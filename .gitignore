@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual env / IDE
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+
+# qteasy-ai local memory (default under cwd)
+.qteasy/
+
+# Test / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
