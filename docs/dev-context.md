@@ -36,7 +36,7 @@
 | 1 | qteasy 文档（master-plan、ROADMAP、rules stub） | **已完成（2026-08-06）** |
 | 2 | 自 `qt_ai_dev` 原样迁移 Stage A | **已完成（2026-08-06）** |
 | 3 | qteasy RELEASE/README 补充 | **已完成（2026-08-06）** |
-| 4 | 0.1.0 发布 + 人工测试金标准 | **0.1.0 已就绪（CHANGELOG/docs）；人工测试待 Jackie 按 MANUAL_TEST.md 执行** |
+| 4 | 0.1.0 发布 + 人工测试金标准 | **David 部分已完成**（0.1.0 / CHANGELOG / MANUAL_TEST）；**Jackie 人工 smoke 待执行** |
 
 ## 5. 迁移源码只读来源
 
@@ -46,3 +46,20 @@ git -C ../qteasy show qt_ai_dev:qteasy/ai/app.py
 ```
 
 完整文件列表见 Session 2 plan：`qteasy/.cursor/plans/s1.4_剥离_qteasy-ai_10ba0551.plan.md` §2.1。
+
+## 6. Git commit 索引（2026-08-06）
+
+| 仓库 | 分支 | Commit | 说明 | 远程 |
+| --- | --- | --- | --- | --- |
+| qteasy-ai | `main` | `8e8c0b2` | Session 0 脚手架 | 已 push |
+| qteasy-ai | `main` | `a845cbb` | Session 2 Stage A 迁移 | 已 push |
+| qteasy-ai | `main` | `35b2981` | Session 4 发布 0.1.0 | **待 push** |
+| qteasy | `docs/qteasy-ai-split` | `0539905` | Session 1 ROADMAP | **待 push** |
+| qteasy | `docs/qteasy-ai-split` | `c52b897` | Session 3 用户向文档 | **待 push** |
+
+## 7. Jackie 人工测试入口
+
+- 简明清单：本仓 [`docs/MANUAL_TEST.md`](MANUAL_TEST.md)
+- 完整语料：qteasy `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`
+- 记录模板：`tests/ai_corpus/manual_record_template.md`
+- 语料批跑：`python tests/run_ai_manual_corpus.py`（需 `pip install -e .` 或设置 PYTHONPATH）
