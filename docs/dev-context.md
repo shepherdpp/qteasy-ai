@@ -54,8 +54,10 @@ git -C ../qteasy show qt_ai_dev:qteasy/ai/app.py
 | qteasy-ai | `main` | `8e8c0b2` | Session 0 脚手架 | 已 push |
 | qteasy-ai | `main` | `a845cbb` | Session 2 Stage A 迁移 | 已 push |
 | qteasy-ai | `main` | `35b2981` | Session 4 发布 0.1.0 | **待 push** |
+| qteasy-ai | `main` | `9a5b274` | dev-context 交付记录 | **待 push** |
 | qteasy | `docs/qteasy-ai-split` | `0539905` | Session 1 ROADMAP | **待 push** |
 | qteasy | `docs/qteasy-ai-split` | `c52b897` | Session 3 用户向文档 | **待 push** |
+| qteasy | `docs/qteasy-ai-split` | `02b693a` | ROADMAP Q-AI 进度记录 | **待 push** |
 
 ## 7. Jackie 人工测试入口
 
