@@ -1,0 +1,42 @@
+# ======================================
+# File:     pyproject.toml
+# Author:   Jackie PENG
+# Contact:  jackie.pengzhao@gmail.com
+# Created:  2026-08-05
+# Desc:
+#   qteasy-ai package metadata (Session 0 scaffold).
+#   Stage A code migration lands in Session 2.
+# ======================================
+
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qteasy-ai"
+version = "0.0.0"
+description = "AI orchestration shell for qteasy — natural language plans over qteasy APIs"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.9, <3.13"
+authors = [
+  { name = "Jackie PENG", email = "jackie.pengzhao@gmail.com" },
+]
+keywords = ["quantitative investment", "ai", "llm", "qteasy", "skills"]
+dependencies = [
+    "qteasy>=2.6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/shepherdpp/qteasy-ai"
+Documentation = "https://github.com/shepherdpp/qteasy-ai#readme"
+Issues = "https://github.com/shepherdpp/qteasy-ai/issues"
+Repository = "https://github.com/shepherdpp/qteasy-ai"
+
+[project.scripts]
+qteasy-ai = "qteasy_ai.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qteasy_ai*"]
