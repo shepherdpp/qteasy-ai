@@ -11,7 +11,7 @@
 
 """qteasy AI 外壳模块（S1.4 阶段A，独立包 qteasy_ai）。"""
 
-__version__ = '0.0.0'
+__version__ = '0.1.0'
 
 from .contracts import (
     PlanExecutionRecord,

@@ -4,11 +4,21 @@
 
 ## 1. 准备环境
 
+先安装 qteasy 内核，再安装本包：
+
 ```bash
-pip install -e .[dev]
+pip install "qteasy>=2.6.0"
+pip install -e /path/to/qteasy-ai
 ```
 
-可选 Provider 配置：
+本地双仓联调：
+
+```bash
+pip install -e /path/to/qteasy
+pip install -e /path/to/qteasy-ai
+```
+
+可选 Provider 配置（**推荐环境变量**）：
 
 ```bash
 export QTEASY_AI_MODEL="gpt-4o-mini"
@@ -16,12 +26,8 @@ export QTEASY_AI_API_KEY="your_api_key"
 export QTEASY_AI_BASE_URL="https://api.openai.com/v1"
 ```
 
-也可以直接查看 qteasy 全局 AI 配置：
-
-```python
-import qteasy as qt
-print(qt.configuration(["ai_model", "ai_base_url", "ai_timeout", "ai_home"]))
-```
+未设置 `QTEASY_AI_MODEL` 时为**规则模式**（Planner 不调用 LLM），属正常。  
+若 qteasy 侧仍保留 `ai_*` 配置键（2.7 前可选兼容），`ConfigCenter` 会在 env 未设置时读取；**qteasy 2.6.0 master 无 `ai_*` 键**，请优先用 `QTEASY_AI_*`。
 
 ## 2. CLI 方式
 
@@ -159,4 +165,5 @@ Execute.
 
 - 语料文件：`tests/ai_corpus/*.json`
 - 人工记录模板：`tests/ai_corpus/manual_record_template.md`
-- 执行脚本：`python tests/run_ai_manual_corpus.py`
+- 执行脚本：`python tests/run_ai_manual_corpus.py`（或 `python -m unittest discover -s tests -p 'test_ai_*.py' -v`）
+- 人工测试清单：[MANUAL_TEST.md](../MANUAL_TEST.md)
