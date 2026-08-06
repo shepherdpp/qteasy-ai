@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "A1",
+      "query": "list built-in strategies",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy_meta.list"
+    },
+    {
+      "id": "A2",
+      "query": "show me macd strategy parameters",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy_meta.get"
+    },
+    {
+      "id": "B1",
+      "query": "show summary of 000300.SH from 20240101 to 20241231",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.summary_kline"
+    },
+    {
+      "id": "C1",
+      "query": "export kline of 000300.SH to png",
+      "mode": "plan",
+      "expected_skill": "qt.ai.visual.export_kline"
+    },
+    {
+      "id": "D1",
+      "query": "explain PT and PS",
+      "mode": "ask",
+      "expected_skill": ""
+    }
+  ]
+}

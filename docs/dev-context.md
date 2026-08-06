@@ -33,8 +33,8 @@
 | Session | 内容 | 状态 |
 | --- | --- | --- |
 | 0 | 脚手架 + multi-root + git init | **已完成（2026-08-05）** |
-| 1 | qteasy 文档（master-plan、ROADMAP、rules stub） | 待做 |
-| 2 | 自 `qt_ai_dev` 原样迁移 Stage A | 待做 |
+| 1 | qteasy 文档（master-plan、ROADMAP、rules stub） | **已完成（2026-08-06）** |
+| 2 | 自 `qt_ai_dev` 原样迁移 Stage A | **已完成（2026-08-06）** |
 | 3 | qteasy RELEASE/README 补充 | 待做 |
 | 4 | 0.1.x 发布 + 人工测试金标准 | 待做 |
 

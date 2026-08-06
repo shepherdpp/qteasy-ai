@@ -3,7 +3,7 @@
 **qteasy-ai** 是 [qteasy](https://github.com/shepherdpp/qteasy) 的 **独立 AI 编排外壳**：自然语言 → ToolPlan → 用户确认 → 调用 qteasy API → 结构化结果。  
 它不修改 qteasy 回测/交易内核，仅作为可插拔的 skills + planner + executor 层。
 
-> **当前状态（Session 0）**：仓库脚手架已就绪；Stage A 完整代码将在 Session 2 自 qteasy 的 `qt_ai_dev` 分支迁入。  
+> **当前状态（Session 2）**：Stage A 已从 qteasy `qt_ai_dev` 迁入本仓；发布 0.1.x 见 Session 4。  
 > **协作规范与 Q-AI 计划真源**仍在 qteasy 仓库的 [`.cursor/rules/`](https://github.com/shepherdpp/qteasy/tree/master/.cursor/rules) 与 [`.cursor/plans/`](https://github.com/shepherdpp/qteasy/tree/master/.cursor/plans)。
 
 ## 与 qteasy 的关系
@@ -16,7 +16,7 @@
 - **依赖方向**：`qteasy-ai` → `qteasy`（pip 安装 `qteasy>=2.6.0`）
 - **发布**：两项目 **独立 semver**；qteasy 新版本 API 可由 qteasy-ai skills 增量适配
 
-## 安装（Session 2 之后）
+## 安装
 
 ```bash
 pip install qteasy>=2.6.0

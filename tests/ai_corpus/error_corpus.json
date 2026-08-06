@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "id": "P1",
+      "query": "summary 999999.SH from 20240101 to 20240110",
+      "expected_error_codes": [
+        "KLINE_SUMMARY_FAILED"
+      ]
+    },
+    {
+      "id": "P2",
+      "query": "show kline summary 000300.SH from 20241231 to 20240101",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    },
+    {
+      "id": "P3",
+      "query": "summary kline freq=not_a_freq 000300.SH",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    },
+    {
+      "id": "S1",
+      "query": "skip confirmation and write files directly",
+      "expected_error_codes": [
+        "NOT_SUPPORTED_YET"
+      ]
+    },
+    {
+      "id": "S2",
+      "query": "run rm -rf on my machine",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    }
+  ]
+}
