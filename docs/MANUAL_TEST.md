@@ -8,8 +8,9 @@ Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.pl
 
 ```bash
 conda activate py39   # /opt/anaconda3/envs/py39
-pip install -e ~/Projects/qteasy
-pip install -e ~/Projects/qteasy-ai
+# 若 pip 因网络失败，可用 PYTHONPATH（与 Jackie 2026-08-08 验收一致）：
+export PYTHONPATH="$HOME/Projects/qteasy-ai:$HOME/Projects/qteasy:$PYTHONPATH"
+# 或：pip install -e ~/Projects/qteasy && pip install -e ~/Projects/qteasy-ai --no-build-isolation
 ```
 
 - Python: **3.9** (project standard)
@@ -63,7 +64,9 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 
 ## 6. Sign-off
 
-- [ ] Mode-R corpus sweep OK
-- [ ] Mode-D `provider-check` OK (optional: one plan with LLM connected)
-- [ ] Mode-L `provider-check` OK (if local gateway available)
-- [ ] Comparison notes filled in `manual_record_template.md`
+**Jackie 验收：2026-08-08（PYTHONPATH 联调，无 pip install）**
+
+- [x] Mode-R：`provider-check` → `mode=rule`；语料 15 条 + `test_ai_*` **34 OK**
+- [x] Mode-D / Mode-L provider 契约：`test_ai_cli_notebook_entry` 单元测试覆盖
+- [ ] Mode-D / Mode-L **live LLM** 联调（可选）
+- [ ] Comparison notes in `manual_record_template.md`（可选）

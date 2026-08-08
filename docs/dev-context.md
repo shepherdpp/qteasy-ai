@@ -36,7 +36,7 @@
 | 1 | qteasy 文档（master-plan、ROADMAP、rules stub） | **已完成（2026-08-06）** |
 | 2 | 自 `qt_ai_dev` 原样迁移 Stage A | **已完成（2026-08-06）** |
 | 3 | qteasy RELEASE/README 补充 | **已完成（2026-08-06）** |
-| 4 | 0.1.0 发布 + 人工测试金标准 | **David 部分已完成**（0.1.0 / CHANGELOG / MANUAL_TEST）；**Jackie 人工 smoke 待执行** |
+| 4 | 0.1.0 发布 + 人工测试金标准 | **已完成（2026-08-08）** — Jackie Mode-R smoke + 34 tests |
 
 ## 5. 迁移源码只读来源
 
