@@ -13,21 +13,23 @@
 
 ## 2. 目录结构
 
-- `qteasy/ai/contracts.py`：统一契约
-- `qteasy/ai/registry.py`：技能注册与发现
-- `qteasy/ai/planner.py`：规则驱动计划生成
-- `qteasy/ai/executor.py`：计划执行与 run 记录
-- `qteasy/ai/provider.py`：Provider 抽象与 OpenAI-compatible 实现
-- `qteasy/ai/memory_store.py`：本地记忆与执行记录
-- `qteasy/ai/skills/*.py`：阶段A只读技能
-- `qteasy/ai/cli.py`：CLI 入口
-- `qteasy/ai/app.py`：Notebook/CLI 共享应用层
+- `qteasy_ai/contracts.py`：统一契约
+- `qteasy_ai/registry.py`：技能注册与发现
+- `qteasy_ai/planner.py`：Hybrid 计划生成与规则校验
+- `qteasy_ai/executor.py`：计划执行与 run 记录
+- `qteasy_ai/provider.py`：Provider 抽象与 OpenAI-compatible 实现
+- `qteasy_ai/memory_store.py`：本地记忆与执行记录
+- `qteasy_ai/skills/*.py`：阶段A只读技能
+- `qteasy_ai/cli.py`：CLI 入口
+- `qteasy_ai/app.py`：Notebook/CLI 共享应用层
 
 ## 3. 运行模式
 
-- Ask：只返回 plan，不执行技能
-- Plan：默认返回 dry-run plan
-- Run：确认后执行并写入 `runs`
+> **唯一定义**见 qteasy 仓 [qteasy_ai_top_level_design](https://github.com/shepherdpp/qteasy/blob/master/.cursor/plans/qteasy_ai_top_level_design.plan.md) §四。下表为 0.1.0 现状摘要。
+
+- Ask（`ask`）：生成 ToolPlan，**不执行** skill
+- Plan（`plan`）：默认 dry-run plan，供审阅
+- Run（`run`）：生成 plan 后执行（产品语义对应目标态 **Agent**；profile 门控待 Q-AI.2）
 
 ## 4. 本地配置
 
