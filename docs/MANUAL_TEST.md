@@ -52,7 +52,8 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 
 1. `list built-in strategies` → `qt.ai.strategy_meta.list`
 2. `show me macd strategy parameters` → `qt.ai.strategy_meta.get`
-3. `show kline summary of 000300.SH from 20240101 to 20241231` → `qt.ai.data.summary_kline`
+3. `show summary of 000300.SH from 20240101 to 20241231` → `qt.ai.data.summary_kline`  
+   （注意：含裸词 `kline` 的句子如 `show kline summary ...` 在 0.1.0 会误路由到 `visual.export_kline`）
 4. `export kline of 000300.SH to png` → `qt.ai.visual.export_kline` (confirm side effect / artifact path on `run`)
 5. Ask: `assistant.ask("explain PT vs PS")` → `dry_run`, **zero** plan steps
 

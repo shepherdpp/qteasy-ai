@@ -1,5 +1,7 @@
 # AI 人工语料测试记录模板
 
+> **留存约定**：会话明细复制为 `manual_record_YYYY-MM-DD.md` 留在本地（已 gitignore）；关单摘要写入 qteasy 仓 `knowledge/runlog/`。回归语料见同目录 `*_corpus.json`。
+
 ## 基本信息
 
 - 测试日期：
