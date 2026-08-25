@@ -19,6 +19,12 @@
       "expected_skill": "qt.ai.data.summary_kline"
     },
     {
+      "id": "B2",
+      "query": "kline summary of 000300.SH",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.summary_kline"
+    },
+    {
       "id": "C1",
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
@@ -29,6 +35,22 @@
       "query": "explain PT and PS",
       "mode": "ask",
       "expected_skill": ""
+    },
+    {
+      "id": "E1",
+      "query": "帮我看 Tushare 是否配好、本地缺哪些表",
+      "mode": "plan",
+      "expected_skill": "qt.ai.env.check_tushare",
+      "expected_skills": [
+        "qt.ai.env.check_tushare",
+        "qt.ai.env.overview_tables"
+      ]
+    },
+    {
+      "id": "R1",
+      "query": "factor IC summary for selection pool",
+      "mode": "plan",
+      "expected_skill": "qt.ai.research.factor_ic_summary"
     }
   ]
 }

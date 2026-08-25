@@ -53,9 +53,11 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 1. `list built-in strategies` → `qt.ai.strategy_meta.list`
 2. `show me macd strategy parameters` → `qt.ai.strategy_meta.get`
 3. `show summary of 000300.SH from 20240101 to 20241231` → `qt.ai.data.summary_kline`  
-   （注意：含裸词 `kline` 的句子如 `show kline summary ...` 在 0.1.0 会误路由到 `visual.export_kline`）
+   （B0：含 `kline` 的 `kline summary ...` 亦路由到 summary，不再误走 export）
 4. `export kline of 000300.SH to png` → `qt.ai.visual.export_kline` (confirm side effect / artifact path on `run`)
 5. Ask: `assistant.ask("explain PT vs PS")` → `dry_run`, **zero** plan steps
+6. **B0 env**: `帮我看 Tushare 是否配好、本地缺哪些表` → `check_tushare` + `overview_tables`；payload 含 `plan_md`
+7. **B0 research**: `factor IC summary for selection pool` → `qt.ai.research.factor_ic_summary`（执行需注入 panel_builder / 有研究面板）
 
 ## 5. Boundaries (must hold)
 

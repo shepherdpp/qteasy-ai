@@ -90,19 +90,30 @@ class RuleValidator:
 
 
 class Planner:
-    """阶段A计划生成器。
+    """规则 + env_facts 门禁的计划生成器（B0）。
 
     Parameters
     ----------
     registry : SkillRegistry
         技能注册中心，用于读取技能元数据（尤其是 side_effects）。
     provider : BaseLLMProvider, optional
-        模型提供方抽象。阶段A中仅用于记录是否启用，不参与计划生成。
+        模型提供方抽象。B0 仅记录是否启用，不参与候选计划生成。
+    env_facts : dict, optional
+        本机环境事实（凭证/表状态）；用于门禁前置检查。
     """
 
-    def __init__(self, registry: SkillRegistry, provider: Optional[BaseLLMProvider] = None) -> None:
+    # 门禁关注的核心行情表：仅当 env_facts 已记录且 exists=False 时前置 overview。
+    _CORE_MARKET_TABLES = ("stock_daily", "index_daily")
+
+    def __init__(
+        self,
+        registry: SkillRegistry,
+        provider: Optional[BaseLLMProvider] = None,
+        env_facts: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.registry = registry
         self.provider = provider
+        self.env_facts: Dict[str, Any] = dict(env_facts or {})
         self.validator = RuleValidator(registry)
         self._strategy_alias_map: Optional[Dict[str, str]] = None
 
@@ -150,15 +161,16 @@ class Planner:
 
         query = user_query.strip()
         q_lower = query.lower()
-        step = self._infer_single_step(query=query, q_lower=q_lower)
+        steps = self._infer_steps(query=query, q_lower=q_lower)
         assumptions = {
-            "planner": "hybrid_candidate_stage_a0",
+            "planner": "hybrid_candidate_stage_b0",
             "provider_enabled": self.provider is not None,
+            "env_facts_used": bool(self.env_facts),
         }
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=user_query,
-            steps=[step],
+            steps=steps,
             assumptions=assumptions,
             execution_mode="dry_run",
             mode="plan",
@@ -181,56 +193,180 @@ class Planner:
         }
         return final_plan
 
-    def _infer_single_step(self, *, query: str, q_lower: str) -> ToolStep:
-        """根据 query 推断单步技能调用。
-
-        阶段A采用“单步策略”：
-        - 便于理解和调试；
-        - 先把入口打通，再在后续阶段扩展多步DAG。
-        """
-
-        fallback_inputs = self._infer_fallback_inputs(query=query, q_lower=q_lower)
-        if fallback_inputs is not None:
-            skill_name = "qt.ai.system.fallback"
-            inputs = fallback_inputs
-        elif any(word in q_lower for word in ["strategy", "built-in", "built in", "策略"]):
-            is_parameter_query = self._is_strategy_parameter_query(q_lower)
-            match_id = self._extract_strategy_id(query)
-            if is_parameter_query and not match_id:
-                skill_name = "qt.ai.system.fallback"
-                inputs = {
-                    "query": query,
-                    "fallback_action": "clarify_required",
-                    "reason": "strategy_id_missing_for_parameter_query",
-                    "hint": "Cannot determine strategy id for parameter query.",
-                    "missing_info": "strategy_id",
-                    "next_step": "Please provide exact strategy id, e.g. 'List all tunable parameters of MACD strategy'.",
-                }
-            elif match_id:
-                skill_name = "qt.ai.strategy_meta.get"
-                inputs = {"strategy_id": match_id}
-            else:
-                skill_name = "qt.ai.strategy_meta.list"
-                inputs = {}
-        elif any(word in q_lower for word in ["kline", "candle", "k线", "绘图", "导出", "png"]):
-            skill_name = "qt.ai.visual.export_kline"
-            inputs = self._extract_market_inputs(query)
-        else:
-            skill_name = "qt.ai.data.summary_kline"
-            inputs = self._extract_market_inputs(query)
+    def _make_step(
+        self,
+        *,
+        step_id: str,
+        skill_name: str,
+        inputs: Dict[str, Any],
+        depends_on: Optional[List[str]] = None,
+    ) -> ToolStep:
+        """构造带 registry 元数据的 ToolStep。"""
 
         meta = self.registry.get_metadata(skill_name)
         return ToolStep(
-            step_id="step_1",
+            step_id=step_id,
             skill_name=skill_name,
             inputs=inputs,
             side_effects=meta.side_effects,
             estimated_cost="low",
-            depends_on=[],
+            depends_on=list(depends_on or []),
             run_if="",
             on_fail="stop",
             retry_limit=0,
         )
+
+    def _infer_steps(self, *, query: str, q_lower: str) -> List[ToolStep]:
+        """根据 query 推断一步或多步技能调用（B0 规则路径）。"""
+
+        fallback_inputs = self._infer_fallback_inputs(query=query, q_lower=q_lower)
+        if fallback_inputs is not None:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=fallback_inputs,
+                )
+            ]
+
+        if self._is_env_query(q_lower):
+            return [
+                self._make_step(step_id="step_1", skill_name="qt.ai.env.check_tushare", inputs={}),
+                self._make_step(step_id="step_2", skill_name="qt.ai.env.overview_tables", inputs={}),
+            ]
+
+        if any(word in q_lower for word in ["strategy", "built-in", "built in", "策略"]):
+            is_parameter_query = self._is_strategy_parameter_query(q_lower)
+            match_id = self._extract_strategy_id(query)
+            if is_parameter_query and not match_id:
+                return [
+                    self._make_step(
+                        step_id="step_1",
+                        skill_name="qt.ai.system.fallback",
+                        inputs={
+                            "query": query,
+                            "fallback_action": "clarify_required",
+                            "reason": "strategy_id_missing_for_parameter_query",
+                            "hint": "Cannot determine strategy id for parameter query.",
+                            "missing_info": "strategy_id",
+                            "next_step": "Please provide exact strategy id, e.g. 'List all tunable parameters of MACD strategy'.",
+                        },
+                    )
+                ]
+            if match_id:
+                skill_name = "qt.ai.strategy_meta.get"
+                inputs: Dict[str, Any] = {"strategy_id": match_id}
+            else:
+                skill_name = "qt.ai.strategy_meta.list"
+                inputs = {}
+            steps = [self._make_step(step_id="step_1", skill_name=skill_name, inputs=inputs)]
+            return steps
+
+        if self._is_factor_ic_query(q_lower):
+            primary = self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.research.factor_ic_summary",
+                inputs=self._extract_market_inputs(query),
+            )
+            return self._maybe_prepend_table_gate([primary], data_intent=True)
+
+        # summary / 摘要 / 波动率 优先于 kline 导出（修实弹误路由）
+        if self._is_summary_query(q_lower):
+            primary = self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.data.summary_kline",
+                inputs=self._extract_market_inputs(query),
+            )
+            return self._maybe_prepend_table_gate([primary], data_intent=True)
+
+        if any(word in q_lower for word in ["kline", "candle", "k线", "绘图", "导出", "png", "export"]):
+            primary = self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.visual.export_kline",
+                inputs=self._extract_market_inputs(query),
+            )
+            return self._maybe_prepend_table_gate([primary], data_intent=True)
+
+        primary = self._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.summary_kline",
+            inputs=self._extract_market_inputs(query),
+        )
+        return self._maybe_prepend_table_gate([primary], data_intent=True)
+
+    def _maybe_prepend_table_gate(self, steps: List[ToolStep], *, data_intent: bool) -> List[ToolStep]:
+        """当 env_facts 已记录核心表缺失时，前置 overview_tables。"""
+
+        if not data_intent or not self.env_facts:
+            return steps
+        tables = self.env_facts.get("tables")
+        if not isinstance(tables, dict) or not tables:
+            return steps
+        missing = False
+        for name in self._CORE_MARKET_TABLES:
+            entry = tables.get(name)
+            if isinstance(entry, dict) and entry.get("exists") is False:
+                missing = True
+                break
+        if not missing:
+            return steps
+        if any(step.skill_name == "qt.ai.env.overview_tables" for step in steps):
+            return steps
+        gate = self._make_step(step_id="step_gate", skill_name="qt.ai.env.overview_tables", inputs={})
+        renumbered: List[ToolStep] = [gate]
+        for idx, step in enumerate(steps, start=1):
+            step.step_id = f"step_{idx}"
+            renumbered.append(step)
+        return renumbered
+
+    @staticmethod
+    def _is_env_query(q_lower: str) -> bool:
+        """判断是否为环境就绪检查意图。"""
+
+        keywords = [
+            "tushare",
+            "token",
+            "配好",
+            "缺表",
+            "数据表",
+            "本地表",
+            "env",
+            "environment",
+            "check table",
+            "missing table",
+            "local data table",
+            "overview table",
+        ]
+        return any(item in q_lower for item in keywords)
+
+    @staticmethod
+    def _is_summary_query(q_lower: str) -> bool:
+        """判断是否为 K 线/行情摘要意图（优先于 export）。"""
+
+        keywords = [
+            "summary",
+            "摘要",
+            "波动率",
+            "交易天数",
+            "volatility",
+            "trading day",
+            "trading days",
+            "n_rows",
+        ]
+        return any(item in q_lower for item in keywords)
+
+    @staticmethod
+    def _is_factor_ic_query(q_lower: str) -> bool:
+        """判断是否为因子 IC 摘要意图。"""
+
+        keywords = ["factor ic", "因子 ic", "因子ic", "ic summary", "ic 摘要", "information coefficient"]
+        return any(item in q_lower for item in keywords)
+
+    def _infer_single_step(self, *, query: str, q_lower: str) -> ToolStep:
+        """兼容旧调用：返回推断结果的第一步。"""
+
+        steps = self._infer_steps(query=query, q_lower=q_lower)
+        return steps[0]
 
     @staticmethod
     def _is_strategy_parameter_query(q_lower: str) -> bool:

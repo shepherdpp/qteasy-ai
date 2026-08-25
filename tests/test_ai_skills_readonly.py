@@ -11,6 +11,7 @@
 import tempfile
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from qteasy_ai.skills import (
@@ -64,18 +65,43 @@ class TestAiReadonlySkills(unittest.TestCase):
         summary_meta, summary_handler = build_data_summary_skill(get_kline_func=lambda **_: frame.copy())
         summary_result = summary_handler(shares="000300.SH", freq="d")
 
+        close = frame["close"].astype(float)
+        simple_rets = close.pct_change().dropna()
+        exp_vol_daily = float(simple_rets.std(ddof=1))
+        exp_vol_annual = exp_vol_daily * float(np.sqrt(252.0))
+        print("\n[TestAiReadonlySkills] summary skill:", summary_meta.name)
+        print(" metrics:", summary_result["metrics"])
+        print(" expected vol_daily/annual:", exp_vol_daily, exp_vol_annual)
+
+        self.assertTrue(summary_result["ok"])
+        self.assertEqual(summary_result["metrics"]["n_rows"], 5)
+        self.assertEqual(summary_result["metrics"]["n_trading_days"], 5)
+        self.assertAlmostEqual(summary_result["metrics"]["volatility_daily"], exp_vol_daily, places=10)
+        self.assertAlmostEqual(
+            summary_result["metrics"]["volatility_annualized"], exp_vol_annual, places=10
+        )
+
         with tempfile.TemporaryDirectory() as temp_dir:
             output_file = f"{temp_dir}/kline.png"
             export_meta, export_handler = build_visual_export_skill(get_kline_func=lambda **_: frame.copy())
             export_result = export_handler(shares="000300.SH", output_path=output_file)
 
-            print("\n[TestAiReadonlySkills] summary skill:", summary_meta.name, summary_result["metrics"])
             print(" export skill:", export_meta.name, export_result["artifacts"])
 
-            self.assertTrue(summary_result["ok"])
-            self.assertEqual(summary_result["metrics"]["n_rows"], 5)
             self.assertTrue(export_result["ok"])
             self.assertTrue(export_result["artifacts"][0]["path"].endswith(".png"))
+
+    def test_data_summary_empty_data_english_error(self) -> None:
+        """空数据失败且 error.message 为英文。"""
+
+        print("\n[TestAiReadonlySkills] empty data error")
+        empty = pd.DataFrame(columns=["open", "high", "low", "close", "vol"])
+        _, handler = build_data_summary_skill(get_kline_func=lambda **_: empty.copy())
+        result = handler(shares="000300.SH")
+        print(" result:", result)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "KLINE_SUMMARY_FAILED")
+        self.assertIn("Failed to summarize", result["error"]["message"])
 
 
 if __name__ == "__main__":

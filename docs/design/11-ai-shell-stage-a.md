@@ -70,3 +70,18 @@ qteasy-ai provider-check
 - `error`
 
 用户可见错误信息保持英文，便于统一对外输出约定。
+
+## 7. Stage B0 增量（Q-AI.1.5）
+
+在阶段A骨架上，B0 交付：
+
+| 能力 | 说明 |
+|------|------|
+| `skill_kind` | L1 子标签：`api`（默认）/ `guide`（环境引导） |
+| env skills | `qt.ai.env.check_tushare`、`qt.ai.env.overview_tables`（只读探针，不联网、不全库 overview） |
+| `env_facts` 门禁 | Planner 读取 MemoryStore；已知核心行情表 `exists=False` 时前置 overview |
+| data/research | summary 增加交易天数与波动率；`qt.ai.research.factor_ic_summary` |
+| plan 双轨 | ToolPlan JSON + 单向 `plan.md`（`plan_md` / `runs/{run_id}.plan.md`） |
+
+设计决议（qteasy 仓执行层 B0.0）：规则 + env_facts 为主；不做 LLM 候选生成；不做 md→plan 反解析。
+

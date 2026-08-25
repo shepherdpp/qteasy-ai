@@ -35,6 +35,47 @@ from typing import Any, Dict, List, Optional
 from .config import ConfigCenter
 
 
+def merge_env_facts(old: Dict[str, Any], probe: Dict[str, Any]) -> Dict[str, Any]:
+    """深合并 env_facts：探针结果覆盖同名键，tables 按表名合并。
+
+    Parameters
+    ----------
+    old : Dict[str, Any]
+        已有环境事实（可为空字典）。
+    probe : Dict[str, Any]
+        本次探针写入的片段（如 tushare / tables）。
+
+    Returns
+    -------
+    Dict[str, Any]
+        合并后的 env_facts；会刷新 ``updated_at``（UTC ISO + Z）。
+
+    Examples
+    --------
+    >>> merge_env_facts({}, {"tushare": {"token_present": True}})["tushare"]["token_present"]
+    True
+    """
+
+    merged: Dict[str, Any] = dict(old) if old else {}
+    for key, value in (probe or {}).items():
+        if key == "updated_at":
+            continue
+        if key == "tables" and isinstance(value, dict):
+            tables = dict(merged.get("tables") or {})
+            for table_name, table_info in value.items():
+                if isinstance(table_info, dict) and isinstance(tables.get(table_name), dict):
+                    tables[table_name] = {**tables[table_name], **table_info}
+                else:
+                    tables[table_name] = table_info
+            merged["tables"] = tables
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    merged["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return merged
+
+
 class MemoryStore:
     """管理 profile/env_facts/runs 的最小落盘。
 
@@ -146,6 +187,26 @@ class MemoryStore:
         payload = dict(run_payload)
         payload["saved_at"] = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         self._write_json(target, payload)
+        return str(target)
+
+    def save_plan_md(self, run_id: str, plan_md: str) -> str:
+        """将人读轨 plan.md 落盘到 runs 目录。
+
+        Parameters
+        ----------
+        run_id : str
+            与 JSON run 对齐的 ID。
+        plan_md : str
+            Markdown 文本。
+
+        Returns
+        -------
+        str
+            已保存的 ``{run_id}.plan.md`` 路径。
+        """
+
+        target = self.runs_dir / f"{run_id}.plan.md"
+        target.write_text(plan_md or "", encoding="utf-8")
         return str(target)
 
     def load_run(self, run_id: str) -> Dict[str, Any]:

@@ -81,6 +81,8 @@ class SkillMetadata:
     side_effects: SkillSideEffects = field(default_factory=SkillSideEffects)
     required_capabilities: List[str] = field(default_factory=list)
     qteasy_entrypoints: List[str] = field(default_factory=list)
+    skill_kind: str = "api"
+    """技能子标签：``api``（默认 L1 原子）或 ``guide``（环境引导，仍属 L1）。"""
 
 
 @dataclass

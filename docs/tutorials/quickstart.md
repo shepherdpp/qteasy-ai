@@ -51,7 +51,7 @@ qteasy-ai plan "show kline summary of 000300.SH from 20240101" --raw
 qteasy-ai run "export kline 000300.SH to png"
 ```
 
-执行后可在返回结果中查看 `run_file`，并追溯每个 step 的输入输出。
+执行后可在返回结果中查看 `run_file` / `plan_md`，并追溯每个 step 的输入输出。
 
 ### 2.4 Provider 配置诊断
 
@@ -60,6 +60,35 @@ qteasy-ai provider-check
 ```
 
 输出会包含 `mode/model/base_url/timeout/api_key_present/config_sources`，用于快速确认当前是规则模式、云端模型还是本地模型。
+
+## 2.5 Stage B0（Q-AI.1.5）环境与数据
+
+B0 在规则 Planner 上增加：
+
+- 环境引导 skills：`qt.ai.env.check_tushare`、`qt.ai.env.overview_tables`（`skill_kind=guide`）
+- `env_facts` 门禁：已知核心表缺失时，取数/研究计划前置 overview
+- K 线摘要含 `n_trading_days` / `volatility_*`；研究只读 `qt.ai.research.factor_ic_summary`
+- `plan()` / `run()` 同时返回 **ToolPlan JSON** 与人读 **`plan_md`**（单向，不做 md 反解析）
+
+示例：
+
+```bash
+qteasy-ai plan "帮我看 Tushare 是否配好、本地缺哪些表" --raw
+qteasy-ai plan "kline summary of 000300.SH" --pretty
+```
+
+Python：
+
+```python
+from qteasy_ai.app import QteasyAssistant
+
+assistant = QteasyAssistant()
+payload = assistant.plan("帮我看 Tushare 是否配好、本地缺哪些表", response_style="raw")
+print(payload["plan"]["steps"])
+print(payload["plan_md"][:400])
+```
+
+完整脚本见 `examples/ai_shell_stage_b0_demo.py`。
 
 ## 3. Notebook 方式
 

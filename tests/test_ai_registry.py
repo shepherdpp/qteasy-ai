@@ -42,6 +42,31 @@ class TestAiRegistry(unittest.TestCase):
         self.assertEqual(skill_names, ["qt.ai.test.echo"])
         self.assertTrue(result["ok"])
         self.assertEqual(result["echo"], "world")
+        print(" default skill_kind:", metadata.skill_kind)
+        self.assertEqual(metadata.skill_kind, "api")
+
+    def test_skill_kind_guide_default_api(self) -> None:
+        """验证 skill_kind 默认为 api，引导技能可标为 guide。"""
+
+        api_meta = SkillMetadata(
+            name="qt.ai.test.api",
+            version="0.1.0",
+            summary="API skill.",
+            inputs_schema={},
+            outputs_schema={},
+        )
+        guide_meta = SkillMetadata(
+            name="qt.ai.test.guide",
+            version="0.1.0",
+            summary="Guide skill.",
+            inputs_schema={},
+            outputs_schema={},
+            skill_kind="guide",
+        )
+        print("\n[TestAiRegistry] api skill_kind:", api_meta.skill_kind)
+        print(" guide skill_kind:", guide_meta.skill_kind)
+        self.assertEqual(api_meta.skill_kind, "api")
+        self.assertEqual(guide_meta.skill_kind, "guide")
 
 
 if __name__ == "__main__":

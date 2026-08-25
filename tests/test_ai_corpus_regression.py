@@ -42,9 +42,15 @@ class TestAiCorpusRegression(unittest.TestCase):
             else:
                 payload = assistant.plan(query, response_style="raw")
                 steps = payload["plan"]["steps"]
-                print(" plan case:", case["id"], "skill:", steps[0]["skill_name"] if steps else "")
+                print(" plan case:", case["id"], "skills:", [s["skill_name"] for s in steps])
                 self.assertGreaterEqual(len(steps), 1)
                 self.assertEqual(steps[0]["skill_name"], case["expected_skill"])
+                if "expected_skills" in case:
+                    self.assertEqual(
+                        [s["skill_name"] for s in steps],
+                        case["expected_skills"],
+                    )
+                self.assertTrue(str(payload.get("plan_md", "")).strip())
 
     def test_future_capability_fallback_corpus(self) -> None:
         """验证前瞻语料回退行为。"""

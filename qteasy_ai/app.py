@@ -32,15 +32,19 @@ from typing import Any, Dict, Optional
 
 from .config import ConfigCenter
 from .executor import PlanExecutor
-from .memory_store import MemoryStore
+from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
+from .plan_markdown import tool_plan_to_markdown
 from .planner import Planner
 from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
 from .skills import (
+    build_check_tushare_skill,
     build_data_summary_skill,
+    build_factor_ic_summary_skill,
+    build_overview_tables_skill,
     build_strategy_meta_get_skill,
     build_strategy_meta_list_skill,
     build_system_fallback_skill,
@@ -70,6 +74,9 @@ def build_default_registry() -> SkillRegistry:
         build_data_summary_skill,
         build_visual_export_skill,
         build_system_fallback_skill,
+        build_check_tushare_skill,
+        build_overview_tables_skill,
+        build_factor_ic_summary_skill,
     ]:
         metadata, handler = builder()
         registry.register(metadata, handler)
@@ -115,13 +122,28 @@ class QteasyAssistant:
         self.memory_store = memory_store or MemoryStore()
         # Registry：聚合本阶段可用技能及其元数据。
         self.registry = registry or build_default_registry()
-        # Planner：根据用户请求生成计划对象。
-        self.planner = Planner(self.registry, provider=provider)
+        # Planner：根据用户请求生成计划对象（注入 env_facts 供门禁）。
+        self.planner = Planner(
+            self.registry,
+            provider=provider,
+            env_facts=self.memory_store.load_env_facts(),
+        )
         # Executor：负责按计划执行。
         self.executor = PlanExecutor(self.registry, self.memory_store)
         self.renderer = OutputRenderer()
         self.run_policy = run_policy or RunStorePolicy()
         self._last_run_id = ""
+
+    def _refresh_planner_env_facts(self) -> None:
+        """从 MemoryStore 刷新 Planner 的 env_facts。"""
+
+        self.planner.env_facts = self.memory_store.load_env_facts()
+
+    def _build_plan(self, query: str, *, mode: str) -> Any:
+        """加载最新 env_facts 后生成 ToolPlan。"""
+
+        self._refresh_planner_env_facts()
+        return self.planner.build_plan(query, mode=mode)
 
     def ask(
         self,
@@ -144,7 +166,7 @@ class QteasyAssistant:
             dry-run 执行结果（无技能调用），用于解释和预览。
         """
 
-        plan = self.planner.build_plan(query, mode="ask")
+        plan = self._build_plan(query, mode="ask")
         return self._execute_and_format(
             plan=plan,
             confirm=False,
@@ -168,7 +190,7 @@ class QteasyAssistant:
         - plan：通常会生成可执行步骤，强调“执行前审阅”。
         """
 
-        plan = self.planner.build_plan(query, mode="plan")
+        plan = self._build_plan(query, mode="plan")
         return self._execute_and_format(
             plan=plan,
             confirm=False,
@@ -193,7 +215,7 @@ class QteasyAssistant:
         3) 交给 Executor 实际执行并写入 runs。
         """
 
-        plan = self.planner.build_plan(query, mode="plan")
+        plan = self._build_plan(query, mode="plan")
         plan.execution_mode = "execute"
         return self._execute_and_format(
             plan=plan,
@@ -217,12 +239,19 @@ class QteasyAssistant:
         persist_mode = persist or self.run_policy.persist_mode
         persist_run = persist_mode in {"bounded", "audit"}
         payload = self.executor.execute(plan, confirm=confirm, persist_run=False)
+        plan_md = tool_plan_to_markdown(payload.get("plan") or plan)
+        payload["plan_md"] = plan_md
+
+        if confirm:
+            self._merge_env_facts_from_execution(payload)
 
         if persist_run:
             run_id = str(payload.get("run_id", "")).strip()
             if run_id:
                 run_file = self.memory_store.save_run(run_id, payload)
                 payload["run_file"] = run_file
+                md_file = self.memory_store.save_plan_md(run_id, plan_md)
+                payload["plan_md_file"] = md_file
                 self._last_run_id = run_id
                 if persist_mode == "bounded":
                     cleanup_report = self.memory_store.cleanup_runs(
@@ -237,17 +266,50 @@ class QteasyAssistant:
                     payload["pinned_file"] = self.memory_store.pin_run(run_id, tag="keep")
         else:
             payload["run_file"] = ""
+            payload["plan_md_file"] = ""
             payload["cleanup"] = {"deleted_count": 0, "deleted_files": [], "remaining_count": len(self.memory_store.list_runs())}
 
         if response_style == "raw":
             return payload
 
         rendered = self.renderer.render(payload, style="user_friendly", context={"persist_mode": persist_mode})
+        if plan_md:
+            first_lines = "\n".join(plan_md.strip().splitlines()[:6])
+            rendered.narrative = rendered.narrative + f"\n\nPlan (markdown preview):\n{first_lines}"
         if self.run_policy.show_save_hint:
             run_file = payload.get("run_file", "")
             hint = f"\nRun file: {run_file}" if run_file else "\nRun file: not persisted."
+            plan_md_file = payload.get("plan_md_file", "")
+            if plan_md_file:
+                hint = hint + f"\nPlan md file: {plan_md_file}"
             rendered.narrative = rendered.narrative + hint
         return rendered
+
+    def _merge_env_facts_from_execution(self, payload: Dict[str, Any]) -> None:
+        """将 guide skill 成功探针 merge 进 env_facts（仅 execute 路径）。"""
+
+        steps = (payload.get("execution") or {}).get("steps") or []
+        probe: Dict[str, Any] = {}
+        for step in steps:
+            result = step.get("result") or {}
+            if not result.get("ok"):
+                continue
+            env_probe = (result.get("payload") or {}).get("env_probe")
+            if not isinstance(env_probe, dict):
+                continue
+            for key, value in env_probe.items():
+                if key == "tables" and isinstance(value, dict):
+                    tables = dict(probe.get("tables") or {})
+                    tables.update(value)
+                    probe["tables"] = tables
+                else:
+                    probe[key] = value
+        if not probe:
+            return
+        old = self.memory_store.load_env_facts()
+        merged = merge_env_facts(old, probe)
+        self.memory_store.save_env_facts(merged)
+        self.planner.env_facts = merged
 
     def debug_config(self) -> Dict[str, Any]:
         """返回当前 AI 配置诊断信息（不泄露密钥）。"""

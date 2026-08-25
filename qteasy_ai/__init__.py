@@ -28,7 +28,8 @@ from .contracts import (
 from .executor import PlanExecutor
 from .config import ConfigCenter
 from .output import AssistantOutput
-from .memory_store import MemoryStore
+from .memory_store import MemoryStore, merge_env_facts
+from .plan_markdown import tool_plan_to_markdown
 from .planner import Planner
 from .provider import BaseLLMProvider, OpenAICompatProvider
 from .renderer import OutputRenderer
@@ -56,6 +57,8 @@ __all__ = [
     "RunStorePolicy",
     "SkillRuntime",
     "MemoryStore",
+    "merge_env_facts",
+    "tool_plan_to_markdown",
     "BaseLLMProvider",
     "OpenAICompatProvider",
 ]

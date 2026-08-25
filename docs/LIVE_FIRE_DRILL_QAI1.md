@@ -6,7 +6,7 @@
 |----|------|
 | **目标** | 从用户视角理解骨架：怎么问、怎么出 plan、怎么执行、结果形态、**不能做什么** |
 | **非目标** | 不验收 Q-AI.1.5+；不追求 LLM 回答质量（0.1.0 Planner 为**规则路由**） |
-| **关单摘要（真源）** | qteasy 仓 [`knowledge/runlog/qteasy-ai-live-fire-drill-qai1-2026-08.md`](https://github.com/shepherdpp/qteasy/blob/main/knowledge/runlog/qteasy-ai-live-fire-drill-qai1-2026-08.md) |
+| **关单摘要（真源）** | qteasy 仓本地 `knowledge/runlog/qteasy-ai-live-fire-drill-qai1-2026-08.md`（OKF；`/knowledge` 未进 qteasy git） |
 | **本地明细** | 复制 [`manual_record_template.md`](../tests/ai_corpus/manual_record_template.md) 为 `manual_record_YYYY-MM-DD.md`（**gitignore，不进仓**） |
 | **Round-D/L 脚本** | `python tests/run_ai_drill_provider_compare.py`（需已 export `QTEASY_AI_*`） |
 | **对照** | 顶层金标准见 qteasy 仓 `.cursor/plans/qteasy_ai_top_level_design.plan.md` |
