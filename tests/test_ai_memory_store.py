@@ -80,6 +80,50 @@ class TestAiMemoryStore(unittest.TestCase):
             self.assertEqual(run_data["status"], "ok")
             self.assertIn("run_demo", run_ids)
 
+    def test_corrupt_env_facts_falls_back_to_default(self) -> None:
+        """损坏的 env_facts.json 应降级为空字典并备份。"""
+
+        print("\n[TestAiMemoryStore] corrupt env_facts fallback")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            corrupt_path = store.env_facts_path
+            corrupt_path.write_text(
+                '{\n  "tables": {\n    "trade_calendar": {\n      "pk_min": ',
+                encoding="utf-8",
+            )
+            loaded = store.load_env_facts()
+            backup = corrupt_path.with_suffix(corrupt_path.suffix + ".corrupt.json")
+            print(" loaded:", loaded)
+            print(" backup exists:", backup.exists(), backup)
+            self.assertEqual(loaded, {})
+            self.assertTrue(backup.exists())
+            self.assertFalse(corrupt_path.exists())
+
+    def test_save_env_facts_with_date_values(self) -> None:
+        """env_facts 含 date 对象时应可序列化落盘。"""
+
+        from datetime import date
+
+        print("\n[TestAiMemoryStore] save env_facts with date")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            store.save_env_facts(
+                {
+                    "tables": {
+                        "trade_calendar": {
+                            "exists": True,
+                            "rows": 10,
+                            "pk_min": date(1990, 12, 19),
+                            "pk_max": date(2026, 8, 25),
+                        }
+                    }
+                }
+            )
+            loaded = store.load_env_facts()
+            print(" loaded:", loaded)
+            self.assertEqual(loaded["tables"]["trade_calendar"]["pk_min"], "1990-12-19")
+            self.assertEqual(loaded["tables"]["trade_calendar"]["pk_max"], "2026-08-25")
+
 
 if __name__ == "__main__":
     unittest.main()

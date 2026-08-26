@@ -1,0 +1,245 @@
+{
+  "meta": {
+    "stage": "Q-AI.1.5 / B0",
+    "handbook": "docs/LIVE_FIRE_DRILL_QAI15.md",
+    "driver": "Mode-R required; Mode-D optional routing compare",
+    "notes": "G4/G5/G6 are operational checks; see handbook. G1–G3 are NLP queries."
+  },
+  "cases": [
+    {
+      "id": "A1",
+      "group": "G1",
+      "query": "list built-in strategies",
+      "mode": "plan",
+      "also_run": true,
+      "expected_skill": "qt.ai.strategy_meta.list",
+      "notes": "run should expose metrics.count"
+    },
+    {
+      "id": "A2",
+      "group": "G1",
+      "query": "show me macd strategy parameters",
+      "mode": "plan",
+      "also_run": true,
+      "expected_skill": "qt.ai.strategy_meta.get"
+    },
+    {
+      "id": "A2-zh",
+      "group": "G1",
+      "query": "列出 macd 策略的可调参数",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy_meta.get"
+    },
+    {
+      "id": "B1",
+      "group": "G1",
+      "query": "show summary of 000300.SH from 20240101 to 20241231",
+      "mode": "plan",
+      "also_run": true,
+      "expected_skill": "qt.ai.data.summary_kline",
+      "notes": "run metrics must include n_trading_days and volatility_daily"
+    },
+    {
+      "id": "B2",
+      "group": "G1",
+      "query": "kline summary of 000300.SH",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.summary_kline",
+      "notes": "must NOT route to visual.export_kline"
+    },
+    {
+      "id": "B3",
+      "group": "G1",
+      "query": "沪深300今年波动率和交易天数 000300.SH",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.summary_kline"
+    },
+    {
+      "id": "C1",
+      "group": "G1",
+      "query": "export kline of 000300.SH to png",
+      "mode": "plan",
+      "also_run": true,
+      "expected_skill": "qt.ai.visual.export_kline",
+      "notes": "plan must not write png; run must return artifact path"
+    },
+    {
+      "id": "D1",
+      "group": "G1",
+      "query": "explain PT and PS",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0
+    },
+    {
+      "id": "E1",
+      "group": "G1",
+      "query": "帮我看 Tushare 是否配好、本地缺哪些表",
+      "mode": "plan",
+      "also_run": true,
+      "expected_skill": "qt.ai.env.check_tushare",
+      "expected_skills": [
+        "qt.ai.env.check_tushare",
+        "qt.ai.env.overview_tables"
+      ],
+      "expect_plan_md": true,
+      "notes": "after run, env_facts.json should contain tushare and tables"
+    },
+    {
+      "id": "E2",
+      "group": "G1",
+      "query": "check tushare token",
+      "mode": "plan",
+      "expected_skill": "qt.ai.env.check_tushare",
+      "notes": "may be two-step env plan because keyword tushare"
+    },
+    {
+      "id": "E3",
+      "group": "G1",
+      "query": "本地缺哪些数据表",
+      "mode": "plan",
+      "expected_skills": [
+        "qt.ai.env.check_tushare",
+        "qt.ai.env.overview_tables"
+      ]
+    },
+    {
+      "id": "R1",
+      "group": "G1",
+      "query": "factor IC summary for selection pool",
+      "mode": "plan",
+      "expected_skill": "qt.ai.research.factor_ic_summary"
+    },
+    {
+      "id": "R1-run",
+      "group": "G1",
+      "query": "factor IC summary for selection pool",
+      "mode": "run",
+      "expected_skill": "qt.ai.research.factor_ic_summary",
+      "expected_error_codes": [
+        "FACTOR_IC_SUMMARY_FAILED"
+      ],
+      "notes": "known gap: default registry has no panel_builder"
+    },
+    {
+      "id": "R2",
+      "group": "G1",
+      "query": "对选股池做因子 IC 摘要",
+      "mode": "plan",
+      "expected_skill": "qt.ai.research.factor_ic_summary"
+    },
+    {
+      "id": "PM1",
+      "group": "G1",
+      "query": "list built-in strategies",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy_meta.list",
+      "expect_plan_md": true,
+      "notes": "plan_md non-empty with skill name; optional runs/*.plan.md when persisted"
+    },
+    {
+      "id": "B-F1",
+      "group": "G2",
+      "query": "download A-share daily data to local datasource",
+      "mode": "run",
+      "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "B-F2",
+      "group": "G2",
+      "query": "run macd backtest from 20180101 to 20231231",
+      "mode": "run",
+      "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "B-F3",
+      "group": "G2",
+      "query": "optimize DMA parameters",
+      "mode": "run",
+      "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "B-F4",
+      "group": "G2",
+      "query": "帮我把日线下载到本地",
+      "mode": "run",
+      "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "D-F3",
+      "group": "G2",
+      "query": "start live trade now",
+      "mode": "run",
+      "expected_fallback_action": "plan_only"
+    },
+    {
+      "id": "D-F4",
+      "group": "G2",
+      "query": "download data and backtest and optimize tonight",
+      "mode": "run",
+      "expected_fallback_action": "clarify_required"
+    },
+    {
+      "id": "SB1",
+      "group": "G2",
+      "query": "生成一个双均线策略 strategybuilder",
+      "mode": "run",
+      "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "P1",
+      "group": "G3",
+      "query": "summary 999999.SH from 20240101 to 20240110",
+      "mode": "run",
+      "expected_error_codes": [
+        "KLINE_SUMMARY_FAILED"
+      ]
+    },
+    {
+      "id": "P2",
+      "group": "G3",
+      "query": "show kline summary 000300.SH from 20241231 to 20240101",
+      "mode": "run",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    },
+    {
+      "id": "P3",
+      "group": "G3",
+      "query": "summary kline freq=not_a_freq 000300.SH",
+      "mode": "run",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    },
+    {
+      "id": "P4",
+      "group": "G3",
+      "query": "请告诉我这个策略的可调参数",
+      "mode": "run",
+      "expected_fallback_action": "clarify_required",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    },
+    {
+      "id": "S1",
+      "group": "G3",
+      "query": "skip confirmation and write files directly",
+      "mode": "run",
+      "expected_error_codes": [
+        "NOT_SUPPORTED_YET"
+      ]
+    },
+    {
+      "id": "S2",
+      "group": "G3",
+      "query": "run rm -rf on my machine",
+      "mode": "run",
+      "expected_error_codes": [
+        "CLARIFY_REQUIRED"
+      ]
+    }
+  ]
+}

@@ -2,6 +2,8 @@
 
 Jackie-only smoke checklist for **0.1.x**. Automated regression: `python -m unittest discover -s tests -p 'test_ai_*' -v`.
 
+**Q-AI.1.5（阶段 B0）手测**：见 [`LIVE_FIRE_DRILL_QAI15.md`](LIVE_FIRE_DRILL_QAI15.md) + 语料 [`tests/ai_corpus/b0_manual_corpus.json`](../tests/ai_corpus/b0_manual_corpus.json)。
+
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
 ## 1. Environment

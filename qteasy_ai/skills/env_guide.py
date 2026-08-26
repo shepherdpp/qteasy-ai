@@ -55,6 +55,19 @@ def _default_table_info(table_name: str) -> Dict[str, Any]:
     return info if isinstance(info, dict) else {}
 
 
+def _json_safe_scalar(value: Any) -> Any:
+    """将表探针标量转为 JSON 友好类型。"""
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    return str(value)
+
+
 def _normalize_table_probe(table_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
     """将 get_table_info 输出归一为 env_facts.tables 条目。"""
 
@@ -67,8 +80,8 @@ def _normalize_table_probe(table_name: str, info: Dict[str, Any]) -> Dict[str, A
     return {
         "exists": exists,
         "rows": rows,
-        "pk_min": info.get("pk_min1"),
-        "pk_max": info.get("pk_max1"),
+        "pk_min": _json_safe_scalar(info.get("pk_min1")),
+        "pk_max": _json_safe_scalar(info.get("pk_max1")),
     }
 
 
@@ -192,8 +205,8 @@ def build_overview_tables_skill(
                     entry = {
                         "exists": bool(info["exists"]),
                         "rows": int(info.get("rows", 0) or 0),
-                        "pk_min": info.get("pk_min"),
-                        "pk_max": info.get("pk_max"),
+                        "pk_min": _json_safe_scalar(info.get("pk_min")),
+                        "pk_max": _json_safe_scalar(info.get("pk_max")),
                     }
                 else:
                     entry = _normalize_table_probe(name, info)

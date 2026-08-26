@@ -28,11 +28,38 @@ from __future__ import annotations
 import json
 import shutil
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import ConfigCenter
+
+
+def _json_safe(value: Any) -> Any:
+    """将对象递归转为 JSON 可序列化形态。
+
+    Parameters
+    ----------
+    value : Any
+        任意嵌套结构。
+
+    Returns
+    -------
+    Any
+        ``date``/``datetime`` 转为 ISO 字符串；其它未知类型转为 ``str``。
+    """
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0).isoformat() + ("Z" if value.tzinfo is None else "")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def merge_env_facts(old: Dict[str, Any], probe: Dict[str, Any]) -> Dict[str, Any]:
@@ -115,27 +142,46 @@ class MemoryStore:
         return self.base_dir / "env_facts.json"
 
     def _read_json(self, path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
-        """读取 JSON 文件，不存在时返回默认值。
+        """读取 JSON 文件，不存在或损坏时返回默认值。
 
         Notes
         -----
-        阶段A采用“宽松读取”策略：不存在即返回默认值，
-        以减少首次使用时的失败概率。
+        阶段A采用“宽松读取”策略：不存在即返回默认值。
+        B0 起对损坏 JSON 也降级：备份为 ``*.corrupt.json`` 后返回默认值，
+        避免 CLI/Assistant 因本地记忆损坏而无法启动。
         """
 
         if not path.exists():
             return default
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            # 损坏文件备份后降级，便于用户排查手工编辑/写半截问题。
+            backup = path.with_suffix(path.suffix + ".corrupt.json")
+            try:
+                if path.exists():
+                    path.replace(backup)
+            except OSError:
+                pass
+            print(
+                f"[MemoryStore] Warning: failed to read {path} ({exc}); "
+                f"using default and moved corrupt file to {backup}."
+            )
+            return default
 
     def _write_json(self, path: Path, data: Dict[str, Any]) -> None:
-        """写入 JSON 文件。
+        """写入 JSON 文件（先写临时文件再替换，降低截断风险）。
 
         统一 UTF-8 + pretty JSON，方便用户直接查看和手工修复。
         """
 
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(_json_safe(data), f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        tmp_path.replace(path)
 
     def load_profile(self) -> Dict[str, Any]:
         """读取 profile。"""
