@@ -36,9 +36,13 @@ class TestAiBacktestSkill(unittest.TestCase):
                 "trade_log_file": "/tmp/trade_log_demo.csv",
             }
 
+        def fake_operator(sid, run_freq="d"):
+            captured["run_freq"] = run_freq
+            return {"id": sid}
+
         meta, handler = build_backtest_run_skill(
             run_func=fake_run,
-            operator_factory=lambda sid: {"id": sid},
+            operator_factory=fake_operator,
             list_func=lambda: ["macd", "dma"],
         )
         result = handler(
@@ -46,10 +50,12 @@ class TestAiBacktestSkill(unittest.TestCase):
             asset_pool="000300.SH",
             invest_start="20180101",
             invest_end="20231231",
+            freq="d",
         )
         print(" metrics:", result["metrics"])
         print(" artifacts:", result["artifacts"])
-        print(" run kwargs mode/visual/report:", captured.get("mode"), captured.get("visual"), captured.get("report"))
+        print(" run kwargs keys:", sorted(k for k in captured if k != "op"))
+        print(" operator run_freq:", captured.get("run_freq"))
         self.assertTrue(result["ok"])
         self.assertTrue(meta.side_effects.filesystem_write)
         self.assertEqual(result["metrics"]["final_value"], 112000.0)
@@ -64,6 +70,8 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(captured.get("report"), False)
         self.assertEqual(captured.get("trade_log"), True)
         self.assertEqual(captured.get("mode"), 1)
+        self.assertNotIn("freq", captured)
+        self.assertEqual(captured.get("run_freq"), "d")
 
     def test_unknown_strategy_does_not_call_run(self) -> None:
         """未知策略 ID 英文错误，不调用 run_func。"""
@@ -82,6 +90,37 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "UNKNOWN_STRATEGY_ID")
         self.assertIn("not_a_real_strategy", result["error"]["message"])
         self.assertEqual(called["n"], 0)
+
+    def test_run_kwargs_exclude_freq_config_key(self) -> None:
+        """qt.run 不得接收 freq：该键不是 QT_CONFIG 内置参数。"""
+
+        print("\n[TestAiBacktestSkill] freq is Operator.run_freq, not qt.run config")
+        captured = {}
+
+        def fake_run(op, **kwargs):
+            captured["kwargs"] = dict(kwargs)
+            return {"final_value": 1.0, "annual_rtn": 0.01, "mdd": 0.02}
+
+        def fake_operator(sid, run_freq="d"):
+            captured["sid"] = sid
+            captured["run_freq"] = run_freq
+            return {"id": sid}
+
+        _, handler = build_backtest_run_skill(
+            run_func=fake_run,
+            operator_factory=fake_operator,
+            list_func=lambda: ["macd"],
+        )
+        result = handler(strategy_id="macd", freq="w")
+        print(" ok:", result["ok"])
+        print(" run kwargs:", captured.get("kwargs"))
+        print(" operator run_freq:", captured.get("run_freq"))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("freq", captured["kwargs"])
+        self.assertEqual(captured["run_freq"], "w")
+        self.assertEqual(result["metrics"]["final_value"], 1.0)
+        self.assertEqual(result["metrics"]["annual_rtn"], 0.01)
+        self.assertEqual(result["metrics"]["mdd"], 0.02)
 
 
 if __name__ == "__main__":

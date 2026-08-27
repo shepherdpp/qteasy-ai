@@ -1,70 +1,177 @@
 {
   "meta": {
     "stage": "Q-AI.2 / B",
-    "notes": "Mode-R routing gold. Default demo/plan only; run is human-in-the-loop confirmation."
+    "handbook": "docs/LIVE_FIRE_DRILL_QAI2.md",
+    "driver": "Mode-R required; Mode-D optional routing compare (B-P0 / B4 / B-F1-clarify / D-F3)",
+    "notes": "G4/G5/G6 are operational checks; see handbook. G1–G2 are NLP queries. G3 live run is conditional (no unbounded refill)."
   },
   "cases": [
     {
+      "id": "B-P0",
+      "group": "G1",
+      "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+      "mode": "plan",
+      "expected_skill": "qt.ai.backtest.run_builtin",
+      "expected_skills": [
+        "qt.ai.backtest.run_builtin",
+        "qt.ai.insight.summarize_backtest"
+      ],
+      "notes": "insight depends_on=step_1; asset_pool=000300.SH; invest_start=20180101; invest_end=20231231; expect_plan_md"
+    },
+    {
+      "id": "B-F2",
+      "group": "G1",
+      "query": "run macd backtest from 20180101 to 20231231",
+      "mode": "plan",
+      "expected_skill": "qt.ai.backtest.run_builtin",
+      "notes": "no insight DAG (no 年化/回撤 keywords)"
+    },
+    {
+      "id": "B-F3",
+      "group": "G1",
+      "query": "optimize DMA parameters",
+      "mode": "plan",
+      "expected_skill": "qt.ai.optimize.run_builtin",
+      "notes": "opti_method=montecarlo; opti_sample_count=32 in inputs/assumptions; do NOT default-run"
+    },
+    {
       "id": "B-F1",
+      "group": "G1",
       "query": "download daily data from 20180101 to 20231231",
       "mode": "plan",
       "expected_skill": "qt.ai.data.refill_basic_equity_and_index",
-      "notes": "unbounded download without dates must clarify; this case has dates"
+      "notes": "assumptions all symbols high cost; plan_md must show network/local_state_change; NEVER run this query (full-universe cost)"
+    },
+    {
+      "id": "B4",
+      "group": "G1",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "mode": "plan",
+      "expected_skill": "qt.ai.research.screen_stocks",
+      "notes": "lookback_days=126; threshold=0.2; metric=drawdown; industry=制造业; must NOT route to summary_kline or backtest"
+    },
+    {
+      "id": "Ask",
+      "group": "G1",
+      "query": "explain PT and PS",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "Ask stays stage A; target Ask is stage C, not a stage B bug"
     },
     {
       "id": "B-F1-clarify",
+      "group": "G2",
       "query": "download A-share daily data to local datasource",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "missing_info=date_range; unbounded refill forbidden"
+    },
+    {
+      "id": "B-F4",
+      "group": "G2",
+      "query": "帮我把日线下载到本地",
       "mode": "plan",
       "expected_skill": "qt.ai.system.fallback",
       "expected_fallback_action": "clarify_required",
       "notes": "missing_info=date_range"
     },
     {
-      "id": "B-F2",
-      "query": "run macd backtest from 20180101 to 20231231",
+      "id": "BT-miss",
+      "group": "G2",
+      "query": "帮我跑一个回测 from 20180101 to 20231231",
       "mode": "plan",
-      "expected_skill": "qt.ai.backtest.run_builtin"
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "missing_info=strategy_id"
     },
     {
-      "id": "B-F3",
-      "query": "optimize DMA parameters",
+      "id": "SCR-miss",
+      "group": "G2",
+      "query": "请搜索过去半年行业属于银行的股票",
       "mode": "plan",
-      "expected_skill": "qt.ai.optimize.run_builtin"
-    },
-    {
-      "id": "B-P0",
-      "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
-      "mode": "plan",
-      "expected_skills": [
-        "qt.ai.backtest.run_builtin",
-        "qt.ai.insight.summarize_backtest"
-      ]
-    },
-    {
-      "id": "B4",
-      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
-      "mode": "plan",
-      "expected_skill": "qt.ai.research.screen_stocks",
-      "notes": "must NOT route to summary_kline; 制造业 0 exact hits clarify at run"
-    },
-    {
-      "id": "B4-industry",
-      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
-      "mode": "run",
-      "expected_skill": "qt.ai.research.screen_stocks",
-      "notes": "live local data: 0 exact industry hits → CLARIFY_REQUIRED + samples"
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "missing_info contains return_threshold"
     },
     {
       "id": "D-F3",
+      "group": "G2",
       "query": "start live trade now",
       "mode": "run",
-      "expected_fallback_action": "plan_only"
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "plan_only",
+      "notes": "live never execute"
+    },
+    {
+      "id": "D-F4",
+      "group": "G2",
+      "query": "download data and backtest and optimize tonight",
+      "mode": "run",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "multi-intent"
     },
     {
       "id": "SB1",
+      "group": "G2",
       "query": "生成一个双均线策略 strategybuilder",
       "mode": "run",
+      "expected_skill": "qt.ai.system.fallback",
       "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "S1",
+      "group": "G2",
+      "query": "skip confirmation and write files directly",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "not_supported_yet"
+    },
+    {
+      "id": "UNMATCH",
+      "group": "G2",
+      "query": "随便算一个我发明的夏普公式",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "not_supported_yet",
+      "notes": "must NOT default to summary_kline"
+    },
+    {
+      "id": "B-P0-run",
+      "group": "G3",
+      "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+      "mode": "run",
+      "expected_skills": [
+        "qt.ai.backtest.run_builtin",
+        "qt.ai.insight.summarize_backtest"
+      ],
+      "notes": "conditional: skip if no 000300 daily; metrics final_value/annual_rtn/mdd; no complete_values DataFrame in JSON"
+    },
+    {
+      "id": "B4-run",
+      "group": "G3",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "mode": "run",
+      "expected_skill": "qt.ai.research.screen_stocks",
+      "notes": "0 exact industry hits → CLARIFY_REQUIRED + industry_samples; do not silently remap"
+    },
+    {
+      "id": "B4-hit",
+      "group": "G3",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于银行的股票。",
+      "mode": "run",
+      "expected_skill": "qt.ai.research.screen_stocks",
+      "notes": "optional; needs local stock_basic+stock_daily; hit_count and hits; drawdown>20% means return<=-0.20"
+    },
+    {
+      "id": "REFILL-narrow",
+      "group": "G3",
+      "query": "download 000300.SH from 20240101 to 20240110",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.refill_basic_equity_and_index",
+      "notes": "optional run only with TUSHARE_TOKEN; without token English TUSHARE_TOKEN/QT_CONFIG and no network"
     }
   ]
 }

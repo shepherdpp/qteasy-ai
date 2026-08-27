@@ -23,6 +23,58 @@ MAX_INDUSTRY_SAMPLES = 15
 DEFAULT_MAX_HITS = 50
 
 
+def _to_yyyymmdd(value: Any) -> str:
+    """将日期值格式化为 YYYYMMDD。"""
+
+    return pd.to_datetime(value).strftime("%Y%m%d")
+
+
+def _default_latest_screen_end() -> str:
+    """取本地 stock_daily 最新交易日；读不到则退回今天。"""
+
+    try:
+        from qteasy import QT_DATA_SOURCE
+
+        info = QT_DATA_SOURCE.get_table_info(
+            table="stock_daily",
+            verbose=False,
+            print_info=False,
+            human=False,
+        )
+        raw = (info or {}).get("pk_max2")
+        if raw is not None and str(raw).strip() not in {"", "N/A", "None"}:
+            return _to_yyyymmdd(raw)
+    except Exception:
+        pass
+    return pd.Timestamp.today().strftime("%Y%m%d")
+
+
+def _resolve_screen_window(
+    start: Optional[str],
+    end: Optional[str],
+    lookback_days: int,
+    latest_end_func: Callable[[], str],
+) -> tuple:
+    """为筛股补齐 start/end。
+
+    ``qt.get_history_data`` 不允许 start 与 end 同时为空；仅传 ``rows``
+    仍会在底层报错。缺省 end 取本地行情最新日，start 按 lookback 交易日
+    折成日历跨度（含节假日缓冲）。
+    """
+
+    end_value = str(end).strip() if end else ""
+    start_value = str(start).strip() if start else ""
+    if not end_value:
+        end_value = str(latest_end_func() or "").strip() or pd.Timestamp.today().strftime("%Y%m%d")
+    end_value = _to_yyyymmdd(end_value)
+    if not start_value:
+        span = max(int(lookback_days or 0) * 7 // 5 + 14, 8)
+        start_value = (pd.to_datetime(end_value) - pd.Timedelta(days=span)).strftime("%Y%m%d")
+    else:
+        start_value = _to_yyyymmdd(start_value)
+    return start_value, end_value
+
+
 def _series_from_history_item(item: Any) -> Optional[pd.Series]:
     """从单标的历史对象取出 close 序列。"""
 
@@ -106,6 +158,7 @@ def build_research_screen_skill(
     filter_stocks_func: Callable[..., pd.DataFrame] | None = None,
     history_func: Callable[..., Any] | None = None,
     list_industries_func: Callable[[], List[str]] | None = None,
+    latest_end_func: Callable[[], str] | None = None,
 ) -> tuple[SkillMetadata, Callable[..., dict]]:
     """构建只读筛股技能。
 
@@ -117,6 +170,8 @@ def build_research_screen_skill(
         注入行情读取（``get_history_data`` / ``get_kline``）。
     list_industries_func : callable, optional
         返回数据源中的行业短名列表，供 0 命中澄清。
+    latest_end_func : callable, optional
+        返回本地行情最新交易日（YYYYMMDD）；缺省读 stock_daily 主键。
 
     Returns
     -------
@@ -134,6 +189,8 @@ def build_research_screen_skill(
         history_func = qt.get_history_data
     if list_industries_func is None:
         list_industries_func = _default_list_industries
+    if latest_end_func is None:
+        latest_end_func = _default_latest_screen_end
 
     metadata = SkillMetadata(
         name="qt.ai.research.screen_stocks",
@@ -239,12 +296,19 @@ def build_research_screen_skill(
                         names[code] = str(pool.loc[code, "name"])
                     except Exception:
                         names[code] = code
+            start_date, end_date = _resolve_screen_window(
+                start,
+                end,
+                int(lookback_days or 126),
+                latest_end_func,
+            )
+            inputs_echo["start"] = start_date
+            inputs_echo["end"] = end_date
             history = history_func(
                 htype_names="close",
                 shares=symbols,
-                start=start,
-                end=end,
-                rows=int(lookback_days) if not start else None,
+                start=start_date,
+                end=end_date,
                 freq="d",
             )
             closes = _closes_by_symbol(history, symbols)
@@ -264,7 +328,10 @@ def build_research_screen_skill(
                 )
                 return result.to_dict()
             hits: List[Dict[str, Any]] = []
+            window = int(lookback_days or 0)
             for symbol, series in closes.items():
+                if window > 0 and len(series) > window:
+                    series = series.iloc[-window:]
                 start_close = float(series.iloc[0])
                 end_close = float(series.iloc[-1])
                 if start_close == 0:
@@ -276,11 +343,23 @@ def build_research_screen_skill(
                 else:
                     matched = ret >= abs(thresh)
                 if matched:
+                    try:
+                        start_px_date = _to_yyyymmdd(series.index[0])
+                    except Exception:
+                        start_px_date = str(series.index[0])
+                    try:
+                        end_px_date = _to_yyyymmdd(series.index[-1])
+                    except Exception:
+                        end_px_date = str(series.index[-1])
                     hits.append(
                         {
                             "symbol": symbol,
                             "name": names.get(symbol, symbol),
                             "return": float(ret),
+                            "start_price": start_close,
+                            "end_price": end_close,
+                            "start_date": start_px_date,
+                            "end_date": end_px_date,
                         }
                     )
             hits.sort(key=lambda item: item["return"])

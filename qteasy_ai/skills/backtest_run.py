@@ -157,16 +157,21 @@ def build_backtest_run_skill(
                 )
                 return result.to_dict()
             canonical = lower_map[sid.lower()]
-            operator = operator_factory(canonical)
+            run_freq = freq or "d"
+            try:
+                operator = operator_factory(canonical, run_freq=run_freq)
+            except TypeError:
+                # 单测注入的 factory 可能只接收 strategy_id
+                operator = operator_factory(canonical)
             import qteasy as qt
 
+            # freq 不是 QT_CONFIG 键；运行频率应落在 Operator(run_freq=...) 上
             run_kwargs: Dict[str, Any] = {
                 "mode": getattr(qt, "BACKTEST_MODE", 1),
                 "visual": False,
                 "report": False,
                 "trade_log": True,
                 "asset_pool": pool,
-                "freq": freq or "d",
             }
             if start_date:
                 run_kwargs["invest_start"] = start_date

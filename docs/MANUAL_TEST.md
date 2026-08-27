@@ -4,7 +4,7 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 
 **Q-AI.1.5（阶段 B0）手测**：见 [`LIVE_FIRE_DRILL_QAI15.md`](LIVE_FIRE_DRILL_QAI15.md) + 语料 [`tests/ai_corpus/b0_manual_corpus.json`](../tests/ai_corpus/b0_manual_corpus.json)。
 
-**Q-AI.2（阶段 B）手测语料**：[`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json)（筛股金句、P0 回测 DAG、下载缺日期澄清）。
+**Q-AI.2（阶段 B）实弹**：见 [`LIVE_FIRE_DRILL_QAI2.md`](LIVE_FIRE_DRILL_QAI2.md) + 语料 [`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json)（P0 DAG、筛股、refill 安全协议、金标准 Gap 栏）。
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 

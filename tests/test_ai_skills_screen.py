@@ -37,19 +37,21 @@ class TestAiScreenSkill(unittest.TestCase):
             return pool
 
         def fake_history(**kwargs):
-            print(" history shares:", kwargs.get("shares"))
+            print(" history kwargs:", {k: kwargs.get(k) for k in ("start", "end", "rows", "shares")})
             return history
 
         meta, handler = build_research_screen_skill(
             filter_stocks_func=fake_filter,
             history_func=fake_history,
             list_industries_func=lambda: ["银行", "电气设备"],
+            latest_end_func=lambda: "20241231",
         )
         result = handler(industry="银行", threshold=0.20, metric="drawdown", lookback_days=126)
         hits = result["payload"]["hits"]
         print(" metrics:", result["metrics"])
         print(" hits:", hits)
         print(" returns gold: 000001.SZ", 75.0 / 100.0 - 1.0, "000002.SZ", 90.0 / 100.0 - 1.0)
+        print(" prices gold: start", 100.0, "end", 75.0, "dates", "20240101", "20240105")
         self.assertTrue(result["ok"])
         self.assertFalse(meta.side_effects.network)
         self.assertFalse(meta.side_effects.filesystem_write)
@@ -57,6 +59,10 @@ class TestAiScreenSkill(unittest.TestCase):
         self.assertEqual(hits[0]["symbol"], "000001.SZ")
         self.assertEqual(hits[0]["name"], "Alpha")
         self.assertAlmostEqual(hits[0]["return"], -0.25, places=10)
+        self.assertAlmostEqual(hits[0]["start_price"], 100.0, places=10)
+        self.assertAlmostEqual(hits[0]["end_price"], 75.0, places=10)
+        self.assertEqual(hits[0]["start_date"], "20240101")
+        self.assertEqual(hits[0]["end_date"], "20240105")
         self.assertEqual([item["symbol"] for item in hits], ["000001.SZ"])
 
     def test_unknown_industry_clarify_with_samples(self) -> None:
@@ -82,6 +88,50 @@ class TestAiScreenSkill(unittest.TestCase):
         self.assertIn("industry_samples", result["error"]["details"])
         self.assertEqual(result["error"]["details"]["industry_samples"][:2], ["银行", "电气设备"])
         self.assertEqual(called_filter["n"], 0)
+
+    def test_missing_dates_resolved_before_history(self) -> None:
+        """未给 start/end 时必须补齐窗口，禁止把两端空值传给 get_history_data。"""
+
+        print("\n[TestAiScreenSkill] resolve start/end from lookback")
+        captured = {}
+        pool = pd.DataFrame(
+            {"name": ["Alpha"], "industry": ["仓储物流"]},
+            index=["000001.SZ"],
+        )
+        idx = pd.date_range("2024-06-01", periods=5, freq="D")
+        history = {"000001.SZ": pd.DataFrame({"close": [100.0, 90.0, 80.0, 70.0, 60.0]}, index=idx)}
+
+        def fake_history(**kwargs):
+            captured.update(kwargs)
+            return history
+
+        _, handler = build_research_screen_skill(
+            filter_stocks_func=lambda **kwargs: pool,
+            history_func=fake_history,
+            list_industries_func=lambda: ["仓储物流"],
+            latest_end_func=lambda: "20240827",
+        )
+        result = handler(industry="仓储物流", threshold=0.20, metric="drawdown", lookback_days=126)
+        expected_start = (pd.Timestamp("20240827") - pd.Timedelta(days=126 * 7 // 5 + 14)).strftime("%Y%m%d")
+        print(" ok:", result["ok"])
+        print(" history start/end:", captured.get("start"), captured.get("end"))
+        print(" expected start:", expected_start)
+        print(" echo start/end:", result["inputs_echo"]["start"], result["inputs_echo"]["end"])
+        hit = result["payload"]["hits"][0]
+        print(" hit_count:", result["metrics"]["hit_count"], "return:", hit["return"])
+        print(" hit prices:", hit.get("start_price"), hit.get("end_price"), hit.get("start_date"), hit.get("end_date"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured.get("end"), "20240827")
+        self.assertEqual(captured.get("start"), expected_start)
+        self.assertIsNone(captured.get("rows"))
+        self.assertEqual(result["inputs_echo"]["start"], expected_start)
+        self.assertEqual(result["inputs_echo"]["end"], "20240827")
+        self.assertEqual(result["metrics"]["hit_count"], 1)
+        self.assertAlmostEqual(hit["return"], 60.0 / 100.0 - 1.0, places=10)
+        self.assertAlmostEqual(hit["start_price"], 100.0, places=10)
+        self.assertAlmostEqual(hit["end_price"], 60.0, places=10)
+        self.assertEqual(hit["start_date"], "20240601")
+        self.assertEqual(hit["end_date"], "20240605")
 
 
 if __name__ == "__main__":
