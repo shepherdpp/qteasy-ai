@@ -1,0 +1,88 @@
+# coding=utf-8
+# ======================================
+# File: test_ai_skills_backtest.py
+# Author: Jackie PENG
+# Contact: jackie.pengzhao@gmail.com
+# Created: 2026-08-27
+# Desc:
+# Unittest for qteasy-ai stage B backtest skill
+# ======================================
+
+import unittest
+
+from qteasy_ai.skills.backtest_run import build_backtest_run_skill
+
+
+class TestAiBacktestSkill(unittest.TestCase):
+    """测试内置策略回测 L1（DI run_func）。"""
+
+    def test_backtest_metrics_gold_values(self) -> None:
+        """注入金标准 final_value/annual_rtn/mdd，禁止只比两路相等。"""
+
+        print("\n[TestAiBacktestSkill] gold metrics")
+        captured = {}
+
+        def fake_run(op, **kwargs):
+            captured["op"] = op
+            captured.update(kwargs)
+            return {
+                "final_value": 112000.0,
+                "annual_rtn": 0.12,
+                "mdd": 0.25,
+                "peak_date": "2020-01-15",
+                "valley_date": "2020-03-23",
+                "recover_date": "2020-11-01",
+                "complete_values": "MUST_NOT_APPEAR",
+                "trade_log_file": "/tmp/trade_log_demo.csv",
+            }
+
+        meta, handler = build_backtest_run_skill(
+            run_func=fake_run,
+            operator_factory=lambda sid: {"id": sid},
+            list_func=lambda: ["macd", "dma"],
+        )
+        result = handler(
+            strategy_id="macd",
+            asset_pool="000300.SH",
+            invest_start="20180101",
+            invest_end="20231231",
+        )
+        print(" metrics:", result["metrics"])
+        print(" artifacts:", result["artifacts"])
+        print(" run kwargs mode/visual/report:", captured.get("mode"), captured.get("visual"), captured.get("report"))
+        self.assertTrue(result["ok"])
+        self.assertTrue(meta.side_effects.filesystem_write)
+        self.assertEqual(result["metrics"]["final_value"], 112000.0)
+        self.assertEqual(result["metrics"]["annual_rtn"], 0.12)
+        self.assertEqual(result["metrics"]["mdd"], 0.25)
+        self.assertEqual(result["metrics"]["peak_date"], "2020-01-15")
+        self.assertEqual(result["metrics"]["valley_date"], "2020-03-23")
+        self.assertEqual(result["metrics"]["recover_date"], "2020-11-01")
+        self.assertNotIn("complete_values", result["metrics"])
+        self.assertEqual(result["artifacts"][0]["kind"], "trade_log")
+        self.assertEqual(captured.get("visual"), False)
+        self.assertEqual(captured.get("report"), False)
+        self.assertEqual(captured.get("trade_log"), True)
+        self.assertEqual(captured.get("mode"), 1)
+
+    def test_unknown_strategy_does_not_call_run(self) -> None:
+        """未知策略 ID 英文错误，不调用 run_func。"""
+
+        print("\n[TestAiBacktestSkill] unknown strategy")
+        called = {"n": 0}
+        _, handler = build_backtest_run_skill(
+            run_func=lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+            operator_factory=lambda sid: None,
+            list_func=lambda: ["macd"],
+        )
+        result = handler(strategy_id="not_a_real_strategy")
+        print(" result:", result)
+        print(" run called:", called["n"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "UNKNOWN_STRATEGY_ID")
+        self.assertIn("not_a_real_strategy", result["error"]["message"])
+        self.assertEqual(called["n"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

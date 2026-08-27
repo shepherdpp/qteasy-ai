@@ -82,7 +82,7 @@ class SkillMetadata:
     required_capabilities: List[str] = field(default_factory=list)
     qteasy_entrypoints: List[str] = field(default_factory=list)
     skill_kind: str = "api"
-    """技能子标签：``api``（默认 L1 原子）或 ``guide``（环境引导，仍属 L1）。"""
+    """技能子标签：``api``（默认 L1 原子）、``guide``（环境引导）、``insight``（只读归因）。"""
 
 
 @dataclass
@@ -160,6 +160,22 @@ class SkillResult:
     warnings: List[str] = field(default_factory=list)
     error: Optional[SkillError] = None
     payload: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转为技能 handler 统一返回的字典。"""
+
+        return {
+            "ok": self.ok,
+            "skill_name": self.skill_name,
+            "run_id": self.run_id,
+            "inputs_echo": self.inputs_echo,
+            "metrics": self.metrics,
+            "data_summary": self.data_summary,
+            "payload": self.payload,
+            "warnings": self.warnings,
+            "error": None if self.error is None else self.error.__dict__,
+            "artifacts": self.artifacts,
+        }
 
 
 @dataclass

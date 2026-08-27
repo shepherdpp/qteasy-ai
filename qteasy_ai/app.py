@@ -41,10 +41,15 @@ from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
 from .skills import (
+    build_backtest_run_skill,
     build_check_tushare_skill,
+    build_data_refill_skill,
     build_data_summary_skill,
     build_factor_ic_summary_skill,
+    build_insight_backtest_skill,
+    build_optimize_run_skill,
     build_overview_tables_skill,
+    build_research_screen_skill,
     build_strategy_meta_get_skill,
     build_strategy_meta_list_skill,
     build_system_fallback_skill,
@@ -53,18 +58,12 @@ from .skills import (
 
 
 def build_default_registry() -> SkillRegistry:
-    """构建阶段A默认 Registry。
+    """构建阶段 B 默认 Registry。
 
     Returns
     -------
     SkillRegistry
-        已注册阶段A默认只读技能的注册中心实例。
-
-    Notes
-    -----
-    这里按固定顺序注册技能，便于：
-    - 测试时得到稳定输出；
-    - 阅读时清楚看到阶段A能力边界。
+        已注册只读、引导与 L1/L2/L3 技能的注册中心实例。
     """
 
     registry = SkillRegistry()
@@ -77,6 +76,11 @@ def build_default_registry() -> SkillRegistry:
         build_check_tushare_skill,
         build_overview_tables_skill,
         build_factor_ic_summary_skill,
+        build_data_refill_skill,
+        build_backtest_run_skill,
+        build_optimize_run_skill,
+        build_research_screen_skill,
+        build_insight_backtest_skill,
     ]:
         metadata, handler = builder()
         registry.register(metadata, handler)
@@ -209,10 +213,8 @@ class QteasyAssistant:
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan + 确认执行。
 
-        工作流程：
-        1) 先由 Planner 生成 ToolPlan；
-        2) 将 execution_mode 切换为 execute；
-        3) 交给 Executor 实际执行并写入 runs。
+        CLI ``run`` 视为人在回路的一次确认：生成计划后 ``confirm=True`` 执行。
+        ``profile.agent.allow_*`` 本阶段不读取、不门控。
         """
 
         plan = self._build_plan(query, mode="plan")

@@ -163,10 +163,18 @@ class Planner:
         q_lower = query.lower()
         steps = self._infer_steps(query=query, q_lower=q_lower)
         assumptions = {
-            "planner": "hybrid_candidate_stage_b0",
+            "planner": "hybrid_candidate_stage_b",
             "provider_enabled": self.provider is not None,
             "env_facts_used": bool(self.env_facts),
         }
+        for step in steps:
+            if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):
+                assumptions["refill_universe"] = "all symbols for those tables (high cost)"
+            if step.skill_name == "qt.ai.optimize.run_builtin":
+                assumptions["opti_method"] = step.inputs.get("opti_method", "montecarlo")
+                assumptions["opti_sample_count"] = step.inputs.get("opti_sample_count", 32)
+            if step.skill_name == "qt.ai.research.screen_stocks":
+                assumptions["screen_end"] = "latest trading day in local datasource"
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=user_query,
@@ -204,12 +212,19 @@ class Planner:
         """构造带 registry 元数据的 ToolStep。"""
 
         meta = self.registry.get_metadata(skill_name)
+        side = meta.side_effects
+        if side.local_state_change or side.filesystem_write:
+            cost = "high"
+        elif side.heavy_compute:
+            cost = "high"
+        else:
+            cost = "low"
         return ToolStep(
             step_id=step_id,
             skill_name=skill_name,
             inputs=inputs,
             side_effects=meta.side_effects,
-            estimated_cost="low",
+            estimated_cost=cost,
             depends_on=list(depends_on or []),
             run_if="",
             on_fail="stop",
@@ -217,7 +232,7 @@ class Planner:
         )
 
     def _infer_steps(self, *, query: str, q_lower: str) -> List[ToolStep]:
-        """根据 query 推断一步或多步技能调用（B0 规则路径）。"""
+        """根据 query 推断一步或多步技能调用（阶段 B 规则路径）。"""
 
         fallback_inputs = self._infer_fallback_inputs(query=query, q_lower=q_lower)
         if fallback_inputs is not None:
@@ -228,6 +243,26 @@ class Planner:
                     inputs=fallback_inputs,
                 )
             ]
+
+        screen_steps = self._infer_screen_steps(query=query, q_lower=q_lower)
+        if screen_steps is not None:
+            return screen_steps
+
+        refill_steps = self._infer_refill_steps(query=query, q_lower=q_lower)
+        if refill_steps is not None:
+            return refill_steps
+
+        optimize_steps = self._infer_optimize_steps(query=query, q_lower=q_lower)
+        if optimize_steps is not None:
+            return optimize_steps
+
+        backtest_steps = self._infer_backtest_steps(query=query, q_lower=q_lower)
+        if backtest_steps is not None:
+            return backtest_steps
+
+        insight_steps = self._infer_insight_only_steps(query=query, q_lower=q_lower)
+        if insight_steps is not None:
+            return insight_steps
 
         if self._is_env_query(q_lower):
             return [
@@ -259,8 +294,7 @@ class Planner:
             else:
                 skill_name = "qt.ai.strategy_meta.list"
                 inputs = {}
-            steps = [self._make_step(step_id="step_1", skill_name=skill_name, inputs=inputs)]
-            return steps
+            return [self._make_step(step_id="step_1", skill_name=skill_name, inputs=inputs)]
 
         if self._is_factor_ic_query(q_lower):
             primary = self._make_step(
@@ -270,7 +304,6 @@ class Planner:
             )
             return self._maybe_prepend_table_gate([primary], data_intent=True)
 
-        # summary / 摘要 / 波动率 优先于 kline 导出（修实弹误路由）
         if self._is_summary_query(q_lower):
             primary = self._make_step(
                 step_id="step_1",
@@ -287,12 +320,20 @@ class Planner:
             )
             return self._maybe_prepend_table_gate([primary], data_intent=True)
 
-        primary = self._make_step(
-            step_id="step_1",
-            skill_name="qt.ai.data.summary_kline",
-            inputs=self._extract_market_inputs(query),
-        )
-        return self._maybe_prepend_table_gate([primary], data_intent=True)
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.system.fallback",
+                inputs={
+                    "query": query,
+                    "fallback_action": "not_supported_yet",
+                    "reason": "no_matching_skill",
+                    "hint": "No matching qteasy-ai skill for this query. Arbitrary stats/formulas are not supported.",
+                    "missing_info": "supported_skill",
+                    "next_step": "Try refill, builtin backtest/optimize, stock screen, kline summary, or strategy meta.",
+                },
+            )
+        ]
 
     def _maybe_prepend_table_gate(self, steps: List[ToolStep], *, data_intent: bool) -> List[ToolStep]:
         """当 env_facts 已记录核心表缺失时，前置 overview_tables。"""
@@ -361,6 +402,318 @@ class Planner:
 
         keywords = ["factor ic", "因子 ic", "因子ic", "ic summary", "ic 摘要", "information coefficient"]
         return any(item in q_lower for item in keywords)
+
+    def _fallback_step_inputs(
+        self,
+        *,
+        query: str,
+        action: str,
+        reason: str,
+        hint: str,
+        missing_info: str,
+        next_step: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """构造 system.fallback 输入。"""
+
+        payload: Dict[str, Any] = {
+            "query": query,
+            "fallback_action": action,
+            "reason": reason,
+            "hint": hint,
+            "missing_info": missing_info,
+            "next_step": next_step,
+        }
+        if details:
+            payload["details"] = details
+        return payload
+
+    @staticmethod
+    def _is_download_query(q_lower: str) -> bool:
+        """判断是否为下载/refill 意图。"""
+
+        return any(item in q_lower for item in ["下载", "download", "refill"])
+
+    @staticmethod
+    def _is_backtest_query(q_lower: str) -> bool:
+        """判断是否为回测意图。"""
+
+        return any(item in q_lower for item in ["回测", "backtest"])
+
+    @staticmethod
+    def _is_optimize_query(q_lower: str) -> bool:
+        """判断是否为优化意图。"""
+
+        return any(item in q_lower for item in ["优化", "optimize"])
+
+    @staticmethod
+    def _is_screen_query(q_lower: str) -> bool:
+        """判断是否为筛股意图（避免落到 summary_kline）。"""
+
+        keywords = ["筛股", "筛选股票", "搜索股票", "搜股票", "screen stock", "stock screen", "screening"]
+        if any(item in q_lower for item in keywords):
+            return True
+        if ("搜索" in q_lower and "股票" in q_lower) or ("筛选" in q_lower and "股票" in q_lower):
+            return True
+        has_move = ("跌幅" in q_lower) or ("涨幅" in q_lower) or ("drawdown" in q_lower)
+        has_pool = ("股票" in q_lower) or ("industry" in q_lower) or ("行业" in q_lower)
+        return has_move and has_pool
+
+    @staticmethod
+    def _is_insight_commentary(q_lower: str) -> bool:
+        """判断回测问法是否同时要年化/回撤解读。"""
+
+        return any(
+            item in q_lower
+            for item in ["年化", "最大回撤", "解读", "归因", "summarize", "annual", "mdd"]
+        )
+
+    @staticmethod
+    def _is_insight_only_query(q_lower: str) -> bool:
+        """判断是否为只读总结已有回测，而非新开回测。"""
+
+        summarize = any(item in q_lower for item in ["总结回测", "解读回测", "summarize backtest", "上次回测", "归因"])
+        launching = any(item in q_lower for item in ["跑", "run ", "用 "])
+        return summarize and not launching
+
+    def _infer_screen_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """筛股路由：规则抽参；缺阈值/窗口或额外条件则澄清。"""
+
+        if not self._is_screen_query(q_lower):
+            return None
+        extra = []
+        for token in ("市盈率", "市值", "成交量", "换手", "申万", " pe", "pe/", "pb"):
+            if token in q_lower:
+                extra.append(token.strip())
+        if extra:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="screen_extra_conditions_not_supported",
+                        hint="PE/market-cap/volume/formula filters are not supported in this stage.",
+                        missing_info="supported_screen_conditions",
+                        next_step="Use lookback + drawdown/gain threshold + one exact Tushare industry name.",
+                        details={"unsupported": extra},
+                    ),
+                )
+            ]
+        params, missing = self._extract_screen_params(query=query, q_lower=q_lower)
+        if missing:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="screen_missing_fields",
+                        hint="Stock screen needs a lookback window and a return threshold.",
+                        missing_info="|".join(missing),
+                        next_step="Example: 过去半年跌幅>20%，行业属于银行.",
+                    ),
+                )
+            ]
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.research.screen_stocks",
+                inputs=params,
+            )
+        ]
+
+    def _extract_screen_params(self, *, query: str, q_lower: str) -> Tuple[Dict[str, Any], List[str]]:
+        """从筛股问法抽取 lookback / metric / threshold / industry。"""
+
+        params: Dict[str, Any] = {}
+        missing: List[str] = []
+        lookback_days: Optional[int] = None
+        if any(item in q_lower for item in ["半年", "6个月", "六个月", "six months"]):
+            lookback_days = 126
+        elif any(item in q_lower for item in ["3个月", "三个月", "一季度", "季度", "3 months"]):
+            lookback_days = 63
+        elif any(item in q_lower for item in ["1年", "一年", "过去一年", "one year"]):
+            lookback_days = 252
+        else:
+            day_match = re.search(r"(\d+)\s*(?:日|天|days?)", q_lower)
+            if day_match:
+                lookback_days = int(day_match.group(1))
+        if lookback_days is None:
+            missing.append("lookback")
+        else:
+            params["lookback_days"] = lookback_days
+
+        drop_match = re.search(r"(跌幅|drawdown|drop)\s*[>≥>=]{1,2}\s*(\d+(?:\.\d+)?)\s*%?", query, flags=re.IGNORECASE)
+        gain_match = re.search(r"(涨幅|gain|rally)\s*[>≥>=]{1,2}\s*(\d+(?:\.\d+)?)\s*%?", query, flags=re.IGNORECASE)
+        if drop_match:
+            params["metric"] = "drawdown"
+            params["threshold"] = float(drop_match.group(2)) / 100.0
+        elif gain_match:
+            params["metric"] = "gain"
+            params["threshold"] = float(gain_match.group(2)) / 100.0
+        else:
+            missing.append("return_threshold")
+
+        industry = ""
+        industry_match = re.search(r"行业(?:属于|为|是|:|：)\s*([^\s，,的]+)", query)
+        if industry_match:
+            industry = industry_match.group(1).strip()
+        else:
+            en_match = re.search(r"industry\s*(?:is|=|:|：)\s*([A-Za-z0-9_\u4e00-\u9fff]+)", query, flags=re.IGNORECASE)
+            if en_match:
+                industry = en_match.group(1).strip()
+        if industry:
+            params["industry"] = industry
+        else:
+            missing.append("industry")
+        return params, missing
+
+    def _infer_refill_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """下载路由：缺日期澄清；无 token 时前置 check_tushare。"""
+
+        if not self._is_download_query(q_lower):
+            return None
+        market = self._extract_market_inputs(query)
+        start = market.get("start")
+        end = market.get("end")
+        if not start or not end:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="refill_date_range_required",
+                        hint="Download/refill requires an explicit start and end date. Unbounded full-history download is not allowed.",
+                        missing_info="date_range",
+                        next_step="Provide a date range such as 20180101 to 20231231 or 2018-2023.",
+                    ),
+                )
+            ]
+        inputs: Dict[str, Any] = {"start": start, "end": end, "tables": ["stock_daily", "index_daily"]}
+        if market.get("shares"):
+            inputs["symbols"] = market["shares"]
+        steps = [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.data.refill_basic_equity_and_index",
+                inputs=inputs,
+            )
+        ]
+        tushare = self.env_facts.get("tushare") if isinstance(self.env_facts.get("tushare"), dict) else {}
+        if tushare.get("token_present") is False:
+            gate = self._make_step(step_id="step_gate", skill_name="qt.ai.env.check_tushare", inputs={})
+            steps[0].step_id = "step_1"
+            steps = [gate, steps[0]]
+        return steps
+
+    def _infer_optimize_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """优化路由：缺 strategy_id 则澄清。"""
+
+        if not self._is_optimize_query(q_lower):
+            return None
+        strategy_id = self._extract_strategy_id(query)
+        if not strategy_id:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="optimize_strategy_id_missing",
+                        hint="Cannot determine built-in strategy id for optimize.",
+                        missing_info="strategy_id",
+                        next_step="Provide a built-in strategy id, e.g. DMA or macd.",
+                    ),
+                )
+            ]
+        market = self._extract_market_inputs(query)
+        inputs: Dict[str, Any] = {
+            "strategy_id": strategy_id,
+            "opti_method": "montecarlo",
+            "opti_sample_count": 32,
+        }
+        if market.get("shares"):
+            inputs["asset_pool"] = market["shares"]
+        if market.get("start"):
+            inputs["invest_start"] = market["start"]
+        if market.get("end"):
+            inputs["invest_end"] = market["end"]
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.optimize.run_builtin",
+                inputs=inputs,
+            )
+        ]
+
+    def _infer_backtest_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """回测路由；若同时要年化/回撤解读则追加 insight DAG。"""
+
+        if not self._is_backtest_query(q_lower):
+            return None
+        if self._is_insight_only_query(q_lower):
+            return None
+        strategy_id = self._extract_strategy_id(query)
+        if not strategy_id:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="backtest_strategy_id_missing",
+                        hint="Cannot determine built-in strategy id for backtest.",
+                        missing_info="strategy_id",
+                        next_step="Provide a built-in strategy id, e.g. macd.",
+                    ),
+                )
+            ]
+        market = self._extract_market_inputs(query)
+        inputs: Dict[str, Any] = {"strategy_id": strategy_id, "freq": market.get("freq") or "d"}
+        if market.get("shares"):
+            inputs["asset_pool"] = market["shares"]
+        if market.get("start"):
+            inputs["invest_start"] = market["start"]
+        if market.get("end"):
+            inputs["invest_end"] = market["end"]
+        backtest = self._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.backtest.run_builtin",
+            inputs=inputs,
+        )
+        if not self._is_insight_commentary(q_lower):
+            return [backtest]
+        insight = self._make_step(
+            step_id="step_2",
+            skill_name="qt.ai.insight.summarize_backtest",
+            inputs={},
+            depends_on=["step_1"],
+        )
+        insight.run_if = "all_dependencies_ok"
+        return [backtest, insight]
+
+    def _infer_insight_only_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """只读总结已有回测。"""
+
+        if not self._is_insight_only_query(q_lower) and not (
+            ("insight" in q_lower or "归因" in q_lower) and not self._is_backtest_query(q_lower)
+        ):
+            if not (("总结" in q_lower or "summarize" in q_lower) and self._is_backtest_query(q_lower)):
+                return None
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.insight.summarize_backtest",
+                inputs={},
+            )
+        ]
 
     def _infer_single_step(self, *, query: str, q_lower: str) -> ToolStep:
         """兼容旧调用：返回推断结果的第一步。"""
@@ -437,14 +790,14 @@ class Planner:
                 "next_step": "Ask for a live-trade plan first, then confirm each high-risk step manually.",
             }
 
-        if contains_download or contains_backtest or contains_optimize or contains_codegen:
+        if contains_codegen:
             return {
                 "query": query,
                 "fallback_action": "not_supported_yet",
-                "reason": "feature_not_implemented_in_stage_a",
-                "hint": "This capability is planned for later stages. Use available read-only skills for now.",
-                "missing_info": "supported_stage_a_skill",
-                "next_step": "Try read-only tasks such as strategy list/get, kline summary, and kline export.",
+                "reason": "strategy_builder_not_supported",
+                "hint": "StrategyBuilder / strategy codegen is not available in this stage.",
+                "missing_info": "supported_stage_b_skill",
+                "next_step": "Use built-in strategy ids with backtest/optimize, or read-only strategy_meta.",
             }
 
         date_match = re.findall(r"(20\d{2}[-/]?\d{2}[-/]?\d{2})", query)
@@ -506,6 +859,28 @@ class Planner:
             "param",
             "parameter",
             "parameters",
+            "optimize",
+            "optimization",
+            "backtest",
+            "download",
+            "refill",
+            "run",
+            "using",
+            "with",
+            "from",
+            "please",
+            "data",
+            "local",
+            "daily",
+            "share",
+            "shares",
+            "stock",
+            "stocks",
+            "index",
+            "screen",
+            "search",
+            "summary",
+            "summarize",
         }
         normalized = unicodedata.normalize("NFKC", query)
         normalized_lower = normalized.lower()
@@ -555,19 +930,41 @@ class Planner:
         """
 
         result: Dict[str, Any] = {}
+        year_range = re.search(
+            r"(20\d{2})\s*年?\s*(?:[~\-–—]|至|到|to)\s*(20\d{2})\s*年?",
+            query,
+            flags=re.IGNORECASE,
+        )
+        if year_range:
+            y1 = int(year_range.group(1))
+            y2 = int(year_range.group(2))
+            if y1 <= y2:
+                result["start"] = f"{y1:04d}0101"
+                result["end"] = f"{y2:04d}1231"
+        alias_map = {
+            "沪深300": "000300.SH",
+            "csi300": "000300.SH",
+            "csi 300": "000300.SH",
+        }
+        q_lower = query.lower()
+        for alias, code in alias_map.items():
+            if alias.lower() in q_lower or alias in query:
+                result["shares"] = code
+                break
         symbol_match = re.search(r"(\d{6}\.(?:SH|SZ|BJ))", query, flags=re.IGNORECASE)
         if symbol_match:
             result["shares"] = symbol_match.group(1).upper()
-        else:
+        elif "shares" not in result:
             short_symbol = re.search(r"\b(\d{6})\b", query)
             if short_symbol:
                 # 阶段A的简化假设：纯6位代码优先按 SH 处理。
                 result["shares"] = short_symbol.group(1) + ".SH"
-        date_match = re.findall(r"(20\d{2}[-/]?\d{2}[-/]?\d{2})", query)
-        if date_match:
-            result["start"] = date_match[0].replace("-", "").replace("/", "")
-            if len(date_match) > 1:
-                result["end"] = date_match[1].replace("-", "").replace("/", "")
+        if "start" not in result:
+            date_match = re.findall(r"(20\d{2}[-/]?\d{2}[-/]?\d{2})", query)
+            if date_match:
+                result["start"] = date_match[0].replace("-", "").replace("/", "")
+                if len(date_match) > 1:
+                    result["end"] = date_match[1].replace("-", "").replace("/", "")
         freq_match = re.search(r"\b(1min|5min|15min|30min|60min|d|w|m)\b", query, flags=re.IGNORECASE)
         if freq_match:
             result["freq"] = freq_match.group(1)

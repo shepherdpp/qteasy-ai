@@ -34,6 +34,38 @@ from typing import Any, Dict, List, Optional
 
 from .config import ConfigCenter
 
+# 阶段 B 预留 Agent 授权 schema；默认全 false。CLI / assistant.run 本阶段不消费这些开关。
+DEFAULT_PROFILE: Dict[str, Any] = {
+    "agent": {
+        "allow_refill": False,
+        "allow_backtest": False,
+        "allow_optimize": False,
+    }
+}
+
+
+def apply_profile_defaults(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """将读取到的 profile 与默认 agent 开关合并。
+
+    Parameters
+    ----------
+    raw : dict or None
+        磁盘上的原始 profile；缺文件时为空字典。
+
+    Returns
+    -------
+    Dict[str, Any]
+        保证含 ``agent.allow_refill/allow_backtest/allow_optimize``，用户键保留。
+    """
+
+    profile: Dict[str, Any] = dict(raw or {})
+    agent_defaults = dict(DEFAULT_PROFILE["agent"])
+    existing_agent = profile.get("agent")
+    if not isinstance(existing_agent, dict):
+        existing_agent = {}
+    profile["agent"] = {**agent_defaults, **existing_agent}
+    return profile
+
 
 def _json_safe(value: Any) -> Any:
     """将对象递归转为 JSON 可序列化形态。
@@ -184,9 +216,9 @@ class MemoryStore:
         tmp_path.replace(path)
 
     def load_profile(self) -> Dict[str, Any]:
-        """读取 profile。"""
+        """读取 profile，并补齐默认 ``agent`` 授权开关。"""
 
-        return self._read_json(self.profile_path, default={})
+        return apply_profile_defaults(self._read_json(self.profile_path, default={}))
 
     def save_profile(self, profile: Dict[str, Any]) -> None:
         """保存 profile。

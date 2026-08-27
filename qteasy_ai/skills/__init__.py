@@ -5,14 +5,19 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-04-15
 # Desc:
-# qteasy AI 阶段A只读技能导出入口。
+# qteasy AI 技能导出入口。
 # ======================================
 
-"""阶段A/B0 只读与引导技能集合。"""
+"""阶段 A/B 技能集合。"""
 
+from .backtest_run import build_backtest_run_skill
+from .data_refill import build_data_refill_skill
 from .data_summary import build_data_summary_skill
 from .env_guide import build_check_tushare_skill, build_overview_tables_skill
+from .insight_backtest import build_insight_backtest_skill
+from .optimize_run import build_optimize_run_skill
 from .research_factor_ic import build_factor_ic_summary_skill
+from .research_screen import build_research_screen_skill
 from .strategy_meta import build_strategy_meta_get_skill, build_strategy_meta_list_skill
 from .system_fallback import build_system_fallback_skill
 from .visual_export import build_visual_export_skill
@@ -26,4 +31,9 @@ __all__ = [
     "build_check_tushare_skill",
     "build_overview_tables_skill",
     "build_factor_ic_summary_skill",
+    "build_data_refill_skill",
+    "build_backtest_run_skill",
+    "build_optimize_run_skill",
+    "build_research_screen_skill",
+    "build_insight_backtest_skill",
 ]

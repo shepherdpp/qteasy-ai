@@ -1,0 +1,88 @@
+# coding=utf-8
+# ======================================
+# File: test_ai_skills_screen.py
+# Author: Jackie PENG
+# Contact: jackie.pengzhao@gmail.com
+# Created: 2026-08-27
+# Desc:
+# Unittest for qteasy-ai stage B screen skill
+# ======================================
+
+import unittest
+
+import pandas as pd
+
+from qteasy_ai.skills.research_screen import build_research_screen_skill
+
+
+class TestAiScreenSkill(unittest.TestCase):
+    """测试只读筛股 L2（DI filter + history）。"""
+
+    def test_drawdown_threshold_gold_hits(self) -> None:
+        """跌幅>20%：-0.25 命中，-0.10 不命中。"""
+
+        print("\n[TestAiScreenSkill] gold hits")
+        pool = pd.DataFrame(
+            {"name": ["Alpha", "Beta"], "industry": ["银行", "银行"]},
+            index=["000001.SZ", "000002.SZ"],
+        )
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        history = {
+            "000001.SZ": pd.DataFrame({"close": [100.0, 90.0, 80.0, 76.0, 75.0]}, index=idx),
+            "000002.SZ": pd.DataFrame({"close": [100.0, 95.0, 92.0, 91.0, 90.0]}, index=idx),
+        }
+
+        def fake_filter(**kwargs):
+            print(" filter kwargs:", kwargs)
+            return pool
+
+        def fake_history(**kwargs):
+            print(" history shares:", kwargs.get("shares"))
+            return history
+
+        meta, handler = build_research_screen_skill(
+            filter_stocks_func=fake_filter,
+            history_func=fake_history,
+            list_industries_func=lambda: ["银行", "电气设备"],
+        )
+        result = handler(industry="银行", threshold=0.20, metric="drawdown", lookback_days=126)
+        hits = result["payload"]["hits"]
+        print(" metrics:", result["metrics"])
+        print(" hits:", hits)
+        print(" returns gold: 000001.SZ", 75.0 / 100.0 - 1.0, "000002.SZ", 90.0 / 100.0 - 1.0)
+        self.assertTrue(result["ok"])
+        self.assertFalse(meta.side_effects.network)
+        self.assertFalse(meta.side_effects.filesystem_write)
+        self.assertEqual(result["metrics"]["hit_count"], 1)
+        self.assertEqual(hits[0]["symbol"], "000001.SZ")
+        self.assertEqual(hits[0]["name"], "Alpha")
+        self.assertAlmostEqual(hits[0]["return"], -0.25, places=10)
+        self.assertEqual([item["symbol"] for item in hits], ["000001.SZ"])
+
+    def test_unknown_industry_clarify_with_samples(self) -> None:
+        """制造业 0 精确命中 → CLARIFY_REQUIRED 并附行业样例。"""
+
+        print("\n[TestAiScreenSkill] industry miss")
+        called_filter = {"n": 0}
+
+        def fake_filter(**kwargs):
+            called_filter["n"] += 1
+            return pd.DataFrame()
+
+        _, handler = build_research_screen_skill(
+            filter_stocks_func=fake_filter,
+            history_func=lambda **kwargs: {},
+            list_industries_func=lambda: ["银行", "电气设备"],
+        )
+        result = handler(industry="制造业", threshold=0.20, metric="drawdown")
+        print(" result error:", result["error"])
+        print(" filter called:", called_filter["n"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "CLARIFY_REQUIRED")
+        self.assertIn("industry_samples", result["error"]["details"])
+        self.assertEqual(result["error"]["details"]["industry_samples"][:2], ["银行", "电气设备"])
+        self.assertEqual(called_filter["n"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

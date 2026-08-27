@@ -51,6 +51,10 @@ qteasy-ai plan "show kline summary of 000300.SH from 20240101" --raw
 qteasy-ai run "export kline 000300.SH to png"
 ```
 
+**CLI `run` = 人在回路的一次确认**：生成计划后立即执行（含 refill / 回测 / 优化等高副作用 skill）。这与 Notebook 不同：`%%qtai --mode run` 仍只出 plan，必须再执行 `%%qtai --confirm <plan_id>`。
+
+`profile.json` 中的 `agent.allow_refill/allow_backtest/allow_optimize` 默认全为 `false`，本阶段**不**门控 CLI/`assistant.run()`（预留给以后的无人值守 Agent）。
+
 执行后可在返回结果中查看 `run_file` / `plan_md`，并追溯每个 step 的输入输出。
 
 ### 2.4 Provider 配置诊断
@@ -88,7 +92,7 @@ print(payload["plan"]["steps"])
 print(payload["plan_md"][:400])
 ```
 
-完整脚本见 `examples/ai_shell_stage_b0_demo.py`。
+完整脚本见 `examples/ai_shell_stage_b0_demo.py`。阶段 B（Q-AI.2）plan-only 演示见 `examples/ai_shell_stage_b_demo.py`。
 
 ## 3. Notebook 方式
 
@@ -165,12 +169,14 @@ Execute.
 - `--persist {bounded,audit,none}`：覆盖本次留存策略
 - `--keep`：将本次 run 标记为保留
 
-对于尚未实现的能力（例如下载/回测/优化/策略生成等），当前阶段会返回结构化回退结果，
+对于尚未实现的能力（例如 StrategyBuilder、实盘 execute、任意公式统计），当前阶段会返回结构化回退结果，
 `payload.fallback_action` 可能为：
 
-- `plan_only`
+- `plan_only`（实盘永远只出计划）
 - `not_supported_yet`
-- `clarify_required`
+- `clarify_required`（如下载缺起止日期、筛股缺阈值/窗口、行业名 0 精确命中）
+
+阶段 B 已实现：本地 refill、内置策略回测/优化、只读筛股、回测内生归因。Ask 目标态（Hybrid LLM 填槽）仍在阶段 C。
 
 当回退到 `system_fallback` 时，输出会明确给出：
 

@@ -55,6 +55,23 @@ def build_system_fallback_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
             "clarify_required": "CLARIFY_REQUIRED",
         }
         error_code = action_code_map.get(fallback_action, "NOT_SUPPORTED_YET")
+        extra_details = kwargs.get("details") if isinstance(kwargs.get("details"), dict) else {}
+        error_details = {
+            "fallback_action": fallback_action,
+            "reason": reason,
+            "missing_info": missing_info,
+            "next_step": next_step,
+        }
+        error_details.update(extra_details)
+        payload = {
+            "fallback_action": fallback_action,
+            "reason": reason,
+            "hint": hint,
+            "missing_info": missing_info,
+            "next_step": next_step,
+        }
+        if extra_details:
+            payload["details"] = extra_details
         result = SkillResult(
             ok=False,
             skill_name=metadata.name,
@@ -71,33 +88,11 @@ def build_system_fallback_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
             error=SkillError(
                 code=error_code,
                 message=hint or "Request cannot be executed in current stage.",
-                details={
-                    "fallback_action": fallback_action,
-                    "reason": reason,
-                    "missing_info": missing_info,
-                    "next_step": next_step,
-                },
+                details=error_details,
             ),
-            payload={
-                "fallback_action": fallback_action,
-                "reason": reason,
-                "hint": hint,
-                "missing_info": missing_info,
-                "next_step": next_step,
-            },
+            payload=payload,
         )
-        return {
-            "ok": result.ok,
-            "skill_name": result.skill_name,
-            "run_id": result.run_id,
-            "inputs_echo": result.inputs_echo,
-            "metrics": result.metrics,
-            "data_summary": result.data_summary,
-            "payload": result.payload,
-            "warnings": result.warnings,
-            "error": None if result.error is None else result.error.__dict__,
-            "artifacts": result.artifacts,
-        }
+        return result.to_dict()
 
     return metadata, handler
 

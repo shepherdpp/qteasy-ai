@@ -1,8 +1,10 @@
-# qteasy-ai Stage A — Manual test guide (Gold Standard)
+# qteasy-ai Stage A / B — Manual test guide (Gold Standard)
 
-Jackie-only smoke checklist for **0.1.x**. Automated regression: `python -m unittest discover -s tests -p 'test_ai_*' -v`.
+Jackie-only smoke checklist. Automated regression: `python -m unittest discover -s tests -p 'test_ai_*' -v`.
 
 **Q-AI.1.5（阶段 B0）手测**：见 [`LIVE_FIRE_DRILL_QAI15.md`](LIVE_FIRE_DRILL_QAI15.md) + 语料 [`tests/ai_corpus/b0_manual_corpus.json`](../tests/ai_corpus/b0_manual_corpus.json)。
+
+**Q-AI.2（阶段 B）手测语料**：[`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json)（筛股金句、P0 回测 DAG、下载缺日期澄清）。
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
@@ -60,11 +62,18 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 5. Ask: `assistant.ask("explain PT vs PS")` → `dry_run`, **zero** plan steps
 6. **B0 env**: `帮我看 Tushare 是否配好、本地缺哪些表` → `check_tushare` + `overview_tables`；payload 含 `plan_md`
 7. **B0 research**: `factor IC summary for selection pool` → `qt.ai.research.factor_ic_summary`（执行需注入 panel_builder / 有研究面板）
+8. **B refill**: `download daily data from 20180101 to 20231231` → `qt.ai.data.refill_basic_equity_and_index`（`plan` 零执行；无日期问法应 `clarify_required` / `date_range`）
+9. **B P0**: `用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤` → `backtest.run_builtin` 然后 `insight.summarize_backtest`（`depends_on`）
+10. **B screen**: `请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。` → `qt.ai.research.screen_stocks`（不得落到 `summary_kline`；制造业若 0 精确命中则 `CLARIFY_REQUIRED` 并附 `industry_samples`）
+11. **B optimize**: `optimize DMA parameters` → `qt.ai.optimize.run_builtin`（默认 `montecarlo` / `opti_sample_count=32`）
 
 ## 5. Boundaries (must hold)
 
-- High side-effect skills: plan shows `side_effects`; run only after explicit confirm in Notebook (`%%qtai --confirm <plan_id>`).
-- Unsupported queries → `qt.ai.system.fallback` with `fallback_action` / `next_step` (not silent wrong skill).
+- High side-effect skills: plan shows `side_effects`; **CLI `qteasy-ai run` = one human confirmation** and executes. Notebook `%%qtai --mode run` still requires `--confirm <plan_id>`.
+- `profile.agent.allow_*` defaults are all `false` and are **not** read by CLI/`assistant.run()` in this stage (reserved for unattended agents later).
+- Ask stays stage-A: `assistant.ask(...)` → `dry_run`, **zero** plan steps (Ask target / Hybrid LLM is stage C).
+- Live trade is always `plan_only` (never execute). StrategyBuilder / skip-confirmation remain `not_supported_yet`.
+- Unsupported queries → `qt.ai.system.fallback` with `fallback_action` / `next_step` (not silent wrong skill; never default to `summary_kline`).
 - No merge of `qt_ai_dev` into qteasy `master`.
 
 ## 6. Sign-off

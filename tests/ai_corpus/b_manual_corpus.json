@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "stage": "Q-AI.2 / B",
+    "notes": "Mode-R routing gold. Default demo/plan only; run is human-in-the-loop confirmation."
+  },
+  "cases": [
+    {
+      "id": "B-F1",
+      "query": "download daily data from 20180101 to 20231231",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.refill_basic_equity_and_index",
+      "notes": "unbounded download without dates must clarify; this case has dates"
+    },
+    {
+      "id": "B-F1-clarify",
+      "query": "download A-share daily data to local datasource",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "missing_info=date_range"
+    },
+    {
+      "id": "B-F2",
+      "query": "run macd backtest from 20180101 to 20231231",
+      "mode": "plan",
+      "expected_skill": "qt.ai.backtest.run_builtin"
+    },
+    {
+      "id": "B-F3",
+      "query": "optimize DMA parameters",
+      "mode": "plan",
+      "expected_skill": "qt.ai.optimize.run_builtin"
+    },
+    {
+      "id": "B-P0",
+      "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
+      "mode": "plan",
+      "expected_skills": [
+        "qt.ai.backtest.run_builtin",
+        "qt.ai.insight.summarize_backtest"
+      ]
+    },
+    {
+      "id": "B4",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "mode": "plan",
+      "expected_skill": "qt.ai.research.screen_stocks",
+      "notes": "must NOT route to summary_kline; 制造业 0 exact hits clarify at run"
+    },
+    {
+      "id": "B4-industry",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "mode": "run",
+      "expected_skill": "qt.ai.research.screen_stocks",
+      "notes": "live local data: 0 exact industry hits → CLARIFY_REQUIRED + samples"
+    },
+    {
+      "id": "D-F3",
+      "query": "start live trade now",
+      "mode": "run",
+      "expected_fallback_action": "plan_only"
+    },
+    {
+      "id": "SB1",
+      "query": "生成一个双均线策略 strategybuilder",
+      "mode": "run",
+      "expected_fallback_action": "not_supported_yet"
+    }
+  ]
+}

@@ -140,30 +140,32 @@
     {
       "id": "B-F1",
       "group": "G2",
-      "query": "download A-share daily data to local datasource",
-      "mode": "run",
-      "expected_fallback_action": "not_supported_yet"
+      "query": "download daily data from 20180101 to 20231231",
+      "mode": "plan",
+      "expected_skill": "qt.ai.data.refill_basic_equity_and_index",
+      "notes": "Q-AI.2: dated download routes to refill; missing dates still clarify"
     },
     {
       "id": "B-F2",
       "group": "G2",
       "query": "run macd backtest from 20180101 to 20231231",
-      "mode": "run",
-      "expected_fallback_action": "not_supported_yet"
+      "mode": "plan",
+      "expected_skill": "qt.ai.backtest.run_builtin"
     },
     {
       "id": "B-F3",
       "group": "G2",
       "query": "optimize DMA parameters",
-      "mode": "run",
-      "expected_fallback_action": "not_supported_yet"
+      "mode": "plan",
+      "expected_skill": "qt.ai.optimize.run_builtin"
     },
     {
       "id": "B-F4",
       "group": "G2",
       "query": "帮我把日线下载到本地",
       "mode": "run",
-      "expected_fallback_action": "not_supported_yet"
+      "expected_fallback_action": "clarify_required",
+      "notes": "missing_info=date_range; unbounded refill forbidden"
     },
     {
       "id": "D-F3",

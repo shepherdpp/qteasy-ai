@@ -130,7 +130,7 @@ class TestAiA0Refactor(unittest.TestCase):
         )
         registry.register(metadata, lambda **_: {"ok": True})
         planner = Planner(registry=registry)
-        plan = planner.build_plan("show me 000001")
+        plan = planner.build_plan("show summary of 000001")
 
         print("\n[TestAiA0Refactor] planner trace:", plan.planner_trace)
         self.assertIn("candidate_plan_id", plan.planner_trace)

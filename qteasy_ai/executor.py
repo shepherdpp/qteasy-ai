@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from .contracts import (
     PlanExecutionRecord,
@@ -138,7 +138,11 @@ class PlanExecutor:
                     step_results[step_id] = result
                     continue
 
-                result = self._execute_step_with_retry(step=step, confirm=confirm)
+                result = self._execute_step_with_retry(
+                    step=step,
+                    confirm=confirm,
+                    step_results=step_results,
+                )
                 ended_at = _utc_now_iso()
                 step_records.append(
                     PlanStepRecord(
@@ -252,16 +256,34 @@ class PlanExecutor:
             ],
         }
 
-    def _execute_step_with_retry(self, *, step: ToolStep, confirm: bool) -> Dict[str, Any]:
-        """按 on_fail/retry_limit 执行单步。"""
+    def _execute_step_with_retry(
+        self,
+        *,
+        step: ToolStep,
+        confirm: bool,
+        step_results: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """按 on_fail/retry_limit 执行单步，并把依赖步输出注入 inputs。"""
 
+        merged_inputs = dict(step.inputs)
+        for dep_id in step.depends_on:
+            dep_result = (step_results or {}).get(dep_id) or {}
+            if not dep_result.get("ok"):
+                continue
+            merged_inputs.setdefault("upstream_run_id", dep_result.get("run_id"))
+            if dep_result.get("metrics") is not None:
+                merged_inputs.setdefault("upstream_metrics", dep_result.get("metrics"))
+            if dep_result.get("artifacts"):
+                merged_inputs.setdefault("upstream_artifacts", dep_result.get("artifacts"))
+            if dep_result.get("payload"):
+                merged_inputs.setdefault("upstream_payload", dep_result.get("payload"))
         max_attempts = 1
         if step.on_fail == "retry":
             max_attempts = max(1, int(step.retry_limit) + 1)
         last_result: Dict[str, Any] = {}
         for attempt in range(1, max_attempts + 1):
             try:
-                result = self.registry.call(step.skill_name, confirmed=confirm, **step.inputs)
+                result = self.registry.call(step.skill_name, confirmed=confirm, **merged_inputs)
             except Exception as exc:
                 result = {
                     "ok": False,
