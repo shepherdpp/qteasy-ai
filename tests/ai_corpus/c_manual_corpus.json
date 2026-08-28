@@ -1,0 +1,161 @@
+{
+  "meta": {
+    "stage": "Q-AI.3 / C",
+    "handbook": "docs/LIVE_FIRE_DRILL_QAI3.md",
+    "driver": "Mode-R required (Ask Offline + Plan rule path); Mode-D optional (Ask LLM + Hybrid plan candidates)",
+    "notes": "G4/G5/G6 are operational checks; see handbook. G1–G3 are NLP queries. Pure ask must not increase runs/. Never run Hybrid refill/backtest candidates."
+  },
+  "cases": [
+    {
+      "id": "C-A1",
+      "group": "G1",
+      "query": "explain PT vs PS",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "expected_sources": ["pt_ps_vs"],
+      "notes": "mode=ask; English answer contains Position Target / PT / PS; no execution"
+    },
+    {
+      "id": "C-A2",
+      "group": "G1",
+      "query": "where does run_freq belong",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "expected_sources": ["operator_run_freq"],
+      "notes": "run_freq is Operator/Group, not qt.run"
+    },
+    {
+      "id": "C-A3",
+      "group": "G1",
+      "query": "difference between Ask Plan and Agent",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "expected_sources": ["ask_plan_agent"],
+      "notes": "Ask explains modes; does not emit executable steps"
+    },
+    {
+      "id": "C-A4",
+      "group": "G1",
+      "query": "what happens when trade price is NaN",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "expected_sources": ["common_errors"],
+      "notes": "NaN prices must not be filled with 1"
+    },
+    {
+      "id": "C-A5",
+      "group": "G1",
+      "query": "what is macd strategy",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "expected_sources": ["strategy_meta"],
+      "notes": "live qt.built_in_list/doc, not a skill handler"
+    },
+    {
+      "id": "C-F1",
+      "group": "G2",
+      "query": "list built-in strategies",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "suggest Plan/preview; no strategy_meta.list steps"
+    },
+    {
+      "id": "C-F2",
+      "group": "G2",
+      "query": "quantum foam meaning of life xyzzy-no-match",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "expected_error_code": "NOT_FOUND",
+      "notes": "KB miss; Mode-R must not call LLM"
+    },
+    {
+      "id": "C-F3",
+      "group": "G2",
+      "query": "download daily data from 20180101 to 20231231",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "ask must NOT emit refill step; suggest Plan instead"
+    },
+    {
+      "id": "C-P1",
+      "group": "G3",
+      "query": "list built-in strategies",
+      "mode": "preview",
+      "expected_skill": "qt.ai.strategy_meta.list",
+      "notes": "dry_run; same as plan(); may persist runs/ (unlike ask)"
+    },
+    {
+      "id": "C-P2",
+      "group": "G3",
+      "query": "list built-in strategies",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy_meta.list",
+      "notes": "preview ≡ plan dry-run"
+    },
+    {
+      "id": "C-D1",
+      "group": "G4",
+      "query": "explain PT vs PS",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "CLI --depth brief: python_code empty; handbook operational"
+    },
+    {
+      "id": "C-D2",
+      "group": "G4",
+      "query": "explain PT vs PS",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "CLI --depth standard: narrative + python_code + result_preview"
+    },
+    {
+      "id": "C-D3",
+      "group": "G4",
+      "query": "explain PT vs PS",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "CLI --depth deep: narrative contains Risk / assumptions"
+    },
+    {
+      "id": "C-H1",
+      "group": "G5",
+      "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+      "mode": "plan",
+      "expected_skill": "qt.ai.backtest.run_builtin",
+      "expected_skills": [
+        "qt.ai.backtest.run_builtin",
+        "qt.ai.insight.summarize_backtest"
+      ],
+      "notes": "Mode-D optional: candidate_source llm or rule+downgrade_reason; NEVER run"
+    },
+    {
+      "id": "C-H2",
+      "group": "G5",
+      "query": "download A-share daily data to local datasource",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "Mode-D optional: missing_info=date_range; gates must still hold"
+    },
+    {
+      "id": "C-H3",
+      "group": "G5",
+      "query": "随便算一个我发明的夏普公式",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "not_supported_yet",
+      "notes": "Mode-D optional: must NOT silent-route to summary_kline"
+    }
+  ]
+}

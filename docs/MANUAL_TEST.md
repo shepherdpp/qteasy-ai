@@ -1,10 +1,12 @@
-# qteasy-ai Stage A / B — Manual test guide (Gold Standard)
+# qteasy-ai Stage A / B / C — Manual test guide (Gold Standard)
 
 Jackie-only smoke checklist. Automated regression: `python -m unittest discover -s tests -p 'test_ai_*' -v`.
 
 **Q-AI.1.5（阶段 B0）手测**：见 [`LIVE_FIRE_DRILL_QAI15.md`](LIVE_FIRE_DRILL_QAI15.md) + 语料 [`tests/ai_corpus/b0_manual_corpus.json`](../tests/ai_corpus/b0_manual_corpus.json)。
 
-**Q-AI.2（阶段 B）实弹**：见 [`LIVE_FIRE_DRILL_QAI2.md`](LIVE_FIRE_DRILL_QAI2.md) + 语料 [`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json)（P0 DAG、筛股、refill 安全协议、金标准 Gap 栏）。
+**Q-AI.2（阶段 B）实弹**：**已关单（2026-08-28）**。手册 [`LIVE_FIRE_DRILL_QAI2.md`](LIVE_FIRE_DRILL_QAI2.md) + 语料 [`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json)。摘要：qteasy 仓 `knowledge/runlog/qteasy-ai-qai2-stage-b-checkpoint-2026-08.md`。
+
+**Q-AI.3（阶段 C）实弹**：**已关单（2026-08-28）**。手册 [`LIVE_FIRE_DRILL_QAI3.md`](LIVE_FIRE_DRILL_QAI3.md) + 语料 [`tests/ai_corpus/c_manual_corpus.json`](../tests/ai_corpus/c_manual_corpus.json)。摘要：qteasy 仓 `knowledge/runlog/qteasy-ai-qai3-stage-c-tdd-2026-08.md`。
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 

@@ -1,16 +1,20 @@
 # Q-AI.2（阶段 B）实弹演练手册（Jackie 手动执行）
 
+**状态：实弹关单（2026-08-28）。** G0–G6 已记；G4-3 Notebook confirm **Skip**；体验债见下方 G6，**不阻塞**关单。后手册：[Q-AI.3](LIVE_FIRE_DRILL_QAI3.md) **已关单**。
+
 基线：qteasy-ai **0.1.x + 阶段 B 未发版改动** · qteasy **>=2.6** · Python **py39**
 
 | 项 | 说明 |
 |----|------|
 | **目标** | 用户视角摸清支柱 2（refill / 内置回测 / 优化）+ 支柱 3（内生归因）+ 筛股 L2：路由、确认、metrics、行业澄清、高副作用标签 |
 | **非目标** | 阶段 C Ask / Hybrid LLM 填槽；StrategyBuilder；实盘 execute；全市场真下载 |
+| **关单摘要（真源）** | qteasy 仓 `knowledge/runlog/qteasy-ai-qai2-stage-b-checkpoint-2026-08.md` |
 | **语料 JSON** | [`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json) |
 | **回归冒烟** | `python tests/run_ai_manual_corpus.py`（current / future / error） |
 | **本地明细** | 复制 [`manual_record_template.md`](../tests/ai_corpus/manual_record_template.md) → `manual_record_YYYY-MM-DD.md`（**gitignore**） |
 | **对照** | 阶段 B TDD 行为边界；顶层金标准 **Q-AI.2 / 支柱 2+3**（Ask 归 **阶段 C**） |
 | **前手册** | [Q-AI.1](LIVE_FIRE_DRILL_QAI1.md)、[Q-AI.1.5 / B0](LIVE_FIRE_DRILL_QAI15.md)（env / summary / export **不重复全跑**） |
+| **后手册** | [Q-AI.3](LIVE_FIRE_DRILL_QAI3.md) |
 
 **驱动**：**Mode-R 必测**（Planner 仍为规则路径）。Mode-D 可选抽 4 条（B-P0 / B4 / B-F1-clarify / D-F3）确认路由与 R 相同。不要求 Mode-L。
 
@@ -154,7 +158,7 @@ qteasy-ai run "请搜索过去半年内所有跌幅>20%，且行业属于制造�
 
 | ID | 操作 | 期望 |
 |----|------|------|
-| G4-1 | 仅 `plan` B-P0 与 B-F1，再看 runs / 本地库 / trade_log | execution 空；dry_run **不**写库、不落 trade_log |
+| G4-1 | 仅 `plan` B-P0 与 B-F1，再看 runs / 本地库 / trade_log | `status=dry_run` 且 `execution.steps=[]`；**允许** bounded persist 计划到 `runs/`（不算失败）；**不**写 datasource、不落 trade_log |
 | G4-2 | `profile.agent.*` 全 false 时 CLI `run "list built-in strategies"` | 仍 success（开关 **不**门控 CLI/`assistant.run`） |
 | G4-3 | Notebook：`%%qtai --mode run` 对 refill/backtest | **不得**直接执行；须 `--confirm <plan_id>` |
 | G4-4 | 打开 B-F1 / B-P0 的 `plan_md` | 高副作用 step 出现 `filesystem_write` 或 `local_state_change` |
@@ -175,40 +179,73 @@ Mode-D 可选抽：B-P0 / B4 / B-F1-clarify / D-F3 — **路由应与 Mode-R 相
 
 ---
 
-## G6 金标准 Gap 工作坊（必填，纯记录）
+## G6 金标准 Gap 工作坊（2026-08-28 Jackie Mode-R + Mode-D）
 
-每条记 **符合 / Gap / 体验债**（不是代码 bug 也要写）：
+命题仍保留；下面是本轮手测结论（符合 / Gap / 体验债）。**本段不是关单。**
 
-- P0 中文惊艳句：年份区间与沪深300 别名是否一次命中？
-- CLI `run`=单次确认 vs Notebook 两步：是否符合你对「Plan 优先」的直觉？
-- 筛股「制造业」澄清：用户是否感到被指导，还是像失败？样例够不够用？
-- insight：有 trade_log 时邻近日摘要是否有用？「怎么改」只有 hint 是否够（金标准禁止 codegen）？
-- refill 缺 symbols 的 high-cost assumptions：`plan_md` 是否醒目到能拦住误 `run`？
-- Ask 仍 0 步：是否伤害场景一（已知归 C，记紧迫性而非阶段 B 缺陷）？
-- 真回测 metrics 是否像「内核算的」还是空/错键？（单元测试是 stub，实弹才能验切片）
-- 未匹配问法不再落到 summary：是否误伤你常用的模糊问法？
+### 命题对照
 
-记录文件续填：
+| 命题 | 结论 |
+|------|------|
+| P0 中文惊艳句：年份区间与沪深300 别名是否一次命中？ | **符合。** `2018-2023` + 沪深300 → `000300.SH` / `20180101`–`20231231`；Mode-R 与 Mode-D 降级后相同。 |
+| CLI `run`=单次确认 vs Notebook 两步 | **符合契约**（G4-2：`profile.agent.*` 全 false 时 CLI `run` 只读仍 success）。Notebook confirm（G4-3）本轮未跑，记 Skip。直觉是否「Plan 优先」仍开放。 |
+| 筛股「制造业」澄清：被指导还是像失败？样例够不够用？ | **有被指导感**（`CLARIFY_REQUIRED` + 英文说明 + 15 个 Tushare 短名），不像崩溃。**样例不够贴：** 现为 `stock_basic.industry` **字典序前 15**（IT设备、保险、全国地产与「制造业」无关）。Jackie：应按用户输入 **推荐近似**（如 制造业 → 专用机械 / 元器件 / 其他建材），而不是词表切片。 |
+| insight：邻近日摘要是否有用？hint 是否够？ | **体验债。** `nearby_trades` 读多层 trade_log 表头失败 → `Unnamed: 0/1/2`，退回 **2018-01-02** 空信号行，无用。`change_hint` 指向 strategy_meta、无 codegen，**符合**金标准边界。`recover_date` 为字符串 `"NaT"` 而非 JSON `null`。 |
+| refill 高成本 assumptions 是否醒目？ | **plan_md 有** `refill_universe: all symbols … (high cost)` 与 network/local_state_change。本轮未误 `run` B-F1。是否「够拦住」仍开放（只 plan 过）。 |
+| Ask 仍 0 步？ | **过时。** 阶段 C 已落地 Ask=KB；场景一改走 QAI3 手册。勿再当阶段 B 缺陷。 |
+| 真回测 metrics 是否像内核？ | **符合。** `final_value=81295.5519`，`annual_rtn≈-3.40%`，`mdd≈37.2%`，peak/valley 有日期；JSON **无**完整净值表；artifacts 有 trade_log + value_curve。与 8/28 检查点同一切片。 |
+| 未匹配问法不再落到 summary？ | Mode-R **符合**（G2 UNMATCH）。Mode-D LLM 接通后寒暄/`你好吗` 会点 `fallback` 但 **空槽**，变成 `SKILL_PRECHECK_FAILED`，用户看不到 `not_supported_yet` hint。 |
 
-- Top 5 问题
-- Top 5 隐藏用法
-- Top 5 新潜在场景
-- **金标准可推翻清单**（允许写「无修订」）
+### Top 5 问题
 
-关单摘要可稍后写入 qteasy 仓 `knowledge/runlog/`（不进 qteasy git）。
+1. **Hybrid 填槽（Mode-D）**：LLM 认对 `screen_stocks` 却把整句塞进 `inputs.query`，缺 `industry`/`threshold` → `SKILL_PRECHECK_FAILED`。规则路径本可填「公共交通」并真筛。门禁只拦未知 skill / 坏 JSON / refill 日期，**不拦缺必填槽**。（复现：`tests/test_ai_planner_hybrid.py`）
+2. **Hybrid fallback 空槽**：`你好吗` → `qt.ai.system.fallback` + `inputs={}` → 同样预检失败，无 `not_supported_yet` 文案。
+3. **筛股样例不近似**：制造业澄清有指导感，但 samples 与用户词无关。
+4. **`nearby_trades` / `"NaT"`**：归因邻近日不可用；`recover_date` 序列化不友好。
+5. **pretty DAG**：`--pretty` 只抬 `first_skill`（回测），insight 年化/回撤/hint 埋在 `raw`；`python_code` 为占位。
+
+### Top 5 隐藏用法
+
+1. `plan` 会 bounded persist 到 `runs/`，**不是**已回测/已下载；G4-1 以 `execution.steps=[]` 为准。
+2. 制造业 samples 只在 **`run`** 出现；只 `plan` 看不到澄清。
+3. Mode-D `402` / timeout → `candidate_source=rule` + `downgrade_reason`（埋在 assumptions，CLI 顶部不单独提示）。
+4. CLI `--pretty` 仍是一层 JSON（narrative 通道），不是纯文本。
+5. 寒暄应 `ask`，不要 `run`。
+
+### Top 5 新潜在场景
+
+1. Hybrid：**LLM 选 skill + 规则填槽**（或缺槽 `clarify_required`），避免预检失败甩给用户。
+2. 筛股：国标大类 / 口语行业 → Tushare 短名 **近似推荐**（可附 edit distance / 关键词映射）。
+3. pretty：多 step DAG 汇总 metrics + insight，而不是只报第一步。
+4. Provider 失败时用户可见一行「已降级规则路径」。
+5. Ask 承接寒暄 / 概念题，Plan 拒绝空槽 fallback。
+
+### 金标准可推翻清单 + 修复时机
+
+| 项 | 建议 | 理由 |
+|----|------|------|
+| Hybrid 必填槽门禁（缺则降级规则或 clarify） | **后面修**（优先挂 Q-AI.3 Hybrid 余量，不阻塞本轮 G4–G6 记录） | 契约已清、有 FakeLLM 复现；要改 `planner` 候选采纳条件，不宜夹在实弹记录里顺手改完。 |
+| 筛股 samples 按用户输入近似推荐 | **后面修**（体验增强；可在阶段 E 选股 DAG 之前做一刀小改进） | 精确匹配 + 澄清的金标准仍成立；改排序/映射即可，不要变成超级筛股 skill。 |
+| nearby_trades 表头 / `recover_date` NaT | **后面修** | 已知债，不挡回测 metrics 验收。 |
+| pretty 多步叙事 | **后面修** | 渲染层，非路由错误。 |
+| G4-1「execution 空」措辞 | **已在本手册 G4-1 改掉**（文档，非代码） | 避免再和 `runs/` 计数打架。 |
+| 选股无阈值改枚举+投影 | **不现在、归阶段 E** | 已拍板禁止超级 skill。 |
+| 现在就改 Hybrid / 近似行业？ | **不建议现在修** | 本轮目标是 G6 记债；代码改动应单开 TDD 切片，并先定「降级 vs 与规则合并槽位」。 |
+
+关单摘要已写入 qteasy 仓 `knowledge/runlog/qteasy-ai-qai2-stage-b-checkpoint-2026-08.md`。
 
 ---
 
 ## 验收清单
 
-- [ ] G0 provider-check 通过（Mode-R）；profile 默认 `allow_*` 已看过
-- [ ] G1 全部 plan 有记录（skill / inputs / plan_md）
-- [ ] G2 至少 D-F3、D-F4、SB1、缺日期、SCR-miss、UNMATCH 不落 summary
-- [ ] G4-1 与 G4-2 已做
-- [ ] G3：P0 要么成功 run 并记下 metrics 键，要么明确 Skip（缺数）
-- [ ] G3：B4-run 制造业澄清 + samples 已记录
-- [ ] G5 至少 raw vs pretty（B-P0）
-- [ ] G6 Top 5×3 + 可推翻清单已写
-- [ ] `manual_record_*.md` 已填（本地，不进仓）
+- [x] G0 provider-check 通过（Mode-R）；profile 默认 `allow_*` 已看过
+- [x] G1 全部 plan 有记录（skill / inputs / plan_md）
+- [x] G2 至少 D-F3、D-F4、SB1、缺日期、SCR-miss、UNMATCH 不落 summary
+- [x] G4-1 与 G4-2 已做（G4-3 Notebook confirm **Skip**）
+- [x] G3：P0 `run` success（`final_value=81295.5519` 等）
+- [x] G3：B4-run 制造业澄清 + samples 已记录
+- [x] G5 至少 raw vs pretty（B-P0；本轮用 `run` 对比，等价摸到入口）
+- [x] G6 Top 5×3 + 可推翻清单已写
+- [ ] `manual_record_*.md` 已填（本地，不进仓；可选）
 
-自动化（可选）：`PYTHONPATH=. /opt/anaconda3/envs/py39/bin/python -m unittest discover -s tests -p 'test_ai_*'`（阶段 B 后约 76 OK）。
+自动化（可选）：`PYTHONPATH=. /opt/anaconda3/envs/py39/bin/python -m unittest discover -s tests -p 'test_ai_*'`（阶段 C 后约 102 OK；Hybrid G6 锚点在 `test_ai_planner_hybrid`）。

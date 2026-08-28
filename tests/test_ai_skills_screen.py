@@ -88,6 +88,7 @@ class TestAiScreenSkill(unittest.TestCase):
         self.assertIn("industry_samples", result["error"]["details"])
         self.assertEqual(result["error"]["details"]["industry_samples"][:2], ["银行", "电气设备"])
         self.assertEqual(called_filter["n"], 0)
+        # G6：现样例 = 注入目录切片，非按「制造业」近似推荐；模糊匹配后面再做。
 
     def test_missing_dates_resolved_before_history(self) -> None:
         """未给 start/end 时必须补齐窗口，禁止把两端空值传给 get_history_data。"""
