@@ -9,18 +9,19 @@
 # 请求转换为结构化 ToolPlan。
 # ======================================
 
-"""自然语言到 ToolPlan 的 Hybrid 最小实现。
+"""自然语言到 ToolPlan 的 Hybrid 实现。
 
-A0 目标是打通 Planner 三段式链路：
+三段式链路：
 
-1. `build_candidate_plan()`：候选计划生成（当前以规则为主，Provider 可选）；
-2. `validate_plan()`：规则校验、字段归一与风险门控；
-3. `finalize_plan()`：生成可执行计划并附加 `planner_trace`。
+1. `build_candidate_plan()`：规则推断，或（有 Provider 时）LLM 候选 JSON；
+2. `validate_plan()`：规则校验、字段归一；env_facts / 日期门禁在候选之后共用；
+3. `finalize_plan()`：生成可执行计划并附加 `planner_trace`（含 candidate_source）。
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import re
 import unicodedata
 from copy import deepcopy
@@ -161,11 +162,26 @@ class Planner:
 
         query = user_query.strip()
         q_lower = query.lower()
-        steps = self._infer_steps(query=query, q_lower=q_lower)
+        candidate_source = "rule"
+        downgrade_reason = ""
+        steps: Optional[List[ToolStep]] = None
+        if self.provider is not None:
+            llm_steps, llm_reason = self._try_llm_candidate(query)
+            if llm_steps is not None:
+                candidate_source = "llm"
+                steps = llm_steps
+            else:
+                downgrade_reason = llm_reason
+                steps = self._infer_steps(query=query, q_lower=q_lower)
+        else:
+            steps = self._infer_steps(query=query, q_lower=q_lower)
+        steps = self._apply_post_candidate_gates(steps, query=query)
         assumptions = {
             "planner": "hybrid_candidate_stage_b",
             "provider_enabled": self.provider is not None,
             "env_facts_used": bool(self.env_facts),
+            "candidate_source": candidate_source,
+            "downgrade_reason": downgrade_reason,
         }
         for step in steps:
             if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):
@@ -198,8 +214,145 @@ class Planner:
             "candidate_plan_id": candidate_plan.plan_id,
             "validator_trace": trace,
             "final_step_count": len(final_plan.steps),
+            "candidate_source": candidate_plan.assumptions.get("candidate_source", "rule"),
+            "downgrade_reason": candidate_plan.assumptions.get("downgrade_reason", ""),
         }
         return final_plan
+
+    _DATA_INTENT_SKILLS = {
+        "qt.ai.data.summary_kline",
+        "qt.ai.research.factor_ic_summary",
+        "qt.ai.visual.export_kline",
+        "qt.ai.data.refill_basic_equity_and_index",
+    }
+
+    _LLM_PLAN_SYSTEM = (
+        "You generate a qteasy-ai ToolPlan candidate. "
+        "Reply with JSON only: {\"steps\": [{\"skill_name\": \"qt.ai...\", \"inputs\": {}}]}. "
+        "Use only skill names listed in the prompt. Do not invent skills."
+    )
+
+    def _try_llm_candidate(self, query: str) -> Tuple[Optional[List[ToolStep]], str]:
+        """调用 Provider 生成候选 steps；失败返回 (None, reason)。"""
+
+        if self.provider is None:
+            return None, "provider_missing"
+        catalog = [item.name for item in self.registry.list_skills()]
+        prompt = (
+            "Available skills:\n"
+            + "\n".join(f"- {name}" for name in catalog)
+            + f"\n\nUser query:\n{query}\n\n"
+            "Return JSON with a steps array. Each step needs skill_name and inputs."
+        )
+        try:
+            text = self.provider.chat(prompt, system_prompt=self._LLM_PLAN_SYSTEM)
+        except Exception as exc:
+            return None, f"llm_chat_failed: {exc}"
+        payload = self._parse_llm_plan_json(text)
+        if not isinstance(payload, dict):
+            return None, "llm_json_parse_failed"
+        raw_steps = payload.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            return None, "llm_empty_steps"
+        available = set(catalog)
+        steps: List[ToolStep] = []
+        for idx, raw in enumerate(raw_steps, start=1):
+            if not isinstance(raw, dict):
+                return None, "llm_invalid_step"
+            name = str(raw.get("skill_name", "")).strip()
+            if name not in available:
+                return None, f"Skill not found: {name}"
+            inputs = raw.get("inputs") if isinstance(raw.get("inputs"), dict) else {}
+            depends = raw.get("depends_on") if isinstance(raw.get("depends_on"), list) else []
+            step = self._make_step(
+                step_id=f"step_{idx}",
+                skill_name=name,
+                inputs=dict(inputs),
+                depends_on=[str(item) for item in depends],
+            )
+            if raw.get("run_if"):
+                step.run_if = str(raw.get("run_if"))
+            steps.append(step)
+        return steps, ""
+
+    @staticmethod
+    def _parse_llm_plan_json(text: str) -> Optional[Dict[str, Any]]:
+        """从模型文本中解析计划 JSON。"""
+
+        blob = (text or "").strip()
+        if blob.startswith("```"):
+            lines = blob.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            blob = "\n".join(lines).strip()
+        try:
+            payload = json.loads(blob)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+        start = blob.find("{")
+        end = blob.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            payload = json.loads(blob[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _apply_post_candidate_gates(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
+        """对 LLM 与规则候选共用 env_facts / 日期门禁。"""
+
+        gated = self._enforce_refill_date_range(steps, query=query)
+        gated = self._maybe_prepend_tushare_gate(gated)
+        data_intent = any(step.skill_name in self._DATA_INTENT_SKILLS for step in gated)
+        return self._maybe_prepend_table_gate(gated, data_intent=data_intent)
+
+    def _enforce_refill_date_range(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
+        """refill 缺起止日期时整单澄清，禁止无界下载。"""
+
+        for step in steps:
+            if step.skill_name != "qt.ai.data.refill_basic_equity_and_index":
+                continue
+            start = str(step.inputs.get("start") or "").strip()
+            end = str(step.inputs.get("end") or "").strip()
+            if start and end:
+                continue
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="refill_date_range_required",
+                        hint="Download/refill requires an explicit start and end date. Unbounded full-history download is not allowed.",
+                        missing_info="date_range",
+                        next_step="Provide a date range such as 20180101 to 20231231 or 2018-2023.",
+                    ),
+                )
+            ]
+        return steps
+
+    def _maybe_prepend_tushare_gate(self, steps: List[ToolStep]) -> List[ToolStep]:
+        """refill 且 env_facts 标明 token 缺失时前置 check_tushare。"""
+
+        if not any(step.skill_name == "qt.ai.data.refill_basic_equity_and_index" for step in steps):
+            return steps
+        if any(step.skill_name == "qt.ai.env.check_tushare" for step in steps):
+            return steps
+        tushare = self.env_facts.get("tushare") if isinstance(self.env_facts.get("tushare"), dict) else {}
+        if tushare.get("token_present") is not False:
+            return steps
+        gate = self._make_step(step_id="step_gate", skill_name="qt.ai.env.check_tushare", inputs={})
+        rest: List[ToolStep] = []
+        for idx, step in enumerate(steps, start=1):
+            step.step_id = f"step_{idx}"
+            rest.append(step)
+        return [gate] + rest
 
     def _make_step(
         self,
@@ -302,7 +455,7 @@ class Planner:
                 skill_name="qt.ai.research.factor_ic_summary",
                 inputs=self._extract_market_inputs(query),
             )
-            return self._maybe_prepend_table_gate([primary], data_intent=True)
+            return [primary]
 
         if self._is_summary_query(q_lower):
             primary = self._make_step(
@@ -310,7 +463,7 @@ class Planner:
                 skill_name="qt.ai.data.summary_kline",
                 inputs=self._extract_market_inputs(query),
             )
-            return self._maybe_prepend_table_gate([primary], data_intent=True)
+            return [primary]
 
         if any(word in q_lower for word in ["kline", "candle", "k线", "绘图", "导出", "png", "export"]):
             primary = self._make_step(
@@ -318,7 +471,7 @@ class Planner:
                 skill_name="qt.ai.visual.export_kline",
                 inputs=self._extract_market_inputs(query),
             )
-            return self._maybe_prepend_table_gate([primary], data_intent=True)
+            return [primary]
 
         return [
             self._make_step(
@@ -604,11 +757,6 @@ class Planner:
                 inputs=inputs,
             )
         ]
-        tushare = self.env_facts.get("tushare") if isinstance(self.env_facts.get("tushare"), dict) else {}
-        if tushare.get("token_present") is False:
-            gate = self._make_step(step_id="step_gate", skill_name="qt.ai.env.check_tushare", inputs={})
-            steps[0].step_id = "step_1"
-            steps = [gate, steps[0]]
         return steps
 
     def _infer_optimize_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:

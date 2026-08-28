@@ -1,0 +1,18 @@
+{
+  "id": "ask_plan_agent",
+  "tags": ["ask", "plan", "agent", "run", "mode", "preview"],
+  "keywords": [
+    "ask",
+    "plan",
+    "agent",
+    "run mode",
+    "preview",
+    "模式",
+    "问答"
+  ],
+  "title": "Ask vs Plan vs Agent (run)",
+  "summary": "Ask is Q&A only. Plan shows a ToolPlan. Agent/run executes after confirmation.",
+  "narrative": "Ask is a read-only Q&A channel: LLMClient + KnowledgeBase. It does not generate executable plan steps, does not call skills, and does not call PlanExecutor.\n\nPlan (default) turns natural language into a ToolPlan (JSON + plan.md) with side-effects labelled. Nothing high-side-effect runs until you confirm.\n\npreview / plan --preview is dry-run Plan: you see steps, skills are not executed.\n\nAgent is exposed as CLI/API run: generate plan then execute. Live-trade steps are never auto-executed; they stay plan-only.\n\nIf you want to list strategies, download data, backtest, or optimize, use Plan or preview — not Ask.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nask_out = assistant.ask('explain PT vs PS')\nplan_out = assistant.plan('list built-in strategies')\npreview_out = assistant.preview('list built-in strategies')",
+  "risk_notes": "Mode must be visible in every response so users can predict side effects."
+}

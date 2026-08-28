@@ -59,7 +59,7 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 3. `show summary of 000300.SH from 20240101 to 20241231` → `qt.ai.data.summary_kline`  
    （B0：含 `kline` 的 `kline summary ...` 亦路由到 summary，不再误走 export）
 4. `export kline of 000300.SH to png` → `qt.ai.visual.export_kline` (confirm side effect / artifact path on `run`)
-5. Ask: `assistant.ask("explain PT vs PS")` → `dry_run`, **zero** plan steps
+5. Ask: `qteasy-ai ask "explain PT vs PS"` → `mode=ask`, sources include `pt_ps_vs`, **no** `execution` / no plan steps. To preview a ToolPlan: `qteasy-ai preview "list built-in strategies"`
 6. **B0 env**: `帮我看 Tushare 是否配好、本地缺哪些表` → `check_tushare` + `overview_tables`；payload 含 `plan_md`
 7. **B0 research**: `factor IC summary for selection pool` → `qt.ai.research.factor_ic_summary`（执行需注入 panel_builder / 有研究面板）
 8. **B refill**: `download daily data from 20180101 to 20231231` → `qt.ai.data.refill_basic_equity_and_index`（`plan` 零执行；无日期问法应 `clarify_required` / `date_range`）
@@ -71,7 +71,7 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 
 - High side-effect skills: plan shows `side_effects`; **CLI `qteasy-ai run` = one human confirmation** and executes. Notebook `%%qtai --mode run` still requires `--confirm <plan_id>`.
 - `profile.agent.allow_*` defaults are all `false` and are **not** read by CLI/`assistant.run()` in this stage (reserved for unattended agents later).
-- Ask stays stage-A: `assistant.ask(...)` → `dry_run`, **zero** plan steps (Ask target / Hybrid LLM is stage C).
+- Ask target state: `assistant.ask(...)` → `mode=ask`, KnowledgeBase answer, **no** skill / PlanExecutor / `runs/` persist. Former empty-step plan preview is `preview()` / `plan --preview`.
 - Live trade is always `plan_only` (never execute). StrategyBuilder / skip-confirmation remain `not_supported_yet`.
 - Unsupported queries → `qt.ai.system.fallback` with `fallback_action` / `next_step` (not silent wrong skill; never default to `summary_kline`).
 - No merge of `qt_ai_dev` into qteasy `master`.

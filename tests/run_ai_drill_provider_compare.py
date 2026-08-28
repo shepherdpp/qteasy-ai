@@ -58,6 +58,12 @@ def main() -> int:
             payload = raw.raw
         else:
             payload = raw
+        if mode == "ask":
+            print(
+                f"- {item['id']}: mode=ask, ok={payload.get('ok')}, "
+                f"sources={payload.get('sources')}"
+            )
+            continue
         plan = payload.get("plan", {})
         print(
             f"- {item['id']}: mode={mode}, steps={len(plan.get('steps', []))}, "

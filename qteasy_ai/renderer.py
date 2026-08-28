@@ -15,13 +15,21 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .explanation import apply_explanation_depth
 from .output import AssistantOutput
 
 
 class OutputRenderer:
     """将 raw payload 渲染为用户输出。"""
 
-    def render(self, payload: Dict[str, Any], *, style: str = "user_friendly", context: Dict[str, Any] | None = None) -> AssistantOutput:
+    def render(
+        self,
+        payload: Dict[str, Any],
+        *,
+        style: str = "user_friendly",
+        context: Dict[str, Any] | None = None,
+        explanation_depth: str = "standard",
+    ) -> AssistantOutput:
         """渲染输出。
 
         Parameters
@@ -32,6 +40,8 @@ class OutputRenderer:
             输出风格，目前支持 `user_friendly`。
         context : Dict[str, Any], optional
             额外上下文信息。
+        explanation_depth : {'brief', 'standard', 'deep'}, default 'standard'
+            解释层深度，与 Ask 共用 explanation_template。
         """
 
         if style != "user_friendly":
@@ -50,16 +60,40 @@ class OutputRenderer:
         first_result = execution_steps[0].get("result", {}) if execution_steps else {}
 
         if first_skill == "qt.ai.strategy_meta.list":
-            return self._render_strategy_meta_list(payload, first_result)
-        if first_skill == "qt.ai.strategy_meta.get":
-            return self._render_strategy_meta_get(payload, first_result)
-        if first_skill == "qt.ai.data.summary_kline":
-            return self._render_data_summary(payload, first_result)
-        if first_skill == "qt.ai.visual.export_kline":
-            return self._render_visual_export(payload, first_result)
-        if first_skill == "qt.ai.system.fallback":
-            return self._render_fallback(payload, first_result)
-        return self._render_generic(payload, first_skill, first_result)
+            output = self._render_strategy_meta_list(payload, first_result)
+        elif first_skill == "qt.ai.strategy_meta.get":
+            output = self._render_strategy_meta_get(payload, first_result)
+        elif first_skill == "qt.ai.data.summary_kline":
+            output = self._render_data_summary(payload, first_result)
+        elif first_skill == "qt.ai.visual.export_kline":
+            output = self._render_visual_export(payload, first_result)
+        elif first_skill == "qt.ai.system.fallback":
+            output = self._render_fallback(payload, first_result)
+        else:
+            output = self._render_generic(payload, first_skill, first_result)
+
+        risk_notes = ""
+        if explanation_depth == "deep":
+            side = ""
+            if steps:
+                side = str(steps[0].get("side_effects", ""))
+            risk_notes = (
+                f"Mode={plan.get('mode', 'plan')}, execution_mode={plan.get('execution_mode', '')}. "
+                f"First-step side_effects={side or 'unknown'}."
+            )
+        channels = apply_explanation_depth(
+            narrative=output.narrative,
+            python_code=output.python_code,
+            result_preview=output.result_preview,
+            depth=explanation_depth,
+            risk_notes=risk_notes,
+        )
+        return AssistantOutput(
+            narrative=channels.narrative,
+            python_code=channels.python_code,
+            result_preview=channels.result_preview,
+            raw=payload,
+        )
 
     @staticmethod
     def _render_strategy_meta_list(payload: Dict[str, Any], result: Dict[str, Any]) -> AssistantOutput:

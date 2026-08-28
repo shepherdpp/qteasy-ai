@@ -25,11 +25,16 @@
 
 ## 3. 运行模式
 
-> **唯一定义**见 qteasy 仓 [qteasy_ai_top_level_design](https://github.com/shepherdpp/qteasy/blob/master/.cursor/plans/qteasy_ai_top_level_design.plan.md) §四。下表为 0.1.0 现状摘要。
+> **唯一定义**见 qteasy 仓 [qteasy_ai_top_level_design](https://github.com/shepherdpp/qteasy/blob/master/.cursor/plans/qteasy_ai_top_level_design.plan.md) §四。
 
-- Ask（`ask`）：生成 ToolPlan，**不执行** skill
-- Plan（`plan`）：默认 dry-run plan，供审阅
-- Run（`run`）：生成 plan 后执行（产品语义对应目标态 **Agent**；profile 门控待 Q-AI.2）
+| 概念 | 阶段 A 现状（已废弃于 Ask） | 阶段 C 目标态（Q-AI.3） |
+|------|---------------------------|------------------------|
+| **Ask** | `ask()` 生成空步 ToolPlan，`dry_run`，不执行 skill | `ask()` = LLMClient + KnowledgeBase，**无 steps / 无 Executor**；无 Provider 时 Offline KB |
+| **preview** | （无独立入口） | `preview()` / `plan --preview` = 原「只看 plan」语义，等于 `plan()` dry-run |
+| **Plan** | dry-run ToolPlan | 不变；有 Provider 时 LLM 候选 + RuleValidator / env_facts 门禁 |
+| **Run / Agent** | 生成 plan 后执行 | 不变；实盘永远 plan_only |
+
+用户指南：[USER_GUIDE.md](../USER_GUIDE.md)。
 
 ## 4. 本地配置
 
@@ -49,7 +54,8 @@
 ## 5. CLI 用法
 
 ```bash
-qteasy-ai ask "list built-in strategies"
+qteasy-ai ask "explain PT vs PS"
+qteasy-ai preview "list built-in strategies"
 qteasy-ai plan "show kline summary of 000300.SH"
 qteasy-ai run "export kline of 000300.SH"
 qteasy-ai provider-check
@@ -83,5 +89,12 @@ qteasy-ai provider-check
 | data/research | summary 增加交易天数与波动率；`qt.ai.research.factor_ic_summary` |
 | plan 双轨 | ToolPlan JSON + 单向 `plan.md`（`plan_md` / `runs/{run_id}.plan.md`） |
 
-设计决议（qteasy 仓执行层 B0.0）：规则 + env_facts 为主；不做 LLM 候选生成；不做 md→plan 反解析。
+设计决议（qteasy 仓执行层 B0.0）：规则 + env_facts 为主；B0 **不做** LLM 候选生成；不做 md→plan 反解析。Hybrid LLM 候选归 **阶段 C**。
+
+## 8. Stage C 增量（Q-AI.3）
+
+- Ask 目标态：`AskEngine` + 策展 `qteasy_ai/kb/*.json`；策略元数据直接读 `qteasy.built_in_*`（不经 skill）。
+- `preview()` / CLI `preview` / `plan --preview` 承接原 ask 空步预览。
+- `explanation_depth`：`brief` / `standard` / `deep`。
+- Hybrid Planner：有 Provider 时 LLM 生成候选 JSON；未知 skill / 非法 JSON 降级规则路径；refill 缺日期与 env_facts 门禁在候选之后共用。
 

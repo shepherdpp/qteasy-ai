@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from .app import QteasyAssistant
+from .ask_engine import AskResponse
 from .output import AssistantOutput
 
 try:
@@ -64,19 +65,25 @@ class MagicCommand:
     confirm_plan_id: str
     diag: bool
     query: str
+    explanation_depth: str
 
 
 def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
     """解析 `%qtai/%%qtai` 命令参数。"""
 
     parser = argparse.ArgumentParser(prog="qtai", add_help=False)
-    parser.add_argument("--mode", choices=["ask", "plan", "run"], default="plan")
+    parser.add_argument("--mode", choices=["ask", "plan", "run", "preview"], default="plan")
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--raw", action="store_true")
     parser.add_argument("--persist", choices=["bounded", "audit", "none"], default=None)
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--confirm", dest="confirm_plan_id", default="")
     parser.add_argument("--diag", action="store_true")
+    parser.add_argument(
+        "--depth",
+        choices=["brief", "standard", "deep"],
+        default="standard",
+    )
     parser.add_argument("query_parts", nargs="*")
 
     args = parser.parse_args(shlex.split(line))
@@ -93,6 +100,7 @@ def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
         confirm_plan_id=str(args.confirm_plan_id).strip(),
         diag=bool(args.diag),
         query=query_text,
+        explanation_depth=str(args.depth),
     )
 
 
@@ -129,6 +137,7 @@ def execute_magic_command(
             response_style=response_style,
             persist=persist,
             keep=keep,
+            explanation_depth=command.explanation_depth,
         )
         plan_cache.pop(command.confirm_plan_id, None)
         return {
@@ -183,15 +192,17 @@ def execute_magic_command(
             response_style=command.response_style,
             persist=command.persist,
             keep=command.keep,
+            explanation_depth=command.explanation_depth,
         )
         return {"mode": "ask", "result": result, "confirm_hint": ""}
 
-    if command.mode == "plan":
-        result = assistant.plan(
+    if command.mode in {"plan", "preview"}:
+        result = assistant.preview(
             command.query,
             response_style=command.response_style,
             persist=command.persist,
             keep=command.keep,
+            explanation_depth=command.explanation_depth,
         )
         return {"mode": "plan", "result": result, "confirm_hint": ""}
 
@@ -204,6 +215,7 @@ def execute_magic_command(
         response_style=command.response_style,
         persist=command.persist,
         keep=command.keep,
+        explanation_depth=command.explanation_depth,
     )
     raw = result.raw if isinstance(result, AssistantOutput) else result
     plan_id = str(raw.get("plan", {}).get("plan_id", plan.plan_id))
@@ -221,7 +233,7 @@ def execute_magic_command(
 def _result_to_raw_dict(result: Any) -> Dict[str, Any]:
     """将结果统一转为 dict。"""
 
-    if isinstance(result, AssistantOutput):
+    if isinstance(result, (AssistantOutput, AskResponse)):
         return result.to_dict()
     if isinstance(result, dict):
         return result
@@ -232,7 +244,22 @@ def render_magic_result(mode: str, result: Any, *, confirm_hint: str = "") -> st
     """将命令执行结果格式化为 Markdown 文本。"""
 
     mode_bar = f"[MODE: {mode.upper()}]"
-    if isinstance(result, AssistantOutput):
+    if isinstance(result, AskResponse):
+        sections = [
+            mode_bar,
+            "",
+            "### Narrative",
+            result.narrative.strip(),
+            "",
+            "### Python Code",
+            "```python",
+            (result.python_code or "").strip(),
+            "```",
+            "",
+            "### Result Preview",
+            (result.result_preview or "").strip(),
+        ]
+    elif isinstance(result, AssistantOutput):
         sections = [
             mode_bar,
             "",

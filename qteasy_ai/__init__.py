@@ -31,7 +31,9 @@ from .output import AssistantOutput
 from .memory_store import MemoryStore, merge_env_facts
 from .plan_markdown import tool_plan_to_markdown
 from .planner import Planner
-from .provider import BaseLLMProvider, OpenAICompatProvider
+from .ask_engine import AskEngine, AskResponse
+from .knowledge_base import KnowledgeBase
+from .provider import BaseLLMProvider, FakeLLMProvider, OpenAICompatProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
@@ -60,5 +62,9 @@ __all__ = [
     "merge_env_facts",
     "tool_plan_to_markdown",
     "BaseLLMProvider",
+    "FakeLLMProvider",
     "OpenAICompatProvider",
+    "AskEngine",
+    "AskResponse",
+    "KnowledgeBase",
 ]

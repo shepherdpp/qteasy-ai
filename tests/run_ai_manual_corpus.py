@@ -37,6 +37,11 @@ def run_corpus(corpus_name: str) -> None:
         mode = case.get("mode", "plan")
         if mode == "ask":
             payload = assistant.ask(query, response_style="raw")
+            print(
+                f" - {case.get('id', 'N/A')}: mode=ask, ok={payload.get('ok')}, "
+                f"sources={payload.get('sources')}"
+            )
+            continue
         else:
             payload = assistant.plan(query, response_style="raw")
         plan_steps = payload.get("plan", {}).get("steps", [])

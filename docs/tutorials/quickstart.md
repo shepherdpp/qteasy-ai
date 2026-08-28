@@ -1,6 +1,8 @@
 # Tutorial 09 - qteasy AI shell 快速上手
 
-本教程展示 S1.4 阶段A的最小闭环：plan 生成、确认执行、结构化结果查看。
+本教程展示 qteasy-ai 的最小闭环：Ask 问答、plan 生成、确认执行、结构化结果查看。
+
+更完整的模式与安全说明见 [USER_GUIDE.md](../USER_GUIDE.md)。
 
 ## 1. 准备环境
 
@@ -31,10 +33,24 @@ export QTEASY_AI_BASE_URL="https://api.openai.com/v1"
 
 ## 2. CLI 方式
 
-### 2.1 Ask 模式
+### 2.1 Ask 模式（Q-AI.3 目标态）
+
+Ask 是只读问答：KnowledgeBase + 可选 LLM，**不**生成可执行 steps，**不**调用 skill / PlanExecutor。
+
+无 Provider 时仍可用（Offline 检索 + 英文模板）。执行型请求（列出策略、下载、回测）请改用 Plan / preview。
 
 ```bash
-qteasy-ai ask "list built-in strategies"
+qteasy-ai ask "explain PT vs PS"
+qteasy-ai ask "explain PT vs PS" --depth deep
+```
+
+### 2.1b preview（原 ask 的 plan 预览）
+
+`ask()` 不再返回空步 ToolPlan。若只想看 plan、不执行：
+
+```bash
+qteasy-ai preview "list built-in strategies"
+qteasy-ai plan "list built-in strategies" --preview
 ```
 
 ### 2.2 Plan 模式
@@ -92,7 +108,7 @@ print(payload["plan"]["steps"])
 print(payload["plan_md"][:400])
 ```
 
-完整脚本见 `examples/ai_shell_stage_b0_demo.py`。阶段 B（Q-AI.2）plan-only 演示见 `examples/ai_shell_stage_b_demo.py`。
+完整脚本见 `examples/ai_shell_stage_b0_demo.py`。阶段 B（Q-AI.2）plan-only 演示见 `examples/ai_shell_stage_b_demo.py`。阶段 C Ask/preview 见 `examples/ai_shell_stage_c_ask_demo.py`。
 
 ## 3. Notebook 方式
 
@@ -101,7 +117,9 @@ import qteasy as qt
 from qteasy_ai.app import QteasyAssistant
 
 assistant = QteasyAssistant()
+ask_output = assistant.ask("explain PT vs PS")
 plan_output = assistant.plan("list built-in strategies")  # 默认 user_friendly
+preview_output = assistant.preview("list built-in strategies", persist="none")
 run_output = assistant.run("export kline of 000300.SH", keep=True)
 raw_plan = assistant.plan("list built-in strategies", response_style="raw", persist="none")
 debug_payload = assistant.debug_config()
@@ -166,8 +184,9 @@ Execute.
 可选参数：
 
 - `--raw`：返回原始结构化输出
-- `--persist {bounded,audit,none}`：覆盖本次留存策略
+- `--persist {bounded,audit,none}`：覆盖本次留存策略（Ask 不落盘）
 - `--keep`：将本次 run 标记为保留
+- `--depth {brief,standard,deep}`：解释层深度
 
 对于尚未实现的能力（例如 StrategyBuilder、实盘 execute、任意公式统计），当前阶段会返回结构化回退结果，
 `payload.fallback_action` 可能为：
@@ -176,7 +195,10 @@ Execute.
 - `not_supported_yet`
 - `clarify_required`（如下载缺起止日期、筛股缺阈值/窗口、行业名 0 精确命中）
 
-阶段 B 已实现：本地 refill、内置策略回测/优化、只读筛股、回测内生归因。Ask 目标态（Hybrid LLM 填槽）仍在阶段 C。
+阶段 B 已实现：本地 refill、内置策略回测/优化、只读筛股、回测内生归因。  
+阶段 C 已实现：Ask 目标态（KB + 可选 LLM）、`preview` 迁移、`explanation_depth`、Hybrid LLM 候选（规则仍门禁）。
+
+完整脚本见 `examples/ai_shell_stage_c_ask_demo.py`。
 
 当回退到 `system_fallback` 时，输出会明确给出：
 

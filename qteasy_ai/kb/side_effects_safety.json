@@ -1,0 +1,19 @@
+{
+  "id": "side_effects_safety",
+  "tags": ["side-effects", "live", "refill", "safety", "confirm"],
+  "keywords": [
+    "live",
+    "实盘",
+    "side effect",
+    "refill",
+    "download",
+    "auto execute",
+    "confirm",
+    "safety"
+  ],
+  "title": "Side effects and live-trade safety",
+  "summary": "High side-effect steps need a visible plan. Live trade is never auto-executed.",
+  "narrative": "qteasy-ai labels side effects on every ToolPlan step: network, filesystem write, local state change, heavy compute.\n\nDownload/refill, backtest, optimize, and code rewrite require Plan (or an explicit run confirmation). Ask never triggers them.\n\nLive trade steps are always plan_only. Agent/run must never auto-execute live orders. Unbounded all-market refill without dates is refused.\n\nIf no skill matches, the planner returns clarify_required or not_supported_yet — it must not silently fall back to summary_kline.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('download daily data from 20180101 to 20231231', response_style='raw')\nprint(plan['plan']['steps'][0]['side_effects'])\nprint(plan['plan']['execution_mode'])  # dry_run until you confirm via run()",
+  "risk_notes": "Never treat Ask as a way to skip confirmation. preview shows the plan but does not execute skills."
+}

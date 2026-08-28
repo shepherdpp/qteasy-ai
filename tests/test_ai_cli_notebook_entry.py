@@ -122,6 +122,33 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["mode"], "local_llm")
 
+    def test_cli_ask_command_target_state(self) -> None:
+        """验证 CLI ask 返回 Ask 目标态，不含 execution。"""
+
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "ask", "explain PT vs PS"]
+        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        payload = json.loads(completed.stdout)
+        print("\n[TestAiCliNotebookEntry] cli ask:", payload.get("mode"), payload.get("sources"))
+        print(" answer:", str(payload.get("answer", ""))[:240])
+        self.assertEqual(payload["mode"], "ask")
+        self.assertNotIn("execution", payload)
+        self.assertIn("PT", payload.get("answer", ""))
+        self.assertIn("PS", payload.get("answer", ""))
+
+    def test_cli_preview_and_plan_preview_alias(self) -> None:
+        """验证 preview 与 plan --preview 走出 strategy_meta.list。"""
+
+        for cmd in (
+            [sys.executable, "-m", "qteasy_ai.cli", "preview", "list built-in strategies"],
+            [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies", "--preview"],
+        ):
+            completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            payload = json.loads(completed.stdout)
+            print("\n[TestAiCliNotebookEntry] preview cmd:", cmd[-2:], "status:", payload["execution"]["status"])
+            print(" skills:", [s["skill_name"] for s in payload["plan"]["steps"]])
+            self.assertEqual(payload["execution"]["status"], "dry_run")
+            self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.strategy_meta.list")
+
 
 if __name__ == "__main__":
     unittest.main()

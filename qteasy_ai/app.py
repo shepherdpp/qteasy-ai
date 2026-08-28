@@ -30,8 +30,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from .ask_engine import AskEngine, AskResponse
 from .config import ConfigCenter
 from .executor import PlanExecutor
+from .knowledge_base import KnowledgeBase
 from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
 from .plan_markdown import tool_plan_to_markdown
@@ -109,8 +111,8 @@ class QteasyAssistant:
     这是用户最直接接触的 AI 外壳对象，面向“用户意图”而不是“内部模块”。
     用户只需要选择调用模式：
 
-    - `ask()`：只问不执行；
-    - `plan()`：生成 dry-run 计划；
+    - `ask()`：Ask 目标态问答（LLM + KnowledgeBase，不执行 skill）；
+    - `preview()` / `plan()`：生成 dry-run 计划；
     - `run()`：确认执行计划。
     """
 
@@ -136,6 +138,10 @@ class QteasyAssistant:
         self.executor = PlanExecutor(self.registry, self.memory_store)
         self.renderer = OutputRenderer()
         self.run_policy = run_policy or RunStorePolicy()
+        self.ask_engine = AskEngine(
+            knowledge_base=KnowledgeBase(),
+            provider=provider,
+        )
         self._last_run_id = ""
 
     def _refresh_planner_env_facts(self) -> None:
@@ -156,27 +162,64 @@ class QteasyAssistant:
         response_style: str = "user_friendly",
         persist: str | None = None,
         keep: bool = False,
+        explanation_depth: str = "standard",
     ) -> Dict[str, Any] | AssistantOutput:
-        """Ask 模式：仅返回 plan，不执行技能。
+        """Ask 目标态：LLMClient + KnowledgeBase 问答，不执行 skill。
+
+        不调用 PlanExecutor，不写入 ``runs/``。``persist`` / ``keep`` 被忽略。
+        若仍需审阅可执行步骤，请使用 ``preview()`` 或 ``plan()``。
 
         Parameters
         ----------
         query : str
-            用户自然语言请求。
+            用户自然语言问题。
+        response_style : {'user_friendly', 'raw'}, default 'user_friendly'
+            raw 返回 Ask 字典；user_friendly 返回 AssistantOutput。
+        persist : str, optional
+            忽略（Ask 不落盘 run）。
+        keep : bool, default False
+            忽略。
+        explanation_depth : {'brief', 'standard', 'deep'}, default 'standard'
+            解释层深度。
 
         Returns
         -------
-        Dict[str, Any]
-            dry-run 执行结果（无技能调用），用于解释和预览。
+        dict or AssistantOutput
+            ``mode='ask'`` 的问答结果，不含可执行 steps。
         """
 
-        plan = self._build_plan(query, mode="ask")
-        return self._execute_and_format(
-            plan=plan,
-            confirm=False,
+        del persist, keep
+        result: AskResponse = self.ask_engine.ask(query, explanation_depth=explanation_depth)
+        if response_style == "raw":
+            return result.to_dict()
+        return AssistantOutput(
+            narrative=result.narrative,
+            python_code=result.python_code,
+            result_preview=result.result_preview,
+            raw=result.to_dict(),
+        )
+
+    def preview(
+        self,
+        query: str,
+        *,
+        response_style: str = "user_friendly",
+        persist: str | None = None,
+        keep: bool = False,
+        explanation_depth: str = "standard",
+    ) -> Dict[str, Any] | AssistantOutput:
+        """Plan 预览别名：dry-run ToolPlan，不执行 skill。
+
+        对应阶段 A 误用 ``ask()`` 作为「只看 plan」的迁移入口。
+        语义与 ``plan()`` 相同。
+        """
+
+        return self.plan(
+            query,
             response_style=response_style,
             persist=persist,
             keep=keep,
+            explanation_depth=explanation_depth,
         )
 
     def plan(
@@ -186,12 +229,13 @@ class QteasyAssistant:
         response_style: str = "user_friendly",
         persist: str | None = None,
         keep: bool = False,
+        explanation_depth: str = "standard",
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 模式：生成 dry_run 计划。
 
         与 `ask()` 的区别在于：
-        - ask：通常无步骤，强调“问答解释”；
-        - plan：通常会生成可执行步骤，强调“执行前审阅”。
+        - ask：KnowledgeBase 问答，无 skill / 无 Executor；
+        - plan / preview：生成可审阅 ToolPlan steps，不执行。
         """
 
         plan = self._build_plan(query, mode="plan")
@@ -201,6 +245,7 @@ class QteasyAssistant:
             response_style=response_style,
             persist=persist,
             keep=keep,
+            explanation_depth=explanation_depth,
         )
 
     def run(
@@ -210,6 +255,7 @@ class QteasyAssistant:
         response_style: str = "user_friendly",
         persist: str | None = None,
         keep: bool = False,
+        explanation_depth: str = "standard",
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan + 确认执行。
 
@@ -225,6 +271,7 @@ class QteasyAssistant:
             response_style=response_style,
             persist=persist,
             keep=keep,
+            explanation_depth=explanation_depth,
         )
 
     def _execute_and_format(
@@ -235,6 +282,7 @@ class QteasyAssistant:
         response_style: str,
         persist: str | None,
         keep: bool,
+        explanation_depth: str = "standard",
     ) -> Dict[str, Any] | AssistantOutput:
         """执行并按策略处理落盘与渲染。"""
 
@@ -274,7 +322,12 @@ class QteasyAssistant:
         if response_style == "raw":
             return payload
 
-        rendered = self.renderer.render(payload, style="user_friendly", context={"persist_mode": persist_mode})
+        rendered = self.renderer.render(
+            payload,
+            style="user_friendly",
+            context={"persist_mode": persist_mode},
+            explanation_depth=explanation_depth,
+        )
         if plan_md:
             first_lines = "\n".join(plan_md.strip().splitlines()[:6])
             rendered.narrative = rendered.narrative + f"\n\nPlan (markdown preview):\n{first_lines}"

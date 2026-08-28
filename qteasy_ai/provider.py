@@ -31,7 +31,7 @@ import json
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import ConfigCenter
 
@@ -59,6 +59,32 @@ class BaseLLMProvider(ABC):
         str
             模型返回文本。
         """
+
+
+class FakeLLMProvider(BaseLLMProvider):
+    """测试用 Provider：按队列返回罐头文本，并记录 prompt。
+
+    不发起网络请求。供 Ask 与 Hybrid Planner 的 unittest 注入。
+
+    Parameters
+    ----------
+    replies : list of str, optional
+        按调用顺序弹出的回复；队列为空时返回带 prompt 摘要的占位文本。
+    """
+
+    def __init__(self, replies: Optional[List[str]] = None) -> None:
+        self.replies: List[str] = list(replies or [])
+        self.prompts: List[str] = []
+        self.system_prompts: List[str] = []
+
+    def chat(self, prompt: str, *, system_prompt: str = "") -> str:
+        """记录 prompt 并返回下一条罐头回复。"""
+
+        self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
+        if self.replies:
+            return self.replies.pop(0)
+        return f"[fake-llm] {prompt[:240]}"
 
 
 class OpenAICompatProvider(BaseLLMProvider):

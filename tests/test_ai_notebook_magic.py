@@ -39,7 +39,7 @@ class TestAiNotebookMagic(unittest.TestCase):
         self.assertEqual(command.query, "列出所有内置策略")
 
     def test_ask_mode_is_readonly(self) -> None:
-        """验证 Ask 模式为 dry_run 且无执行步骤。"""
+        """验证 Ask 目标态：无 execution、无 steps，答案来自 KnowledgeBase。"""
 
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = QteasyAssistant(
@@ -47,14 +47,23 @@ class TestAiNotebookMagic(unittest.TestCase):
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             plan_cache = {}
-            command = parse_magic_command("--mode ask --raw 列出所有内置策略")
+            command = parse_magic_command("--mode ask --raw explain PT vs PS")
             outcome = execute_magic_command(command, assistant=assistant, plan_cache=plan_cache)
             payload = outcome["result"]
 
-            print("\n[TestAiNotebookMagic] ask payload status:", payload["execution"]["status"])
-            print(" ask plan steps:", len(payload["plan"]["steps"]))
-            self.assertEqual(payload["execution"]["status"], "dry_run")
-            self.assertEqual(len(payload["plan"]["steps"]), 0)
+            print("\n[TestAiNotebookMagic] ask mode:", payload.get("mode"))
+            print(" ask keys:", sorted(payload.keys()) if isinstance(payload, dict) else type(payload))
+            print(" ask sources:", payload.get("sources"))
+            print(" ask answer:", str(payload.get("answer", ""))[:240])
+            self.assertEqual(outcome["mode"], "ask")
+            self.assertEqual(payload["mode"], "ask")
+            self.assertNotIn("execution", payload)
+            self.assertTrue(payload.get("ok"))
+            self.assertIn("PT", payload.get("answer", ""))
+            self.assertIn("PS", payload.get("answer", ""))
+            runs = assistant.memory_store.list_runs()
+            print(" ask persisted runs:", runs)
+            self.assertEqual(runs, [])
 
     def test_confirm_flow(self) -> None:
         """验证 run -> confirm 的两阶段流程。"""

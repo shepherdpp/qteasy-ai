@@ -3,7 +3,8 @@
 **qteasy-ai** 是 [qteasy](https://github.com/shepherdpp/qteasy) 的 **独立 AI 编排外壳**：自然语言 → ToolPlan → 用户确认 → 调用 qteasy API → 结构化结果。  
 它不修改 qteasy 回测/交易内核，仅作为可插拔的 skills + planner + executor 层。
 
-> **当前版本：0.1.0**（Stage A，自 qteasy `qt_ai_dev` 迁入）。人工 smoke 见 [docs/MANUAL_TEST.md](docs/MANUAL_TEST.md)。  
+> **当前版本：0.1.0**（Stage A 发版标签）。阶段 C（Q-AI.3）Ask 目标态 / preview / Hybrid LLM 已在主分支实现，发版标签由 Jackie 统一打出。  
+> 用户指南：[docs/USER_GUIDE.md](docs/USER_GUIDE.md)。人工 smoke 见 [docs/MANUAL_TEST.md](docs/MANUAL_TEST.md)。  
 > **协作规范与 Q-AI 计划真源**仍在 qteasy 仓库的 [`.cursor/rules/`](https://github.com/shepherdpp/qteasy/tree/master/.cursor/rules) 与 [`.cursor/plans/`](https://github.com/shepherdpp/qteasy/tree/master/.cursor/plans)。
 
 ## 与 qteasy 的关系
@@ -37,7 +38,7 @@ pip install -e /path/to/qteasy-ai
 - `QTEASY_AI_HOME` — 本地记忆目录（profile / env_facts / runs）
 - `QTEASY_AI_MODEL` / `QTEASY_AI_API_KEY` / `QTEASY_AI_BASE_URL` — OpenAI-compatible Provider
 
-详见 qteasy 仓内计划 [`s1.4_剥离_qteasy-ai`](https://github.com/shepherdpp/qteasy/blob/master/.cursor/plans/s1.4_剥离_qteasy-ai_10ba0551.plan.md) 与 Q-AI 执行 plan。
+详见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)、[docs/tutorials/quickstart.md](docs/tutorials/quickstart.md)。
 
 ## 开发
 

@@ -1,0 +1,19 @@
+{
+  "id": "operator_run_freq",
+  "tags": ["run_freq", "run_timing", "operator", "group", "qt.run"],
+  "keywords": [
+    "run_freq",
+    "run timing",
+    "frequency",
+    "qt.run",
+    "qt_config",
+    "operator",
+    "freq",
+    "运行频率"
+  ],
+  "title": "run_freq belongs to Operator / Group, not qt.run",
+  "summary": "Backtest frequency is an Operator/Group field. Passing freq into qt.run or QT_CONFIG fails.",
+  "narrative": "run_freq and run_timing live on Group (and Operator accepts run_freq at construction). Strategy objects do not cache their own frequency; they read it from the owning Group.\n\nDo not pass freq / run_freq as a qt.run() keyword or as a QT_CONFIG built-in key. That raises: config_key is not a built-in parameter key.\n\nSpoken 'daily backtest' should become Operator(..., run_freq='d'), not a run() config patch.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies=['macd'], run_freq='d')\n# Wrong: qt.run(op, freq='d')  # freq is not a qt.run / QT_CONFIG key\nqt.run(op, mode=1, asset_pool='000300.SH', invest_start='20180101', invest_end='20231231')",
+  "risk_notes": "Mis-routing freq into qt.run is a known qteasy-ai skill trap; Ask only explains, it does not call qt.run."
+}

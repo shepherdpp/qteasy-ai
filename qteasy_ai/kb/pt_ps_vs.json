@@ -1,0 +1,20 @@
+{
+  "id": "pt_ps_vs",
+  "tags": ["pt", "ps", "vs", "signal", "position", "order"],
+  "keywords": [
+    "pt",
+    "ps",
+    "vs",
+    "signal type",
+    "position target",
+    "proportional",
+    "value signal",
+    "信号",
+    "仓位"
+  ],
+  "title": "PT / PS / VS signal types",
+  "summary": "PT is a target-weight signal; PS and VS are order-style signals.",
+  "narrative": "PT (Position Target) is a portfolio target-weight signal: it describes the holdings vector you want at the end of this bar. qteasy parses PT into a one-shot rebalance plan (cash_to_spend / amounts_to_sell) from current total value.\n\nPS (Proportional Signal) is an order-style signal sized as a fraction of total assets (buys) or of current holdings (sells). It does not guarantee reaching a target weight.\n\nVS (Value Signal) is an absolute size/amount order, closest to the matching engine.\n\nPS and VS execute only against this bar's available cash and holdings. They do not auto-refill missing legs or spend future cash. PT may reuse same-bar sell proceeds only when shorting is off and cash_delivery_period is 0.",
+  "python_code": "import qteasy as qt\n# PT / PS / VS is a Strategy / Group signal_type, not a qt.run() config key.\nop = qt.Operator(strategies=['macd'], signal_type='pt')\nprint(op.signal_type)",
+  "risk_notes": "Do not treat PS/VS as target-weight rebalance. Same-bar cash reuse is PT-only under cash_delivery_period=0."
+}

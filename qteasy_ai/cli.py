@@ -92,24 +92,58 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="qteasy-ai",
-        description="qteasy AI shell stage-A CLI",
+        description="qteasy AI shell CLI (Ask / Plan / preview / run)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ask_parser = sub.add_parser("ask", help="Ask mode, no skill execution.")
+    ask_parser = sub.add_parser("ask", help="Ask mode: Q&A via KnowledgeBase, no skill execution.")
     ask_parser.add_argument("query", type=str, help="Natural language query")
     ask_parser.add_argument("--pretty", action="store_true", help="Render user-friendly output")
     ask_parser.add_argument("--raw", action="store_true", help="Force raw payload output")
+    ask_parser.add_argument(
+        "--depth",
+        choices=["brief", "standard", "deep"],
+        default="standard",
+        help="Explanation depth for Ask answers.",
+    )
+
+    preview_parser = sub.add_parser("preview", help="Dry-run plan preview (no skill execution).")
+    preview_parser.add_argument("query", type=str, help="Natural language query")
+    preview_parser.add_argument("--pretty", action="store_true", help="Render user-friendly output")
+    preview_parser.add_argument("--raw", action="store_true", help="Force raw payload output")
+    preview_parser.add_argument(
+        "--depth",
+        choices=["brief", "standard", "deep"],
+        default="standard",
+        help="Explanation depth for pretty output.",
+    )
 
     plan_parser = sub.add_parser("plan", help="Plan mode dry run.")
     plan_parser.add_argument("query", type=str, help="Natural language query")
     plan_parser.add_argument("--pretty", action="store_true", help="Render user-friendly output")
     plan_parser.add_argument("--raw", action="store_true", help="Force raw payload output")
+    plan_parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Alias of dry-run plan (same as preview subcommand).",
+    )
+    plan_parser.add_argument(
+        "--depth",
+        choices=["brief", "standard", "deep"],
+        default="standard",
+        help="Explanation depth for pretty output.",
+    )
 
     run_parser = sub.add_parser("run", help="Plan and execute.")
     run_parser.add_argument("query", type=str, help="Natural language query")
     run_parser.add_argument("--pretty", action="store_true", help="Render user-friendly output")
     run_parser.add_argument("--raw", action="store_true", help="Force raw payload output")
+    run_parser.add_argument(
+        "--depth",
+        choices=["brief", "standard", "deep"],
+        default="standard",
+        help="Explanation depth for pretty output.",
+    )
 
     sub.add_parser("provider-check", help="Check provider settings.")
     return parser
@@ -131,13 +165,40 @@ def main() -> int:
         response_style = "raw"
 
     if args.command == "ask":
-        _print_json(_normalize_output(assistant.ask(args.query, response_style=response_style)))
+        depth = getattr(args, "depth", "standard")
+        _print_json(
+            _normalize_output(
+                assistant.ask(
+                    args.query,
+                    response_style=response_style,
+                    explanation_depth=depth,
+                )
+            )
+        )
         return 0
-    if args.command == "plan":
-        _print_json(_normalize_output(assistant.plan(args.query, response_style=response_style)))
+    if args.command in {"plan", "preview"}:
+        depth = getattr(args, "depth", "standard")
+        _print_json(
+            _normalize_output(
+                assistant.preview(
+                    args.query,
+                    response_style=response_style,
+                    explanation_depth=depth,
+                )
+            )
+        )
         return 0
     if args.command == "run":
-        _print_json(_normalize_output(assistant.run(args.query, response_style=response_style)))
+        depth = getattr(args, "depth", "standard")
+        _print_json(
+            _normalize_output(
+                assistant.run(
+                    args.query,
+                    response_style=response_style,
+                    explanation_depth=depth,
+                )
+            )
+        )
         return 0
     if args.command == "provider-check":
         _print_json(_provider_check_payload())

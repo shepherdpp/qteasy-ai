@@ -36,9 +36,24 @@ class TestAiCorpusRegression(unittest.TestCase):
             mode = case.get("mode", "plan")
             if mode == "ask":
                 payload = assistant.ask(query, response_style="raw")
-                steps = payload["plan"]["steps"]
-                print(" ask case:", case["id"], "steps:", len(steps))
-                self.assertEqual(steps, [])
+                print(
+                    " ask case:",
+                    case["id"],
+                    "mode:",
+                    payload.get("mode"),
+                    "ok:",
+                    payload.get("ok"),
+                    "sources:",
+                    payload.get("sources"),
+                )
+                print(" ask answer:", str(payload.get("answer", ""))[:300])
+                self.assertEqual(payload.get("mode"), "ask")
+                self.assertNotIn("execution", payload)
+                self.assertTrue(payload.get("plan") in (None, {}) or payload.get("plan", {}).get("steps") in (None, []))
+                answer = str(payload.get("answer", ""))
+                self.assertIn("PT", answer)
+                self.assertIn("PS", answer)
+                self.assertTrue(payload.get("sources"))
             else:
                 payload = assistant.plan(query, response_style="raw")
                 steps = payload["plan"]["steps"]
