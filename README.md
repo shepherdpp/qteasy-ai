@@ -1,4 +1,4 @@
-# qteasy-ai
+# qteasy-ai 介绍
 
 **qteasy-ai** 是 [qteasy](https://github.com/shepherdpp/qteasy) 的 **独立 AI 编排外壳**：自然语言 → ToolPlan → 用户确认 → 调用 qteasy API → 结构化结果。  
 它不修改 qteasy 回测/交易内核，仅作为可插拔的 skills + planner + executor 层。
