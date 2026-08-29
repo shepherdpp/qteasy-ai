@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
+from pathlib import Path
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
 
@@ -59,19 +60,22 @@ def _slice_backtest_output(raw: Any) -> tuple[Dict[str, Any], List[Dict[str, Any
 
 def build_backtest_run_skill(
     run_func: Callable[..., Any] | None = None,
-    operator_factory: Callable[[str], Any] | None = None,
+    operator_factory: Callable[..., Any] | None = None,
     list_func: Callable[[], list] | None = None,
+    load_func: Callable[[str], Any] | None = None,
 ) -> tuple[SkillMetadata, Callable[..., dict]]:
-    """构建内置策略回测技能。
+    """构建内置或生成策略回测技能。
 
     Parameters
     ----------
     run_func : callable, optional
         注入 ``qteasy.run``；单测返回金标准 dict，避免真回测。
     operator_factory : callable, optional
-        ``strategy_id -> Operator``。
+        ``strategy_id 或策略类 -> Operator``。
     list_func : callable, optional
         内置策略 ID 列表。
+    load_func : callable, optional
+        ``strategy_path -> 策略类``；有 ``strategy_path`` 时不查内置 ID。
 
     Returns
     -------
@@ -91,11 +95,15 @@ def build_backtest_run_skill(
         import qteasy as qt
 
         list_func = qt.built_in_list
+    if load_func is None:
+        from .strategy_sanity import load_strategy_class
+
+        load_func = lambda path: load_strategy_class(Path(path))
 
     metadata = SkillMetadata(
         name="qt.ai.backtest.run_builtin",
         version="0.2.0",
-        summary="Run a built-in strategy backtest (mode=1) and return sliced metrics.",
+        summary="Run a built-in or generated-strategy backtest (mode=1) and return sliced metrics.",
         inputs_schema={
             "strategy_id": {"type": "string", "required": True},
             "asset_pool": {"type": "string", "required": False},
@@ -105,6 +113,8 @@ def build_backtest_run_skill(
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
             "freq": {"type": "string", "required": False},
+            "strategy_path": {"type": "string", "required": False},
+            "signal_type": {"type": "string", "required": False},
         },
         outputs_schema={"metrics": "dict", "artifacts": "list"},
         side_effects=SkillSideEffects(
@@ -126,43 +136,70 @@ def build_backtest_run_skill(
         start: Optional[str] = None,
         end: Optional[str] = None,
         freq: str = "d",
+        strategy_path: str = "",
+        signal_type: str = "",
+        upstream_payload: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> dict:
         run_id = new_run_id()
-        pool = asset_pool or shares or "000300.SH"
-        start_date = invest_start or start
-        end_date = invest_end or end
+        payload_in = upstream_payload if isinstance(upstream_payload, dict) else {}
+        path_text = str(strategy_path or payload_in.get("strategy_path") or "").strip()
+        spec_raw = payload_in.get("spec") if isinstance(payload_in.get("spec"), dict) else {}
+        pool = asset_pool or shares or spec_raw.get("asset_pool") or "000300.SH"
+        start_date = invest_start or start or spec_raw.get("invest_start")
+        end_date = invest_end or end or spec_raw.get("invest_end")
+        run_freq = freq or spec_raw.get("run_freq") or payload_in.get("run_freq") or "d"
+        sig = (
+            signal_type
+            or payload_in.get("signal_type")
+            or spec_raw.get("signal_type")
+            or "PS"
+        )
         inputs_echo = {
             "strategy_id": strategy_id,
             "asset_pool": pool,
             "invest_start": start_date,
             "invest_end": end_date,
-            "freq": freq,
+            "freq": run_freq,
+            "strategy_path": path_text,
             **kwargs,
         }
         sid = str(strategy_id).strip()
         try:
-            known = [str(item).strip() for item in list_func() if str(item).strip()]
-            lower_map = {item.lower(): item for item in known}
-            if sid.lower() not in lower_map:
-                result = SkillResult(
-                    ok=False,
-                    skill_name=metadata.name,
-                    run_id=run_id,
-                    inputs_echo=inputs_echo,
-                    error=SkillError(
-                        code="UNKNOWN_STRATEGY_ID",
-                        message=f"Unknown built-in strategy id: {sid}. Use strategy_meta.list to inspect available ids.",
-                    ),
-                )
-                return result.to_dict()
-            canonical = lower_map[sid.lower()]
-            run_freq = freq or "d"
-            try:
-                operator = operator_factory(canonical, run_freq=run_freq)
-            except TypeError:
-                # 单测注入的 factory 可能只接收 strategy_id
-                operator = operator_factory(canonical)
+            if path_text:
+                stg_obj = load_func(path_text)
+                try:
+                    operator = operator_factory(
+                        stg_obj,
+                        run_freq=run_freq,
+                        signal_type=str(sig).lower(),
+                    )
+                except TypeError:
+                    try:
+                        operator = operator_factory(stg_obj, run_freq=run_freq)
+                    except TypeError:
+                        operator = operator_factory(stg_obj)
+                canonical = getattr(stg_obj, "__name__", path_text)
+            else:
+                known = [str(item).strip() for item in list_func() if str(item).strip()]
+                lower_map = {item.lower(): item for item in known}
+                if sid.lower() not in lower_map:
+                    result = SkillResult(
+                        ok=False,
+                        skill_name=metadata.name,
+                        run_id=run_id,
+                        inputs_echo=inputs_echo,
+                        error=SkillError(
+                            code="UNKNOWN_STRATEGY_ID",
+                            message=f"Unknown built-in strategy id: {sid}. Use strategy_meta.list to inspect available ids.",
+                        ),
+                    )
+                    return result.to_dict()
+                canonical = lower_map[sid.lower()]
+                try:
+                    operator = operator_factory(canonical, run_freq=run_freq)
+                except TypeError:
+                    operator = operator_factory(canonical)
             import qteasy as qt
 
             # freq 不是 QT_CONFIG 键；运行频率应落在 Operator(run_freq=...) 上
@@ -187,7 +224,7 @@ def build_backtest_run_skill(
                 metrics=metrics,
                 data_summary={"strategy_id": canonical, "asset_pool": pool, "mode": 1},
                 artifacts=artifacts,
-                payload={"strategy_id": canonical},
+                payload={"strategy_id": canonical, "strategy_path": path_text},
             )
         except Exception as exc:
             result = SkillResult(

@@ -1,4 +1,4 @@
-# qteasy-ai Stage A / B / C — Manual test guide (Gold Standard)
+# qteasy-ai Stage A / B / C / D — Manual test guide (Gold Standard)
 
 Jackie-only smoke checklist. Automated regression: `python -m unittest discover -s tests -p 'test_ai_*' -v`.
 
@@ -7,6 +7,8 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 **Q-AI.2（阶段 B）实弹**：**已关单（2026-08-28）**。手册 [`LIVE_FIRE_DRILL_QAI2.md`](LIVE_FIRE_DRILL_QAI2.md) + 语料 [`tests/ai_corpus/b_manual_corpus.json`](../tests/ai_corpus/b_manual_corpus.json)。摘要：qteasy 仓 `knowledge/runlog/qteasy-ai-qai2-stage-b-checkpoint-2026-08.md`。
 
 **Q-AI.3（阶段 C）实弹**：**已关单（2026-08-28）**。手册 [`LIVE_FIRE_DRILL_QAI3.md`](LIVE_FIRE_DRILL_QAI3.md) + 语料 [`tests/ai_corpus/c_manual_corpus.json`](../tests/ai_corpus/c_manual_corpus.json)。摘要：qteasy 仓 `knowledge/runlog/qteasy-ai-qai3-stage-c-tdd-2026-08.md`。
+
+**Q-AI.4（阶段 D）实弹**：TDD 已落地，待手测。手册 [`LIVE_FIRE_DRILL_QAI4.md`](LIVE_FIRE_DRILL_QAI4.md) + 语料 [`tests/ai_corpus/d_manual_corpus.json`](../tests/ai_corpus/d_manual_corpus.json)。
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
@@ -74,7 +76,8 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 - High side-effect skills: plan shows `side_effects`; **CLI `qteasy-ai run` = one human confirmation** and executes. Notebook `%%qtai --mode run` still requires `--confirm <plan_id>`.
 - `profile.agent.allow_*` defaults are all `false` and are **not** read by CLI/`assistant.run()` in this stage (reserved for unattended agents later).
 - Ask target state: `assistant.ask(...)` → `mode=ask`, KnowledgeBase answer, **no** skill / PlanExecutor / `runs/` persist. Former empty-step plan preview is `preview()` / `plan --preview`.
-- Live trade is always `plan_only` (never execute). StrategyBuilder / skip-confirmation remain `not_supported_yet`.
+- Live trade uses `qt.ai.pipeline.live_trade_plan_only` (never execute orders). Skip-confirmation remains `not_supported_yet`.
+- StrategyBuilder: Plan DAG for dual-MA templates; Ask does not write strategy files.
 - Unsupported queries → `qt.ai.system.fallback` with `fallback_action` / `next_step` (not silent wrong skill; never default to `summary_kline`).
 - No merge of `qt_ai_dev` into qteasy `master`.
 

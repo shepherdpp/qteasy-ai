@@ -14,8 +14,9 @@ SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy)
 - KnowledgeBase (`qteasy_ai/kb/*.json`) and `AskEngine` (Offline when no Provider).
 - `assistant.preview()`, CLI `preview`, `plan --preview`.
 - `explanation_depth`: `brief` / `standard` / `deep` (`--depth`).
-- Hybrid Planner LLM candidate generation; RuleValidator and `env_facts` gates still apply. Unknown skills / invalid JSON fall back to the rule router.
+- Hybrid Planner LLM candidate generation; RuleValidator and `env_facts` gates still apply. Unknown skills / invalid JSON fall back to the rule router. Candidate prompt includes each skill's one-line `summary`.
 - User guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md). Demo: `examples/ai_shell_stage_c_ask_demo.py`.
+- **StrategyBuilder (Q-AI.4)**: `qt.ai.strategy.spec_from_nl` / `codegen_hybrid` / `sanity_check` / `qt.ai.operator.build_from_spec`; generated source under `.qteasy/ai/strategies/`; reuses `backtest.run_builtin` (optional `strategy_path`). Live: `qt.ai.pipeline.live_trade_plan_only`. Demo: `examples/ai_shell_stage_d_strategybuilder_demo.py`. Handbook: [docs/LIVE_FIRE_DRILL_QAI4.md](docs/LIVE_FIRE_DRILL_QAI4.md).
 
 ## 0.1.0 (2026-08-06)
 

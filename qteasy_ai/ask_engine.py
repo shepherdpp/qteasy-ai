@@ -39,6 +39,11 @@ _PLAN_LIKE_HINTS = (
     "下载",
     "回测",
     "优化",
+    "生成策略",
+    "strategybuilder",
+    "帮我写",
+    "写一个",
+    "创建策略",
 )
 
 _ASK_SYSTEM_PROMPT = (
@@ -174,7 +179,7 @@ class AskEngine:
         """执行型请求：提示改用 Plan，不生成 steps。"""
 
         answer = (
-            "This looks like an executable request (list/download/backtest/optimize/export). "
+            "This looks like an executable request (list/download/backtest/optimize/export/codegen). "
             "Ask mode does not call skills or PlanExecutor. "
             "Use Plan or preview to review a ToolPlan, then confirm before run."
         )

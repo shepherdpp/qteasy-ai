@@ -126,15 +126,17 @@ class TestAiPlannerB(unittest.TestCase):
         self.assertEqual(step.inputs.get("opti_method"), "montecarlo")
 
     def test_live_and_codegen_still_fallback(self) -> None:
-        """实盘 plan_only；StrategyBuilder not_supported_yet。"""
+        """实盘走 live_trade_plan_only；StrategyBuilder 不再 not_supported_yet。"""
 
         print("\n[TestAiPlannerB] live/codegen")
         live = self.planner.build_plan("start live trade now", mode="plan")
         codegen = self.planner.build_plan("生成一个双均线策略 strategybuilder", mode="plan")
-        print(" live:", live.steps[0].inputs.get("fallback_action"))
-        print(" codegen:", codegen.steps[0].inputs.get("fallback_action"))
-        self.assertEqual(live.steps[0].inputs.get("fallback_action"), "plan_only")
-        self.assertEqual(codegen.steps[0].inputs.get("fallback_action"), "not_supported_yet")
+        print(" live:", live.steps[0].skill_name, live.execution_mode)
+        print(" codegen:", codegen.steps[0].skill_name, codegen.steps[0].inputs.get("fallback_action"))
+        self.assertEqual(live.steps[0].skill_name, "qt.ai.pipeline.live_trade_plan_only")
+        self.assertEqual(live.execution_mode, "dry_run")
+        self.assertNotEqual(codegen.steps[0].inputs.get("fallback_action"), "not_supported_yet")
+        self.assertEqual(codegen.steps[0].inputs.get("fallback_action"), "clarify_required")
 
     def test_unmatched_does_not_default_to_summary(self) -> None:
         """无法匹配时不得默认 summary_kline。"""

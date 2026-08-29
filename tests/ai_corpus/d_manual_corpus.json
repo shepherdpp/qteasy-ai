@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "stage": "Q-AI.4 / D",
+    "handbook": "docs/LIVE_FIRE_DRILL_QAI4.md",
+    "driver": "Mode-R required (rule path StrategyBuilder DAG + live plan-only). Mode-D optional Hybrid catalog.",
+    "notes": "Never run live. Codegen/backtest only after reviewing plan. Ask must not write strategy files."
+  },
+  "cases": [
+    {
+      "id": "D-A1",
+      "group": "G1",
+      "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy.spec_from_nl",
+      "expected_skills": [
+        "qt.ai.strategy.spec_from_nl",
+        "qt.ai.strategy.codegen_hybrid",
+        "qt.ai.strategy.sanity_check",
+        "qt.ai.operator.build_from_spec",
+        "qt.ai.backtest.run_builtin"
+      ],
+      "notes": "dry_run only; depends_on chain; NEVER run unless Jackie explicitly confirms"
+    },
+    {
+      "id": "D-A2",
+      "group": "G1",
+      "query": "生成一个双均线策略 strategybuilder",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "missing fast/slow; not not_supported_yet"
+    },
+    {
+      "id": "D-A3",
+      "group": "G1",
+      "query": "start live trade now",
+      "mode": "plan",
+      "expected_skill": "qt.ai.pipeline.live_trade_plan_only",
+      "notes": "never auto-execute live"
+    },
+    {
+      "id": "D-A4",
+      "group": "G2",
+      "query": "帮我写一个双均线策略",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "Ask suggests Plan; no codegen write"
+    }
+  ]
+}

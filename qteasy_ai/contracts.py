@@ -125,6 +125,69 @@ class ToolPlan:
 
 
 @dataclass
+class StrategyParameterSpec:
+    """StrategySpec 中的单个可调参数。"""
+
+    name: str
+    default: Any
+    range: List[Any] = field(default_factory=list)
+    par_type: str = "int"
+    opt_tag: int = 1
+
+
+@dataclass
+class StrategySpec:
+    """NL→代码 的机器可读策略规格（阶段 D）。
+
+    歧义规则必须进入 ``assumptions``，禁止 silently 编造标的池或信号类型。
+    """
+
+    signal_type: str
+    run_freq: str
+    run_timing: str
+    asset_pool: str
+    htypes: List[str]
+    window_length: int
+    use_latest_data_cycle: bool
+    parameters: List[Dict[str, Any]]
+    risk_decl: Dict[str, Any]
+    template_id: str
+    assumptions: List[str]
+    source_query: str
+    invest_start: str = ""
+    invest_end: str = ""
+    class_name: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转为 JSON 友好字典。"""
+
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "StrategySpec":
+        """从字典恢复规格。"""
+
+        payload = dict(raw or {})
+        return cls(
+            signal_type=str(payload.get("signal_type") or ""),
+            run_freq=str(payload.get("run_freq") or "d"),
+            run_timing=str(payload.get("run_timing") or "close"),
+            asset_pool=str(payload.get("asset_pool") or ""),
+            htypes=list(payload.get("htypes") or []),
+            window_length=int(payload.get("window_length") or 0),
+            use_latest_data_cycle=bool(payload.get("use_latest_data_cycle")),
+            parameters=list(payload.get("parameters") or []),
+            risk_decl=dict(payload.get("risk_decl") or {}),
+            template_id=str(payload.get("template_id") or ""),
+            assumptions=list(payload.get("assumptions") or []),
+            source_query=str(payload.get("source_query") or ""),
+            invest_start=str(payload.get("invest_start") or ""),
+            invest_end=str(payload.get("invest_end") or ""),
+            class_name=str(payload.get("class_name") or ""),
+        )
+
+
+@dataclass
 class SkillError:
     """技能错误信息。
 

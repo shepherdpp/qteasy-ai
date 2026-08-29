@@ -237,14 +237,23 @@ class Planner:
     )
 
     def _try_llm_candidate(self, query: str) -> Tuple[Optional[List[ToolStep]], str]:
-        """调用 Provider 生成候选 steps；失败返回 (None, reason)。"""
+        """调用 Provider 生成候选 steps；失败返回 (None, reason)。
+
+        候选 prompt 对每个已注册 skill 注入 ``- name: summary`` 一行用途，
+        降低错品类（例如回测句点成 refill）。
+        """
 
         if self.provider is None:
             return None, "provider_missing"
-        catalog = [item.name for item in self.registry.list_skills()]
+        catalog_items = self.registry.list_skills()
+        catalog_names = [item.name for item in catalog_items]
+        catalog_lines = [
+            f"- {item.name}: {item.summary}"
+            for item in catalog_items
+        ]
         prompt = (
             "Available skills:\n"
-            + "\n".join(f"- {name}" for name in catalog)
+            + "\n".join(catalog_lines)
             + f"\n\nUser query:\n{query}\n\n"
             "Return JSON with a steps array. Each step needs skill_name and inputs."
         )
@@ -258,7 +267,7 @@ class Planner:
         raw_steps = payload.get("steps")
         if not isinstance(raw_steps, list) or not raw_steps:
             return None, "llm_empty_steps"
-        available = set(catalog)
+        available = set(catalog_names)
         steps: List[ToolStep] = []
         for idx, raw in enumerate(raw_steps, start=1):
             if not isinstance(raw, dict):
@@ -454,8 +463,151 @@ class Planner:
             retry_limit=0,
         )
 
+    @staticmethod
+    def _has_strategy_builder_keywords(query: str, q_lower: str) -> bool:
+        """是否含 StrategyBuilder 关键词（写策略 / 双均线金叉）。"""
+
+        write_hints = (
+            "生成策略",
+            "strategybuilder",
+            "codegen",
+            "帮我写",
+            "写一个",
+            "写一份",
+            "创建策略",
+            "write a strategy",
+            "generate a strategy",
+        )
+        sma_hints = ("金叉", "死叉", "双均线", "均线交叉", "sma cross", "dual ma")
+        return any(item in query or item in q_lower for item in write_hints) or any(
+            item in query or item in q_lower for item in sma_hints
+        )
+
+    def _is_strategy_builder_query(self, query: str, q_lower: str) -> bool:
+        """判断是否走 StrategyBuilder DAG（排除实盘与内置策略回测）。"""
+
+        if any(item in q_lower for item in ["实盘", "live trade"]) or bool(
+            re.search(r"\blive\b", q_lower)
+        ):
+            return False
+        if not self._has_strategy_builder_keywords(query, q_lower):
+            return False
+        write_hints = ("生成策略", "strategybuilder", "codegen", "帮我写", "写一个", "写一份", "创建策略")
+        if self._extract_strategy_id(query) and not any(
+            item in query or item in q_lower for item in write_hints
+        ):
+            return False
+        return True
+
+    def _infer_strategy_builder_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """NL→Spec→codegen→sanity→Operator→可选回测/insight。"""
+
+        if not self._is_strategy_builder_query(query, q_lower):
+            return None
+        from .skills.strategy_spec import parse_strategy_spec_from_nl
+
+        spec, clarify = parse_strategy_spec_from_nl(query)
+        if spec is None:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason=str(clarify.get("reason") or "strategy_spec_incomplete"),
+                        hint=str(clarify.get("hint") or "Please provide a complete dual-MA cross description."),
+                        missing_info=str(clarify.get("missing_info") or "fast|slow"),
+                        next_step="Provide fast/slow windows (e.g. 20/60) and a single signal type.",
+                    ),
+                )
+            ]
+        spec_inputs: Dict[str, Any] = {"query": query}
+        steps = [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.strategy.spec_from_nl",
+                inputs=spec_inputs,
+            ),
+            self._make_step(
+                step_id="step_2",
+                skill_name="qt.ai.strategy.codegen_hybrid",
+                inputs={},
+                depends_on=["step_1"],
+            ),
+            self._make_step(
+                step_id="step_3",
+                skill_name="qt.ai.strategy.sanity_check",
+                inputs={},
+                depends_on=["step_2"],
+            ),
+            self._make_step(
+                step_id="step_4",
+                skill_name="qt.ai.operator.build_from_spec",
+                inputs={},
+                depends_on=["step_3"],
+            ),
+        ]
+        if self._is_backtest_query(q_lower):
+            market = self._extract_market_inputs(query)
+            bt_inputs: Dict[str, Any] = {
+                "strategy_id": spec.class_name or "GeneratedSmaCross",
+                "freq": spec.run_freq or market.get("freq") or "d",
+            }
+            pool = spec.asset_pool or market.get("shares") or ""
+            if pool:
+                bt_inputs["asset_pool"] = pool
+            start = spec.invest_start or market.get("start") or ""
+            end = spec.invest_end or market.get("end") or ""
+            if start:
+                bt_inputs["invest_start"] = start
+            if end:
+                bt_inputs["invest_end"] = end
+            steps.append(
+                self._make_step(
+                    step_id="step_5",
+                    skill_name="qt.ai.backtest.run_builtin",
+                    inputs=bt_inputs,
+                    depends_on=["step_4"],
+                )
+            )
+            if self._is_insight_commentary(q_lower):
+                insight = self._make_step(
+                    step_id="step_6",
+                    skill_name="qt.ai.insight.summarize_backtest",
+                    inputs={},
+                    depends_on=["step_5"],
+                )
+                insight.run_if = "all_dependencies_ok"
+                steps.append(insight)
+        return steps
+
+    def _infer_live_plan_only_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+        """实盘请求只路由到 plan-only skill，永不当作可执行下单。"""
+
+        if not (
+            any(item in q_lower for item in ["实盘", "live trade"])
+            or bool(re.search(r"\blive\b", q_lower))
+        ):
+            return None
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.pipeline.live_trade_plan_only",
+                inputs={"query": query},
+            )
+        ]
+
     def _infer_steps(self, *, query: str, q_lower: str) -> List[ToolStep]:
-        """根据 query 推断一步或多步技能调用（阶段 B 规则路径）。"""
+        """根据 query 推断一步或多步技能调用（阶段 B/D 规则路径）。"""
+
+        builder_steps = self._infer_strategy_builder_steps(query=query, q_lower=q_lower)
+        if builder_steps is not None:
+            return builder_steps
+
+        live_steps = self._infer_live_plan_only_steps(query=query, q_lower=q_lower)
+        if live_steps is not None:
+            return live_steps
 
         fallback_inputs = self._infer_fallback_inputs(query=query, q_lower=q_lower)
         if fallback_inputs is not None:
@@ -966,6 +1118,7 @@ class Planner:
         contains_codegen = any(item in q_lower for item in ["生成策略", "strategybuilder", "codegen"])
         contains_dangerous = any(item in q_lower for item in ["rm -rf", "bash", "shell command", "cmd /c", "powershell"])
         contains_bypass_confirm = any(item in q_lower for item in ["跳过确认", "skip confirmation", "write files directly"])
+        builder_query = Planner._has_strategy_builder_keywords(query, q_lower)
 
         if contains_dangerous:
             return {
@@ -987,7 +1140,9 @@ class Planner:
                 "next_step": "Please use plan mode first, then execute with explicit confirmation.",
             }
 
-        high_risk_intents = [contains_live, contains_download, contains_backtest, contains_optimize, contains_codegen]
+        high_risk_intents = [contains_live, contains_download, contains_backtest, contains_optimize]
+        if not builder_query:
+            high_risk_intents.append(contains_codegen)
         if sum(1 for flag in high_risk_intents if flag) >= 2:
             return {
                 "query": query,
@@ -1007,6 +1162,9 @@ class Planner:
                 "missing_info": "explicit_execution_confirmation",
                 "next_step": "Ask for a live-trade plan first, then confirm each high-risk step manually.",
             }
+
+        if builder_query:
+            return None
 
         if contains_codegen:
             return {

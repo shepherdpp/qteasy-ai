@@ -130,6 +130,8 @@ def build_optimize_run_skill(
             "end": {"type": "string", "required": False},
             "opti_method": {"type": "string", "required": False},
             "opti_sample_count": {"type": "integer", "required": False},
+            "strategy_path": {"type": "string", "required": False},
+            "signal_type": {"type": "string", "required": False},
         },
         outputs_schema={"metrics": "dict"},
         side_effects=SkillSideEffects(
@@ -152,9 +154,14 @@ def build_optimize_run_skill(
         end: Optional[str] = None,
         opti_method: str = DEFAULT_OPTI_METHOD,
         opti_sample_count: int = DEFAULT_OPTI_SAMPLE_COUNT,
+        strategy_path: str = "",
+        signal_type: str = "",
+        upstream_payload: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> dict:
         run_id = new_run_id()
+        payload_in = upstream_payload if isinstance(upstream_payload, dict) else {}
+        path_text = str(strategy_path or payload_in.get("strategy_path") or "").strip()
         pool = asset_pool or shares or "000300.SH"
         start_date = invest_start or start
         end_date = invest_end or end
@@ -167,26 +174,39 @@ def build_optimize_run_skill(
             "invest_end": end_date,
             "opti_method": method,
             "opti_sample_count": sample_count,
+            "strategy_path": path_text,
             **kwargs,
         }
         sid = str(strategy_id).strip()
         try:
-            known = [str(item).strip() for item in list_func() if str(item).strip()]
-            lower_map = {item.lower(): item for item in known}
-            if sid.lower() not in lower_map:
-                result = SkillResult(
-                    ok=False,
-                    skill_name=metadata.name,
-                    run_id=run_id,
-                    inputs_echo=inputs_echo,
-                    error=SkillError(
-                        code="UNKNOWN_STRATEGY_ID",
-                        message=f"Unknown built-in strategy id: {sid}.",
-                    ),
-                )
-                return result.to_dict()
-            canonical = lower_map[sid.lower()]
-            operator = operator_factory(canonical)
+            if path_text:
+                from pathlib import Path
+                from .strategy_sanity import load_strategy_class
+
+                stg_obj = load_strategy_class(Path(path_text))
+                sig = str(signal_type or payload_in.get("signal_type") or "PS").lower()
+                try:
+                    operator = operator_factory(stg_obj, signal_type=sig)
+                except TypeError:
+                    operator = operator_factory(stg_obj)
+                canonical = getattr(stg_obj, "__name__", path_text)
+            else:
+                known = [str(item).strip() for item in list_func() if str(item).strip()]
+                lower_map = {item.lower(): item for item in known}
+                if sid.lower() not in lower_map:
+                    result = SkillResult(
+                        ok=False,
+                        skill_name=metadata.name,
+                        run_id=run_id,
+                        inputs_echo=inputs_echo,
+                        error=SkillError(
+                            code="UNKNOWN_STRATEGY_ID",
+                            message=f"Unknown built-in strategy id: {sid}.",
+                        ),
+                    )
+                    return result.to_dict()
+                canonical = lower_map[sid.lower()]
+                operator = operator_factory(canonical)
             strategies: List[Any] = list(getattr(operator, "strategies", []) or [])
             for stg in strategies:
                 setter = getattr(stg, "set_opt_tag", None)

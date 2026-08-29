@@ -123,5 +123,62 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(result["metrics"]["mdd"], 0.02)
 
 
+    def test_strategy_path_skips_builtin_list(self) -> None:
+        """有 strategy_path 时加载自定义类，不查 built_in_list。"""
+
+        print("\n[TestAiBacktestSkill] strategy_path custom")
+        captured = {}
+        listed = {"n": 0}
+
+        def fake_run(op, **kwargs):
+            captured["op"] = op
+            captured["kwargs"] = dict(kwargs)
+            return {"final_value": 99.0, "annual_rtn": 0.05, "mdd": 0.1}
+
+        def fake_operator(stg, run_freq="d", **kwargs):
+            captured["stg"] = stg
+            captured["run_freq"] = run_freq
+            captured["factory_kwargs"] = dict(kwargs)
+            return {"custom": True, "stg": stg}
+
+        def fake_load(path):
+            captured["loaded_path"] = path
+            return "CUSTOM_CLASS"
+
+        def list_func():
+            listed["n"] += 1
+            return ["macd"]
+
+        _, handler = build_backtest_run_skill(
+            run_func=fake_run,
+            operator_factory=fake_operator,
+            list_func=list_func,
+            load_func=fake_load,
+        )
+        result = handler(
+            strategy_id="GeneratedSmaCross",
+            strategy_path="/tmp/GeneratedSmaCross.py",
+            freq="d",
+            asset_pool="000300.SH",
+            invest_start="20150101",
+            invest_end="20201231",
+        )
+        print(" ok:", result["ok"])
+        print(" metrics:", result["metrics"])
+        print(" listed:", listed["n"])
+        print(" loaded:", captured.get("loaded_path"))
+        print(" stg:", captured.get("stg"))
+        print(" run kwargs:", captured.get("kwargs"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(listed["n"], 0)
+        self.assertEqual(captured.get("loaded_path"), "/tmp/GeneratedSmaCross.py")
+        self.assertEqual(captured.get("stg"), "CUSTOM_CLASS")
+        self.assertEqual(captured.get("run_freq"), "d")
+        self.assertNotIn("freq", captured.get("kwargs") or {})
+        self.assertEqual(result["metrics"]["final_value"], 99.0)
+        self.assertEqual(result["metrics"]["annual_rtn"], 0.05)
+        self.assertEqual(result["metrics"]["mdd"], 0.1)
+
+
 if __name__ == "__main__":
     unittest.main()

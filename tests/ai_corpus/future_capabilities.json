@@ -1,11 +1,6 @@
 {
   "cases": [
     {
-      "id": "D-F3",
-      "query": "start live trade now",
-      "expected_fallback_action": "plan_only"
-    },
-    {
       "id": "D-F4",
       "query": "download data and backtest and optimize tonight",
       "expected_fallback_action": "clarify_required"
@@ -13,7 +8,7 @@
     {
       "id": "SB1",
       "query": "生成一个双均线策略 strategybuilder",
-      "expected_fallback_action": "not_supported_yet"
+      "expected_fallback_action": "clarify_required"
     }
   ]
 }

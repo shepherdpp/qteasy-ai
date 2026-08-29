@@ -48,7 +48,8 @@ print(preview["plan"]["steps"][0]["skill_name"])
 用户可见错误与警告为**英文**。
 
 - 高副作用（网络下载、写库、回测、优化、改策略文件）必须先出现在 Plan 的 `side_effects` 中，确认后再 `run`。
-- **实盘相关 step 永远 `plan_only`，永不 auto-execute。**
+- **实盘**走 `qt.ai.pipeline.live_trade_plan_only`：只出前置清单，`execution_forbidden`，永不 auto-execute。
+- StrategyBuilder（阶段 D）：自然语言 → StrategySpec → 模板骨架写入 `.qteasy/ai/strategies/` → 静态校验 → 复用 `backtest.run_builtin`。Ask 不写策略文件。
 - 无日期或超长区间的全市场 refill：Plan 会 `clarify_required` / `date_range`，禁止无界下载。
 - 无匹配 skill 时返回 `clarify_required` / `not_supported_yet`，**禁止**静默落到 `summary_kline`。
 - Hybrid Planner：配置了 Provider 时 LLM 只生成**候选** ToolPlan；`RuleValidator` 与 `env_facts` 门禁仍生效。未知 skill / 非法 JSON 降级回规则路径。未配置 Provider 时行为与阶段 B 规则路由相同。
@@ -70,4 +71,23 @@ qteasy-ai provider-check
 
 - 快速上手：[tutorials/quickstart.md](tutorials/quickstart.md)
 - 阶段 A 设计备忘（含现状 vs 目标态）：[design/11-ai-shell-stage-a.md](design/11-ai-shell-stage-a.md)
-- 示例：`examples/ai_shell_stage_c_ask_demo.py`
+- 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
+- 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`
+
+## 6. StrategyBuilder（Q-AI.4）
+
+自然语言写策略走 **Plan**，不是 Ask。本阶段只支持 **RuleIterator 双均线择时** 模板（如 20/60 金叉死叉）。生成源码写入 `.qteasy/ai/strategies/`，不写 qteasy 安装包、默认不写 `examples/`。
+
+```bash
+qteasy-ai plan "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测" --raw
+```
+
+实盘：
+
+```bash
+qteasy-ai plan "start live trade now" --raw
+```
+
+期望 skill：`qt.ai.pipeline.live_trade_plan_only`（只出计划）。
+
+演示脚本：`examples/ai_shell_stage_d_strategybuilder_demo.py`。

@@ -85,6 +85,25 @@
       "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
       "mode": "plan",
       "expected_skill": "qt.ai.research.screen_stocks"
+    },
+    {
+      "id": "D1",
+      "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy.spec_from_nl",
+      "expected_skills": [
+        "qt.ai.strategy.spec_from_nl",
+        "qt.ai.strategy.codegen_hybrid",
+        "qt.ai.strategy.sanity_check",
+        "qt.ai.operator.build_from_spec",
+        "qt.ai.backtest.run_builtin"
+      ]
+    },
+    {
+      "id": "D-LIVE",
+      "query": "start live trade now",
+      "mode": "plan",
+      "expected_skill": "qt.ai.pipeline.live_trade_plan_only"
     }
   ]
 }

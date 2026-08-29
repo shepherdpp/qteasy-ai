@@ -155,6 +155,20 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertEqual(self.executor.execute_calls, 0)
         self.assertEqual(self.registry.call_count, 0)
 
+    def test_codegen_query_suggests_plan_without_writing(self) -> None:
+        """写策略类 Ask 提示改用 Plan，不写盘、不调 skill。"""
+
+        print("\n[TestAiAskEngine] codegen ask suggests Plan")
+        engine = AskEngine(knowledge_base=self.kb)
+        result = engine.ask("帮我写一个双均线策略")
+        payload = result.to_dict()
+        print(" answer:", payload.get("answer"))
+        self.assertEqual(payload["mode"], "ask")
+        self.assertIn("plan", payload["answer"].lower())
+        self.assertNotIn("execution", payload)
+        self.assertEqual(self.executor.execute_calls, 0)
+        self.assertEqual(self.registry.call_count, 0)
+
     def test_offline_run_freq_sources_only_operator(self) -> None:
         """Offline run_freq 问句 sources 仅为 operator_run_freq。"""
 

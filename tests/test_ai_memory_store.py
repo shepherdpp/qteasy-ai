@@ -10,6 +10,7 @@
 
 import tempfile
 import unittest
+from pathlib import Path
 
 from qteasy_ai.memory_store import MemoryStore, merge_env_facts
 
@@ -79,6 +80,18 @@ class TestAiMemoryStore(unittest.TestCase):
             self.assertEqual(env_facts["python"], "3.9")
             self.assertEqual(run_data["status"], "ok")
             self.assertIn("run_demo", run_ids)
+
+    def test_strategies_dir_created_under_ai_home(self) -> None:
+        """strategies 目录位于 ai_home 下，不落在 examples。"""
+
+        print("\n[TestAiMemoryStore] strategies_dir")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            print(" strategies_dir:", store.strategies_dir)
+            self.assertTrue(store.strategies_dir.exists())
+            self.assertEqual(store.strategies_dir, Path(temp_dir) / "strategies")
+            self.assertEqual(store.strategies_dir.parent, store.base_dir)
+            self.assertNotIn("examples", store.strategies_dir.parts)
 
     def test_corrupt_env_facts_falls_back_to_default(self) -> None:
         """损坏的 env_facts.json 应降级为空字典并备份。"""

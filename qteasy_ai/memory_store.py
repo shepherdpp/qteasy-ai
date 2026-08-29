@@ -156,10 +156,12 @@ class MemoryStore:
         self.base_dir = Path(base_dir)
         self.runs_dir = self.base_dir / "runs"
         self.pinned_dir = self.base_dir / "pinned"
+        self.strategies_dir = self.base_dir / "strategies"
         # 初始化时确保目录存在，避免后续写入分支到处做 mkdir。
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.pinned_dir.mkdir(parents=True, exist_ok=True)
+        self.strategies_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def profile_path(self) -> Path:

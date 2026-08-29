@@ -49,18 +49,23 @@ from .skills import (
     build_data_summary_skill,
     build_factor_ic_summary_skill,
     build_insight_backtest_skill,
+    build_live_trade_plan_only_skill,
     build_optimize_run_skill,
+    build_operator_from_spec_skill,
     build_overview_tables_skill,
     build_research_screen_skill,
+    build_strategy_codegen_hybrid_skill,
     build_strategy_meta_get_skill,
     build_strategy_meta_list_skill,
+    build_strategy_sanity_check_skill,
+    build_strategy_spec_from_nl_skill,
     build_system_fallback_skill,
     build_visual_export_skill,
 )
 
 
 def build_default_registry() -> SkillRegistry:
-    """构建阶段 B 默认 Registry。
+    """构建默认 Registry（阶段 A～D 已注册技能）。
 
     Returns
     -------
@@ -83,6 +88,11 @@ def build_default_registry() -> SkillRegistry:
         build_optimize_run_skill,
         build_research_screen_skill,
         build_insight_backtest_skill,
+        build_strategy_spec_from_nl_skill,
+        build_strategy_codegen_hybrid_skill,
+        build_strategy_sanity_check_skill,
+        build_operator_from_spec_skill,
+        build_live_trade_plan_only_skill,
     ]:
         metadata, handler = builder()
         registry.register(metadata, handler)

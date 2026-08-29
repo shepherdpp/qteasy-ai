@@ -211,6 +211,44 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertEqual(hybrid.steps[0].inputs.get("industry"), "银行")
         self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.15)
 
+    def test_llm_catalog_includes_skill_name_and_summary(self) -> None:
+        """Hybrid 候选 prompt 对每个已注册 skill 含一行 name: summary。"""
+
+        print("\n[TestAiPlannerHybrid] catalog name + summary")
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.backtest.run_builtin",
+                            "inputs": {
+                                "strategy_id": "macd",
+                                "asset_pool": "000300.SH",
+                                "invest_start": "20180101",
+                                "invest_end": "20231231",
+                            },
+                        }
+                    ]
+                )
+            ]
+        )
+        planner = Planner(self.registry, provider=fake, env_facts={})
+        plan = planner.build_plan("run macd backtest 2018-2023 on 000300.SH", mode="plan")
+        self.assertTrue(fake.prompts)
+        prompt = fake.prompts[0]
+        print(" prompt catalog excerpt:", prompt[:800])
+        print(" plan skill:", plan.steps[0].skill_name)
+        skills = self.registry.list_skills()
+        self.assertGreaterEqual(len(skills), 1)
+        for meta in skills:
+            expected_line = f"- {meta.name}: {meta.summary}"
+            print(" expect line:", expected_line)
+            self.assertIn(expected_line, prompt)
+            self.assertTrue(str(meta.summary).strip())
+        self.assertIn("qt.ai.backtest.run_builtin:", prompt)
+        self.assertIn("qt.ai.data.refill_basic_equity_and_index:", prompt)
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.backtest.run_builtin")
+
     def test_llm_screen_missing_slots_clarifies_when_rules_cannot_fill(self) -> None:
         """LLM 点了筛股但规则走 fallback、缺槽无法填时改为 clarify_required。"""
 

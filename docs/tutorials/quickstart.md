@@ -188,17 +188,19 @@ Execute.
 - `--keep`：将本次 run 标记为保留
 - `--depth {brief,standard,deep}`：解释层深度
 
-对于尚未实现的能力（例如 StrategyBuilder、实盘 execute、任意公式统计），当前阶段会返回结构化回退结果，
+对于尚未实现的能力（例如任意公式统计、选股/网格模板），当前阶段会返回结构化回退结果，
 `payload.fallback_action` 可能为：
 
-- `plan_only`（实盘永远只出计划）
 - `not_supported_yet`
-- `clarify_required`（如下载缺起止日期、筛股缺阈值/窗口、行业名 0 精确命中）
+- `clarify_required`（如下载缺起止日期、筛股缺阈值/窗口、双均线缺快慢周期）
+
+实盘请求路由到 `qt.ai.pipeline.live_trade_plan_only`（只出计划，永不下单）。
 
 阶段 B 已实现：本地 refill、内置策略回测/优化、只读筛股、回测内生归因。  
-阶段 C 已实现：Ask 目标态（KB + 可选 LLM）、`preview` 迁移、`explanation_depth`、Hybrid LLM 候选（规则仍门禁）。
+阶段 C 已实现：Ask 目标态（KB + 可选 LLM）、`preview` 迁移、`explanation_depth`、Hybrid LLM 候选（规则仍门禁）。  
+阶段 D 已实现：StrategyBuilder 一条龙（NL→Spec→模板 codegen→sanity→Operator→复用回测）；源码写入 `.qteasy/ai/strategies/`。
 
-完整脚本见 `examples/ai_shell_stage_c_ask_demo.py`。
+完整脚本见 `examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`。
 
 当回退到 `system_fallback` 时，输出会明确给出：
 
@@ -213,6 +215,7 @@ Execute.
 - `.qteasy/ai/profile.json`
 - `.qteasy/ai/env_facts.json`
 - `.qteasy/ai/runs/*.json`
+- `.qteasy/ai/strategies/*.py`（阶段 D 生成的策略源码）
 - `.qteasy/ai/pinned/*.json`
 
 其中 runs 文件用于复盘每次 plan 的执行轨迹与产物路径，默认采用有界留存（bounded）并自动清理；
