@@ -127,15 +127,10 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertEqual(hybrid_none.steps[0].inputs.get("invest_start"), "20180101")
         self.assertEqual(hybrid_none.steps[0].inputs.get("invest_end"), "20231231")
 
-    def test_llm_screen_query_blob_skips_required_slot_gate(self) -> None:
-        """G6 锚点：LLM 把筛股整句塞进 query 时仍被采纳，缺 industry/threshold。
+    def test_llm_screen_query_blob_fills_required_slots_from_rules(self) -> None:
+        """LLM 把筛股整句塞进 query 时，用规则路径补齐 industry/threshold。"""
 
-        2026-08-28 Mode-D 实弹：公共交通句 ``candidate_source=llm``，
-        runtime ``SKILL_PRECHECK_FAILED``。规则路径会填 ``industry`` / ``threshold``。
-        修复必填槽门禁（降级规则或 clarify）后应改写本用例。
-        """
-
-        print("\n[TestAiPlannerHybrid] G6 LLM screen query-blob slots")
+        print("\n[TestAiPlannerHybrid] LLM screen query-blob fills slots from rules")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
         fake = FakeLLMProvider(
             replies=[
@@ -156,23 +151,18 @@ class TestAiPlannerHybrid(unittest.TestCase):
         print(" hybrid source:", hybrid.assumptions.get("candidate_source"))
         print(" hybrid skill/inputs:", hybrid.steps[0].skill_name, hybrid.steps[0].inputs)
         print(" rule skill/inputs:", rule.steps[0].skill_name, rule.steps[0].inputs)
-        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
         self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.research.screen_stocks")
-        self.assertNotIn("industry", hybrid.steps[0].inputs)
-        self.assertNotIn("threshold", hybrid.steps[0].inputs)
-        self.assertIn("query", hybrid.steps[0].inputs)
+        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
+        self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.2)
         self.assertEqual(rule.steps[0].skill_name, "qt.ai.research.screen_stocks")
         self.assertEqual(rule.steps[0].inputs.get("industry"), "公共交通")
         self.assertEqual(float(rule.steps[0].inputs.get("threshold")), 0.2)
+        self.assertNotEqual(hybrid.steps[0].inputs, {})
 
-    def test_llm_empty_fallback_skips_required_slot_gate(self) -> None:
-        """G6 锚点：LLM 给出空 inputs 的 fallback 仍被采纳。
+    def test_llm_empty_fallback_fills_required_slots_from_rules(self) -> None:
+        """LLM 给出空 inputs 的 fallback 时，用规则路径填齐必填槽。"""
 
-        实弹 ``你好吗`` → ``SKILL_PRECHECK_FAILED``（缺 query/fallback_action/reason）。
-        规则路径会填 not_supported_yet。修复后门禁后应改写本用例。
-        """
-
-        print("\n[TestAiPlannerHybrid] G6 LLM empty fallback")
+        print("\n[TestAiPlannerHybrid] LLM empty fallback fills slots from rules")
         query = "你好吗？"
         fake = FakeLLMProvider(
             replies=[_llm_plan([{"skill_name": "qt.ai.system.fallback", "inputs": {}}])]
@@ -181,13 +171,75 @@ class TestAiPlannerHybrid(unittest.TestCase):
         rule = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
         print(" hybrid source/inputs:", hybrid.assumptions.get("candidate_source"), hybrid.steps[0].inputs)
         print(" rule action:", rule.steps[0].inputs.get("fallback_action"), rule.steps[0].inputs.get("reason"))
-        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
         self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(hybrid.steps[0].inputs, {})
         self.assertEqual(rule.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertTrue(rule.steps[0].inputs.get("fallback_action"))
-        self.assertTrue(rule.steps[0].inputs.get("reason"))
-        self.assertEqual(rule.steps[0].inputs.get("query"), query)
+        self.assertEqual(hybrid.steps[0].inputs.get("query"), query)
+        self.assertTrue(hybrid.steps[0].inputs.get("fallback_action"))
+        self.assertTrue(hybrid.steps[0].inputs.get("reason"))
+        self.assertEqual(
+            hybrid.steps[0].inputs.get("fallback_action"),
+            rule.steps[0].inputs.get("fallback_action"),
+        )
+        self.assertEqual(hybrid.steps[0].inputs.get("reason"), rule.steps[0].inputs.get("reason"))
+        self.assertNotEqual(hybrid.steps[0].inputs, {})
+
+    def test_llm_screen_complete_slots_keeps_candidate_source_llm(self) -> None:
+        """LLM 已填齐筛股必填槽时保留 candidate_source=llm，不被规则覆盖。"""
+
+        print("\n[TestAiPlannerHybrid] LLM screen complete slots stay llm")
+        query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.research.screen_stocks",
+                            "inputs": {
+                                "industry": "银行",
+                                "threshold": 0.15,
+                            },
+                        }
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+        print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" inputs:", hybrid.steps[0].inputs)
+        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.research.screen_stocks")
+        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "银行")
+        self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.15)
+
+    def test_llm_screen_missing_slots_clarifies_when_rules_cannot_fill(self) -> None:
+        """LLM 点了筛股但规则走 fallback、缺槽无法填时改为 clarify_required。"""
+
+        print("\n[TestAiPlannerHybrid] LLM screen missing slots clarify")
+        query = "你好吗？"
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.research.screen_stocks",
+                            "inputs": {},
+                        }
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+        rule = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
+        print(" hybrid skill/inputs:", hybrid.steps[0].skill_name, hybrid.steps[0].inputs)
+        print(" rule skill:", rule.steps[0].skill_name, rule.steps[0].inputs.get("fallback_action"))
+        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(hybrid.steps[0].inputs.get("fallback_action"), "clarify_required")
+        missing = str(hybrid.steps[0].inputs.get("missing_info") or "")
+        print(" missing_info:", missing)
+        self.assertIn("industry", missing)
+        self.assertIn("threshold", missing)
+        self.assertEqual(rule.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertNotEqual(rule.steps[0].inputs.get("fallback_action"), "clarify_required")
 
 
 if __name__ == "__main__":

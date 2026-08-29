@@ -22,7 +22,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _KB_DIR = Path(__file__).resolve().parent / "kb"
 
@@ -38,6 +38,7 @@ _STRATEGY_QUERY_HINTS = (
 )
 
 _WORD_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 @dataclass
@@ -53,6 +54,7 @@ class KbEntry:
     tags: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     score: float = 0.0
+    kernel_doc_zh: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """转为字典。"""
@@ -67,6 +69,7 @@ class KbEntry:
             "tags": list(self.tags),
             "keywords": list(self.keywords),
             "score": self.score,
+            "kernel_doc_zh": self.kernel_doc_zh,
         }
 
 
@@ -132,7 +135,7 @@ class KnowledgeBase:
         Returns
         -------
         list of KbEntry
-            按分数降序；无命中时为空列表。
+            按分数降序；无命中时为空列表。低于最高分一半的命中会被丢弃，避免低分 bleed。
         """
 
         q = (query or "").strip()
@@ -153,12 +156,17 @@ class KnowledgeBase:
                 tags=list(entry.tags),
                 keywords=list(entry.keywords),
                 score=score,
+                kernel_doc_zh=entry.kernel_doc_zh,
             )
             scored.append(hit)
         strategy_hit = self._maybe_strategy_meta(q)
         if strategy_hit is not None:
             scored.append(strategy_hit)
         scored.sort(key=lambda item: item.score, reverse=True)
+        if scored:
+            top_score = scored[0].score
+            floor = top_score * 0.5
+            scored = [item for item in scored if item.score >= floor]
         return scored[: max(1, int(limit))] if scored else []
 
     @staticmethod
@@ -173,22 +181,32 @@ class KnowledgeBase:
                 extra.append(word)
         return tokens + extra
 
+    @staticmethod
+    def _term_in_query(term: str, query_lower: str, q_tokens: set) -> bool:
+        """整 token / 词边界匹配，避免 ``run`` 命中 ``run_freq``。"""
+
+        key = (term or "").strip().lower()
+        if not key:
+            return False
+        if " " in key or _CJK_RE.search(key) or "." in key:
+            return key in query_lower
+        if key in q_tokens or (key + "s") in q_tokens or (key + "es") in q_tokens:
+            return True
+        pattern = r"(?<![a-z0-9_.])" + re.escape(key) + r"(?![a-z0-9_])"
+        return bool(re.search(pattern, query_lower))
+
     def _score(self, *, query: str, entry: KbEntry) -> float:
         """计算 query 与条目的重叠分数。"""
 
         q_lower = query.lower()
+        q_tokens = set(self._tokenize(query))
         score = 0.0
         for keyword in entry.keywords:
-            key = keyword.lower()
-            if not key:
-                continue
-            if key in q_lower:
+            if self._term_in_query(keyword, q_lower, q_tokens):
                 score += 3.0
         for tag in entry.tags:
-            tag_l = tag.lower()
-            if tag_l and tag_l in q_lower:
+            if self._term_in_query(tag, q_lower, q_tokens):
                 score += 2.0
-        q_tokens = set(self._tokenize(query))
         id_tokens = set(self._tokenize(entry.id.replace("_", " ")))
         score += 1.0 * len(q_tokens & id_tokens)
         return score
@@ -220,8 +238,9 @@ class KnowledgeBase:
                 except Exception:
                     doc_text = ""
             narrative_parts.append(f"Matched strategy_id={strategy_id}.")
-            if doc_text:
-                narrative_parts.append(doc_text[:800])
+            english_doc, kernel_zh = self._wrap_strategy_doc(strategy_id, doc_text)
+            if english_doc:
+                narrative_parts.append(english_doc)
             python_code = (
                 "import qteasy as qt\n"
                 f"print(qt.built_in_doc('{strategy_id}'))\n"
@@ -233,6 +252,7 @@ class KnowledgeBase:
             narrative_parts.append(f"Built-in strategy ids (truncated): {preview}.")
             if len(names) > 20:
                 narrative_parts.append(f"Total count: {len(names)}.")
+            kernel_zh = ""
         return KbEntry(
             id="strategy_meta",
             title="Built-in strategy metadata",
@@ -243,7 +263,51 @@ class KnowledgeBase:
             tags=["strategy", "meta"],
             keywords=["strategy", "macd", "dma"],
             score=8.0 if strategy_id else 4.0,
+            kernel_doc_zh=kernel_zh,
         )
+
+    @staticmethod
+    def _wrap_strategy_doc(strategy_id: str, doc_text: str) -> Tuple[str, str]:
+        """内核中文 docstring 英文化顶层说明，原文放入 kernel_doc_zh。
+
+        Parameters
+        ----------
+        strategy_id : str
+            内置策略 ID。
+        doc_text : str
+            ``qt.built_in_doc`` 原文。
+
+        Returns
+        -------
+        english_narrative : str
+            顶层英文说明。
+        kernel_doc_zh : str
+            中文内核原文；英文 docstring 时为空。
+        """
+
+        raw = (doc_text or "").strip()
+        if not raw:
+            return "", ""
+        if not _CJK_RE.search(raw):
+            return raw[:800], ""
+        lines = [
+            f"The {strategy_id} strategy is a built-in qteasy timing strategy.",
+        ]
+        if "PT" in raw or "目标仓位" in raw:
+            lines.append("Signal type: PT (target-weight / target position percentage).")
+        default_match = re.search(r"默认参数:\s*(\([^)]+\))", raw)
+        if default_match:
+            lines.append(f"Default parameters: {default_match.group(1)}.")
+        if "MACD值大于0" in raw or "大于0时" in raw:
+            lines.append("When the MACD value is greater than 0, set the target position to 1.")
+        if "MACD值小于0" in raw or "小于0时" in raw:
+            lines.append("When the MACD value is less than 0, set the target position to 0.")
+        if "短周期" in raw and "长周期" in raw:
+            lines.append(
+                "Strategy parameters include short period (s), long period (l), "
+                "and MACD DEA period (m)."
+            )
+        return "\n".join(lines), raw[:800]
 
     @staticmethod
     def _extract_strategy_id(*, query: str, names: List[str]) -> str:

@@ -152,6 +152,63 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertEqual(self.executor.execute_calls, 0)
         self.assertEqual(self.registry.call_count, 0)
 
+    def test_offline_run_freq_sources_only_operator(self) -> None:
+        """Offline run_freq 问句 sources 仅为 operator_run_freq。"""
+
+        print("\n[TestAiAskEngine] offline run_freq sources")
+        engine = AskEngine(knowledge_base=self.kb)
+        result = engine.ask("where does run_freq belong")
+        payload = result.to_dict()
+        print(" sources:", payload.get("sources"))
+        print(" answer:", payload.get("answer", "")[:300])
+        self._assert_no_plan_execution(payload)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["sources"], ["operator_run_freq"])
+        self.assertIn("Operator", payload["answer"])
+
+    def test_offline_nan_python_code_matches_topic(self) -> None:
+        """Offline NaN 问句 python_code 不得是日期窗 get_history_data 示例。"""
+
+        print("\n[TestAiAskEngine] offline NaN python_code")
+        engine = AskEngine(knowledge_base=self.kb)
+        result = engine.ask("what happens when trade price is NaN")
+        payload = result.to_dict()
+        print(" sources:", payload.get("sources"))
+        print(" python_code:", payload.get("python_code"))
+        print(" answer:", payload.get("answer", "")[:300])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["sources"], ["common_errors_nan"])
+        self.assertIn("NaN", payload["answer"])
+        self.assertNotIn("get_history_data", payload.get("python_code") or "")
+
+    def test_offline_macd_narrative_is_english(self) -> None:
+        """Offline macd 顶层 narrative 为英文；中文 kernel 不进 answer。"""
+
+        print("\n[TestAiAskEngine] offline macd English wrap")
+        macd_zh = (
+            "MACD择时策略类，运用MACD均线策略，生成目标仓位百分比\n"
+            "    信号类型:\n"
+            "        PT型: 目标仓位百分比\n"
+            "        默认参数: (12, 26, 9)\n"
+        )
+        kb = KnowledgeBase(
+            list_func=lambda: ["macd"],
+            doc_func=lambda sid: macd_zh,
+        )
+        engine = AskEngine(knowledge_base=kb)
+        result = engine.ask("what is macd strategy")
+        payload = result.to_dict()
+        print(" sources:", payload.get("sources"))
+        print(" answer:", payload.get("answer", "")[:400])
+        hits = (payload.get("raw") or {}).get("hits") or []
+        meta = next(item for item in hits if item.get("id") == "strategy_meta")
+        print(" kernel prefix:", (meta.get("kernel_doc_zh") or "")[:80])
+        self.assertIn("strategy_meta", payload["sources"])
+        self.assertIn("PT", payload["answer"])
+        self.assertIn("(12, 26, 9)", payload["answer"])
+        self.assertNotIn("择时策略类", payload["answer"])
+        self.assertIn("择时策略类", meta.get("kernel_doc_zh") or "")
+
     def test_assistant_ask_and_preview_wiring(self) -> None:
         """QteasyAssistant.ask 走 AskEngine；preview 等于 plan dry_run。"""
 

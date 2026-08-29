@@ -1,0 +1,15 @@
+{
+  "id": "common_errors_run_freq",
+  "tags": ["error", "config_key", "qt_config"],
+  "keywords": [
+    "config_key",
+    "built-in parameter key",
+    "qt_config",
+    "not a built-in parameter"
+  ],
+  "title": "freq is not a qt.run / QT_CONFIG key",
+  "summary": "Passing freq or run_freq into qt.run or QT_CONFIG raises config_key is not a built-in parameter key.",
+  "narrative": "freq / run_freq must not be passed to qt.run() or QT_CONFIG. Put it on Operator(..., run_freq=...). That mistake raises: config_key is not a built-in parameter key.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies=['macd'], run_freq='d')\n# Wrong: qt.run(op, freq='d')\nqt.run(op, mode=1, asset_pool='000300.SH', invest_start='20180101', invest_end='20231231')",
+  "risk_notes": "Ask explains this error; it does not call qt.run."
+}

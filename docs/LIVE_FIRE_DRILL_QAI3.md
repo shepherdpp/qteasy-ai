@@ -79,7 +79,7 @@ preview/plan 核对：skill 名、`dry_run`、零 handler。
 | C-A1 | `explain PT vs PS` | `mode=ask`；`sources` 含 `pt_ps_vs`；英文答案含 Position Target / PT / PS |
 | C-A2 | `where does run_freq belong` | `sources` 含 `operator_run_freq` |
 | C-A3 | `difference between Ask Plan and Agent` | `sources` 含 `ask_plan_agent` |
-| C-A4 | `what happens when trade price is NaN` | `sources` 含 `common_errors` |
+| C-A4 | `what happens when trade price is NaN` | `sources` 含 `common_errors_nan` |
 | C-A5 | `what is macd strategy` | `sources` 含 `strategy_meta`（内置 API，**非** skill） |
 
 ```bash
@@ -179,7 +179,7 @@ qteasy-ai plan "随便算一个我发明的夏普公式" --raw
 
 ## G6 Gap 工作坊（2026-08-28 Mode-R + Mode-D；**实弹关单**）
 
-Q-AI.2 实弹 **已关单**。本手册 **Mode-R G0–G5** 与 **Mode-D C-H1～C-H5** 已手测（Notebook C-E3 **Skip**）。未 `run` 高副作用。**Jackie 2026-08-28 关单。**
+Q-AI.2 实弹 **已关单**。本手册 **Mode-R G0–G5** 与 **Mode-D C-H1～C-H5** 已手测（Notebook C-E3 **Skip**）。未 `run` 高副作用。**Jackie 2026-08-28 关单。** **2026-08-29 C 余量 TDD** 已修 Hybrid 缺槽、Ask bleed/`common_errors` 切片、macd 英文包装（见下表「已修」）；下表命题对照仍是关单当日手测记录。
 
 ### 命题对照
 
@@ -219,12 +219,11 @@ Q-AI.2 实弹 **已关单**。本手册 **Mode-R G0–G5** 与 **Mode-D C-H1～C
 
 | 项 | 建议 | 理由 |
 |----|------|------|
-| Hybrid 必填槽门禁 | **后面修**（优先于新 skill） | 不要把 `SKILL_PRECHECK_FAILED` 当用户文案；本轮关单前只复测 `plan`。 |
-| Ask 检索 bleed / `common_errors` 整篇 | **后面修** | Mode-D 合成可掩盖；`python_code` 与问句仍会错位。 |
-| macd 中英混排 | **后面修**（Offline 包装层） | Mode-D 顶层已英文化；不必挡关单。 |
+| Hybrid 必填槽门禁 | **已修**（2026-08-29 C 余量 TDD） | 缺槽填规则或 `clarify_required`；禁止把空槽计划交 Executor。 |
+| Ask 检索 bleed / `common_errors` 整篇 | **已修**（同日） | 整 token 打分 + 半高分 cutoff；`common_errors_*` 子题切片。 |
+| macd 中英混排 | **已修**（同日） | Offline 顶层英文；内核 docstring 进 `kernel_doc_zh`。 |
 | preview pretty 谎称已 list | **后面修** | 渲染层，非路由错误。 |
 | 筛股近似行业 | **后面修**（归选股体验 / 阶段 E 前小改进） | 见 QAI2 G6。 |
-| 现在就改代码？ | **不建议本轮顺手改** | 关单后 Hybrid 空槽单开 TDD。 |
 
 关单摘要已写入 qteasy 仓 `knowledge/runlog/qteasy-ai-qai3-stage-c-tdd-2026-08.md`。
 

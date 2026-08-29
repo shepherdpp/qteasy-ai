@@ -1,0 +1,17 @@
+{
+  "id": "common_errors_date_window",
+  "tags": ["error", "get_history_data", "date", "window"],
+  "keywords": [
+    "get_history_data",
+    "date window",
+    "at least one of start",
+    "start and end",
+    "日期",
+    "rows"
+  ],
+  "title": "get_history_data needs a date window",
+  "summary": "get_history_data requires at least one of start or end; rows alone is not enough.",
+  "narrative": "get_history_data requires at least one of start or end. Passing only rows raises: at least one of start or end should be given. For 'last six months' screens, resolve the latest local trading day first, then compute lookback.",
+  "python_code": "import qteasy as qt\n# Need a date window — rows alone is not enough:\ndata = qt.get_history_data('close', shares='000300.SH', start='20240101', end='20241231')\nprint(data.shape)",
+  "risk_notes": "Ask explains this error; it does not call get_history_data."
+}

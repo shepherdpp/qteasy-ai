@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
+from .runtime import SkillRuntime
 
 
 class RuleValidator:
@@ -117,6 +118,7 @@ class Planner:
         self.env_facts: Dict[str, Any] = dict(env_facts or {})
         self.validator = RuleValidator(registry)
         self._strategy_alias_map: Optional[Dict[str, str]] = None
+        self._skill_runtime = SkillRuntime()
 
     def build_plan(self, user_query: str, *, mode: str = "plan") -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
@@ -175,7 +177,9 @@ class Planner:
                 steps = self._infer_steps(query=query, q_lower=q_lower)
         else:
             steps = self._infer_steps(query=query, q_lower=q_lower)
-        steps = self._apply_post_candidate_gates(steps, query=query)
+        steps = self._apply_post_candidate_gates(
+            steps, query=query, candidate_source=candidate_source
+        )
         assumptions = {
             "planner": "hybrid_candidate_stage_b",
             "provider_enabled": self.provider is not None,
@@ -303,13 +307,79 @@ class Planner:
             return None
         return payload if isinstance(payload, dict) else None
 
-    def _apply_post_candidate_gates(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
-        """对 LLM 与规则候选共用 env_facts / 日期门禁。"""
+    def _apply_post_candidate_gates(
+        self,
+        steps: List[ToolStep],
+        *,
+        query: str,
+        candidate_source: str = "rule",
+    ) -> List[ToolStep]:
+        """对 LLM 与规则候选共用日期、必填槽与 env_facts 门禁。"""
 
         gated = self._enforce_refill_date_range(steps, query=query)
+        if candidate_source == "llm":
+            gated = self._enforce_required_slots(gated, query=query)
         gated = self._maybe_prepend_tushare_gate(gated)
         data_intent = any(step.skill_name in self._DATA_INTENT_SKILLS for step in gated)
         return self._maybe_prepend_table_gate(gated, data_intent=data_intent)
+
+    def _missing_required_fields(self, step: ToolStep) -> List[str]:
+        """返回步骤缺少的 inputs_schema required 字段。"""
+
+        try:
+            meta = self.registry.get_metadata(step.skill_name)
+        except Exception:
+            return []
+        return list(self._skill_runtime.precheck(meta, step.inputs))
+
+    def _enforce_required_slots(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
+        """LLM 候选缺必填槽时用同 skill 规则填槽，否则整单 clarify。
+
+        与 SkillRuntime.precheck 同源；禁止把空槽计划交给 Executor。
+        """
+
+        if not steps:
+            return steps
+        missing_by_step = [self._missing_required_fields(step) for step in steps]
+        if not any(missing_by_step):
+            return steps
+        q_lower = query.lower()
+        rule_steps = self._infer_steps(query=query, q_lower=q_lower)
+        rule_by_skill: Dict[str, ToolStep] = {}
+        for rule_step in rule_steps:
+            rule_by_skill.setdefault(rule_step.skill_name, rule_step)
+        merged = deepcopy(steps)
+        still_missing: List[str] = []
+        for step, missing in zip(merged, missing_by_step):
+            if not missing:
+                continue
+            rule_peer = rule_by_skill.get(step.skill_name)
+            if rule_peer is None:
+                still_missing.extend(missing)
+                continue
+            for field_name in missing:
+                if field_name in rule_peer.inputs:
+                    step.inputs[field_name] = rule_peer.inputs[field_name]
+            leftover = self._missing_required_fields(step)
+            still_missing.extend(leftover)
+        if not still_missing:
+            return merged
+        unique_missing = sorted(set(still_missing))
+        missing_info = "|".join(unique_missing)
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.system.fallback",
+                inputs=self._fallback_step_inputs(
+                    query=query,
+                    action="clarify_required",
+                    reason="llm_missing_required_slots",
+                    hint="The LLM candidate omitted required skill inputs. Provide the missing fields instead of executing an empty-slot plan.",
+                    missing_info=missing_info,
+                    next_step=f"Provide: {', '.join(unique_missing)}.",
+                ),
+            )
+        ]
 
     def _enforce_refill_date_range(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
         """refill 缺起止日期时整单澄清，禁止无界下载。"""

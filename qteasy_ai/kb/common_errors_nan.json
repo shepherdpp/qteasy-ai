@@ -1,0 +1,18 @@
+{
+  "id": "common_errors_nan",
+  "tags": ["error", "nan", "halt"],
+  "keywords": [
+    "nan",
+    "NaN",
+    "halt",
+    "停牌",
+    "missing bar",
+    "nansum",
+    "trade price"
+  ],
+  "title": "NaN trade prices must not be filled",
+  "summary": "NaN trade prices (halt / missing bar) must not be filled with 1; skip that symbol on that bar.",
+  "narrative": "NaN trade prices (halt / missing bar) must not be filled with 1. The engine should not trade that symbol on that bar; fees stay 0. NaN on one symbol must not poison other symbols' total_value (use nansum).",
+  "python_code": "import numpy as np\n# Do not fill NaN trade prices with 1.\n# Skip that symbol on this bar; fees stay 0.\n# Use nansum so one NaN does not poison other symbols' total_value.\nprint(np.nansum([1.0, np.nan, 2.0]))",
+  "risk_notes": "Ask explains this error; it does not call qt.run."
+}

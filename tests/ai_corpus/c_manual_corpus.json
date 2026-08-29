@@ -43,7 +43,7 @@
       "mode": "ask",
       "expected_skill": "",
       "expected_step_count": 0,
-      "expected_sources": ["common_errors"],
+      "expected_sources": ["common_errors_nan"],
       "notes": "NaN prices must not be filled with 1"
     },
     {
