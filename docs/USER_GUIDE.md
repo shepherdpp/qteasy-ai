@@ -17,10 +17,10 @@ Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm
 
 Ask 只走 **LLMClient + KnowledgeBase**：
 
-- 无 Provider 时用离线 KB 检索 + 英文模板答案（仍可用）。
-- 有 Provider 时用检索片段接地，再合成答案。
-- KB 未命中不会空库瞎编，返回英文 `NOT_FOUND` 并建议改用 Plan。
-- 「列出策略 / 下载 / 回测 / 优化 / 导出」等执行型请求会提示改用 Plan，**不**生成可执行 steps。
+- 无 Provider 时用离线 KB 检索 + **英文**模板答案（仍可用）。
+- 有 Provider 时用检索片段接地再合成：`answer` **跟随你的问句语言**（中文问中文答、英文问英文答）。代码、skill 名、`python_code` 保持英文/原文。
+- KB 未命中不会空库瞎编，返回英文 `NOT_FOUND` 并建议改用 Plan（此路径不调用 LLM，故即使用中文提问也是英文提示）。
+- 「列出策略 / 下载 / 回测 / 优化 / 导出」等执行型请求会提示改用 Plan（同样是英文罐头、不调 LLM），**不**生成可执行 steps。
 
 **Breaking（相对阶段 A）**：`ask()` 不再返回空步 `ToolPlan` dry-run。若你需要审阅 steps，请改用 `preview()` / `plan()`。
 

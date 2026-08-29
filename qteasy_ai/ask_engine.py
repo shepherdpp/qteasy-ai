@@ -43,7 +43,10 @@ _PLAN_LIKE_HINTS = (
 
 _ASK_SYSTEM_PROMPT = (
     "You are a qteasy expert. Answer ONLY using the provided knowledge snippets. "
-    "Reply in English. If the snippets are insufficient, say so and suggest Plan mode."
+    "Reply in the same language as the user's Question "
+    "(Chinese question → Chinese answer; English question → English answer). "
+    "Keep qteasy identifiers, skill names, and code unchanged. "
+    "If the snippets are insufficient, say so and suggest Plan mode."
 )
 
 
@@ -58,7 +61,7 @@ class AskResponse:
     ok : bool
         是否成功从 KnowledgeBase 给出答案。
     answer : str
-        面向用户的英文答案。
+        面向用户的答案。有 Provider 时跟随问句语言；Offline 为英文 KB 模板。
     sources : list of str
         命中的 KB 条目 id。
     narrative : str
@@ -221,7 +224,8 @@ class AskEngine:
             f"Question: {query}\n\n"
             "Knowledge snippets:\n"
             + "\n\n".join(snippets)
-            + "\n\nWrite a concise English answer grounded in the snippets."
+            + "\n\nWrite a concise answer in the same language as the Question, "
+            "grounded in the snippets."
         )
         return str(self.provider.chat(prompt, system_prompt=_ASK_SYSTEM_PROMPT)).strip()
 

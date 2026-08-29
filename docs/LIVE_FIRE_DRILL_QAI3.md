@@ -222,6 +222,8 @@ Q-AI.2 实弹 **已关单**。本手册 **Mode-R G0–G5** 与 **Mode-D C-H1～C
 | Hybrid 必填槽门禁 | **已修**（2026-08-29 C 余量 TDD） | 缺槽填规则或 `clarify_required`；禁止把空槽计划交 Executor。 |
 | Ask 检索 bleed / `common_errors` 整篇 | **已修**（同日） | 整 token 打分 + 半高分 cutoff；`common_errors_*` 子题切片。 |
 | macd 中英混排 | **已修**（同日） | Offline 顶层英文；内核 docstring 进 `kernel_doc_zh`。 |
+| Hybrid 错 skill / 错品类澄清 | **后面修** | Mode-D 回测重试：LLM 点 refill → `refill_date_range_required`；问句已有 2018–2023。 |
+| Ask hint「参数」注入 `strategy_meta` | **后面修** | `参数 run_freq` bleed；正文可压住。 |
 | preview pretty 谎称已 list | **后面修** | 渲染层，非路由错误。 |
 | 筛股近似行业 | **后面修**（归选股体验 / 阶段 E 前小改进） | 见 QAI2 G6。 |
 

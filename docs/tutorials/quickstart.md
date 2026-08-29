@@ -37,7 +37,7 @@ export QTEASY_AI_BASE_URL="https://api.openai.com/v1"
 
 Ask 是只读问答：KnowledgeBase + 可选 LLM，**不**生成可执行 steps，**不**调用 skill / PlanExecutor。
 
-无 Provider 时仍可用（Offline 检索 + 英文模板）。执行型请求（列出策略、下载、回测）请改用 Plan / preview。
+无 Provider 时仍可用（Offline 检索 + 英文模板）。有 Provider 时 Ask 的 `answer` 跟随问句语言。执行型请求（列出策略、下载、回测）请改用 Plan / preview。
 
 ```bash
 qteasy-ai ask "explain PT vs PS"
