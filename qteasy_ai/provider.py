@@ -33,7 +33,7 @@ import urllib.request
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from .config import ConfigCenter
+from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 
 
 class BaseLLMProvider(ABC):
@@ -102,7 +102,7 @@ class OpenAICompatProvider(BaseLLMProvider):
         model: str,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = DEFAULT_PROVIDER_TIMEOUT,
         config_center: Optional[ConfigCenter] = None,
     ) -> None:
         cfg = config_center or ConfigCenter()
@@ -115,7 +115,7 @@ class OpenAICompatProvider(BaseLLMProvider):
         self.model = str(resolved.get("model", "")).strip()
         self.api_key = str(resolved.get("api_key", "")).strip()
         self.base_url = str(resolved.get("base_url", "https://api.openai.com/v1")).strip()
-        self.timeout = int(resolved.get("timeout", 30))
+        self.timeout = int(resolved.get("timeout", DEFAULT_PROVIDER_TIMEOUT))
 
     def chat(self, prompt: str, *, system_prompt: str = "") -> str:
         """调用 chat/completions 并返回文本结果。

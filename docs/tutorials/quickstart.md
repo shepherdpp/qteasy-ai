@@ -79,7 +79,7 @@ qteasy-ai run "export kline 000300.SH to png"
 qteasy-ai provider-check
 ```
 
-输出会包含 `mode/model/base_url/timeout/api_key_present/config_sources`，用于快速确认当前是规则模式、云端模型还是本地模型。
+输出会包含 `mode/model/base_url/timeout/api_key_present/config_sources`，用于快速确认当前是规则模式、云端模型还是本地模型。默认 `timeout` 为 120 秒，可用 `QTEASY_AI_TIMEOUT` 覆盖。
 
 ## 2.5 Stage B0（Q-AI.1.5）环境与数据
 

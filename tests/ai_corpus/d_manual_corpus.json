@@ -46,6 +46,40 @@
       "expected_skill": "",
       "expected_step_count": 0,
       "notes": "Ask suggests Plan; no codegen write"
+    },
+    {
+      "id": "D-B1",
+      "group": "G4",
+      "query": "用 PT 目标仓位同时按 VS 股数下单的 20/60 日均线金叉策略",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "signal_type conflict; do not silently pick PT or VS"
+    },
+    {
+      "id": "D-B2",
+      "group": "G4",
+      "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略",
+      "mode": "plan",
+      "expected_skill": "qt.ai.strategy.spec_from_nl",
+      "notes": "no 沪深300; asset_pool must not be invented as 000300.SH"
+    },
+    {
+      "id": "D-M1",
+      "group": "G7",
+      "query": "把快线改成 10",
+      "mode": "plan",
+      "expected_skill": "qt.ai.system.fallback",
+      "notes": "follow-up must NOT inherit previous 20/60 Spec; clarify or unrelated route OK"
+    },
+    {
+      "id": "D-M4",
+      "group": "G7",
+      "query": "刚才那个策略的快线是多少",
+      "mode": "ask",
+      "expected_skill": "",
+      "expected_step_count": 0,
+      "notes": "Ask has no session memory; must not write files"
     }
   ]
 }

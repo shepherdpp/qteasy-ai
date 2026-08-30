@@ -61,7 +61,7 @@ print(preview["plan"]["steps"][0]["skill_name"])
 - Ask：Offline KnowledgeBase。
 - Plan：规则路由（不调用 LLM）。
 
-设置 `QTEASY_AI_MODEL` / `QTEASY_AI_API_KEY` / `QTEASY_AI_BASE_URL` 后：Ask 可走 LLM 合成；Plan 可走 LLM 候选 + 规则门禁。
+设置 `QTEASY_AI_MODEL` / `QTEASY_AI_API_KEY` / `QTEASY_AI_BASE_URL` 后：Ask 可走 LLM 合成；Plan 可走 LLM 候选 + 规则门禁。默认请求超时 **120 秒**（`QTEASY_AI_TIMEOUT` / `ai_timeout` 可覆盖）。
 
 ```bash
 qteasy-ai provider-check

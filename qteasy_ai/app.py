@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from .ask_engine import AskEngine, AskResponse
-from .config import ConfigCenter
+from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .executor import PlanExecutor
 from .knowledge_base import KnowledgeBase
 from .memory_store import MemoryStore, merge_env_facts
@@ -387,7 +387,7 @@ class QteasyAssistant:
             "provider_enabled": self.planner.provider is not None,
             "model": str(provider_cfg.get("model", "")).strip(),
             "base_url": str(provider_cfg.get("base_url", "")).strip(),
-            "timeout": int(provider_cfg.get("timeout", 30)),
+            "timeout": int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT)),
             "api_key_present": bool(api_key),
             "config_sources": {key: item.get("source", "") for key, item in trace.items()},
         }

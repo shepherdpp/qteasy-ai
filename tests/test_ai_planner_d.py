@@ -8,16 +8,32 @@
 # Unittest for stage D StrategyBuilder DAG
 # ======================================
 
+import json
 import tempfile
 import unittest
 
 from qteasy_ai.app import build_default_registry
-from qteasy_ai.contracts import ToolPlan, ToolStep
+from qteasy_ai.contracts import SkillMetadata, SkillSideEffects, ToolPlan, ToolStep
 from qteasy_ai.executor import PlanExecutor
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
+from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.registry import SkillRegistry
-from qteasy_ai.contracts import SkillMetadata, SkillSideEffects
+
+
+def _llm_plan(steps: list) -> str:
+    """构造 FakeLLM 返回的计划 JSON。"""
+
+    return json.dumps({"steps": steps}, ensure_ascii=False)
+
+
+_BUILDER_SKILLS = [
+    "qt.ai.strategy.spec_from_nl",
+    "qt.ai.strategy.codegen_hybrid",
+    "qt.ai.strategy.sanity_check",
+    "qt.ai.operator.build_from_spec",
+    "qt.ai.backtest.run_builtin",
+]
 
 
 GOLDEN_D1 = "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测"
@@ -57,6 +73,235 @@ class TestAiPlannerD(unittest.TestCase):
         self.assertEqual(bt.inputs.get("invest_end"), "20201231")
         self.assertEqual(bt.inputs.get("freq"), "d")
         self.assertEqual(plan.execution_mode, "dry_run")
+
+    def test_llm_matching_recipe_overwrites_slots_and_depends(self) -> None:
+        """LLM 五步品类对但槽/依赖错时，规则覆写；candidate_source 仍为 llm。"""
+
+        print("\n[TestAiPlannerD] LLM matching recipe overwrites slots")
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.strategy.spec_from_nl",
+                            "inputs": {
+                                "natural_language": "基于20/60日均线金叉死叉的择时策略",
+                                "strategy_name": "dual_ma_20_60",
+                                "query": GOLDEN_D1,
+                            },
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.codegen_hybrid",
+                            "inputs": {
+                                "strategy_name": "dual_ma_20_60",
+                                "fast_period": 20,
+                                "slow_period": 60,
+                            },
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.sanity_check",
+                            "inputs": {"strategy_name": "dual_ma_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.operator.build_from_spec",
+                            "inputs": {
+                                "operator_name": "dual_ma_20_60",
+                                "strategy_name": "dual_ma_20_60",
+                            },
+                        },
+                        {
+                            "skill_name": "qt.ai.backtest.run_builtin",
+                            "inputs": {
+                                "strategy_name": "dual_ma_20_60",
+                                "asset_pool": ["000300.SH"],
+                                "start_date": "2015-01-01",
+                                "end_date": "2020-12-31",
+                                "mode": 1,
+                                "strategy_id": "GeneratedSmaCross",
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(GOLDEN_D1, mode="plan")
+        rule = self.planner.build_plan(GOLDEN_D1, mode="plan")
+        names = [step.skill_name for step in hybrid.steps]
+        print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
+        print(" skills:", names)
+        print(" depends:", [step.depends_on for step in hybrid.steps])
+        print(" spec inputs:", hybrid.steps[0].inputs)
+        print(" backtest inputs:", hybrid.steps[-1].inputs)
+        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
+        self.assertEqual(names, _BUILDER_SKILLS)
+        self.assertEqual([step.depends_on for step in hybrid.steps], [step.depends_on for step in rule.steps])
+        self.assertEqual(hybrid.steps[0].inputs, rule.steps[0].inputs)
+        self.assertEqual(hybrid.steps[0].inputs, {"query": GOLDEN_D1})
+        self.assertNotIn("fast_period", hybrid.steps[1].inputs)
+        self.assertNotIn("start_date", hybrid.steps[-1].inputs)
+        self.assertEqual(hybrid.steps[-1].inputs.get("asset_pool"), "000300.SH")
+        self.assertEqual(hybrid.steps[-1].inputs.get("invest_start"), "20150101")
+        self.assertEqual(hybrid.steps[-1].inputs.get("invest_end"), "20201231")
+        self.assertEqual(hybrid.steps[-1].inputs, rule.steps[-1].inputs)
+
+    def test_llm_wrapped_seven_steps_overwrites_to_rule_recipe(self) -> None:
+        """LLM 在五步前后加 overview/insight 时，整表换成规则五步。"""
+
+        print("\n[TestAiPlannerD] LLM 7-step wrapper overwrites to rule 5")
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.env.overview_tables",
+                            "inputs": {"tables": ["index_daily"]},
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.spec_from_nl",
+                            "inputs": {
+                                "description": "20/60 金叉死叉",
+                                "query": GOLDEN_D1,
+                            },
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.codegen_hybrid",
+                            "inputs": {"strategy_name": "ma_cross_20_60", "fast_ma": 20, "slow_ma": 60},
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.sanity_check",
+                            "inputs": {"strategy_file": "ma_cross_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.operator.build_from_spec",
+                            "inputs": {"strategy_name": "ma_cross_20_60", "run_freq": "d"},
+                        },
+                        {
+                            "skill_name": "qt.ai.backtest.run_builtin",
+                            "inputs": {
+                                "strategy": "ma_cross_20_60",
+                                "asset_pool": ["000300.SH"],
+                                "start_date": "2015-01-01",
+                                "end_date": "2020-12-31",
+                                "strategy_id": "GeneratedSmaCross",
+                            },
+                        },
+                        {
+                            "skill_name": "qt.ai.insight.summarize_backtest",
+                            "inputs": {"strategy": "ma_cross_20_60", "start_date": "2015-01-01"},
+                        },
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(GOLDEN_D1, mode="plan")
+        rule = self.planner.build_plan(GOLDEN_D1, mode="plan")
+        names = [step.skill_name for step in hybrid.steps]
+        print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
+        print(" skills:", names)
+        print(" depends:", [step.depends_on for step in hybrid.steps])
+        print(" backtest inputs:", hybrid.steps[-1].inputs if names else None)
+        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
+        self.assertEqual(names, _BUILDER_SKILLS)
+        self.assertEqual(len(hybrid.steps), 5)
+        self.assertEqual([step.depends_on for step in hybrid.steps], [step.depends_on for step in rule.steps])
+        self.assertEqual(hybrid.steps[0].inputs, {"query": GOLDEN_D1})
+        self.assertEqual(hybrid.steps[-1].inputs.get("asset_pool"), "000300.SH")
+        self.assertEqual(hybrid.steps[-1].inputs.get("invest_start"), "20150101")
+        self.assertEqual(hybrid.steps[-1].inputs, rule.steps[-1].inputs)
+
+    def test_llm_prefix_sequence_completes_to_rule_recipe(self) -> None:
+        """LLM 只吐规则菜谱前缀时，补成完整规则图。"""
+
+        print("\n[TestAiPlannerD] LLM prefix completes to full rule recipe")
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.strategy.spec_from_nl",
+                            "inputs": {"natural_language": "dual ma", "strategy_name": "dual_ma_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.codegen_hybrid",
+                            "inputs": {"fast_period": 20, "slow_period": 60},
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.sanity_check",
+                            "inputs": {"strategy_name": "dual_ma_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.operator.build_from_spec",
+                            "inputs": {"operator_name": "dual_ma_20_60"},
+                        },
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(GOLDEN_D1, mode="plan")
+        names = [step.skill_name for step in hybrid.steps]
+        print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
+        print(" skills:", names)
+        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
+        self.assertEqual(names, _BUILDER_SKILLS)
+        self.assertEqual(hybrid.steps[-1].inputs.get("invest_end"), "20201231")
+
+    def test_llm_interrupted_sequence_does_not_overwrite(self) -> None:
+        """LLM 在菜谱中间插入其它 skill 时不覆写。"""
+
+        print("\n[TestAiPlannerD] LLM interrupted sequence keeps candidate slots")
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.strategy.spec_from_nl",
+                            "inputs": {"natural_language": "dual ma", "strategy_name": "dual_ma_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.data.refill_basic_equity_and_index",
+                            "inputs": {"tables": ["index_daily"], "start": "20150101", "end": "20201231"},
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.codegen_hybrid",
+                            "inputs": {"fast_period": 20, "slow_period": 60},
+                        },
+                        {
+                            "skill_name": "qt.ai.strategy.sanity_check",
+                            "inputs": {"strategy_name": "dual_ma_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.operator.build_from_spec",
+                            "inputs": {"operator_name": "dual_ma_20_60"},
+                        },
+                        {
+                            "skill_name": "qt.ai.backtest.run_builtin",
+                            "inputs": {"start_date": "2015-01-01", "strategy_id": "GeneratedSmaCross"},
+                        },
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(GOLDEN_D1, mode="plan")
+        names = [step.skill_name for step in hybrid.steps]
+        print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
+        print(" skills:", names)
+        print(" depends:", [step.depends_on for step in hybrid.steps])
+        print(" codegen inputs:", hybrid.steps[2].inputs if len(hybrid.steps) > 2 else None)
+        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertNotEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
+        self.assertEqual(len(names), 6)
+        self.assertEqual(names[1], "qt.ai.data.refill_basic_equity_and_index")
+        self.assertIn("qt.ai.strategy.codegen_hybrid", names)
+        codegen = next(step for step in hybrid.steps if step.skill_name == "qt.ai.strategy.codegen_hybrid")
+        self.assertEqual(codegen.depends_on, [])
+        self.assertEqual(codegen.inputs.get("fast_period"), 20)
 
     def test_incomplete_builder_clarifies_not_unsupported(self) -> None:
         """双均线缺周期 → clarify，不再 not_supported_yet。"""

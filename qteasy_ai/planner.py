@@ -177,7 +177,7 @@ class Planner:
                 steps = self._infer_steps(query=query, q_lower=q_lower)
         else:
             steps = self._infer_steps(query=query, q_lower=q_lower)
-        steps = self._apply_post_candidate_gates(
+        steps, gate_extras = self._apply_post_candidate_gates(
             steps, query=query, candidate_source=candidate_source
         )
         assumptions = {
@@ -187,6 +187,7 @@ class Planner:
             "candidate_source": candidate_source,
             "downgrade_reason": downgrade_reason,
         }
+        assumptions.update(gate_extras)
         for step in steps:
             if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):
                 assumptions["refill_universe"] = "all symbols for those tables (high cost)"
@@ -221,6 +222,9 @@ class Planner:
             "candidate_source": candidate_plan.assumptions.get("candidate_source", "rule"),
             "downgrade_reason": candidate_plan.assumptions.get("downgrade_reason", ""),
         }
+        recipe_slots_from = candidate_plan.assumptions.get("recipe_slots_from")
+        if recipe_slots_from:
+            final_plan.planner_trace["recipe_slots_from"] = recipe_slots_from
         return final_plan
 
     _DATA_INTENT_SKILLS = {
@@ -322,15 +326,65 @@ class Planner:
         *,
         query: str,
         candidate_source: str = "rule",
-    ) -> List[ToolStep]:
-        """对 LLM 与规则候选共用日期、必填槽与 env_facts 门禁。"""
+    ) -> Tuple[List[ToolStep], Dict[str, Any]]:
+        """对 LLM 与规则候选共用菜谱覆写、日期、必填槽与 env_facts 门禁。"""
 
-        gated = self._enforce_refill_date_range(steps, query=query)
+        extras: Dict[str, Any] = {}
+        gated = steps
+        if candidate_source == "llm":
+            gated, applied = self._overwrite_slots_if_recipe_match(gated, query=query)
+            if applied:
+                extras["recipe_slots_from"] = "rule"
+        gated = self._enforce_refill_date_range(gated, query=query)
         if candidate_source == "llm":
             gated = self._enforce_required_slots(gated, query=query)
         gated = self._maybe_prepend_tushare_gate(gated)
         data_intent = any(step.skill_name in self._DATA_INTENT_SKILLS for step in gated)
-        return self._maybe_prepend_table_gate(gated, data_intent=data_intent)
+        return self._maybe_prepend_table_gate(gated, data_intent=data_intent), extras
+
+    @staticmethod
+    def _skill_name_sequence(steps: List[ToolStep]) -> List[str]:
+        """返回步骤 skill_name 有序列。"""
+
+        return [step.skill_name for step in steps]
+
+    @staticmethod
+    def _is_contiguous_subsequence(needle: List[str], haystack: List[str]) -> bool:
+        """判断 needle 是否为 haystack 的连续子序列（含相等）。"""
+
+        n_len = len(needle)
+        h_len = len(haystack)
+        if n_len == 0 or n_len > h_len:
+            return False
+        for start in range(h_len - n_len + 1):
+            if haystack[start : start + n_len] == needle:
+                return True
+        return False
+
+    @staticmethod
+    def _is_fallback_only_recipe(steps: List[ToolStep]) -> bool:
+        """规则菜谱是否仅为 system.fallback。"""
+
+        return bool(steps) and all(step.skill_name == "qt.ai.system.fallback" for step in steps)
+
+    def _overwrite_slots_if_recipe_match(
+        self, steps: List[ToolStep], *, query: str
+    ) -> Tuple[List[ToolStep], bool]:
+        """LLM 与规则菜谱互为连续子序列时，整表换成规则步骤。"""
+
+        if not steps:
+            return steps, False
+        q_lower = query.lower()
+        rule_steps = self._infer_steps(query=query, q_lower=q_lower)
+        if not rule_steps or self._is_fallback_only_recipe(rule_steps):
+            return steps, False
+        llm_names = self._skill_name_sequence(steps)
+        rule_names = self._skill_name_sequence(rule_steps)
+        if self._is_contiguous_subsequence(rule_names, llm_names) or self._is_contiguous_subsequence(
+            llm_names, rule_names
+        ):
+            return deepcopy(rule_steps), True
+        return steps, False
 
     def _missing_required_fields(self, step: ToolStep) -> List[str]:
         """返回步骤缺少的 inputs_schema required 字段。"""

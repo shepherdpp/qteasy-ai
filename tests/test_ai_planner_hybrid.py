@@ -184,9 +184,9 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertNotEqual(hybrid.steps[0].inputs, {})
 
     def test_llm_screen_complete_slots_keeps_candidate_source_llm(self) -> None:
-        """LLM 已填齐筛股必填槽时保留 candidate_source=llm，不被规则覆盖。"""
+        """LLM 筛股序列命中菜谱时保留 candidate_source=llm，槽改用规则值。"""
 
-        print("\n[TestAiPlannerHybrid] LLM screen complete slots stay llm")
+        print("\n[TestAiPlannerHybrid] LLM screen recipe overwrites slots, source stays llm")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
         fake = FakeLLMProvider(
             replies=[
@@ -205,11 +205,13 @@ class TestAiPlannerHybrid(unittest.TestCase):
         )
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
         print(" inputs:", hybrid.steps[0].inputs)
         self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
         self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.research.screen_stocks")
-        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "银行")
-        self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.15)
+        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
+        self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.2)
 
     def test_llm_catalog_includes_skill_name_and_summary(self) -> None:
         """Hybrid 候选 prompt 对每个已注册 skill 含一行 name: summary。"""

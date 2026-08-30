@@ -18,7 +18,7 @@ import json
 from typing import Any, Dict
 
 from .app import QteasyAssistant
-from .config import ConfigCenter
+from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .memory_store import MemoryStore
 from .provider import OpenAICompatProvider
 
@@ -35,7 +35,7 @@ def _build_provider_from_config() -> OpenAICompatProvider | None:
         model=model,
         api_key=str(provider_cfg.get("api_key", "")),
         base_url=str(provider_cfg.get("base_url", "https://api.openai.com/v1")),
-        timeout=int(provider_cfg.get("timeout", 30)),
+        timeout=int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT)),
         config_center=config_center,
     )
 
@@ -49,7 +49,7 @@ def _provider_check_payload() -> Dict[str, Any]:
     model = str(provider_cfg.get("model", "")).strip()
     api_key = str(provider_cfg.get("api_key", "")).strip()
     base_url = str(provider_cfg.get("base_url", "")).strip()
-    timeout = int(provider_cfg.get("timeout", 30))
+    timeout = int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT))
 
     mode = "rule"
     if model:

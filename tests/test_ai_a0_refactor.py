@@ -11,7 +11,7 @@
 import tempfile
 import unittest
 
-from qteasy_ai.config import ConfigCenter
+from qteasy_ai.config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from qteasy_ai.contracts import SkillMetadata, SkillSideEffects, ToolPlan, ToolStep
 from qteasy_ai.executor import PlanExecutor
 from qteasy_ai.memory_store import MemoryStore
@@ -62,6 +62,16 @@ class TestAiA0Refactor(unittest.TestCase):
         self.assertEqual(value_env, "model_from_env")
         self.assertEqual(value_qt, "model_from_qt")
         self.assertEqual(value_default, "model_default")
+
+    def test_provider_timeout_default_is_120(self) -> None:
+        """无环境变量与 QT_CONFIG 时，Provider 超时默认为 120 秒。"""
+
+        print("\n[TestAiA0Refactor] default provider timeout")
+        center = ConfigCenter(env={}, qt_config={})
+        provider_cfg = center.resolve_provider_config()
+        print(" timeout:", provider_cfg["timeout"], "constant:", DEFAULT_PROVIDER_TIMEOUT)
+        self.assertEqual(DEFAULT_PROVIDER_TIMEOUT, 120)
+        self.assertEqual(provider_cfg["timeout"], 120)
 
     def test_config_center_reads_deprecated_qt_config_keys(self) -> None:
         """验证 ConfigCenter 可从 qt_config 字典读取 ai_*（qteasy 2.7 前可选兼容路径）。"""

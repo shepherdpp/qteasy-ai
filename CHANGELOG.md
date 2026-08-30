@@ -5,6 +5,11 @@ SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy)
 
 ## Unreleased
 
+### Changed
+
+- Default LLM Provider timeout is **120 seconds** (was 30). Override with `QTEASY_AI_TIMEOUT` or `ai_timeout`.
+- Hybrid Plan: when the LLM skill sequence and the rule recipe are contiguous subsequences of each other, the plan is replaced by the rule recipe (`assumptions.recipe_slots_from=rule`). Extra LLM wrapper steps are dropped. `candidate_source` stays `llm`.
+
 ### Breaking
 
 - **`ask()` target state (Q-AI.3)**: `assistant.ask()` / `qteasy-ai ask` no longer returns an empty-step ToolPlan dry-run. It answers via KnowledgeBase (+ optional LLM) and does not call skills or PlanExecutor. Use `preview()` / `qteasy-ai preview` / `plan --preview` to inspect a dry-run ToolPlan.

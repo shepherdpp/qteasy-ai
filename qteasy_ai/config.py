@@ -25,6 +25,9 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+# Hybrid plan 候选 prompt 较长；DeepSeek 等云端推理常需 60～120s。
+DEFAULT_PROVIDER_TIMEOUT = 120
+
 
 @dataclass
 class ConfigValueTrace:
@@ -115,7 +118,7 @@ class ConfigCenter:
             explicit=timeout,
             env_key="QTEASY_AI_TIMEOUT",
             qt_key="ai_timeout",
-            default=30,
+            default=DEFAULT_PROVIDER_TIMEOUT,
         )
         if isinstance(timeout_val, str) and timeout_val.isdigit():
             timeout_val = int(timeout_val)
