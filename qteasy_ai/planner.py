@@ -225,6 +225,9 @@ class Planner:
         recipe_slots_from = candidate_plan.assumptions.get("recipe_slots_from")
         if recipe_slots_from:
             final_plan.planner_trace["recipe_slots_from"] = recipe_slots_from
+        llm_skill_sequence = candidate_plan.assumptions.get("llm_skill_sequence")
+        if llm_skill_sequence:
+            final_plan.planner_trace["llm_skill_sequence"] = list(llm_skill_sequence)
         return final_plan
 
     _DATA_INTENT_SKILLS = {
@@ -331,6 +334,8 @@ class Planner:
 
         extras: Dict[str, Any] = {}
         gated = steps
+        if candidate_source == "llm" and steps:
+            extras["llm_skill_sequence"] = self._skill_name_sequence(steps)
         if candidate_source == "llm":
             gated, applied = self._overwrite_slots_if_recipe_match(gated, query=query)
             if applied:
@@ -370,13 +375,21 @@ class Planner:
     def _overwrite_slots_if_recipe_match(
         self, steps: List[ToolStep], *, query: str
     ) -> Tuple[List[ToolStep], bool]:
-        """LLM 与规则菜谱互为连续子序列时，整表换成规则步骤。"""
+        """LLM 与规则菜谱互为连续子序列时，整表换成规则步骤。
+
+        规则菜谱仅为 fallback 时默认不换表；本句命中 StrategyBuilder
+        关键词则仍用规则澄清，避免单步 codegen 漏网。
+        """
 
         if not steps:
             return steps, False
         q_lower = query.lower()
         rule_steps = self._infer_steps(query=query, q_lower=q_lower)
-        if not rule_steps or self._is_fallback_only_recipe(rule_steps):
+        if not rule_steps:
+            return steps, False
+        if self._is_fallback_only_recipe(rule_steps):
+            if self._has_strategy_builder_keywords(query, q_lower):
+                return deepcopy(rule_steps), True
             return steps, False
         llm_names = self._skill_name_sequence(steps)
         rule_names = self._skill_name_sequence(rule_steps)

@@ -1,6 +1,6 @@
 # Q-AI.4（阶段 D）实弹演练手册（Jackie 手动执行）
 
-**状态：TDD 已落地，待 Jackie 手测关单。**
+**状态：实弹已关单（Jackie，2026-08-31）。**
 
 基线：qteasy-ai **0.1.x + 阶段 D 未发版改动** · qteasy **>=2.6** · Python **py39**
 
@@ -81,7 +81,7 @@ Ask 核对：`mode=ask`、**无** `execution`、steps 空或不存在。
 | ID | query | 期望 |
 |----|--------|------|
 | D-A1 | `帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测` | skills：`spec_from_nl` → `codegen_hybrid` → `sanity_check` → `build_from_spec` → `run_builtin` |
-| D-A2 | `生成一个双均线策略 strategybuilder` | `clarify_required`（缺 fast/slow），**不是** `not_supported_yet` |
+| D-A2 | `生成一个双均线策略 strategybuilder` | `clarify_required`（缺 fast/slow），**不是** `not_supported_yet`。Mode-D 接通后同样应为 fallback 澄清（可有 `recipe_slots_from=rule`），**勿 `run`** |
 | D-A3 | `start live trade now` | `qt.ai.pipeline.live_trade_plan_only`；`execution_mode=dry_run` |
 
 ```bash
@@ -213,7 +213,7 @@ qteasy-ai run "帮我写一个基于 20/60 日均线金叉死叉的择时策略�
 
 | ID | query | 期望 |
 |----|--------|------|
-| D-H1 | `plan` D-A1 金句 `--raw` | `candidate_source` 为 `llm` **或**降级 `rule` + 可解释 `downgrade_reason`。若接通 LLM：user prompt / catalog 含 `- qt.ai.strategy.spec_from_nl:` 一类 **name: summary**。**禁止 `run`**（2026-08-30：接通后可认对五步但槽/`depends_on` 错；债归 E.0，勿当可执行计划） |
+| D-H1 | `plan` D-A1 金句 `--raw` | `candidate_source` 为 `llm` **或**降级 `rule` + 可解释 `downgrade_reason`。若接通 LLM：对照 `planner_trace.llm_skill_sequence`（覆写前 `L`）与最终 `steps`（可能已被规则换成五步）。catalog 含 `- qt.ai.strategy.spec_from_nl:` 一类 **name: summary**。**禁止 `run`** 未审阅 / refill 误判的候选 |
 | D-H2 | `plan "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤"` | **不得**把回测点成 refill（C 体验债：错品类是否因 summary 改善，记 Gap） |
 | D-H3 | `plan "start live trade now"` | 仍 `live_trade_plan_only`；门禁不被 LLM 改成可执行下单 skill |
 | D-H4 | `ask "帮我写一个双均线策略"` | 仍 `mode=ask`、零 skill |
@@ -246,36 +246,36 @@ qteasy-ai ask "帮我写一个双均线策略" --raw
 
 | 命题 | Mode-R | Mode-D |
 |------|--------|--------|
-| 金句 DAG 是否稳定五步？ | | |
-| 缺周期 / PT+VS 是否澄清、不编造？ | | |
-| live 是否永不像可执行下单？ | | |
-| Ask 写策略是否零写盘？ | | |
-| 跟进句是否误当成修订上一份策略？ | | |
-| Hybrid catalog summary 是否减少回测→refill？ | — | |
+| 金句 DAG 是否稳定五步？ | 是 | 最终图：覆写后五步；`L` 仍可能加 refill/overview |
+| 缺周期 / PT+VS 是否澄清、不编造？ | TDD + D-A2 手测过 | D-A2 热修后 `clarify_required` |
+| live 是否永不像可执行下单？ | 是 | D-H3 是 |
+| Ask 写策略是否零写盘？ | 是 | D-H4 是 |
+| 跟进句是否误当成修订上一份策略？ | G7 否（预期） | 同左 |
+| Hybrid catalog summary 是否减少回测→refill？ | — | D-H2 未点 refill；仍可能插 `strategy_meta.get` 后缺槽 |
 
 ### Top 5 问题
 
-1.
-2.
-3.
-4.
-5.
+1. CLI `run` 对 query 重新 plan，不能执行已审阅 `plan_id`（E.1）。
+2. Mode-D `L` 插 refill 且丢掉 `build_from_spec` 则不覆写（E.0）。
+3. 内置回测句 Hybrid 可能先 `strategy_meta.get` 导致整单缺 `strategy_id`（E.0）。
+4. pretty 把 dry-run 写成已执行（B/C 债）。
+5. 无多轮：跟进句不修订上一份 Spec（F，本阶段预期）。
 
 ### Top 5 隐藏用法
 
-1.
-2.
-3.
-4.
-5.
+1. Mode-R `run` 金句 = 与规则五步合同等价的执行路径（G3）。
+2. `planner_trace.llm_skill_sequence` 对照最终 steps，判断是否覆写。
+3. 已有 `GeneratedSmaCross.py` 再 `run` → D-B3 不覆盖。
+4. Ask「写策略」只劝 Plan，不写盘。
+5. live 句只出 `live_trade_plan_only`，禁止 `run`。
 
 ### Top 5 新潜在场景
 
-1.
-2.
-3.
-4.
-5.
+1. 按 `plan_id` 确认执行（E.1）。
+2. 已知意图一律 `R` 出图（E.0）。
+3. 跟进句改快线 / 改回测窗（F）。
+4. 选股 / 网格模板（E 余量）。
+5. 开放句合法非菜谱 DAG（E.0）。
 
 ### 金标准可推翻清单 + 修复时机
 
@@ -283,27 +283,28 @@ qteasy-ai ask "帮我写一个双均线策略" --raw
 |----|------|------|
 | 多轮 / session 记忆 | **后面修（Q-AI.6）** | 金标准 §3.5/§3.6；本阶段单句 plan |
 | CLI/Notebook 会话 | **后面修（Q-AI.6）** | 入口无 REPL |
+| CLI `--plan-id` 执行已审阅图 | **E.1 小修** | 不需要 session；对齐 Notebook `--confirm` |
 | TUI/Web | **后面修（Q-AI.7）** | 开放方向已编号 |
-| 选股/网格模板 | **后面修（E 余量或 D 余量）** | 不阻塞本金句 |
-| Hybrid 错品类 | 手测后填 | catalog summary 是否够用 |
+| 选股/网格模板 | **后面修（E 余量）** | 不阻塞本金句 |
+| Hybrid 错品类 / 缺槽整单 | **E.0 意图门** | catalog summary 不够；不要金句特化 prompt |
 
-关单摘要（手测后）写入 qteasy 仓 `knowledge/runlog/`（勿在本手册预填关单日期）。
+关单摘要（2026-08-31）见 qteasy 仓 `knowledge/runlog/qteasy-ai-qai4-stage-d-checkpoint-2026-08.md`。
 
 ---
 
 ## 验收清单
 
-- [ ] G0 `provider-check` 为 Mode-R；已记 `runs_before` / `strategies/`
-- [ ] G1：D-A1 五步 + depends_on + 000300/日期；D-A2 `clarify_required`；D-A3 live plan-only
-- [ ] G2：Ask 写策略零 `execution`；纯 ask 后 `runs` 不变
-- [ ] G4：PT+VS 澄清；未说标的不编造 pool；已存在文件不覆盖（或 Skip）
-- [ ] G7：跟进句不继承上下文；落盘文件仍在；Ask 不记得上一句
-- [ ] G5：同一金句 raw vs pretty；Notebook D-E3 或 **Skip**
-- [ ] G3：有条件 `run` 或记 Gap 缺数；路径不在包 / `examples/`
-- [ ] G6 Top 5×3 + 可推翻清单已写
+- [x] G0 `provider-check` 为 Mode-R；已记 `runs_before` / `strategies/`
+- [x] G1：D-A1 五步 + depends_on + 000300/日期；D-A2 `clarify_required`；D-A3 live plan-only
+- [x] G2：Ask 写策略零 `execution`；纯 ask 后 `runs` 不变
+- [x] G4：PT+VS / 未说标的 — TDD 覆盖；D-B3 有文件则不覆盖（G3 后路径）
+- [x] G7：跟进句不继承上下文；落盘文件仍在；Ask 不记得上一句
+- [x] G5：同一金句 raw vs pretty；Notebook D-E3 **Skip**（与 QAI2/3 一致）
+- [x] G3：Jackie 2026-08-31 判定已成功 `run`（codegen + 回测，qteasy-log 有产物）
+- [x] G6 Top 5×3 + 可推翻清单已写
 - [ ] `manual_record_*.md` 已填（本地，不进仓；可选）
-- [ ] Mode-D：D-H1～D-H4；**未**对 live / 未审阅 codegen 做 `run`
-- [ ] **关单**（日期 / Jackie）
+- [x] Mode-D：D-H1～D-H4；**未**对 live / 未审阅 codegen 做 `run`
+- [x] **关单**（2026-08-31 / Jackie）
 
 自动化（可选）：
 
@@ -316,4 +317,4 @@ cd ~/Projects/qteasy-ai
 
 ---
 
-*手册角色：Q-AI.4 手测 · 2026-08-29（按 QAI3 密度扩写；待关单）*
+*手册角色：Q-AI.4 手测 · 2026-08-29（按 QAI3 密度扩写；**2026-08-31 关单**）*

@@ -8,7 +8,8 @@ SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy)
 ### Changed
 
 - Default LLM Provider timeout is **120 seconds** (was 30). Override with `QTEASY_AI_TIMEOUT` or `ai_timeout`.
-- Hybrid Plan: when the LLM skill sequence and the rule recipe are contiguous subsequences of each other, the plan is replaced by the rule recipe (`assumptions.recipe_slots_from=rule`). Extra LLM wrapper steps are dropped. `candidate_source` stays `llm`.
+- Hybrid Plan: when the LLM skill sequence and the rule recipe are contiguous subsequences of each other, the plan is replaced by the rule recipe (`assumptions.recipe_slots_from=rule`). Extra LLM wrapper steps are dropped. `candidate_source` stays `llm`. Fallback-only recipes still do not overwrite, except when the query hits StrategyBuilder keywords (incomplete dual-MA → `clarify_required`).
+- Hybrid Plan: Mode-D `planner_trace.llm_skill_sequence` records the skill names **before** recipe overwrite (not persisted for rule-only plans). Full prompts are not stored.
 
 ### Breaking
 
@@ -21,7 +22,7 @@ SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy)
 - `explanation_depth`: `brief` / `standard` / `deep` (`--depth`).
 - Hybrid Planner LLM candidate generation; RuleValidator and `env_facts` gates still apply. Unknown skills / invalid JSON fall back to the rule router. Candidate prompt includes each skill's one-line `summary`.
 - User guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md). Demo: `examples/ai_shell_stage_c_ask_demo.py`.
-- **StrategyBuilder (Q-AI.4)**: `qt.ai.strategy.spec_from_nl` / `codegen_hybrid` / `sanity_check` / `qt.ai.operator.build_from_spec`; generated source under `.qteasy/ai/strategies/`; reuses `backtest.run_builtin` (optional `strategy_path`). Live: `qt.ai.pipeline.live_trade_plan_only`. Demo: `examples/ai_shell_stage_d_strategybuilder_demo.py`. Handbook: [docs/LIVE_FIRE_DRILL_QAI4.md](docs/LIVE_FIRE_DRILL_QAI4.md).
+- **StrategyBuilder (Q-AI.4)**: `qt.ai.strategy.spec_from_nl` / `codegen_hybrid` / `sanity_check` / `qt.ai.operator.build_from_spec`; generated source under `.qteasy/ai/strategies/`; reuses `backtest.run_builtin` (optional `strategy_path`). Live: `qt.ai.pipeline.live_trade_plan_only`. Demo: `examples/ai_shell_stage_d_strategybuilder_demo.py`. Handbook: [docs/LIVE_FIRE_DRILL_QAI4.md](docs/LIVE_FIRE_DRILL_QAI4.md) (live-fire closed 2026-08-31).
 
 ## 0.1.0 (2026-08-06)
 

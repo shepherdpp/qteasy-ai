@@ -73,6 +73,9 @@ class TestAiPlannerD(unittest.TestCase):
         self.assertEqual(bt.inputs.get("invest_end"), "20201231")
         self.assertEqual(bt.inputs.get("freq"), "d")
         self.assertEqual(plan.execution_mode, "dry_run")
+        print(" planner_trace keys:", sorted(plan.planner_trace.keys()))
+        self.assertNotIn("llm_skill_sequence", plan.planner_trace)
+        self.assertNotIn("llm_skill_sequence", plan.assumptions)
 
     def test_llm_matching_recipe_overwrites_slots_and_depends(self) -> None:
         """LLM 五步品类对但槽/依赖错时，规则覆写；candidate_source 仍为 llm。"""
@@ -212,6 +215,18 @@ class TestAiPlannerD(unittest.TestCase):
         self.assertEqual(hybrid.steps[-1].inputs.get("asset_pool"), "000300.SH")
         self.assertEqual(hybrid.steps[-1].inputs.get("invest_start"), "20150101")
         self.assertEqual(hybrid.steps[-1].inputs, rule.steps[-1].inputs)
+        expected_l = [
+            "qt.ai.env.overview_tables",
+            "qt.ai.strategy.spec_from_nl",
+            "qt.ai.strategy.codegen_hybrid",
+            "qt.ai.strategy.sanity_check",
+            "qt.ai.operator.build_from_spec",
+            "qt.ai.backtest.run_builtin",
+            "qt.ai.insight.summarize_backtest",
+        ]
+        print(" llm_skill_sequence:", hybrid.planner_trace.get("llm_skill_sequence"))
+        self.assertEqual(hybrid.planner_trace.get("llm_skill_sequence"), expected_l)
+        self.assertEqual(hybrid.assumptions.get("llm_skill_sequence"), expected_l)
 
     def test_llm_prefix_sequence_completes_to_rule_recipe(self) -> None:
         """LLM 只吐规则菜谱前缀时，补成完整规则图。"""
@@ -314,6 +329,41 @@ class TestAiPlannerD(unittest.TestCase):
         self.assertEqual(plan.steps[0].inputs.get("fallback_action"), "clarify_required")
         missing = str(plan.steps[0].inputs.get("missing_info") or "")
         self.assertTrue("fast" in missing or "slow" in missing)
+
+    def test_llm_incomplete_builder_overwrites_codegen_to_clarify(self) -> None:
+        """Mode-D 单步 codegen 漏网时，SB fallback 菜谱仍覆写为澄清。"""
+
+        print("\n[TestAiPlannerD] LLM incomplete builder overwrites codegen to clarify")
+        query = "生成一个双均线策略 strategybuilder"
+        fake = FakeLLMProvider(
+            replies=[
+                _llm_plan(
+                    [
+                        {
+                            "skill_name": "qt.ai.strategy.codegen_hybrid",
+                            "inputs": {"strategy_name": "dual_ma_strategy"},
+                        }
+                    ]
+                )
+            ]
+        )
+        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+        print(" source:", hybrid.assumptions.get("candidate_source"))
+        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
+        print(" skill:", hybrid.steps[0].skill_name)
+        print(" inputs:", hybrid.steps[0].inputs)
+        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
+        self.assertEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
+        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(hybrid.steps[0].inputs.get("fallback_action"), "clarify_required")
+        missing = str(hybrid.steps[0].inputs.get("missing_info") or "")
+        print(" missing_info:", missing)
+        print(" llm_skill_sequence:", hybrid.planner_trace.get("llm_skill_sequence"))
+        self.assertTrue("fast" in missing or "slow" in missing)
+        self.assertEqual(
+            hybrid.planner_trace.get("llm_skill_sequence"),
+            ["qt.ai.strategy.codegen_hybrid"],
+        )
 
     def test_executor_dry_run_does_not_call_codegen(self) -> None:
         """confirm=False 时 codegen 高副作用不执行。"""
