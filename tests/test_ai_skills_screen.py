@@ -134,6 +134,35 @@ class TestAiScreenSkill(unittest.TestCase):
         self.assertEqual(hit["start_date"], "20240601")
         self.assertEqual(hit["end_date"], "20240605")
 
+    def test_universe_and_project_no_threshold(self) -> None:
+        """无阈值：universe 枚举后投影，不要求 threshold。"""
+
+        print("\n[TestAiScreenSkill] universe project")
+        from qteasy_ai.skills.research_screen import (
+            build_project_universe_skill,
+            build_universe_filter_skill,
+        )
+
+        pool = pd.DataFrame(
+            {"name": ["Alpha", "Beta"], "industry": ["银行", "银行"]},
+            index=["000001.SZ", "000002.SZ"],
+        )
+        _, universe = build_universe_filter_skill(
+            filter_stocks_func=lambda **kwargs: pool,
+            list_industries_func=lambda: ["银行"],
+        )
+        uni = universe(industry="银行")
+        print(" universe payload:", uni["payload"])
+        self.assertTrue(uni["ok"])
+        self.assertEqual(uni["metrics"]["universe_size"], 2)
+        _, project = build_project_universe_skill()
+        projected = project(upstream_payload=uni["payload"])
+        print(" projected:", projected["payload"]["hits"], projected["metrics"])
+        self.assertTrue(projected["ok"])
+        self.assertTrue(projected["metrics"]["enumerated"])
+        self.assertEqual(projected["metrics"]["hit_count"], 2)
+        self.assertEqual(projected["payload"]["hits"][0]["symbol"], "000001.SZ")
+
 
 if __name__ == "__main__":
     unittest.main()

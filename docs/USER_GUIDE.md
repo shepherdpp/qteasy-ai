@@ -9,7 +9,7 @@
 | **Ask** | `assistant.ask()` / `qteasy-ai ask` | **否**。不调用 PlanExecutor，不写 `runs/` | 学习 qteasy：PT/PS/VS、`run_freq`、常见错误 |
 | **Plan** | `assistant.plan()` / `qteasy-ai plan` | 否（dry-run）。只生成 ToolPlan | 审阅步骤、side-effects、假设 |
 | **preview** | `assistant.preview()` / `qteasy-ai preview` / `plan --preview` | 与 Plan 相同 | 原 `ask()` 的「只看 plan 不执行」迁移入口 |
-| **Agent（run）** | `assistant.run()` / `qteasy-ai run` | **是**（CLI 视为一次人在回路确认） | 下载/回测/优化等已确认任务 |
+| **Agent（run）** | `assistant.run()` / `qteasy-ai run`；已审阅图用 `run --plan-id` | **是**（CLI 视为一次人在回路确认） | 下载/回测/优化等已确认任务 |
 
 Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm <plan_id>` 才真正执行。
 
@@ -52,7 +52,7 @@ print(preview["plan"]["steps"][0]["skill_name"])
 - StrategyBuilder（阶段 D）：自然语言 → StrategySpec → 模板骨架写入 `.qteasy/ai/strategies/` → 静态校验 → 复用 `backtest.run_builtin`。Ask 不写策略文件。
 - 无日期或超长区间的全市场 refill：Plan 会 `clarify_required` / `date_range`，禁止无界下载。
 - 无匹配 skill 时返回 `clarify_required` / `not_supported_yet`，**禁止**静默落到 `summary_kline`。
-- Hybrid Planner：配置了 Provider 时 LLM 只生成**候选** ToolPlan；`RuleValidator` 与 `env_facts` 门禁仍生效。未知 skill / 非法 JSON 降级回规则路径。未配置 Provider 时行为与阶段 B 规则路由相同。
+- Hybrid Planner（方案 H）：分类只出 **Job ID**（`planner_trace.intent_job` / `source` / `rationale`）；已知 Job 由代码菜谱出图。配置了 Provider 时，0 命中或冲突表未覆盖才让 LLM 选 Job；非法 JSON / 未知 id → `clarify`，禁止降级回扁平 skill 菜单。未配置 Provider 且 0 命中 → `clarify`。
 
 ## 4. Provider
 

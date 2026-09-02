@@ -134,8 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explanation depth for pretty output.",
     )
 
-    run_parser = sub.add_parser("run", help="Plan and execute.")
-    run_parser.add_argument("query", type=str, help="Natural language query")
+    run_parser = sub.add_parser("run", help="Plan and execute, or execute a reviewed plan by id.")
+    run_parser.add_argument("query", nargs="?", default="", help="Natural language query")
+    run_parser.add_argument(
+        "--plan-id",
+        dest="plan_id",
+        default="",
+        help="Execute a reviewed ToolPlan from runs/ without re-planning.",
+    )
     run_parser.add_argument("--pretty", action="store_true", help="Render user-friendly output")
     run_parser.add_argument("--raw", action="store_true", help="Force raw payload output")
     run_parser.add_argument(
@@ -190,10 +196,35 @@ def main() -> int:
         return 0
     if args.command == "run":
         depth = getattr(args, "depth", "standard")
+        plan_id = str(getattr(args, "plan_id", "") or "").strip()
+        query = str(getattr(args, "query", "") or "").strip()
+        if plan_id:
+            try:
+                payload = assistant.run_plan(
+                    plan_id,
+                    response_style=response_style,
+                    explanation_depth=depth,
+                )
+            except ValueError as exc:
+                _print_json({"ok": False, "error": {"code": "PLAN_ID_NOT_FOUND", "message": str(exc)}})
+                return 1
+            _print_json(_normalize_output(payload))
+            return 0
+        if not query:
+            _print_json(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "QUERY_OR_PLAN_ID_REQUIRED",
+                        "message": "Provide a query or --plan-id. Missing plan_id is not executed as a new query.",
+                    },
+                }
+            )
+            return 1
         _print_json(
             _normalize_output(
                 assistant.run(
-                    args.query,
+                    query,
                     response_style=response_style,
                     explanation_depth=depth,
                 )

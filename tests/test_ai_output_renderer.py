@@ -55,6 +55,24 @@ class TestAiOutputRenderer(unittest.TestCase):
         self.assertIn("fallback_action", output.narrative)
         self.assertIn("plan_only", output.narrative)
 
+    def test_dry_run_does_not_claim_executed(self) -> None:
+        """dry_run pretty 不得使用 successfully/completed。"""
+
+        print("\n[TestAiOutputRenderer] dry_run narrative")
+        renderer = OutputRenderer()
+        payload = {
+            "plan": {
+                "steps": [{"skill_name": "qt.ai.strategy_meta.list"}],
+                "execution_mode": "dry_run",
+            },
+            "execution": {"status": "dry_run", "steps": []},
+        }
+        output = renderer.render(payload)
+        print(" narrative:", output.narrative)
+        self.assertIn("Dry-run plan (not executed)", output.narrative)
+        self.assertNotIn("successfully", output.narrative.lower())
+        self.assertNotIn("completed", output.narrative.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,23 @@
+{
+  "max_steps": 3,
+  "allowed_skills": [
+    "qt.ai.strategy_meta.list",
+    "qt.ai.strategy_meta.get",
+    "qt.ai.data.summary_kline",
+    "qt.ai.data.read",
+    "qt.ai.env.check_tushare",
+    "qt.ai.env.overview_tables",
+    "qt.ai.research.factor_ic_summary",
+    "qt.ai.research.universe_filter",
+    "qt.ai.research.project_universe",
+    "qt.ai.insight.summarize_backtest"
+  ],
+  "forbidden_skills": [
+    "qt.ai.data.refill_basic_equity_and_index",
+    "qt.ai.backtest.run_builtin",
+    "qt.ai.optimize.run_builtin",
+    "qt.ai.strategy.codegen_hybrid",
+    "qt.ai.pipeline.live_trade_plan_only",
+    "qt.ai.visual.export_kline"
+  ]
+}

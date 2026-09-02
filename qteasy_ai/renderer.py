@@ -56,10 +56,15 @@ class OutputRenderer:
         steps: List[Dict[str, Any]] = plan.get("steps", [])
         first_skill = steps[0].get("skill_name", "") if steps else ""
         execution = payload.get("execution", {})
+        execution_status = str(execution.get("status") or "")
         execution_steps = execution.get("steps", [])
         first_result = execution_steps[0].get("result", {}) if execution_steps else {}
 
-        if first_skill == "qt.ai.strategy_meta.list":
+        if execution_status == "dry_run":
+            output = self._render_dry_run(payload, first_skill, first_result)
+            if first_skill == "qt.ai.system.fallback":
+                output = self._render_dry_run_fallback(payload, output)
+        elif first_skill == "qt.ai.strategy_meta.list":
             output = self._render_strategy_meta_list(payload, first_result)
         elif first_skill == "qt.ai.strategy_meta.get":
             output = self._render_strategy_meta_get(payload, first_result)
@@ -92,6 +97,51 @@ class OutputRenderer:
             narrative=channels.narrative,
             python_code=channels.python_code,
             result_preview=channels.result_preview,
+            raw=payload,
+        )
+
+    @staticmethod
+    def _render_dry_run(
+        payload: Dict[str, Any], skill_name: str, result: Dict[str, Any]
+    ) -> AssistantOutput:
+        """dry-run 只用计划预览语气，不得声称已执行。"""
+
+        plan = payload.get("plan", {})
+        n_steps = len(plan.get("steps") or [])
+        narrative = (
+            f"Dry-run plan (not executed). First step: {skill_name or 'none'}. "
+            f"Step count: {n_steps}."
+        )
+        python_code = "# Confirm the plan, then run with explicit confirmation."
+        result_preview = f"execution.status=dry_run; planned_skill={skill_name}"
+        return AssistantOutput(
+            narrative=narrative,
+            python_code=python_code,
+            result_preview=result_preview,
+            raw=payload,
+        )
+
+    @staticmethod
+    def _render_dry_run_fallback(payload: Dict[str, Any], base: AssistantOutput) -> AssistantOutput:
+        """dry-run fallback 仍展示 reason，但不得声称已执行。"""
+
+        steps = (payload.get("plan") or {}).get("steps") or []
+        inputs = steps[0].get("inputs") if steps else {}
+        if not isinstance(inputs, dict):
+            inputs = {}
+        reason = inputs.get("reason") or "unknown_reason"
+        missing_info = inputs.get("missing_info") or "none"
+        next_step = inputs.get("next_step") or "Please refine your query."
+        narrative = (
+            f"{base.narrative}\n"
+            f"- reason: {reason}\n"
+            f"- missing_info: {missing_info}\n"
+            f"- next_step: {next_step}"
+        )
+        return AssistantOutput(
+            narrative=narrative,
+            python_code=base.python_code,
+            result_preview=base.result_preview,
             raw=payload,
         )
 

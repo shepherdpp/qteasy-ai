@@ -1,0 +1,17 @@
+{
+  "pairs": [
+    {"jobs": ["research.screen", "data.summary"], "winner": "research.screen", "rationale": "screen_more_specific_than_summary"},
+    {"jobs": ["research.factor_ic", "data.summary"], "winner": "research.factor_ic", "rationale": "factor_ic_more_specific_than_summary"},
+    {"jobs": ["data.summary", "data.export"], "winner": "data.summary", "rationale": "summary_wins_over_export_kline"},
+    {"jobs": ["strategy.meta", "route_to_ask"], "winner": "strategy.meta", "rationale": "action_verb_beats_ask"},
+    {"jobs": ["strategy.builder", "strategy.meta"], "winner": "strategy.builder", "rationale": "builder_more_specific_than_meta"},
+    {"jobs": ["strategy.builder", "backtest.builtin"], "winner": "strategy.builder", "rationale": "builder_owns_backtest_flag"},
+    {"jobs": ["backtest.builtin", "insight.last_backtest"], "winner": "backtest.builtin", "rationale": "launching_backtest_not_last_run"},
+    {"jobs": ["backtest.builtin", "data.refill"], "winner": "backtest.builtin", "rationale": "unused_pair_multi_clarify_first"},
+    {"jobs": ["research.screen", "route_to_ask"], "winner": "research.screen", "rationale": "action_beats_ask"},
+    {"jobs": ["backtest.builtin", "route_to_ask"], "winner": "backtest.builtin", "rationale": "action_beats_ask"},
+    {"jobs": ["optimize.builtin", "strategy.meta"], "winner": "optimize.builtin", "rationale": "optimize_more_specific"},
+    {"jobs": ["data.read", "data.summary"], "winner": "data.read", "rationale": "explicit_read_channel"},
+    {"jobs": ["env.ready", "route_to_ask"], "winner": "env.ready", "rationale": "action_beats_ask"}
+  ]
+}

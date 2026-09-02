@@ -149,6 +149,41 @@ class TestAiCliNotebookEntry(unittest.TestCase):
             self.assertEqual(payload["execution"]["status"], "dry_run")
             self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.strategy_meta.list")
 
+    def test_run_plan_id_skips_hybrid(self) -> None:
+        """run_plan 从 runs 加载已审阅 plan，不再调用 build_plan。"""
+
+        print("\n[TestAiCliNotebookEntry] run_plan --plan-id")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            assistant = QteasyAssistant(registry=build_default_registry(), memory_store=store)
+            planned = assistant.plan("list built-in strategies", response_style="raw")
+            plan_id = planned["plan"]["plan_id"]
+            print(" saved plan_id:", plan_id)
+            calls = {"n": 0}
+            original = assistant.planner.build_plan
+
+            def wrapped(query, *, mode="plan"):
+                calls["n"] += 1
+                return original(query, mode=mode)
+
+            assistant.planner.build_plan = wrapped  # type: ignore[method-assign]
+            ran = assistant.run_plan(plan_id, response_style="raw")
+            print(" hybrid calls:", calls["n"], "exec status:", ran["execution"]["status"])
+            self.assertEqual(calls["n"], 0)
+            self.assertIn(ran["execution"]["status"], ["success", "partial_failed"])
+            self.assertGreaterEqual(len(ran["execution"]["steps"]), 1)
+
+    def test_cli_run_plan_id_missing_english_error(self) -> None:
+        """缺 plan 记录 → 英文错误，不改走 query run。"""
+
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "run", "--plan-id", "plan_does_not_exist"]
+        completed = subprocess.run(cmd, capture_output=True, text=True)
+        payload = json.loads(completed.stdout)
+        print("\n[TestAiCliNotebookEntry] missing plan_id:", payload)
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(payload["error"]["code"], "PLAN_ID_NOT_FOUND")
+        self.assertIn("plan_id", payload["error"]["message"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

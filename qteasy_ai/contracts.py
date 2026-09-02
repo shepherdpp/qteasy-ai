@@ -123,6 +123,58 @@ class ToolPlan:
     mode: str = "plan"
     created_at: str = field(default_factory=_utc_now_iso)
 
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "ToolPlan":
+        """从 ``runs/`` JSON 的 plan 对象反序列化。
+
+        Parameters
+        ----------
+        raw : dict
+            Executor 落盘的 plan 字典。
+
+        Returns
+        -------
+        ToolPlan
+            可交给 Executor 的计划。
+        """
+
+        steps: List[ToolStep] = []
+        for item in raw.get("steps") or []:
+            if not isinstance(item, dict):
+                continue
+            side_raw = item.get("side_effects") or {}
+            if not isinstance(side_raw, dict):
+                side_raw = {}
+            steps.append(
+                ToolStep(
+                    step_id=str(item.get("step_id") or ""),
+                    skill_name=str(item.get("skill_name") or ""),
+                    inputs=dict(item.get("inputs") or {}),
+                    side_effects=SkillSideEffects(
+                        network=bool(side_raw.get("network")),
+                        filesystem_write=bool(side_raw.get("filesystem_write")),
+                        local_state_change=bool(side_raw.get("local_state_change")),
+                        heavy_compute=bool(side_raw.get("heavy_compute")),
+                        description=str(side_raw.get("description") or ""),
+                    ),
+                    estimated_cost=str(item.get("estimated_cost") or "low"),
+                    depends_on=list(item.get("depends_on") or []),
+                    run_if=str(item.get("run_if") or ""),
+                    on_fail=str(item.get("on_fail") or "stop"),
+                    retry_limit=int(item.get("retry_limit") or 0),
+                )
+            )
+        return cls(
+            plan_id=str(raw.get("plan_id") or ""),
+            user_query=str(raw.get("user_query") or ""),
+            steps=steps,
+            assumptions=dict(raw.get("assumptions") or {}),
+            planner_trace=dict(raw.get("planner_trace") or {}),
+            execution_mode=str(raw.get("execution_mode") or "dry_run"),
+            mode=str(raw.get("mode") or "plan"),
+            created_at=str(raw.get("created_at") or _utc_now_iso()),
+        )
+
 
 @dataclass
 class StrategyParameterSpec:

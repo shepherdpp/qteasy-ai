@@ -42,4 +42,4 @@ where = ["."]
 include = ["qteasy_ai*"]
 
 [tool.setuptools.package-data]
-qteasy_ai = ["kb/*.json"]
+qteasy_ai = ["kb/*.json", "intents/*.json"]

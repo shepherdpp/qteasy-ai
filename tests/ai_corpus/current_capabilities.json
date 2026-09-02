@@ -4,30 +4,35 @@
       "id": "A1",
       "query": "list built-in strategies",
       "mode": "plan",
+      "expected_job": "strategy.meta",
       "expected_skill": "qt.ai.strategy_meta.list"
     },
     {
       "id": "A2",
       "query": "show me macd strategy parameters",
       "mode": "plan",
+      "expected_job": "strategy.meta",
       "expected_skill": "qt.ai.strategy_meta.get"
     },
     {
       "id": "B1",
       "query": "show summary of 000300.SH from 20240101 to 20241231",
       "mode": "plan",
+      "expected_job": "data.summary",
       "expected_skill": "qt.ai.data.summary_kline"
     },
     {
       "id": "B2",
       "query": "kline summary of 000300.SH",
       "mode": "plan",
+      "expected_job": "data.summary",
       "expected_skill": "qt.ai.data.summary_kline"
     },
     {
       "id": "C1",
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
+      "expected_job": "data.export",
       "expected_skill": "qt.ai.visual.export_kline"
     },
     {
@@ -40,6 +45,7 @@
       "id": "E1",
       "query": "帮我看 Tushare 是否配好、本地缺哪些表",
       "mode": "plan",
+      "expected_job": "env.ready",
       "expected_skill": "qt.ai.env.check_tushare",
       "expected_skills": [
         "qt.ai.env.check_tushare",
@@ -50,30 +56,35 @@
       "id": "R1",
       "query": "factor IC summary for selection pool",
       "mode": "plan",
+      "expected_job": "research.factor_ic",
       "expected_skill": "qt.ai.research.factor_ic_summary"
     },
     {
       "id": "B-F1",
       "query": "download daily data from 20180101 to 20231231",
       "mode": "plan",
+      "expected_job": "data.refill",
       "expected_skill": "qt.ai.data.refill_basic_equity_and_index"
     },
     {
       "id": "B-F2",
       "query": "run macd backtest from 20180101 to 20231231",
       "mode": "plan",
+      "expected_job": "backtest.builtin",
       "expected_skill": "qt.ai.backtest.run_builtin"
     },
     {
       "id": "B-F3",
       "query": "optimize DMA parameters",
       "mode": "plan",
+      "expected_job": "optimize.builtin",
       "expected_skill": "qt.ai.optimize.run_builtin"
     },
     {
       "id": "B-P0",
       "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
       "mode": "plan",
+      "expected_job": "backtest.builtin",
       "expected_skill": "qt.ai.backtest.run_builtin",
       "expected_skills": [
         "qt.ai.backtest.run_builtin",
@@ -84,12 +95,19 @@
       "id": "B4",
       "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
       "mode": "plan",
-      "expected_skill": "qt.ai.research.screen_stocks"
+      "expected_job": "research.screen",
+      "expected_skill": "qt.ai.research.universe_filter",
+      "expected_skills": [
+        "qt.ai.research.universe_filter",
+        "qt.ai.research.price_predicate",
+        "qt.ai.research.project_universe"
+      ]
     },
     {
       "id": "D1",
       "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
       "mode": "plan",
+      "expected_job": "strategy.builder",
       "expected_skill": "qt.ai.strategy.spec_from_nl",
       "expected_skills": [
         "qt.ai.strategy.spec_from_nl",
@@ -103,6 +121,7 @@
       "id": "D-LIVE",
       "query": "start live trade now",
       "mode": "plan",
+      "expected_job": "live.plan_only",
       "expected_skill": "qt.ai.pipeline.live_trade_plan_only"
     }
   ]

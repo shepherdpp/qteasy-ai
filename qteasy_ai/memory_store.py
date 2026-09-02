@@ -295,6 +295,34 @@ class MemoryStore:
         target = self.runs_dir / f"{run_id}.json"
         return self._read_json(target, default={})
 
+    def find_run_by_plan_id(self, plan_id: str) -> Dict[str, Any]:
+        """按 ``plan.plan_id`` 扫描 ``runs/*.json``，返回最近一条匹配记录。
+
+        Parameters
+        ----------
+        plan_id : str
+            ToolPlan.plan_id。
+
+        Returns
+        -------
+        dict
+            完整 run payload；未找到则为空 dict。
+        """
+
+        wanted = str(plan_id or "").strip()
+        if not wanted:
+            return {}
+        matches: List[tuple] = []
+        for path in self.runs_dir.glob("*.json"):
+            payload = self._read_json(path, default={})
+            plan = payload.get("plan") if isinstance(payload, dict) else None
+            if isinstance(plan, dict) and str(plan.get("plan_id") or "") == wanted:
+                matches.append((path.stat().st_mtime, payload))
+        if not matches:
+            return {}
+        matches.sort(key=lambda item: item[0])
+        return dict(matches[-1][1])
+
     def list_runs(self) -> List[str]:
         """返回 run_id 列表。
 

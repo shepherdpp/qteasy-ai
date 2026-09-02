@@ -57,9 +57,12 @@ class TestAiCorpusRegression(unittest.TestCase):
             else:
                 payload = assistant.plan(query, response_style="raw")
                 steps = payload["plan"]["steps"]
-                print(" plan case:", case["id"], "skills:", [s["skill_name"] for s in steps])
+                intent_job = (payload.get("plan") or {}).get("planner_trace", {}).get("intent_job")
+                print(" plan case:", case["id"], "job:", intent_job, "skills:", [s["skill_name"] for s in steps])
                 self.assertGreaterEqual(len(steps), 1)
                 self.assertEqual(steps[0]["skill_name"], case["expected_skill"])
+                if "expected_job" in case:
+                    self.assertEqual(intent_job, case["expected_job"])
                 if "expected_skills" in case:
                     self.assertEqual(
                         [s["skill_name"] for s in steps],

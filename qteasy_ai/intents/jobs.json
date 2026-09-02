@@ -1,0 +1,24 @@
+{
+  "official": [
+    {"id": "env.ready", "summary": "Check Tushare token and local data tables."},
+    {"id": "data.summary", "summary": "K-line summary (volatility, trading days)."},
+    {"id": "data.export", "summary": "Export a K-line chart or image."},
+    {"id": "data.refill", "summary": "Bounded download of equity/index daily data."},
+    {"id": "data.read", "summary": "Read-only fetch via history, reference, or static channel."},
+    {"id": "research.factor_ic", "summary": "Factor IC summary for a selection pool."},
+    {"id": "research.screen", "summary": "Stock screen: universe plus optional return predicate and projection."},
+    {"id": "strategy.meta", "summary": "List or get built-in strategy metadata."},
+    {"id": "backtest.builtin", "summary": "Run a built-in strategy backtest; optional insight flag."},
+    {"id": "optimize.builtin", "summary": "Run built-in parameter optimization."},
+    {"id": "strategy.builder", "summary": "NL to spec, codegen, sanity, operator, optional backtest."},
+    {"id": "insight.last_backtest", "summary": "Read-only summary of an existing backtest run."},
+    {"id": "live.plan_only", "summary": "Live-trade checklist only; never auto-execute."}
+  ],
+  "system": [
+    {"id": "clarify", "summary": "Ask the user to split or complete the request."},
+    {"id": "not_supported", "summary": "Explicitly out of 1.0 scope."},
+    {"id": "unsafe", "summary": "Reject shell, bypass-confirm, or other unsafe asks."},
+    {"id": "route_to_ask", "summary": "Conceptual Q and A; hand off to AskEngine."},
+    {"id": "open", "summary": "Low side-effect short DAG on the legal-edge whitelist."}
+  ]
+}

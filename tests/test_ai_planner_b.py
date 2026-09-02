@@ -90,28 +90,38 @@ class TestAiPlannerB(unittest.TestCase):
         self.assertEqual(plan.steps[0].inputs.get("missing_info"), "strategy_id")
 
     def test_screen_gold_sentence_not_summary(self) -> None:
-        """筛股金句路由到 screen_stocks，不得落到 summary_kline。"""
+        """筛股金句路由到 L1 DAG（universe/predicate/project），不得落到 summary_kline。"""
 
         print("\n[TestAiPlannerB] screen gold")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。"
         plan = self.planner.build_plan(query, mode="plan")
-        step = plan.steps[0]
-        print(" skill:", step.skill_name)
-        print(" inputs:", step.inputs)
-        self.assertEqual(step.skill_name, "qt.ai.research.screen_stocks")
-        self.assertEqual(step.inputs.get("industry"), "制造业")
-        self.assertEqual(step.inputs.get("metric"), "drawdown")
-        self.assertEqual(step.inputs.get("lookback_days"), 126)
-        self.assertAlmostEqual(float(step.inputs.get("threshold")), 0.20, places=10)
+        names = [step.skill_name for step in plan.steps]
+        print(" skills:", names)
+        print(" inputs:", [step.inputs for step in plan.steps])
+        print(" intent:", plan.planner_trace.get("intent_job"))
+        self.assertEqual(names[0], "qt.ai.research.universe_filter")
+        self.assertIn("qt.ai.research.price_predicate", names)
+        self.assertEqual(names[-1], "qt.ai.research.project_universe")
+        self.assertEqual(plan.steps[0].inputs.get("industry"), "制造业")
+        pred = next(step for step in plan.steps if step.skill_name == "qt.ai.research.price_predicate")
+        self.assertEqual(pred.inputs.get("metric"), "drawdown")
+        self.assertEqual(pred.inputs.get("lookback_days"), 126)
+        self.assertAlmostEqual(float(pred.inputs.get("threshold")), 0.20, places=10)
+        self.assertEqual(plan.planner_trace.get("intent_job"), "research.screen")
 
-    def test_screen_missing_threshold_clarify(self) -> None:
-        """筛股缺阈值 → clarify return_threshold。"""
+    def test_screen_missing_threshold_enumerates(self) -> None:
+        """筛股缺阈值 → universe+投影，不得因缺 return_threshold 整单澄清。"""
 
-        print("\n[TestAiPlannerB] screen missing threshold")
+        print("\n[TestAiPlannerB] screen missing threshold enumerates")
         plan = self.planner.build_plan("请搜索过去半年行业属于银行的股票", mode="plan")
-        print(" inputs:", plan.steps[0].inputs)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertIn("return_threshold", plan.steps[0].inputs.get("missing_info", ""))
+        names = [step.skill_name for step in plan.steps]
+        print(" skills:", names)
+        print(" inputs:", [step.inputs for step in plan.steps])
+        self.assertEqual(names[0], "qt.ai.research.universe_filter")
+        self.assertNotIn("qt.ai.research.price_predicate", names)
+        self.assertEqual(names[-1], "qt.ai.research.project_universe")
+        self.assertEqual(plan.steps[0].inputs.get("industry"), "银行")
+        self.assertNotEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
 
     def test_optimize_dma_routes(self) -> None:
         """optimize DMA → optimize skill，默认 sample=32。"""

@@ -66,6 +66,17 @@ def _artifacts_from_run(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def _safe_date_prefix(value: Any) -> str:
+    """把回撤锚点收成可用于 contains 的日期前缀；NaT/空串丢弃。"""
+
+    text = str(value or "").strip()
+    if not text or text.lower() in {"nat", "nan", "none", "nattype"}:
+        return ""
+    if "NaT" in text:
+        return ""
+    return text[:10]
+
+
 def _trade_summary_from_log(path: str, *, peak_date: str, valley_date: str) -> List[Dict[str, Any]]:
     """读取 trade_log 中回撤邻近日的少量摘要（有文件才读）。"""
 
@@ -88,12 +99,16 @@ def _trade_summary_from_log(path: str, *, peak_date: str, valley_date: str) -> L
     if date_col is None:
         return frame.head(5).to_dict(orient="records")
     text = frame[date_col].astype(str)
-    anchors = [item for item in (peak_date, valley_date) if item]
+    anchors = []
+    for item in (peak_date, valley_date):
+        prefix = _safe_date_prefix(item)
+        if prefix:
+            anchors.append(prefix)
     if not anchors:
         return frame.head(5).to_dict(orient="records")
     mask = False
-    for anchor in anchors:
-        mask = mask | text.str.contains(str(anchor)[:10], na=False)
+    for prefix in anchors:
+        mask = mask | text.str.contains(prefix, na=False)
     nearby = frame.loc[mask]
     if nearby.empty:
         return frame.head(5).to_dict(orient="records")

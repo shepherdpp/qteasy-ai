@@ -45,6 +45,7 @@ from .run_policy import RunStorePolicy
 from .skills import (
     build_backtest_run_skill,
     build_check_tushare_skill,
+    build_data_read_skill,
     build_data_refill_skill,
     build_data_summary_skill,
     build_factor_ic_summary_skill,
@@ -53,6 +54,8 @@ from .skills import (
     build_optimize_run_skill,
     build_operator_from_spec_skill,
     build_overview_tables_skill,
+    build_price_predicate_skill,
+    build_project_universe_skill,
     build_research_screen_skill,
     build_strategy_codegen_hybrid_skill,
     build_strategy_meta_get_skill,
@@ -60,6 +63,7 @@ from .skills import (
     build_strategy_sanity_check_skill,
     build_strategy_spec_from_nl_skill,
     build_system_fallback_skill,
+    build_universe_filter_skill,
     build_visual_export_skill,
 )
 
@@ -78,6 +82,7 @@ def build_default_registry() -> SkillRegistry:
         build_strategy_meta_list_skill,
         build_strategy_meta_get_skill,
         build_data_summary_skill,
+        build_data_read_skill,
         build_visual_export_skill,
         build_system_fallback_skill,
         build_check_tushare_skill,
@@ -87,6 +92,9 @@ def build_default_registry() -> SkillRegistry:
         build_backtest_run_skill,
         build_optimize_run_skill,
         build_research_screen_skill,
+        build_universe_filter_skill,
+        build_price_predicate_skill,
+        build_project_universe_skill,
         build_insight_backtest_skill,
         build_strategy_spec_from_nl_skill,
         build_strategy_codegen_hybrid_skill,
@@ -249,6 +257,14 @@ class QteasyAssistant:
         """
 
         plan = self._build_plan(query, mode="plan")
+        if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
+            return self.ask(
+                query,
+                response_style=response_style,
+                persist=persist,
+                keep=keep,
+                explanation_depth=explanation_depth,
+            )
         return self._execute_and_format(
             plan=plan,
             confirm=False,
@@ -274,6 +290,43 @@ class QteasyAssistant:
         """
 
         plan = self._build_plan(query, mode="plan")
+        plan.execution_mode = "execute"
+        return self._execute_and_format(
+            plan=plan,
+            confirm=True,
+            response_style=response_style,
+            persist=persist,
+            keep=keep,
+            explanation_depth=explanation_depth,
+        )
+
+    def run_plan(
+        self,
+        plan_id: str,
+        *,
+        response_style: str = "user_friendly",
+        persist: str | None = None,
+        keep: bool = False,
+        explanation_depth: str = "standard",
+    ) -> Dict[str, Any] | AssistantOutput:
+        """从 ``runs/`` 加载已审阅 ToolPlan 并执行，禁止重新 Hybrid。
+
+        Parameters
+        ----------
+        plan_id : str
+            已落盘计划的 ``plan_id``。
+        """
+
+        from .contracts import ToolPlan
+
+        payload = self.memory_store.find_run_by_plan_id(plan_id)
+        plan_raw = payload.get("plan") if isinstance(payload, dict) else None
+        if not isinstance(plan_raw, dict) or not plan_raw:
+            raise ValueError(
+                f"Reviewed plan not found in runs/: plan_id={plan_id!r}. "
+                "Use plan() first, then run --plan-id with that plan_id."
+            )
+        plan = ToolPlan.from_dict(plan_raw)
         plan.execution_mode = "execute"
         return self._execute_and_format(
             plan=plan,

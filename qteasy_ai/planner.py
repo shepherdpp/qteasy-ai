@@ -9,13 +9,13 @@
 # 请求转换为结构化 ToolPlan。
 # ======================================
 
-"""自然语言到 ToolPlan 的 Hybrid 实现。
+"""自然语言到 ToolPlan 的 Hybrid 实现（方案 H）。
 
 三段式链路：
 
-1. `build_candidate_plan()`：规则推断，或（有 Provider 时）LLM 候选 JSON；
-2. `validate_plan()`：规则校验、字段归一；env_facts / 日期门禁在候选之后共用；
-3. `finalize_plan()`：生成可执行计划并附加 `planner_trace`（含 candidate_source）。
+1. `build_candidate_plan()`：IntentEngine 只出 Job ID，再由 recipes 出图（open 走合法边）；
+2. `validate_plan()`：对照 inputs_schema 丢未知键、同步 side_effects；env_facts / 日期门禁共用；
+3. `finalize_plan()`：附加 `planner_trace`（含 `intent_job` / `source` / `rationale`）。
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
+from .intent_engine import IntentEngine, IntentDecision
+from .intents.recipes import compose_recipe
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
@@ -55,6 +57,21 @@ class RuleValidator:
                 trace["downgrade_reason"] = f"Skill not found: {step.skill_name}"
                 continue
             meta = self.registry.get_metadata(step.skill_name)
+            schema = meta.inputs_schema if isinstance(meta.inputs_schema, dict) else {}
+            known_keys = set(schema.keys())
+            if known_keys:
+                dropped = [key for key in list(step.inputs.keys()) if key not in known_keys]
+                for key in dropped:
+                    step.inputs.pop(key, None)
+                if dropped:
+                    trace["corrections"].append(
+                        {
+                            "step_id": step.step_id,
+                            "field": "inputs",
+                            "reason": "drop_unknown_keys",
+                            "dropped": dropped,
+                        }
+                    )
             if step.side_effects != meta.side_effects:
                 step.side_effects = meta.side_effects
                 trace["corrections"].append(
@@ -117,6 +134,7 @@ class Planner:
         self.provider = provider
         self.env_facts: Dict[str, Any] = dict(env_facts or {})
         self.validator = RuleValidator(registry)
+        self.intent_engine = IntentEngine(provider=provider)
         self._strategy_alias_map: Optional[Dict[str, str]] = None
         self._skill_runtime = SkillRuntime()
 
@@ -164,28 +182,36 @@ class Planner:
 
         query = user_query.strip()
         q_lower = query.lower()
-        candidate_source = "rule"
+        self.intent_engine.provider = self.provider
+        decision = self.intent_engine.classify(query)
+        candidate_source = decision.source
         downgrade_reason = ""
-        steps: Optional[List[ToolStep]] = None
-        if self.provider is not None:
-            llm_steps, llm_reason = self._try_llm_candidate(query)
-            if llm_steps is not None:
-                candidate_source = "llm"
-                steps = llm_steps
+        steps = compose_recipe(self, decision, query)
+        if decision.job == "open":
+            open_steps, open_reason = self._compose_open_dag(query)
+            if open_steps is None:
+                downgrade_reason = open_reason
+                decision = IntentDecision(
+                    job="clarify",
+                    source="rule",
+                    rationale=open_reason or "open_illegal_or_unparsed",
+                    llm_called=True,
+                )
+                steps = compose_recipe(self, decision, query)
             else:
-                downgrade_reason = llm_reason
-                steps = self._infer_steps(query=query, q_lower=q_lower)
-        else:
-            steps = self._infer_steps(query=query, q_lower=q_lower)
+                steps = open_steps
         steps, gate_extras = self._apply_post_candidate_gates(
             steps, query=query, candidate_source=candidate_source
         )
         assumptions = {
-            "planner": "hybrid_candidate_stage_b",
+            "planner": "hybrid_intent_h",
             "provider_enabled": self.provider is not None,
             "env_facts_used": bool(self.env_facts),
             "candidate_source": candidate_source,
             "downgrade_reason": downgrade_reason,
+            "intent_job": decision.job,
+            "intent_source": decision.source,
+            "intent_rationale": decision.rationale,
         }
         assumptions.update(gate_extras)
         for step in steps:
@@ -221,77 +247,72 @@ class Planner:
             "final_step_count": len(final_plan.steps),
             "candidate_source": candidate_plan.assumptions.get("candidate_source", "rule"),
             "downgrade_reason": candidate_plan.assumptions.get("downgrade_reason", ""),
+            "intent_job": candidate_plan.assumptions.get("intent_job", ""),
+            "source": candidate_plan.assumptions.get("intent_source", "rule"),
+            "rationale": candidate_plan.assumptions.get("intent_rationale", ""),
         }
-        recipe_slots_from = candidate_plan.assumptions.get("recipe_slots_from")
-        if recipe_slots_from:
-            final_plan.planner_trace["recipe_slots_from"] = recipe_slots_from
-        llm_skill_sequence = candidate_plan.assumptions.get("llm_skill_sequence")
-        if llm_skill_sequence:
-            final_plan.planner_trace["llm_skill_sequence"] = list(llm_skill_sequence)
         return final_plan
 
     _DATA_INTENT_SKILLS = {
         "qt.ai.data.summary_kline",
+        "qt.ai.data.read",
         "qt.ai.research.factor_ic_summary",
         "qt.ai.visual.export_kline",
         "qt.ai.data.refill_basic_equity_and_index",
+        "qt.ai.research.universe_filter",
+        "qt.ai.research.price_predicate",
     }
 
-    _LLM_PLAN_SYSTEM = (
-        "You generate a qteasy-ai ToolPlan candidate. "
+    _LLM_OPEN_SYSTEM = (
+        "You propose a short qteasy-ai ToolPlan using only allowed low side-effect skills. "
         "Reply with JSON only: {\"steps\": [{\"skill_name\": \"qt.ai...\", \"inputs\": {}}]}. "
-        "Use only skill names listed in the prompt. Do not invent skills."
+        "Do not invent skills. Do not use refill, backtest, optimize, codegen, or live skills."
     )
 
-    def _try_llm_candidate(self, query: str) -> Tuple[Optional[List[ToolStep]], str]:
-        """调用 Provider 生成候选 steps；失败返回 (None, reason)。
+    def _compose_open_dag(self, query: str) -> Tuple[Optional[List[ToolStep]], str]:
+        """open：合法边短 DAG；非法边或无法解析则澄清。"""
 
-        候选 prompt 对每个已注册 skill 注入 ``- name: summary`` 一行用途，
-        降低错品类（例如回测句点成 refill）。
-        """
-
+        catalog = self.intent_engine.catalog
+        allowed = set(catalog.legal_allowed_skills())
+        forbidden = set(catalog.legal_forbidden_skills())
+        max_steps = catalog.legal_max_steps()
         if self.provider is None:
-            return None, "provider_missing"
-        catalog_items = self.registry.list_skills()
-        catalog_names = [item.name for item in catalog_items]
-        catalog_lines = [
-            f"- {item.name}: {item.summary}"
-            for item in catalog_items
-        ]
+            return None, "open_requires_provider"
+        allowed_lines = "\n".join(f"- {name}" for name in sorted(allowed))
         prompt = (
-            "Available skills:\n"
-            + "\n".join(catalog_lines)
-            + f"\n\nUser query:\n{query}\n\n"
-            "Return JSON with a steps array. Each step needs skill_name and inputs."
+            f"Allowed skills:\n{allowed_lines}\n\n"
+            f"User query:\n{query}\n"
         )
         try:
-            text = self.provider.chat(prompt, system_prompt=self._LLM_PLAN_SYSTEM)
+            raw = self.provider.chat(prompt, system_prompt=self._LLM_OPEN_SYSTEM)
         except Exception as exc:
-            return None, f"llm_chat_failed: {exc}"
-        payload = self._parse_llm_plan_json(text)
+            return None, f"open_llm_error:{exc}"
+        payload = self._parse_llm_plan_json(raw)
         if not isinstance(payload, dict):
-            return None, "llm_json_parse_failed"
+            return None, "open_unparsed"
         raw_steps = payload.get("steps")
         if not isinstance(raw_steps, list) or not raw_steps:
-            return None, "llm_empty_steps"
-        available = set(catalog_names)
+            return None, "open_empty_steps"
+        if len(raw_steps) > max_steps:
+            return None, "open_too_many_steps"
+        available = {item.name for item in self.registry.list_skills()}
         steps: List[ToolStep] = []
-        for idx, raw in enumerate(raw_steps, start=1):
-            if not isinstance(raw, dict):
-                return None, "llm_invalid_step"
-            name = str(raw.get("skill_name", "")).strip()
+        for idx, raw_step in enumerate(raw_steps, start=1):
+            if not isinstance(raw_step, dict):
+                return None, "open_invalid_step"
+            name = str(raw_step.get("skill_name", "")).strip()
+            if name in forbidden or name not in allowed:
+                return None, "open_forbidden_skill" if name in forbidden else "open_skill_not_on_legal_edge"
             if name not in available:
-                return None, f"Skill not found: {name}"
-            inputs = raw.get("inputs") if isinstance(raw.get("inputs"), dict) else {}
-            depends = raw.get("depends_on") if isinstance(raw.get("depends_on"), list) else []
+                return None, f"open_skill_not_registered:{name}"
+            inputs = raw_step.get("inputs") if isinstance(raw_step.get("inputs"), dict) else {}
+            depends = raw_step.get("depends_on") if isinstance(raw_step.get("depends_on"), list) else []
             step = self._make_step(
                 step_id=f"step_{idx}",
                 skill_name=name,
                 inputs=dict(inputs),
                 depends_on=[str(item) for item in depends],
             )
-            if raw.get("run_if"):
-                step.run_if = str(raw.get("run_if"))
             steps.append(step)
         return steps, ""
 
@@ -330,74 +351,15 @@ class Planner:
         query: str,
         candidate_source: str = "rule",
     ) -> Tuple[List[ToolStep], Dict[str, Any]]:
-        """对 LLM 与规则候选共用菜谱覆写、日期、必填槽与 env_facts 门禁。"""
+        """对已知 Job 与 open DAG 共用日期/freq、必填槽与 env_facts 门禁。"""
 
         extras: Dict[str, Any] = {}
-        gated = steps
-        if candidate_source == "llm" and steps:
-            extras["llm_skill_sequence"] = self._skill_name_sequence(steps)
-        if candidate_source == "llm":
-            gated, applied = self._overwrite_slots_if_recipe_match(gated, query=query)
-            if applied:
-                extras["recipe_slots_from"] = "rule"
+        gated = self._enforce_date_or_freq_clarify(steps, query=query)
         gated = self._enforce_refill_date_range(gated, query=query)
-        if candidate_source == "llm":
-            gated = self._enforce_required_slots(gated, query=query)
+        gated = self._enforce_required_slots(gated, query=query)
         gated = self._maybe_prepend_tushare_gate(gated)
         data_intent = any(step.skill_name in self._DATA_INTENT_SKILLS for step in gated)
         return self._maybe_prepend_table_gate(gated, data_intent=data_intent), extras
-
-    @staticmethod
-    def _skill_name_sequence(steps: List[ToolStep]) -> List[str]:
-        """返回步骤 skill_name 有序列。"""
-
-        return [step.skill_name for step in steps]
-
-    @staticmethod
-    def _is_contiguous_subsequence(needle: List[str], haystack: List[str]) -> bool:
-        """判断 needle 是否为 haystack 的连续子序列（含相等）。"""
-
-        n_len = len(needle)
-        h_len = len(haystack)
-        if n_len == 0 or n_len > h_len:
-            return False
-        for start in range(h_len - n_len + 1):
-            if haystack[start : start + n_len] == needle:
-                return True
-        return False
-
-    @staticmethod
-    def _is_fallback_only_recipe(steps: List[ToolStep]) -> bool:
-        """规则菜谱是否仅为 system.fallback。"""
-
-        return bool(steps) and all(step.skill_name == "qt.ai.system.fallback" for step in steps)
-
-    def _overwrite_slots_if_recipe_match(
-        self, steps: List[ToolStep], *, query: str
-    ) -> Tuple[List[ToolStep], bool]:
-        """LLM 与规则菜谱互为连续子序列时，整表换成规则步骤。
-
-        规则菜谱仅为 fallback 时默认不换表；本句命中 StrategyBuilder
-        关键词则仍用规则澄清，避免单步 codegen 漏网。
-        """
-
-        if not steps:
-            return steps, False
-        q_lower = query.lower()
-        rule_steps = self._infer_steps(query=query, q_lower=q_lower)
-        if not rule_steps:
-            return steps, False
-        if self._is_fallback_only_recipe(rule_steps):
-            if self._has_strategy_builder_keywords(query, q_lower):
-                return deepcopy(rule_steps), True
-            return steps, False
-        llm_names = self._skill_name_sequence(steps)
-        rule_names = self._skill_name_sequence(rule_steps)
-        if self._is_contiguous_subsequence(rule_names, llm_names) or self._is_contiguous_subsequence(
-            llm_names, rule_names
-        ):
-            return deepcopy(rule_steps), True
-        return steps, False
 
     def _missing_required_fields(self, step: ToolStep) -> List[str]:
         """返回步骤缺少的 inputs_schema required 字段。"""
@@ -409,38 +371,14 @@ class Planner:
         return list(self._skill_runtime.precheck(meta, step.inputs))
 
     def _enforce_required_slots(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
-        """LLM 候选缺必填槽时用同 skill 规则填槽，否则整单 clarify。
-
-        与 SkillRuntime.precheck 同源；禁止把空槽计划交给 Executor。
-        """
+        """LLM 候选缺必填槽时整单 clarify。已知 Job 的 R 应已填槽。"""
 
         if not steps:
             return steps
         missing_by_step = [self._missing_required_fields(step) for step in steps]
         if not any(missing_by_step):
             return steps
-        q_lower = query.lower()
-        rule_steps = self._infer_steps(query=query, q_lower=q_lower)
-        rule_by_skill: Dict[str, ToolStep] = {}
-        for rule_step in rule_steps:
-            rule_by_skill.setdefault(rule_step.skill_name, rule_step)
-        merged = deepcopy(steps)
-        still_missing: List[str] = []
-        for step, missing in zip(merged, missing_by_step):
-            if not missing:
-                continue
-            rule_peer = rule_by_skill.get(step.skill_name)
-            if rule_peer is None:
-                still_missing.extend(missing)
-                continue
-            for field_name in missing:
-                if field_name in rule_peer.inputs:
-                    step.inputs[field_name] = rule_peer.inputs[field_name]
-            leftover = self._missing_required_fields(step)
-            still_missing.extend(leftover)
-        if not still_missing:
-            return merged
-        unique_missing = sorted(set(still_missing))
+        unique_missing = sorted({name for names in missing_by_step for name in names})
         missing_info = "|".join(unique_missing)
         return [
             self._make_step(
@@ -449,11 +387,27 @@ class Planner:
                 inputs=self._fallback_step_inputs(
                     query=query,
                     action="clarify_required",
-                    reason="llm_missing_required_slots",
-                    hint="The LLM candidate omitted required skill inputs. Provide the missing fields instead of executing an empty-slot plan.",
+                    reason="missing_required_slots",
+                    hint="Required skill inputs are missing. Provide the missing fields instead of executing an empty-slot plan.",
                     missing_info=missing_info,
                     next_step=f"Provide: {', '.join(unique_missing)}.",
                 ),
+            )
+        ]
+
+    def _enforce_date_or_freq_clarify(self, steps: List[ToolStep], *, query: str) -> List[ToolStep]:
+        """倒置日期区间或非法 freq 整单澄清（不依赖旧 `_infer_steps` 入口）。"""
+
+        if not steps or all(step.skill_name == "qt.ai.system.fallback" for step in steps):
+            return steps
+        fallback = self._date_or_freq_clarify_inputs(query=query, q_lower=query.lower())
+        if fallback is None:
+            return steps
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.system.fallback",
+                inputs=fallback,
             )
         ]
 
@@ -1013,10 +967,12 @@ class Planner:
             missing.append("industry")
         return params, missing
 
-    def _infer_refill_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+    def _infer_refill_steps(
+        self, *, query: str, q_lower: str, skip_query_guard: bool = False
+    ) -> Optional[List[ToolStep]]:
         """下载路由：缺日期澄清；无 token 时前置 check_tushare。"""
 
-        if not self._is_download_query(q_lower):
+        if not skip_query_guard and not self._is_download_query(q_lower):
             return None
         market = self._extract_market_inputs(query)
         start = market.get("start")
@@ -1048,10 +1004,12 @@ class Planner:
         ]
         return steps
 
-    def _infer_optimize_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+    def _infer_optimize_steps(
+        self, *, query: str, q_lower: str, skip_query_guard: bool = False
+    ) -> Optional[List[ToolStep]]:
         """优化路由：缺 strategy_id 则澄清。"""
 
-        if not self._is_optimize_query(q_lower):
+        if not skip_query_guard and not self._is_optimize_query(q_lower):
             return None
         strategy_id = self._extract_strategy_id(query)
         if not strategy_id:
@@ -1089,10 +1047,12 @@ class Planner:
             )
         ]
 
-    def _infer_backtest_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
+    def _infer_backtest_steps(
+        self, *, query: str, q_lower: str, skip_query_guard: bool = False
+    ) -> Optional[List[ToolStep]]:
         """回测路由；若同时要年化/回撤解读则追加 insight DAG。"""
 
-        if not self._is_backtest_query(q_lower):
+        if not skip_query_guard and not self._is_backtest_query(q_lower):
             return None
         if self._is_insight_only_query(q_lower):
             return None
@@ -1242,6 +1202,12 @@ class Planner:
                 "missing_info": "supported_stage_b_skill",
                 "next_step": "Use built-in strategy ids with backtest/optimize, or read-only strategy_meta.",
             }
+
+        return Planner._date_or_freq_clarify_inputs(query=query, q_lower=q_lower)
+
+    @staticmethod
+    def _date_or_freq_clarify_inputs(*, query: str, q_lower: str) -> Optional[Dict[str, str]]:
+        """倒置日期或非法 freq 的 fallback 槽。"""
 
         date_match = re.findall(r"(20\d{2}[-/]?\d{2}[-/]?\d{2})", query)
         if len(date_match) > 1:

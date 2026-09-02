@@ -1,0 +1,9 @@
+{
+  "patterns": [
+    {"any": ["申万"], "reason": "sw_industry_dsl_not_in_1_0"},
+    {"any": ["任意 pe", "任意pe", "pe 公式", "pe公式"], "reason": "pe_formula_dsl_not_in_1_0"},
+    {"all": ["全市场", "无界"], "reason": "unbounded_universe_download_not_in_1_0"},
+    {"all": ["unbounded", "download"], "reason": "unbounded_universe_download_not_in_1_0"},
+    {"all": ["without date", "all a-share"], "reason": "unbounded_universe_download_not_in_1_0"}
+  ]
+}

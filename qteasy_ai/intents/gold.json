@@ -1,0 +1,116 @@
+{
+  "cases": [
+    {
+      "id": "E1",
+      "query": "帮我看 Tushare 是否配好、本地缺哪些表",
+      "job": "env.ready",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "B2",
+      "query": "kline summary of 000300.SH",
+      "job": "data.summary",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "C1",
+      "query": "export kline of 000300.SH to png",
+      "job": "data.export",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "B-F1",
+      "query": "download daily data from 20180101 to 20231231",
+      "job": "data.refill",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "B4",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "job": "research.screen",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "R1",
+      "query": "factor IC summary for selection pool",
+      "job": "research.factor_ic",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "A2",
+      "query": "show me macd strategy parameters",
+      "job": "strategy.meta",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "A1",
+      "query": "list built-in strategies",
+      "job": "strategy.meta",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "B-P0",
+      "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+      "job": "backtest.builtin",
+      "source": "rule",
+      "flags": {"with_insight": true},
+      "lock": true
+    },
+    {
+      "id": "B-P0-dash",
+      "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
+      "job": "backtest.builtin",
+      "source": "rule",
+      "flags": {"with_insight": true},
+      "lock": true
+    },
+    {
+      "id": "B-F3",
+      "query": "optimize DMA parameters",
+      "job": "optimize.builtin",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "D1",
+      "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+      "job": "strategy.builder",
+      "source": "rule",
+      "flags": {"with_backtest": true},
+      "lock": true
+    },
+    {
+      "id": "D-LIVE",
+      "query": "start live trade now",
+      "job": "live.plan_only",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "INSIGHT-1",
+      "query": "总结上次回测",
+      "job": "insight.last_backtest",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    }
+  ]
+}

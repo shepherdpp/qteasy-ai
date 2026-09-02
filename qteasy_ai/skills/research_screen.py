@@ -417,3 +417,299 @@ def build_research_screen_skill(
         return result.to_dict()
 
     return metadata, handler
+
+
+def _industry_miss_result(
+    *,
+    skill_name: str,
+    run_id: str,
+    inputs_echo: Dict[str, Any],
+    industry_name: str,
+    samples: List[str],
+    hit_count: int = 0,
+) -> dict:
+    """行业 0 命中时返回样例，避免静默空集。"""
+
+    result = SkillResult(
+        ok=False,
+        skill_name=skill_name,
+        run_id=run_id,
+        inputs_echo=inputs_echo,
+        error=SkillError(
+            code="CLARIFY_REQUIRED",
+            message=(
+                f"Industry '{industry_name}' has 0 exact matches in stock_basic. "
+                "stock_basic.industry uses Tushare short names, not national GB categories. "
+                "Please pick one of the sample industry names."
+            ),
+            details={
+                "missing_info": "industry",
+                "industry_samples": samples,
+            },
+        ),
+        payload={"industry_samples": samples, "hit_count": hit_count},
+    )
+    return result.to_dict()
+
+
+def build_universe_filter_skill(
+    filter_stocks_func: Callable[..., pd.DataFrame] | None = None,
+    list_industries_func: Callable[[], List[str]] | None = None,
+) -> tuple[SkillMetadata, Callable[..., dict]]:
+    """Universe L1：``filter_stocks`` 行业精确匹配。"""
+
+    if filter_stocks_func is None:
+        import qteasy as qt
+
+        filter_stocks_func = qt.filter_stocks
+    if list_industries_func is None:
+        list_industries_func = _default_list_industries
+
+    metadata = SkillMetadata(
+        name="qt.ai.research.universe_filter",
+        version="0.1.0",
+        summary="Filter local stock universe by exact Tushare industry short name.",
+        inputs_schema={
+            "industry": {"type": "string", "required": True},
+        },
+        outputs_schema={"metrics": "dict", "payload": "dict"},
+        side_effects=SkillSideEffects(description="readonly filter_stocks"),
+        required_capabilities=["local_datasource"],
+        qteasy_entrypoints=["qteasy.filter_stocks"],
+        skill_kind="api",
+    )
+
+    def handler(industry: str = "", **kwargs) -> dict:
+        run_id = new_run_id()
+        industry_name = str(industry).strip()
+        inputs_echo = {"industry": industry_name, **kwargs}
+        catalog = list(list_industries_func() or [])
+        if industry_name and catalog and industry_name not in catalog:
+            return _industry_miss_result(
+                skill_name=metadata.name,
+                run_id=run_id,
+                inputs_echo=inputs_echo,
+                industry_name=industry_name,
+                samples=catalog[:MAX_INDUSTRY_SAMPLES],
+            )
+        pool = filter_stocks_func(industry=industry_name) if industry_name else filter_stocks_func()
+        if pool is None or (hasattr(pool, "empty") and pool.empty):
+            samples = (catalog or list_industries_func() or [])[:MAX_INDUSTRY_SAMPLES]
+            return _industry_miss_result(
+                skill_name=metadata.name,
+                run_id=run_id,
+                inputs_echo=inputs_echo,
+                industry_name=industry_name,
+                samples=samples,
+            )
+        if hasattr(pool, "index"):
+            symbols = [str(item) for item in pool.index.tolist()]
+        else:
+            symbols = [str(item) for item in list(pool)]
+        names: Dict[str, str] = {}
+        if hasattr(pool, "columns") and "name" in pool.columns:
+            for code in symbols:
+                try:
+                    names[code] = str(pool.loc[code, "name"])
+                except Exception:
+                    names[code] = code
+        result = SkillResult(
+            ok=True,
+            skill_name=metadata.name,
+            run_id=run_id,
+            inputs_echo=inputs_echo,
+            metrics={"universe_size": len(symbols)},
+            payload={"symbols": symbols, "names": names, "industry": industry_name},
+        )
+        return result.to_dict()
+
+    return metadata, handler
+
+
+def build_price_predicate_skill(
+    history_func: Callable[..., Any] | None = None,
+    latest_end_func: Callable[[], str] | None = None,
+) -> tuple[SkillMetadata, Callable[..., dict]]:
+    """可选价格谓词 L1：区间简单收益阈值。"""
+
+    if history_func is None:
+        import qteasy as qt
+
+        history_func = qt.get_history_data
+    if latest_end_func is None:
+        latest_end_func = _default_latest_screen_end
+
+    metadata = SkillMetadata(
+        name="qt.ai.research.price_predicate",
+        version="0.1.0",
+        summary="Optional lookback simple-return predicate on an upstream universe.",
+        inputs_schema={
+            "threshold": {"type": "number", "required": True},
+            "metric": {"type": "string", "required": False},
+            "lookback_days": {"type": "integer", "required": False},
+            "start": {"type": "string", "required": False},
+            "end": {"type": "string", "required": False},
+            "upstream_payload": {"type": "object", "required": False},
+        },
+        outputs_schema={"metrics": "dict", "payload": "dict"},
+        side_effects=SkillSideEffects(
+            heavy_compute=True,
+            description="readonly local price scan",
+        ),
+        required_capabilities=["local_datasource"],
+        qteasy_entrypoints=["qteasy.get_history_data"],
+        skill_kind="api",
+    )
+
+    def handler(
+        threshold: float = 0.0,
+        metric: str = "drawdown",
+        lookback_days: int = 126,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        upstream_payload: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> dict:
+        run_id = new_run_id()
+        metric_name = str(metric or "drawdown").strip().lower()
+        thresh = float(threshold)
+        payload_in = dict(upstream_payload or {})
+        symbols = [str(item) for item in (payload_in.get("symbols") or [])]
+        names = dict(payload_in.get("names") or {})
+        inputs_echo = {
+            "threshold": thresh,
+            "metric": metric_name,
+            "lookback_days": lookback_days,
+            "start": start,
+            "end": end,
+            **kwargs,
+        }
+        if not symbols:
+            result = SkillResult(
+                ok=False,
+                skill_name=metadata.name,
+                run_id=run_id,
+                inputs_echo=inputs_echo,
+                error=SkillError(
+                    code="SCREEN_DATA_MISSING",
+                    message="Price predicate needs an upstream universe (symbols).",
+                ),
+            )
+            return result.to_dict()
+        start_date, end_date = _resolve_screen_window(
+            start, end, int(lookback_days or 126), latest_end_func
+        )
+        inputs_echo["start"] = start_date
+        inputs_echo["end"] = end_date
+        history = history_func(
+            htype_names="close",
+            shares=symbols,
+            start=start_date,
+            end=end_date,
+            freq="d",
+        )
+        closes = _closes_by_symbol(history, symbols)
+        hits: List[Dict[str, Any]] = []
+        window = int(lookback_days or 0)
+        for symbol, series in closes.items():
+            if window > 0 and len(series) > window:
+                series = series.iloc[-window:]
+            start_close = float(series.iloc[0])
+            end_close = float(series.iloc[-1])
+            if start_close == 0:
+                continue
+            ret = end_close / start_close - 1.0
+            if metric_name in {"drawdown", "drop", "跌幅"}:
+                matched = ret <= -abs(thresh)
+            else:
+                matched = ret >= abs(thresh)
+            if not matched:
+                continue
+            try:
+                start_px_date = _to_yyyymmdd(series.index[0])
+            except Exception:
+                start_px_date = str(series.index[0])
+            try:
+                end_px_date = _to_yyyymmdd(series.index[-1])
+            except Exception:
+                end_px_date = str(series.index[-1])
+            hits.append(
+                {
+                    "symbol": symbol,
+                    "name": names.get(symbol, symbol),
+                    "return": float(ret),
+                    "start_price": start_close,
+                    "end_price": end_close,
+                    "start_date": start_px_date,
+                    "end_date": end_px_date,
+                }
+            )
+        hits.sort(key=lambda item: item["return"])
+        result = SkillResult(
+            ok=True,
+            skill_name=metadata.name,
+            run_id=run_id,
+            inputs_echo=inputs_echo,
+            metrics={"hit_count": len(hits)},
+            payload={
+                "hits": hits,
+                "symbols": [item["symbol"] for item in hits],
+                "names": names,
+                "industry": payload_in.get("industry", ""),
+            },
+        )
+        return result.to_dict()
+
+    return metadata, handler
+
+
+def build_project_universe_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
+    """投影 L1：输出 hits 或无阈值时的 universe 枚举。"""
+
+    metadata = SkillMetadata(
+        name="qt.ai.research.project_universe",
+        version="0.1.0",
+        summary="Project universe or predicate hits to a user-facing table.",
+        inputs_schema={
+            "max_hits": {"type": "integer", "required": False},
+            "upstream_payload": {"type": "object", "required": False},
+        },
+        outputs_schema={"metrics": "dict", "payload": "dict"},
+        side_effects=SkillSideEffects(description="readonly projection"),
+        required_capabilities=[],
+        qteasy_entrypoints=[],
+        skill_kind="api",
+    )
+
+    def handler(
+        max_hits: int = DEFAULT_MAX_HITS,
+        upstream_payload: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> dict:
+        run_id = new_run_id()
+        payload_in = dict(upstream_payload or {})
+        hits = list(payload_in.get("hits") or [])
+        enumerated = False
+        if not hits:
+            enumerated = True
+            names = dict(payload_in.get("names") or {})
+            for symbol in payload_in.get("symbols") or []:
+                hits.append({"symbol": str(symbol), "name": names.get(str(symbol), str(symbol))})
+        limit = int(max_hits or DEFAULT_MAX_HITS)
+        truncated = False
+        if len(hits) > limit:
+            hits = hits[:limit]
+            truncated = True
+        result = SkillResult(
+            ok=True,
+            skill_name=metadata.name,
+            run_id=run_id,
+            inputs_echo={"max_hits": limit, **kwargs},
+            metrics={"hit_count": len(hits), "enumerated": enumerated},
+            payload={"hits": hits, "industry_samples": payload_in.get("industry_samples") or []},
+            warnings=([f"Hit list truncated to max_hits={limit}."] if truncated else []),
+        )
+        return result.to_dict()
+
+    return metadata, handler
+

@@ -67,7 +67,7 @@ qteasy-ai plan "show kline summary of 000300.SH from 20240101" --raw
 qteasy-ai run "export kline 000300.SH to png"
 ```
 
-**CLI `run` = 人在回路的一次确认**：生成计划后立即执行（含 refill / 回测 / 优化等高副作用 skill）。这与 Notebook 不同：`%%qtai --mode run` 仍只出 plan，必须再执行 `%%qtai --confirm <plan_id>`。
+**CLI `run` = 人在回路的一次确认**：生成计划后立即执行（含 refill / 回测 / 优化等高副作用 skill）。已审阅计划可 `qteasy-ai run --plan-id <plan_id>` 从 `runs/` 执行，**不会**重新 Hybrid。这与 Notebook 不同：`%%qtai --mode run` 仍只出 plan，必须再执行 `%%qtai --confirm <plan_id>`（kernel cache）。
 
 `profile.json` 中的 `agent.allow_refill/allow_backtest/allow_optimize` 默认全为 `false`，本阶段**不**门控 CLI/`assistant.run()`（预留给以后的无人值守 Agent）。
 

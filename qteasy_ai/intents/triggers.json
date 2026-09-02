@@ -1,0 +1,33 @@
+{
+  "triggers": [
+    {"job": "env.ready", "any": ["tushare", "token", "配好", "缺表", "数据表", "本地表", "environment", "check table", "missing table", "local data table", "overview table"]},
+    {"job": "data.summary", "any": ["summary", "摘要", "波动率", "交易天数", "volatility", "trading day", "trading days", "n_rows"]},
+    {"job": "data.export", "any": ["kline", "candle", "k线", "绘图", "导出", "png", "export"]},
+    {"job": "data.refill", "any": ["下载", "download", "refill"]},
+    {"job": "data.read", "any": ["get_history_data", "get_reference_data", "get_static_data", "读取历史", "参考数据", "静态数据", "reference data", "static data"]},
+    {"job": "research.factor_ic", "any": ["factor ic", "因子 ic", "因子ic", "ic summary", "ic 摘要", "information coefficient"]},
+    {"job": "research.screen", "any": ["筛股", "筛选股票", "搜索股票", "搜股票", "screen stock", "stock screen", "screening"]},
+    {"job": "research.screen", "all": ["搜索", "股票"]},
+    {"job": "research.screen", "all": ["筛选", "股票"]},
+    {"job": "research.screen", "all": ["筛选", "行业"]},
+    {"job": "research.screen", "all": ["筛选", "制造"]},
+    {"job": "research.screen", "all": ["跌幅", "股票"]},
+    {"job": "research.screen", "all": ["跌幅", "行业"]},
+    {"job": "research.screen", "all": ["涨幅", "股票"]},
+    {"job": "research.screen", "all": ["drawdown", "industry"]},
+    {"job": "strategy.meta", "any": ["built-in", "built in", "builtin", "strategy_meta"]},
+    {"job": "strategy.meta", "all": ["strategy", "parameter"]},
+    {"job": "strategy.meta", "all": ["strategy", "list"]},
+    {"job": "strategy.meta", "all": ["策略", "参数"]},
+    {"job": "strategy.meta", "all": ["策略", "列出"]},
+    {"job": "strategy.meta", "any": ["内置策略"]},
+    {"job": "backtest.builtin", "any": ["回测", "backtest"]},
+    {"job": "optimize.builtin", "any": ["优化", "optimize"]},
+    {"job": "strategy.builder", "any": ["生成策略", "strategybuilder", "codegen", "帮我写", "写一个", "写一份", "创建策略", "write a strategy", "generate a strategy", "金叉", "死叉", "双均线", "均线交叉", "sma cross", "dual ma"]},
+    {"job": "insight.last_backtest", "any": ["总结回测", "解读回测", "summarize backtest", "上次回测", "summarize last backtest"]},
+    {"job": "live.plan_only", "any": ["实盘", "live trade"]},
+    {"job": "live.plan_only", "regex": "\\blive\\b"},
+    {"job": "route_to_ask", "any": ["什么是", "解释一下", "explain pt", "explain ps", "explain pt and ps"]},
+    {"job": "unsafe", "any": ["rm -rf", "bash", "shell command", "cmd /c", "powershell", "跳过确认", "skip confirmation", "write files directly"]}
+  ]
+}

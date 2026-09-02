@@ -5,7 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-08-28
 # Desc:
-# Unittest for Hybrid Planner LLM candidate
+# Unittest for Hybrid Planner 方案 H
+# （LLM 只出 Job ID）
 # ======================================
 
 import json
@@ -16,97 +17,66 @@ from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 
 
-def _llm_plan(steps: list) -> str:
-    """构造 FakeLLM 返回的计划 JSON。"""
+def _llm_job(job: str) -> str:
+    """构造 FakeLLM 分类 JSON。"""
 
-    return json.dumps({"steps": steps}, ensure_ascii=False)
+    return json.dumps({"job": job}, ensure_ascii=False)
 
 
 class TestAiPlannerHybrid(unittest.TestCase):
-    """测试 LLM 候选 + 规则门禁。"""
+    """测试 Job 分类 + 规则出图。"""
 
     def setUp(self) -> None:
         self.registry = build_default_registry()
 
-    def test_llm_valid_backtest_uses_registry_side_effects(self) -> None:
-        """合法 LLM 候选被采纳，side_effects 来自 registry 而非 LLM 自报。"""
+    def test_llm_zero_hit_summary_job_uses_registry_side_effects(self) -> None:
+        """0 命中 + LLM Job=data.summary：出图且 side_effects 来自 registry。"""
 
-        print("\n[TestAiPlannerHybrid] valid LLM backtest")
-        fake = FakeLLMProvider(
-            replies=[
-                _llm_plan(
-                    [
-                        {
-                            "skill_name": "qt.ai.backtest.run_builtin",
-                            "inputs": {
-                                "strategy_id": "macd",
-                                "asset_pool": "000300.SH",
-                                "invest_start": "20180101",
-                                "invest_end": "20231231",
-                            },
-                            "side_effects": {"network": True, "description": "llm_lied"},
-                        }
-                    ]
-                )
-            ]
-        )
+        print("\n[TestAiPlannerHybrid] llm summary job")
+        fake = FakeLLMProvider(replies=[_llm_job("data.summary")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("whatever the user said", mode="plan")
+        plan = planner.build_plan("xyzzy unmatched formula 12345", mode="plan")
         step = plan.steps[0]
-        meta = self.registry.get_metadata("qt.ai.backtest.run_builtin")
-        print(" source:", plan.assumptions.get("candidate_source"), plan.planner_trace.get("candidate_source"))
+        meta = self.registry.get_metadata("qt.ai.data.summary_kline")
+        print(" intent:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("source"))
         print(" skill:", step.skill_name)
         print(" side_effects:", step.side_effects)
-        print(" llm prompts:", len(fake.prompts))
-        self.assertEqual(plan.assumptions.get("candidate_source"), "llm")
-        self.assertEqual(plan.planner_trace.get("candidate_source"), "llm")
-        self.assertEqual(step.skill_name, "qt.ai.backtest.run_builtin")
+        self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
+        self.assertEqual(plan.planner_trace.get("source"), "llm")
+        self.assertEqual(step.skill_name, "qt.ai.data.summary_kline")
         self.assertEqual(step.side_effects, meta.side_effects)
-        self.assertNotEqual(step.side_effects.description, "llm_lied")
-        self.assertTrue(step.side_effects.filesystem_write)
-        self.assertTrue(step.side_effects.heavy_compute)
-        self.assertEqual(len(fake.prompts), 1)
+        self.assertTrue(fake.prompts)
+        self.assertIn("data.summary:", fake.prompts[0])
+        self.assertNotIn("qt.ai.backtest.run_builtin:", fake.prompts[0])
 
-    def test_llm_unknown_skill_downgrades_to_rules(self) -> None:
-        """未知 skill 降级规则路径，trace 记录 downgrade_reason。"""
+    def test_llm_unknown_job_clarifies_not_skill_menu(self) -> None:
+        """未知 Job id → clarify，不得落到 skill 菜单。"""
 
-        print("\n[TestAiPlannerHybrid] unknown skill downgrade")
-        fake = FakeLLMProvider(
-            replies=[_llm_plan([{"skill_name": "qt.ai.invented.skill", "inputs": {}}])]
-        )
+        print("\n[TestAiPlannerHybrid] unknown job clarify")
+        fake = FakeLLMProvider(replies=[_llm_job("qt.ai.invented.skill")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("list built-in strategies", mode="plan")
+        plan = planner.build_plan("xyzzy unmatched formula 12345", mode="plan")
         print(" skills:", [s.skill_name for s in plan.steps])
-        print(" source:", plan.assumptions.get("candidate_source"))
-        print(" downgrade:", plan.planner_trace.get("downgrade_reason"))
-        self.assertEqual(plan.assumptions.get("candidate_source"), "rule")
-        self.assertIn("invented", str(plan.planner_trace.get("downgrade_reason", "")).lower()
-                      + str(plan.assumptions.get("downgrade_reason", "")).lower())
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.strategy_meta.list")
+        print(" intent:", plan.planner_trace.get("intent_job"), plan.steps[0].inputs)
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(plan.steps[0].inputs.get("fallback_action"), "clarify_required")
+        self.assertNotEqual(plan.planner_trace.get("intent_job"), "data.summary")
 
-    def test_llm_refill_without_dates_still_clarify(self) -> None:
-        """LLM 给出无日期 refill 仍 clarify date_range。"""
+    def test_gold_refill_without_dates_still_clarify(self) -> None:
+        """下载缺日期仍 clarify date_range。"""
 
-        print("\n[TestAiPlannerHybrid] LLM refill missing dates")
-        fake = FakeLLMProvider(
-            replies=[
-                _llm_plan(
-                    [
-                        {
-                            "skill_name": "qt.ai.data.refill_basic_equity_and_index",
-                            "inputs": {"tables": ["stock_daily"]},
-                        }
-                    ]
-                )
-            ]
-        )
+        print("\n[TestAiPlannerHybrid] refill missing dates")
+        fake = FakeLLMProvider(replies=[_llm_job("open")])
         planner = Planner(self.registry, provider=fake, env_facts={})
         plan = planner.build_plan("download A-share daily data to local datasource", mode="plan")
         step = plan.steps[0]
         print(" skill:", step.skill_name, "inputs:", step.inputs)
+        print(" intent:", plan.planner_trace.get("intent_job"))
+        self.assertEqual(plan.planner_trace.get("intent_job"), "data.refill")
         self.assertEqual(step.skill_name, "qt.ai.system.fallback")
         self.assertEqual(step.inputs.get("fallback_action"), "clarify_required")
         self.assertEqual(step.inputs.get("missing_info"), "date_range")
+        self.assertEqual(fake.prompts, [])
 
     def test_no_provider_p0_skill_sequence_matches_rules(self) -> None:
         """无 Provider 时与规则路径 P0 DAG 技能序列一致。"""
@@ -119,167 +89,57 @@ class TestAiPlannerHybrid(unittest.TestCase):
         names_none = [s.skill_name for s in hybrid_none.steps]
         print(" rule:", names_rule)
         print(" none:", names_none)
+        print(" intent:", rule_plan.planner_trace.get("intent_job"), rule_plan.planner_trace.get("source"))
         self.assertEqual(names_none, names_rule)
         self.assertEqual(names_none, ["qt.ai.backtest.run_builtin", "qt.ai.insight.summarize_backtest"])
-        self.assertEqual(hybrid_none.assumptions.get("candidate_source"), "rule")
+        self.assertEqual(rule_plan.planner_trace.get("intent_job"), "backtest.builtin")
+        self.assertEqual(rule_plan.planner_trace.get("source"), "rule")
         self.assertEqual(rule_plan.steps[0].inputs.get("strategy_id").lower(), "macd")
         self.assertEqual(hybrid_none.steps[0].inputs.get("asset_pool"), "000300.SH")
-        self.assertEqual(hybrid_none.steps[0].inputs.get("invest_start"), "20180101")
-        self.assertEqual(hybrid_none.steps[0].inputs.get("invest_end"), "20231231")
 
-    def test_llm_screen_query_blob_fills_required_slots_from_rules(self) -> None:
-        """LLM 把筛股整句塞进 query 时，用规则路径补齐 industry/threshold。"""
+    def test_gold_screen_not_vetoed_by_llm(self) -> None:
+        """筛股金句规则锁，FakeLLM 否决无效。"""
 
-        print("\n[TestAiPlannerHybrid] LLM screen query-blob fills slots from rules")
+        print("\n[TestAiPlannerHybrid] gold screen lock")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
-        fake = FakeLLMProvider(
-            replies=[
-                _llm_plan(
-                    [
-                        {
-                            "skill_name": "qt.ai.research.screen_stocks",
-                            "inputs": {
-                                "query": "过去半年内跌幅>20%且行业属于公共交通的股票",
-                            },
-                        }
-                    ]
-                )
-            ]
-        )
+        fake = FakeLLMProvider(replies=[_llm_job("open")])
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
-        rule = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
-        print(" hybrid source:", hybrid.assumptions.get("candidate_source"))
-        print(" hybrid skill/inputs:", hybrid.steps[0].skill_name, hybrid.steps[0].inputs)
-        print(" rule skill/inputs:", rule.steps[0].skill_name, rule.steps[0].inputs)
-        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.research.screen_stocks")
+        names = [s.skill_name for s in hybrid.steps]
+        print(" skills:", names)
+        print(" intent:", hybrid.planner_trace.get("intent_job"), hybrid.planner_trace.get("source"))
+        print(" universe inputs:", hybrid.steps[0].inputs)
+        self.assertEqual(hybrid.planner_trace.get("intent_job"), "research.screen")
+        self.assertEqual(hybrid.planner_trace.get("source"), "rule")
+        self.assertEqual(names[0], "qt.ai.research.universe_filter")
         self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
-        self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.2)
-        self.assertEqual(rule.steps[0].skill_name, "qt.ai.research.screen_stocks")
-        self.assertEqual(rule.steps[0].inputs.get("industry"), "公共交通")
-        self.assertEqual(float(rule.steps[0].inputs.get("threshold")), 0.2)
-        self.assertNotEqual(hybrid.steps[0].inputs, {})
+        self.assertIn("qt.ai.research.price_predicate", names)
+        self.assertEqual(fake.prompts, [])
+        self.assertNotIn("recipe_slots_from", hybrid.planner_trace)
 
-    def test_llm_empty_fallback_fills_required_slots_from_rules(self) -> None:
-        """LLM 给出空 inputs 的 fallback 时，用规则路径填齐必填槽。"""
+    def test_zero_hit_hello_clarifies(self) -> None:
+        """无匹配寒暄 → clarify，不得 summary。"""
 
-        print("\n[TestAiPlannerHybrid] LLM empty fallback fills slots from rules")
-        query = "你好吗？"
-        fake = FakeLLMProvider(
-            replies=[_llm_plan([{"skill_name": "qt.ai.system.fallback", "inputs": {}}])]
-        )
-        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
-        rule = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
-        print(" hybrid source/inputs:", hybrid.assumptions.get("candidate_source"), hybrid.steps[0].inputs)
-        print(" rule action:", rule.steps[0].inputs.get("fallback_action"), rule.steps[0].inputs.get("reason"))
-        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(rule.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(hybrid.steps[0].inputs.get("query"), query)
-        self.assertTrue(hybrid.steps[0].inputs.get("fallback_action"))
-        self.assertTrue(hybrid.steps[0].inputs.get("reason"))
-        self.assertEqual(
-            hybrid.steps[0].inputs.get("fallback_action"),
-            rule.steps[0].inputs.get("fallback_action"),
-        )
-        self.assertEqual(hybrid.steps[0].inputs.get("reason"), rule.steps[0].inputs.get("reason"))
-        self.assertNotEqual(hybrid.steps[0].inputs, {})
+        print("\n[TestAiPlannerHybrid] hello clarify")
+        plan = Planner(self.registry, env_facts={}).build_plan("你好吗？", mode="plan")
+        print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs.get("fallback_action"))
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(plan.steps[0].inputs.get("fallback_action"), "clarify_required")
+        self.assertNotEqual(plan.steps[0].skill_name, "qt.ai.data.summary_kline")
 
-    def test_llm_screen_complete_slots_keeps_candidate_source_llm(self) -> None:
-        """LLM 筛股序列命中菜谱时保留 candidate_source=llm，槽改用规则值。"""
+    def test_classify_prompt_is_job_catalog(self) -> None:
+        """分类 prompt 含 Job 一行定义，不含扁平 skill 菜单。"""
 
-        print("\n[TestAiPlannerHybrid] LLM screen recipe overwrites slots, source stays llm")
-        query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
-        fake = FakeLLMProvider(
-            replies=[
-                _llm_plan(
-                    [
-                        {
-                            "skill_name": "qt.ai.research.screen_stocks",
-                            "inputs": {
-                                "industry": "银行",
-                                "threshold": 0.15,
-                            },
-                        }
-                    ]
-                )
-            ]
-        )
-        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
-        print(" source:", hybrid.assumptions.get("candidate_source"))
-        print(" recipe_slots_from:", hybrid.assumptions.get("recipe_slots_from"))
-        print(" inputs:", hybrid.steps[0].inputs)
-        self.assertEqual(hybrid.assumptions.get("candidate_source"), "llm")
-        self.assertEqual(hybrid.assumptions.get("recipe_slots_from"), "rule")
-        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.research.screen_stocks")
-        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
-        self.assertEqual(float(hybrid.steps[0].inputs.get("threshold")), 0.2)
-
-    def test_llm_catalog_includes_skill_name_and_summary(self) -> None:
-        """Hybrid 候选 prompt 对每个已注册 skill 含一行 name: summary。"""
-
-        print("\n[TestAiPlannerHybrid] catalog name + summary")
-        fake = FakeLLMProvider(
-            replies=[
-                _llm_plan(
-                    [
-                        {
-                            "skill_name": "qt.ai.backtest.run_builtin",
-                            "inputs": {
-                                "strategy_id": "macd",
-                                "asset_pool": "000300.SH",
-                                "invest_start": "20180101",
-                                "invest_end": "20231231",
-                            },
-                        }
-                    ]
-                )
-            ]
-        )
+        print("\n[TestAiPlannerHybrid] job catalog prompt")
+        fake = FakeLLMProvider(replies=[_llm_job("data.summary")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("run macd backtest 2018-2023 on 000300.SH", mode="plan")
-        self.assertTrue(fake.prompts)
+        plan = planner.build_plan("xyzzy unmatched formula 12345", mode="plan")
         prompt = fake.prompts[0]
-        print(" prompt catalog excerpt:", prompt[:800])
+        print(" prompt excerpt:", prompt[:400])
         print(" plan skill:", plan.steps[0].skill_name)
-        skills = self.registry.list_skills()
-        self.assertGreaterEqual(len(skills), 1)
-        for meta in skills:
-            expected_line = f"- {meta.name}: {meta.summary}"
-            print(" expect line:", expected_line)
-            self.assertIn(expected_line, prompt)
-            self.assertTrue(str(meta.summary).strip())
-        self.assertIn("qt.ai.backtest.run_builtin:", prompt)
-        self.assertIn("qt.ai.data.refill_basic_equity_and_index:", prompt)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.backtest.run_builtin")
-
-    def test_llm_screen_missing_slots_clarifies_when_rules_cannot_fill(self) -> None:
-        """LLM 点了筛股但规则走 fallback、缺槽无法填时改为 clarify_required。"""
-
-        print("\n[TestAiPlannerHybrid] LLM screen missing slots clarify")
-        query = "你好吗？"
-        fake = FakeLLMProvider(
-            replies=[
-                _llm_plan(
-                    [
-                        {
-                            "skill_name": "qt.ai.research.screen_stocks",
-                            "inputs": {},
-                        }
-                    ]
-                )
-            ]
-        )
-        hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
-        rule = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
-        print(" hybrid skill/inputs:", hybrid.steps[0].skill_name, hybrid.steps[0].inputs)
-        print(" rule skill:", rule.steps[0].skill_name, rule.steps[0].inputs.get("fallback_action"))
-        self.assertEqual(hybrid.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(hybrid.steps[0].inputs.get("fallback_action"), "clarify_required")
-        missing = str(hybrid.steps[0].inputs.get("missing_info") or "")
-        print(" missing_info:", missing)
-        self.assertIn("industry", missing)
-        self.assertIn("threshold", missing)
-        self.assertEqual(rule.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertNotEqual(rule.steps[0].inputs.get("fallback_action"), "clarify_required")
+        self.assertIn("- data.summary:", prompt)
+        self.assertIn("- backtest.builtin:", prompt)
+        self.assertNotIn("- qt.ai.backtest.run_builtin:", prompt)
+        self.assertNotIn("- qt.ai.data.refill_basic_equity_and_index:", prompt)
 
 
 if __name__ == "__main__":

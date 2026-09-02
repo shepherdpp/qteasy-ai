@@ -266,6 +266,8 @@ class PlanExecutor:
         """按 on_fail/retry_limit 执行单步，并把依赖步输出注入 inputs。"""
 
         merged_inputs = dict(step.inputs)
+        if confirm and step.skill_name == "qt.ai.strategy.codegen_hybrid":
+            merged_inputs["overwrite"] = True
         for dep_id in step.depends_on:
             dep_result = (step_results or {}).get(dep_id) or {}
             if not dep_result.get("ok"):

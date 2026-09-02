@@ -59,6 +59,26 @@ class TestAiInsightSkill(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "INSIGHT_NO_BACKTEST")
         self.assertIn("backtest", result["error"]["message"].lower())
 
+    def test_nearby_trades_skips_nat_anchor(self) -> None:
+        """NaT 锚点不得拿去 str.contains，应退回 head 摘要。"""
+
+        print("\n[TestAiInsightSkill] NaT nearby_trades")
+        import tempfile
+        from pathlib import Path
+
+        import pandas as pd
+
+        from qteasy_ai.skills.insight_backtest import _trade_summary_from_log
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "trade_log.csv"
+            frame = pd.DataFrame({"date": ["20200115", "20200323"], "qty": [1, 2]})
+            frame.to_csv(path, index=False)
+            rows = _trade_summary_from_log(str(path), peak_date="NaT", valley_date="NaT")
+            print(" rows:", rows)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["qty"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
