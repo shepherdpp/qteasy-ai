@@ -73,11 +73,11 @@ class TestAiPlannerD(unittest.TestCase):
         self.assertNotIn("llm_skill_sequence", plan.planner_trace)
         self.assertNotIn("recipe_slots_from", plan.planner_trace)
 
-    def test_gold_builder_not_vetoed_by_fake_llm(self) -> None:
-        """金句 Builder：FakeLLM 返回 open/backtest 仍走规则五步。"""
+    def test_gold_builder_mode_d_uses_llm_job(self) -> None:
+        """金句 Builder：Mode-D 信 LLM 的 strategy.builder，再走同一五步。"""
 
-        print("\n[TestAiPlannerD] gold lock ignores llm")
-        fake = FakeLLMProvider(replies=[json.dumps({"job": "open"}), json.dumps({"job": "backtest.builtin"})])
+        print("\n[TestAiPlannerD] gold Mode-D llm builder")
+        fake = FakeLLMProvider(replies=[json.dumps({"job": "strategy.builder"})])
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(GOLDEN_D1, mode="plan")
         names = [step.skill_name for step in hybrid.steps]
         print(" skills:", names)
@@ -85,9 +85,9 @@ class TestAiPlannerD(unittest.TestCase):
         print(" prompts:", len(fake.prompts))
         self.assertEqual(names, _BUILDER_SKILLS)
         self.assertEqual(hybrid.planner_trace.get("intent_job"), "strategy.builder")
-        self.assertEqual(hybrid.planner_trace.get("source"), "rule")
+        self.assertEqual(hybrid.planner_trace.get("source"), "llm")
         self.assertEqual(hybrid.steps[-1].inputs.get("asset_pool"), "000300.SH")
-        self.assertEqual(fake.prompts, [])
+        self.assertTrue(fake.prompts)
 
     def test_open_refill_dag_clarifies_not_squashed_to_builder(self) -> None:
         """open 含 refill 不得压成 Builder 菜谱。"""

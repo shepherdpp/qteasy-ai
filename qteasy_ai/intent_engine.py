@@ -5,8 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-02
 # Desc:
-# 方案 H 意图门：规则锁 → 冲突表 →
-# LLM 只出 Job ID。
+# 方案 H′ 意图门：宪法先跑；Mode-R
+# 仅 1 命中；Mode-D 只信 LLM 协议。
 # ======================================
 
 """Hybrid Planner 意图分类引擎。
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, NamedTuple, Optional, Set
 
 from .intents import IntentCatalog, IntentDecision, load_default_catalog
 from .provider import BaseLLMProvider
@@ -43,10 +43,26 @@ READ_CHANNEL_HINTS = (
 )
 
 _LLM_JOB_SYSTEM = (
-    "You classify a qteasy-ai user query into exactly one Job id. "
-    "Reply with JSON only: {\"job\": \"<id>\"}. "
+    "You classify a qteasy-ai user query into Job id(s). "
+    "Reply with JSON only. Legal shapes: "
+    '{"job": "<id>", "uncertain": false}, '
+    '{"job": "<id>", "uncertain": true}, '
+    '{"jobs": ["<id>"]}, '
+    '{"jobs": ["<id_a>", "<id_b>"]}. '
+    "Omit uncertain only when you are certain. "
+    "If the query mixes two tasks, return jobs with more than one id "
+    "instead of guessing one. "
     "Use only Job ids listed in the prompt. Do not output skill names or steps."
 )
+
+_MULTI_JOB_HINT = "Please focus on one task or split into two queries."
+
+
+class _LlmParse(NamedTuple):
+    """分类 LLM 协议解析结果。"""
+
+    kind: str
+    job: str
 
 
 def normalize_query_text(query: str) -> str:
@@ -59,7 +75,7 @@ def normalize_query_text(query: str) -> str:
 
 
 class IntentEngine:
-    """方案 H 三步分类器。"""
+    """方案 H′ 分类器：宪法 → Mode-R 规则 / Mode-D LLM。"""
 
     def __init__(
         self,
@@ -93,19 +109,12 @@ class IntentEngine:
         official = set(self.catalog.official_ids)
         allowed_llm = set(self.catalog.official_ids) | {"open", "clarify", "route_to_ask"}
 
-        if self._is_unsafe(raw, q_lower):
-            return IntentDecision(
-                job="unsafe",
-                source="rule",
-                rationale="constitution_unsafe",
-            )
-        unsupported = self._match_unsupported(raw, q_lower)
-        if unsupported:
-            return IntentDecision(
-                job="not_supported",
-                source="rule",
-                rationale=str(unsupported),
-            )
+        constitution = self._constitution(raw, q_lower)
+        if constitution is not None:
+            return constitution
+
+        if self.provider is not None:
+            return self._llm_classify(raw, allowed_llm)
 
         gold = self._gold_index.get(normalize_query_text(raw))
         if gold and gold.get("lock"):
@@ -121,27 +130,6 @@ class IntentEngine:
 
         hits = self._trigger_hits(raw, q_lower)
         hits.discard("unsafe")
-
-        high_risk = set(hits) & set(HIGH_RISK_JOBS)
-        if "strategy.builder" in hits:
-            high_risk.discard("backtest.builtin")
-        if len(high_risk) >= 2:
-            return IntentDecision(
-                job="clarify",
-                source="rule",
-                rationale="multi_high_risk_intent",
-            )
-
-        if "live.plan_only" in hits:
-            return IntentDecision(
-                job="live.plan_only",
-                source="rule",
-                rationale="live_never_auto",
-            )
-
-        if not hits:
-            return self._llm_or_clarify(raw, allowed_llm, rationale="zero_trigger_hit")
-
         if len(hits) == 1:
             job = next(iter(hits))
             if job not in official and job not in {"route_to_ask"}:
@@ -152,50 +140,84 @@ class IntentEngine:
                 source="rule",
                 rationale="single_trigger",
             )
+        rationale = "zero_trigger_hit" if not hits else "multi_trigger_hit"
+        return IntentDecision(
+            job="clarify",
+            source="rule",
+            rationale=f"{rationale}:no_provider",
+        )
 
-        winner, conflict_reason = self._apply_conflicts(hits)
-        if winner:
+    def _constitution(self, query: str, q_lower: str) -> Optional[IntentDecision]:
+        """宪法：unsafe / 显式不支持 / 多高风险 / 实盘永不 auto。"""
+
+        if self._is_unsafe(query, q_lower):
             return IntentDecision(
-                job=winner,
-                flags=self._flags_for(winner, raw, q_lower),
-                source="tiebreak",
-                rationale=conflict_reason or "conflict_table",
+                job="unsafe",
+                source="rule",
+                rationale="constitution_unsafe",
             )
-        return self._llm_or_clarify(raw, allowed_llm, rationale="uncovered_conflict")
+        unsupported = self._match_unsupported(query, q_lower)
+        if unsupported:
+            return IntentDecision(
+                job="not_supported",
+                source="rule",
+                rationale=str(unsupported),
+            )
 
-    def _llm_or_clarify(
-        self,
-        query: str,
-        allowed: Set[str],
-        *,
-        rationale: str,
-    ) -> IntentDecision:
-        """0 命中或冲突表未覆盖：有 Provider 则只出 Job ID。"""
-
-        if self.provider is None:
+        hits = self._trigger_hits(query, q_lower)
+        hits.discard("unsafe")
+        high_risk = set(hits) & set(HIGH_RISK_JOBS)
+        if "strategy.builder" in hits:
+            high_risk.discard("backtest.builtin")
+        if len(high_risk) >= 2:
             return IntentDecision(
                 job="clarify",
                 source="rule",
-                rationale=f"{rationale}:no_provider",
+                rationale="multi_high_risk_intent",
             )
-        job, parse_ok = self._ask_llm_job(query, allowed)
-        if not parse_ok:
+        if "live.plan_only" in hits:
+            return IntentDecision(
+                job="live.plan_only",
+                source="rule",
+                rationale="live_never_auto",
+            )
+        return None
+
+    def _llm_classify(self, query: str, allowed: Set[str]) -> IntentDecision:
+        """Mode-D：只信 LLM 协议；唯一合法且确定才接受。"""
+
+        parsed = self._ask_llm_job(query, allowed)
+        if parsed.kind == "accept":
+            return IntentDecision(
+                job=parsed.job,
+                flags=self._flags_for(parsed.job, query, query.lower()),
+                source="llm",
+                rationale="llm_certain",
+                llm_called=True,
+            )
+        if parsed.kind == "uncertain":
             return IntentDecision(
                 job="clarify",
                 source="rule",
-                rationale=f"{rationale}:illegal_llm_job",
+                rationale="llm_uncertain",
+                llm_called=True,
+            )
+        if parsed.kind == "multi":
+            return IntentDecision(
+                job="clarify",
+                source="rule",
+                rationale=f"llm_multi_job:{_MULTI_JOB_HINT}",
                 llm_called=True,
             )
         return IntentDecision(
-            job=job,
-            flags=self._flags_for(job, query, query.lower()),
-            source="llm",
-            rationale=rationale,
+            job="clarify",
+            source="rule",
+            rationale="illegal_llm_job",
             llm_called=True,
         )
 
-    def _ask_llm_job(self, query: str, allowed: Set[str]) -> tuple:
-        """调用 Provider，只解析 Job id。"""
+    def _ask_llm_job(self, query: str, allowed: Set[str]) -> _LlmParse:
+        """调用 Provider，按 H′ 协议解析 Job / uncertain / jobs。"""
 
         lines = "\n".join(self.catalog.job_summaries())
         prompt = (
@@ -206,11 +228,8 @@ class IntentEngine:
         try:
             raw = self.provider.chat(prompt, system_prompt=_LLM_JOB_SYSTEM)
         except Exception:
-            return "", False
-        parsed = _parse_job_json(raw)
-        if parsed is None or parsed not in allowed:
-            return "", False
-        return parsed, True
+            return _LlmParse("illegal", "")
+        return _parse_llm_job_payload(raw, allowed)
 
     def _is_unsafe(self, query: str, q_lower: str) -> bool:
         """宪法：shell / 跳过确认。"""
@@ -248,7 +267,7 @@ class IntentEngine:
         return hits
 
     def _apply_conflicts(self, hits: Set[str]) -> tuple:
-        """冲突表消歧；唯一赢家则返回。"""
+        """冲突表消歧（H′ 停用；conflicts.json 仍由 Catalog 加载）。"""
 
         remaining = set(hits)
         rationale = ""
@@ -308,24 +327,41 @@ def _trigger_match(query: str, q_lower: str, trigger: Dict[str, Any]) -> bool:
     return False
 
 
-def _parse_job_json(text: str) -> Optional[str]:
-    """解析分类 LLM 输出；steps 菜单视为非法。"""
+def _parse_llm_job_payload(text: str, allowed: Set[str]) -> _LlmParse:
+    """解析 H′ 分类协议；steps / 非 dict / 未知 id / 空响应为非法。"""
 
     blob = (text or "").strip()
     if not blob:
-        return None
+        return _LlmParse("illegal", "")
     if blob.startswith("```"):
         blob = re.sub(r"^```(?:json)?", "", blob).strip()
         blob = re.sub(r"```$", "", blob).strip()
     try:
         payload = json.loads(blob)
     except json.JSONDecodeError:
-        return None
+        return _LlmParse("illegal", "")
     if not isinstance(payload, dict):
-        return None
+        return _LlmParse("illegal", "")
     if "steps" in payload:
-        return None
-    job = payload.get("job") or payload.get("job_id")
-    if not isinstance(job, str):
-        return None
-    return job.strip()
+        return _LlmParse("illegal", "")
+
+    job = ""
+    if "jobs" in payload:
+        jobs = payload.get("jobs")
+        if not isinstance(jobs, list) or any(not isinstance(item, str) for item in jobs):
+            return _LlmParse("illegal", "")
+        stripped = [item.strip() for item in jobs if item.strip()]
+        if len(stripped) != 1:
+            return _LlmParse("multi", "")
+        job = stripped[0]
+    else:
+        raw_job = payload.get("job") or payload.get("job_id")
+        if not isinstance(raw_job, str) or not raw_job.strip():
+            return _LlmParse("illegal", "")
+        job = raw_job.strip()
+
+    if job not in allowed:
+        return _LlmParse("illegal", "")
+    if payload.get("uncertain") is True:
+        return _LlmParse("uncertain", job)
+    return _LlmParse("accept", job)

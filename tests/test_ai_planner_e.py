@@ -107,7 +107,7 @@ class TestAiPlannerE(unittest.TestCase):
 
         print("\n[TestAiPlannerE] inverted dates")
         plan = Planner(self.registry, env_facts={}).build_plan(
-            "show kline summary 000300.SH from 20241231 to 20240101", mode="plan"
+            "summary 000300.SH from 20241231 to 20240101", mode="plan"
         )
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
@@ -119,7 +119,7 @@ class TestAiPlannerE(unittest.TestCase):
 
         print("\n[TestAiPlannerE] invalid freq")
         plan = Planner(self.registry, env_facts={}).build_plan(
-            "summary kline freq=not_a_freq 000300.SH", mode="plan"
+            "summary freq=not_a_freq 000300.SH", mode="plan"
         )
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")

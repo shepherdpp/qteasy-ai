@@ -5,8 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-08-28
 # Desc:
-# Unittest for Hybrid Planner 方案 H
-# （LLM 只出 Job ID）
+# Unittest for Hybrid Planner 方案 H′
+# （Mode-D LLM 只出 Job ID）
 # ======================================
 
 import json
@@ -66,17 +66,19 @@ class TestAiPlannerHybrid(unittest.TestCase):
         """下载缺日期仍 clarify date_range。"""
 
         print("\n[TestAiPlannerHybrid] refill missing dates")
-        fake = FakeLLMProvider(replies=[_llm_job("open")])
+        fake = FakeLLMProvider(replies=[_llm_job("data.refill")])
         planner = Planner(self.registry, provider=fake, env_facts={})
         plan = planner.build_plan("download A-share daily data to local datasource", mode="plan")
         step = plan.steps[0]
         print(" skill:", step.skill_name, "inputs:", step.inputs)
-        print(" intent:", plan.planner_trace.get("intent_job"))
+        print(" intent:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("source"))
+        print(" prompts:", len(fake.prompts))
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.refill")
+        self.assertEqual(plan.planner_trace.get("source"), "llm")
         self.assertEqual(step.skill_name, "qt.ai.system.fallback")
         self.assertEqual(step.inputs.get("fallback_action"), "clarify_required")
         self.assertEqual(step.inputs.get("missing_info"), "date_range")
-        self.assertEqual(fake.prompts, [])
+        self.assertTrue(fake.prompts)
 
     def test_no_provider_p0_skill_sequence_matches_rules(self) -> None:
         """无 Provider 时与规则路径 P0 DAG 技能序列一致。"""
@@ -97,23 +99,24 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertEqual(rule_plan.steps[0].inputs.get("strategy_id").lower(), "macd")
         self.assertEqual(hybrid_none.steps[0].inputs.get("asset_pool"), "000300.SH")
 
-    def test_gold_screen_not_vetoed_by_llm(self) -> None:
-        """筛股金句规则锁，FakeLLM 否决无效。"""
+    def test_screen_paraphrase_mode_d_uses_llm_job(self) -> None:
+        """筛股改写句：Mode-D 信 LLM Job，再走同一菜谱。"""
 
-        print("\n[TestAiPlannerHybrid] gold screen lock")
+        print("\n[TestAiPlannerHybrid] screen Mode-D llm job")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
-        fake = FakeLLMProvider(replies=[_llm_job("open")])
+        fake = FakeLLMProvider(replies=[_llm_job("research.screen")])
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [s.skill_name for s in hybrid.steps]
         print(" skills:", names)
         print(" intent:", hybrid.planner_trace.get("intent_job"), hybrid.planner_trace.get("source"))
         print(" universe inputs:", hybrid.steps[0].inputs)
+        print(" prompts:", len(fake.prompts))
         self.assertEqual(hybrid.planner_trace.get("intent_job"), "research.screen")
-        self.assertEqual(hybrid.planner_trace.get("source"), "rule")
+        self.assertEqual(hybrid.planner_trace.get("source"), "llm")
         self.assertEqual(names[0], "qt.ai.research.universe_filter")
         self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
         self.assertIn("qt.ai.research.price_predicate", names)
-        self.assertEqual(fake.prompts, [])
+        self.assertTrue(fake.prompts)
         self.assertNotIn("recipe_slots_from", hybrid.planner_trace)
 
     def test_zero_hit_hello_clarifies(self) -> None:

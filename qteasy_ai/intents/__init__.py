@@ -31,7 +31,7 @@ def _load_json(name: str) -> Dict[str, Any]:
 
 @dataclass
 class IntentDecision:
-    """方案 H 分类结果：只含 Job / flags，不含 steps。"""
+    """方案 H′ 分类结果：只含 Job / flags，不含 steps。"""
 
     job: str
     flags: Dict[str, Any] = field(default_factory=dict)

@@ -9,7 +9,7 @@
 # 请求转换为结构化 ToolPlan。
 # ======================================
 
-"""自然语言到 ToolPlan 的 Hybrid 实现（方案 H）。
+"""自然语言到 ToolPlan 的 Hybrid 实现（方案 H′）。
 
 三段式链路：
 
@@ -204,7 +204,7 @@ class Planner:
             steps, query=query, candidate_source=candidate_source
         )
         assumptions = {
-            "planner": "hybrid_intent_h",
+            "planner": "hybrid_intent_h_prime",
             "provider_enabled": self.provider is not None,
             "env_facts_used": bool(self.env_facts),
             "candidate_source": candidate_source,

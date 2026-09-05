@@ -5,7 +5,7 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-02
 # Desc:
-# Unittest for IntentEngine 方案 H 分类
+# Unittest for IntentEngine 方案 H′ 分类
 # ======================================
 
 import json
@@ -17,7 +17,7 @@ from qteasy_ai.provider import FakeLLMProvider
 
 
 class TestAiIntentEngine(unittest.TestCase):
-    """意图门分类：规则锁 / 冲突 / LLM Job ID。"""
+    """意图门分类：宪法 / Mode-R 单命中 / Mode-D LLM 协议。"""
 
     def setUp(self) -> None:
         self.catalog = load_default_catalog()
@@ -74,28 +74,52 @@ class TestAiIntentEngine(unittest.TestCase):
         self.assertEqual(decision.source, "rule")
         self.assertNotEqual(decision.job, "live.plan_only")
 
-    def test_gold_lock_ignores_fake_llm_open(self) -> None:
-        """金句 lock：FakeLLM 返回 open 仍为官方 Job。"""
+    def test_gold_lock_mode_r_only_mode_d_calls_llm(self) -> None:
+        """金句 lock 仅 Mode-R；有 Provider 时走 LLM。"""
 
-        print("\n[TestAiIntentEngine] gold lock veto")
+        print("\n[TestAiIntentEngine] gold lock Mode-R vs Mode-D")
+        query = "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。"
+        none_decision = self.engine.classify(query)
+        print(
+            " mode-r job:",
+            none_decision.job,
+            "source:",
+            none_decision.source,
+            "rationale:",
+            none_decision.rationale,
+        )
+        self.assertEqual(none_decision.job, "research.screen")
+        self.assertEqual(none_decision.source, "rule")
+        self.assertIn("gold_lock", none_decision.rationale)
+
         fake = FakeLLMProvider(replies=[json.dumps({"job": "open"})])
         engine = IntentEngine(catalog=self.catalog, provider=fake)
-        query = "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。"
         decision = engine.classify(query)
-        print(" job:", decision.job, "source:", decision.source, "prompts:", len(fake.prompts))
-        self.assertEqual(decision.job, "research.screen")
-        self.assertEqual(decision.source, "rule")
-        self.assertIn("gold_lock", decision.rationale)
-        self.assertEqual(fake.prompts, [])
+        print(
+            " mode-d job:",
+            decision.job,
+            "source:",
+            decision.source,
+            "llm_called:",
+            decision.llm_called,
+            "prompts:",
+            len(fake.prompts),
+        )
+        self.assertEqual(decision.job, "open")
+        self.assertEqual(decision.source, "llm")
+        self.assertTrue(decision.llm_called)
+        self.assertTrue(fake.prompts)
 
-    def test_screen_vs_summary_tiebreak(self) -> None:
-        """筛选+波动率 → screen，source=tiebreak。"""
+    def test_screen_vs_summary_mode_r_clarify(self) -> None:
+        """筛选+波动率：Mode-R 多命中 → clarify，不再 tiebreak。"""
 
-        print("\n[TestAiIntentEngine] screen vs summary")
+        print("\n[TestAiIntentEngine] screen vs summary Mode-R")
         decision = self.engine.classify("筛选制造业并看波动率")
         print(" job:", decision.job, "source:", decision.source, "rationale:", decision.rationale)
-        self.assertEqual(decision.job, "research.screen")
-        self.assertEqual(decision.source, "tiebreak")
+        self.assertEqual(decision.job, "clarify")
+        self.assertEqual(decision.source, "rule")
+        self.assertIn("multi_trigger", decision.rationale)
+        self.assertNotEqual(decision.source, "tiebreak")
 
     def test_macd_params_is_meta_not_ask(self) -> None:
         """macd 策略参数 → strategy.meta，不是 route_to_ask。"""

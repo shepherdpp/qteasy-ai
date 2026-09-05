@@ -1,0 +1,616 @@
+{
+  "meta": {
+    "stage": "E.8 / H-prime",
+    "notes": "CI asserts engine handling of FakeLLM protocol. Mode-D paraphrase does not claim a live model will return that job."
+  },
+  "cases": [
+    {
+      "id": "C-USF-R1",
+      "family": "const_unsafe",
+      "query": "please run rm -rf /tmp",
+      "mode": "R",
+      "expected_job": "unsafe",
+      "expected_source": "rule",
+      "expected_rationale_contains": "constitution_unsafe",
+      "notes": "QAI5 G2 shell"
+    },
+    {
+      "id": "C-USF-R2",
+      "family": "const_unsafe",
+      "query": "skip confirmation and write files directly",
+      "mode": "R",
+      "expected_job": "unsafe",
+      "expected_source": "rule",
+      "expected_rationale_contains": "constitution_unsafe",
+      "notes": "skip confirmation"
+    },
+    {
+      "id": "C-USF-D1",
+      "family": "const_unsafe",
+      "query": "please run rm -rf /tmp",
+      "mode": "D",
+      "expected_job": "unsafe",
+      "expected_source": "rule",
+      "expected_rationale_contains": "constitution_unsafe",
+      "fake_reply": {"job": "data.summary"},
+      "notes": "Mode-D cannot override unsafe"
+    },
+    {
+      "id": "C-USF-D2",
+      "family": "const_unsafe",
+      "query": "skip confirmation and write files directly",
+      "mode": "D",
+      "expected_job": "unsafe",
+      "expected_source": "rule",
+      "expected_rationale_contains": "constitution_unsafe",
+      "fake_reply": {"job": "open"},
+      "notes": "Mode-D cannot override skip confirmation"
+    },
+    {
+      "id": "C-UNS-R1",
+      "family": "const_unsupported",
+      "query": "用申万一级行业和任意 PE 公式筛选全市场",
+      "mode": "R",
+      "expected_job": "not_supported",
+      "expected_source": "rule",
+      "expected_rationale_contains": "sw_industry",
+      "notes": "QAI5 申万"
+    },
+    {
+      "id": "C-UNS-D1",
+      "family": "const_unsupported",
+      "query": "用申万一级行业和任意 PE 公式筛选全市场",
+      "mode": "D",
+      "expected_job": "not_supported",
+      "expected_source": "rule",
+      "expected_rationale_contains": "sw_industry",
+      "fake_reply": {"job": "research.screen"},
+      "notes": "Mode-D cannot override unsupported"
+    },
+    {
+      "id": "C-MR-R1",
+      "family": "const_multi_risk",
+      "query": "download data and backtest and optimize tonight",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_high_risk_intent",
+      "notes": "download+backtest+optimize"
+    },
+    {
+      "id": "C-MR-R2",
+      "family": "const_multi_risk",
+      "query": "download and start live",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_high_risk_intent",
+      "notes": "download+live"
+    },
+    {
+      "id": "C-MR-D1",
+      "family": "const_multi_risk",
+      "query": "download data and backtest tonight",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_high_risk_intent",
+      "fake_reply": {"job": "backtest.builtin"},
+      "notes": "Mode-D cannot override multi risk"
+    },
+    {
+      "id": "C-MR-D2",
+      "family": "const_multi_risk",
+      "query": "download and start live",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_high_risk_intent",
+      "fake_reply": {"job": "live.plan_only"},
+      "notes": "Mode-D cannot override download+live"
+    },
+    {
+      "id": "C-LV-R1",
+      "family": "const_live",
+      "query": "start live trade now",
+      "mode": "R",
+      "expected_job": "live.plan_only",
+      "expected_source": "rule",
+      "expected_rationale_contains": "live_never_auto",
+      "notes": "gold D-LIVE via constitution"
+    },
+    {
+      "id": "C-LV-D1",
+      "family": "const_live",
+      "query": "start live trade now",
+      "mode": "D",
+      "expected_job": "live.plan_only",
+      "expected_source": "rule",
+      "expected_rationale_contains": "live_never_auto",
+      "fake_reply": {"job": "open"},
+      "notes": "Mode-D cannot auto live"
+    },
+    {
+      "id": "RG-E1",
+      "family": "r_gold",
+      "query": "帮我看 Tushare 是否配好、本地缺哪些表",
+      "mode": "R",
+      "expected_job": "env.ready",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold E1"
+    },
+    {
+      "id": "RG-B2",
+      "family": "r_gold",
+      "query": "kline summary of 000300.SH",
+      "mode": "R",
+      "expected_job": "data.summary",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold B2"
+    },
+    {
+      "id": "RG-C1",
+      "family": "r_gold",
+      "query": "export kline of 000300.SH to png",
+      "mode": "R",
+      "expected_job": "data.export",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold C1"
+    },
+    {
+      "id": "RG-BF1",
+      "family": "r_gold",
+      "query": "download daily data from 20180101 to 20231231",
+      "mode": "R",
+      "expected_job": "data.refill",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold B-F1"
+    },
+    {
+      "id": "RG-B4",
+      "family": "r_gold",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "mode": "R",
+      "expected_job": "research.screen",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold B4"
+    },
+    {
+      "id": "RG-R1",
+      "family": "r_gold",
+      "query": "factor IC summary for selection pool",
+      "mode": "R",
+      "expected_job": "research.factor_ic",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold R1"
+    },
+    {
+      "id": "RG-A2",
+      "family": "r_gold",
+      "query": "show me macd strategy parameters",
+      "mode": "R",
+      "expected_job": "strategy.meta",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold A2"
+    },
+    {
+      "id": "RG-A1",
+      "family": "r_gold",
+      "query": "list built-in strategies",
+      "mode": "R",
+      "expected_job": "strategy.meta",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold A1"
+    },
+    {
+      "id": "RG-BP0",
+      "family": "r_gold",
+      "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+      "mode": "R",
+      "expected_job": "backtest.builtin",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold B-P0"
+    },
+    {
+      "id": "RG-BP0D",
+      "family": "r_gold",
+      "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
+      "mode": "R",
+      "expected_job": "backtest.builtin",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold B-P0-dash"
+    },
+    {
+      "id": "RG-BF3",
+      "family": "r_gold",
+      "query": "optimize DMA parameters",
+      "mode": "R",
+      "expected_job": "optimize.builtin",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold B-F3"
+    },
+    {
+      "id": "RG-D1",
+      "family": "r_gold",
+      "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+      "mode": "R",
+      "expected_job": "strategy.builder",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold D1"
+    },
+    {
+      "id": "RG-INS1",
+      "family": "r_gold",
+      "query": "总结上次回测",
+      "mode": "R",
+      "expected_job": "insight.last_backtest",
+      "expected_source": "rule",
+      "expected_rationale_contains": "gold_lock",
+      "notes": "gold INSIGHT-1"
+    },
+    {
+      "id": "RG-DLIVE",
+      "family": "r_gold",
+      "query": "start live trade now",
+      "mode": "R",
+      "expected_job": "live.plan_only",
+      "expected_source": "rule",
+      "expected_rationale_contains": "live_never_auto",
+      "notes": "gold D-LIVE；宪法先于 gold_lock"
+    },
+    {
+      "id": "RZ-READ-H",
+      "family": "r_zero",
+      "query": "把沪深300从2024年初到月底的收盘价读出来",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "zero_trigger",
+      "notes": "口语 history，无 get_history_data"
+    },
+    {
+      "id": "RZ-READ-S",
+      "family": "r_zero",
+      "query": "查一下 000001 的行业静态信息",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "zero_trigger",
+      "notes": "口语 static，无 get_static_data"
+    },
+    {
+      "id": "RZ-REFILL",
+      "family": "r_zero",
+      "query": "把 2018 到 2023 的日线补进本地库",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "zero_trigger",
+      "notes": "无 download 字样"
+    },
+    {
+      "id": "RZ-XYZZY",
+      "family": "r_zero",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "zero_trigger",
+      "notes": "G6 债"
+    },
+    {
+      "id": "RZ-HELLO",
+      "family": "r_zero",
+      "query": "你好吗？",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "zero_trigger",
+      "notes": "寒暄"
+    },
+    {
+      "id": "RM-SCR-VOL",
+      "family": "r_multi",
+      "query": "筛选制造业并看波动率",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_trigger",
+      "notes": "原 tiebreak screen vs summary"
+    },
+    {
+      "id": "RM-INS-BT",
+      "family": "r_multi",
+      "query": "总结上次回测的结果",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_trigger",
+      "notes": "insight + 回测 子串"
+    },
+    {
+      "id": "RM-SUM-EXP",
+      "family": "r_multi",
+      "query": "show kline summary 000300.SH from 20241231 to 20240101",
+      "mode": "R",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_trigger",
+      "notes": "summary+export 倒置日期句"
+    },
+    {
+      "id": "DP-UNC",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "llm_uncertain",
+      "fake_reply": {"job": "data.summary", "uncertain": true},
+      "notes": "uncertain true"
+    },
+    {
+      "id": "DP-JOBS-2",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "llm_multi_job",
+      "fake_reply": {"jobs": ["data.refill", "backtest.builtin"]},
+      "notes": "jobs length != 1"
+    },
+    {
+      "id": "DP-JOBS-0",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "llm_multi_job",
+      "fake_reply": {"jobs": []},
+      "notes": "empty jobs"
+    },
+    {
+      "id": "DP-BAD-JSON",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "illegal_llm_job",
+      "fake_reply": "not-json{{{",
+      "notes": "illegal JSON"
+    },
+    {
+      "id": "DP-UNKNOWN",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "illegal_llm_job",
+      "fake_reply": {"job": "hack.shell"},
+      "notes": "unknown id"
+    },
+    {
+      "id": "DP-STEPS",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "illegal_llm_job",
+      "fake_reply": {"steps": [{"skill_name": "qt.ai.data.summary_kline"}]},
+      "notes": "contains steps"
+    },
+    {
+      "id": "DP-EMPTY",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "illegal_llm_job",
+      "fake_reply": "",
+      "notes": "empty response"
+    },
+    {
+      "id": "DP-JOBS-1",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "data.summary",
+      "expected_source": "llm",
+      "expected_rationale_contains": "llm_certain",
+      "fake_reply": {"jobs": ["data.summary"]},
+      "notes": "jobs length 1 == unique job"
+    },
+    {
+      "id": "DP-OMIT-UNC",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "env.ready",
+      "expected_source": "llm",
+      "expected_rationale_contains": "llm_certain",
+      "fake_reply": {"job": "env.ready"},
+      "notes": "omit uncertain = certain"
+    },
+    {
+      "id": "DP-UNC-FALSE",
+      "family": "d_protocol",
+      "query": "xyzzy unmatched formula 12345",
+      "mode": "D",
+      "expected_job": "strategy.meta",
+      "expected_source": "llm",
+      "expected_rationale_contains": "llm_certain",
+      "fake_reply": {"job": "strategy.meta", "uncertain": false},
+      "notes": "uncertain false"
+    },
+    {
+      "id": "DPA-READ-H",
+      "family": "d_paraphrase",
+      "query": "把沪深300从2024年初到月底的收盘价读出来",
+      "mode": "D",
+      "expected_job": "data.read",
+      "expected_source": "llm",
+      "fake_reply": {"job": "data.read"},
+      "notes": "口语 history"
+    },
+    {
+      "id": "DPA-READ-S",
+      "family": "d_paraphrase",
+      "query": "查一下 000001 的行业静态信息",
+      "mode": "D",
+      "expected_job": "data.read",
+      "expected_source": "llm",
+      "fake_reply": {"job": "data.read"},
+      "notes": "口语 static"
+    },
+    {
+      "id": "DPA-REFILL",
+      "family": "d_paraphrase",
+      "query": "把 2018 到 2023 的日线补进本地库",
+      "mode": "D",
+      "expected_job": "data.refill",
+      "expected_source": "llm",
+      "fake_reply": {"job": "data.refill"},
+      "notes": "无 download 字样"
+    },
+    {
+      "id": "DPA-INS",
+      "family": "d_paraphrase",
+      "query": "总结上次回测的结果",
+      "mode": "D",
+      "expected_job": "insight.last_backtest",
+      "expected_source": "llm",
+      "fake_reply": {"job": "insight.last_backtest"},
+      "notes": "G6 软肋"
+    },
+    {
+      "id": "DPA-SCR",
+      "family": "d_paraphrase",
+      "query": "帮我筛过去半年跌超两成、行业是银行的票",
+      "mode": "D",
+      "expected_job": "research.screen",
+      "expected_source": "llm",
+      "fake_reply": {"job": "research.screen"},
+      "notes": "口语筛股"
+    },
+    {
+      "id": "DPA-SUM",
+      "family": "d_paraphrase",
+      "query": "看一下沪深300这段时间交易天数多不多",
+      "mode": "D",
+      "expected_job": "data.summary",
+      "expected_source": "llm",
+      "fake_reply": {"job": "data.summary"},
+      "notes": "浅改写 summary"
+    },
+    {
+      "id": "DPA-META",
+      "family": "d_paraphrase",
+      "query": "macd 这个策略有哪些可调参数",
+      "mode": "D",
+      "expected_job": "strategy.meta",
+      "expected_source": "llm",
+      "fake_reply": {"job": "strategy.meta"},
+      "notes": "浅改写 meta"
+    },
+    {
+      "id": "DPA-BT",
+      "family": "d_paraphrase",
+      "query": "用 dma 在创业板上走一遍 2019 到 2022 的回测",
+      "mode": "D",
+      "expected_job": "backtest.builtin",
+      "expected_source": "llm",
+      "fake_reply": {"job": "backtest.builtin"},
+      "notes": "浅改写 backtest"
+    },
+    {
+      "id": "DPA-SB",
+      "family": "d_paraphrase",
+      "query": "按双均线思路帮我生成一份可回测的择时策略",
+      "mode": "D",
+      "expected_job": "strategy.builder",
+      "expected_source": "llm",
+      "fake_reply": {"job": "strategy.builder"},
+      "notes": "浅改写 builder"
+    },
+    {
+      "id": "DPA-ENV",
+      "family": "d_paraphrase",
+      "query": "先确认一下本机数据和 token 齐不齐",
+      "mode": "D",
+      "expected_job": "env.ready",
+      "expected_source": "llm",
+      "fake_reply": {"job": "env.ready"},
+      "notes": "浅改写 env"
+    },
+    {
+      "id": "DPA-EXP",
+      "family": "d_paraphrase",
+      "query": "把 000300 的图导出成一张 png",
+      "mode": "D",
+      "expected_job": "data.export",
+      "expected_source": "llm",
+      "fake_reply": {"job": "data.export"},
+      "notes": "浅改写 export"
+    },
+    {
+      "id": "DPA-IC",
+      "family": "d_paraphrase",
+      "query": "算一下这个选股池最近的因子 IC",
+      "mode": "D",
+      "expected_job": "research.factor_ic",
+      "expected_source": "llm",
+      "fake_reply": {"job": "research.factor_ic"},
+      "notes": "浅改写 factor ic"
+    },
+    {
+      "id": "DPA-OPT",
+      "family": "d_paraphrase",
+      "query": "帮我把 macd 参数搜一圈最优组合",
+      "mode": "D",
+      "expected_job": "optimize.builtin",
+      "expected_source": "llm",
+      "fake_reply": {"job": "optimize.builtin"},
+      "notes": "浅改写 optimize"
+    },
+    {
+      "id": "DMI-DL-BT",
+      "family": "d_multi_intent",
+      "query": "下载并且回测沪深300",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "multi_high_risk",
+      "fake_reply": {"jobs": ["data.refill", "backtest.builtin"]},
+      "notes": "宪法多高风险先于 LLM"
+    },
+    {
+      "id": "DMI-LLM",
+      "family": "d_multi_intent",
+      "query": "先读一段行情再帮我画出来",
+      "mode": "D",
+      "expected_job": "clarify",
+      "expected_source": "rule",
+      "expected_rationale_contains": "llm_multi_job",
+      "fake_reply": {"jobs": ["data.read", "data.export"]},
+      "notes": "低风险双意图由 LLM 自标"
+    }
+  ]
+}
