@@ -227,3 +227,4 @@ Execute.
 - 人工记录模板：`tests/ai_corpus/manual_record_template.md`
 - 执行脚本：`python tests/run_ai_manual_corpus.py`（或 `python -m unittest discover -s tests -p 'test_ai_*.py' -v`）
 - 人工测试清单：[MANUAL_TEST.md](../MANUAL_TEST.md)
+- Q-AI.5 手测入口：[LIVE_FIRE_DRILL_QAI5.md](../LIVE_FIRE_DRILL_QAI5.md)（`plan --raw`；不在此展开 Job 全表）

@@ -13,6 +13,7 @@
 | **本地明细** | 复制 [`manual_record_template.md`](../tests/ai_corpus/manual_record_template.md) → `manual_record_YYYY-MM-DD.md`（**gitignore**） |
 | **对照** | 阶段 D TDD；顶层 **Q-AI.4**；OKF `knowledge/domain/qteasy-ai-strategybuilder.md` |
 | **前手册** | [Q-AI.3](LIVE_FIRE_DRILL_QAI3.md) **已关单**。不重跑 Ask 全套（PT/PS、depth、preview vs ask）。只抽本手册 G2 写策略句 |
+| **后手册** | [Q-AI.5](LIVE_FIRE_DRILL_QAI5.md)（阶段 E 意图门 / 22-skill 矩阵；不重跑本手册 G3 真 codegen+回测） |
 
 **驱动**：**Mode-R 必测**（规则路径 DAG + live plan-only）。**Mode-D 关单前建议补跑**（抽金句：catalog 含 `name: summary`，且不把回测点成 refill）。不要求 Mode-L。
 
