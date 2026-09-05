@@ -1,6 +1,6 @@
 # Q-AI.5（阶段 E）实弹演练手册（Jackie 手动执行）
 
-**状态：待手测（编码已落地；本手册关单后才改本行）。**
+**状态：实弹已关单（Jackie，2026-09-05；口径 = 现行方案 H）。下一编码：E.8 H′。**
 
 基线：qteasy-ai **0.1.x + 阶段 E 未发版改动** · qteasy **>=2.6** · Python **py39**
 
@@ -42,28 +42,28 @@ Registry = 覆盖闭包。来源：`build_default_registry()`（22 个）。**�
 
 | # | skill | 层 | 覆盖门 | 期望出现方式 | 勾 |
 |---|-------|----|--------|----------------|----|
-| 1 | `qt.ai.env.check_tushare` | L1 guide | E-ENV | `env.ready` 第 1 步 | [ ] |
-| 2 | `qt.ai.env.overview_tables` | L1 guide | E-ENV | `env.ready` 第 2 步 | [ ] |
-| 3 | `qt.ai.strategy_meta.list` | L1 | E-META-L + E-PLANID | `strategy.meta` list | [ ] |
-| 4 | `qt.ai.strategy_meta.get` | L1 | E-META-G | macd 参数（**不是** Ask） | [ ] |
-| 5 | `qt.ai.data.summary_kline` | L1 | E-SUM | B2；pretty 不得 successfully | [ ] |
-| 6 | `qt.ai.data.read` | L1 **E 新** | E-READ-H/R/S | 三通道各 1 句 | [ ] |
-| 7 | `qt.ai.visual.export_kline` | L1 | E-EXP | C1；只 plan | [ ] |
-| 8 | `qt.ai.data.refill_basic_equity_and_index` | L2 高副作用 | E-REFILL-P + E-REFILL-C | 有日期 plan；无日期 clarify。**禁止**无界 `run` | [ ] |
-| 9 | `qt.ai.research.factor_ic_summary` | L1 | E-IC | R1 | [ ] |
-| 10 | `qt.ai.research.universe_filter` | L1 **E 新** | E-SCR-TH / E-SCR-EN | screen DAG 第一步 | [ ] |
-| 11 | `qt.ai.research.price_predicate` | L1 **E 新** | E-SCR-TH | 有阈值才出现 | [ ] |
-| 12 | `qt.ai.research.project_universe` | L1 **E 新** | E-SCR-TH / E-SCR-EN | 投影 | [ ] |
-| 13 | `qt.ai.research.screen_stocks` | 遗留 L2 | E-SCR-TH **负例** | B4 **不得**出现此名（Job 已拆 L1） | [ ] |
-| 14 | `qt.ai.backtest.run_builtin` | L2 高副作用 | E-BT | B-P0；有数才可选 `run` | [ ] |
-| 15 | `qt.ai.insight.summarize_backtest` | L3 | E-BT + E-INS | P0 第二步；「总结上次回测」单步 | [ ] |
-| 16 | `qt.ai.optimize.run_builtin` | L2 高副作用 | E-OPT | B-F3 **只 plan** | [ ] |
-| 17 | `qt.ai.strategy.spec_from_nl` | L2 | E-SB | D1 五步第 1（只 plan） | [ ] |
-| 18 | `qt.ai.strategy.codegen_hybrid` | L2 高副作用 | E-SB | 五步第 2；本手册默认不 `run` | [ ] |
-| 19 | `qt.ai.strategy.sanity_check` | L2 | E-SB | 五步第 3 | [ ] |
-| 20 | `qt.ai.operator.build_from_spec` | L2 | E-SB | 五步第 4 | [ ] |
-| 21 | `qt.ai.pipeline.live_trade_plan_only` | L2 | E-LIVE | D-LIVE；**禁止 `run`** | [ ] |
-| 22 | `qt.ai.system.fallback` | 系统 | E-CLR / E-UNS / E-USF | clarify / not_supported / unsafe | [ ] |
+| 1 | `qt.ai.env.check_tushare` | L1 guide | E-ENV | `env.ready` 第 1 步 | [x] |
+| 2 | `qt.ai.env.overview_tables` | L1 guide | E-ENV | `env.ready` 第 2 步 | [x] |
+| 3 | `qt.ai.strategy_meta.list` | L1 | E-META-L + E-PLANID | `strategy.meta` list | [x] |
+| 4 | `qt.ai.strategy_meta.get` | L1 | E-META-G | macd 参数（**不是** Ask） | [x] |
+| 5 | `qt.ai.data.summary_kline` | L1 | E-SUM | B2；pretty 不得 successfully | [x] |
+| 6 | `qt.ai.data.read` | L1 **E 新** | E-READ-H/R/S | 三通道各 1 句 | [x] |
+| 7 | `qt.ai.visual.export_kline` | L1 | E-EXP | C1；只 plan | [x] |
+| 8 | `qt.ai.data.refill_basic_equity_and_index` | L2 高副作用 | E-REFILL-P + E-REFILL-C | 有日期 plan；无日期 clarify。**禁止**无界 `run` | [x] |
+| 9 | `qt.ai.research.factor_ic_summary` | L1 | E-IC | R1 | [x] |
+| 10 | `qt.ai.research.universe_filter` | L1 **E 新** | E-SCR-TH / E-SCR-EN | screen DAG 第一步 | [x] |
+| 11 | `qt.ai.research.price_predicate` | L1 **E 新** | E-SCR-TH | 有阈值才出现 | [x] |
+| 12 | `qt.ai.research.project_universe` | L1 **E 新** | E-SCR-TH / E-SCR-EN | 投影 | [x] |
+| 13 | `qt.ai.research.screen_stocks` | 遗留 L2 | E-SCR-TH **负例** | B4 **不得**出现此名（Job 已拆 L1） | [x] |
+| 14 | `qt.ai.backtest.run_builtin` | L2 高副作用 | E-BT | B-P0；有数才可选 `run` | [x] |
+| 15 | `qt.ai.insight.summarize_backtest` | L3 | E-BT + E-INS | P0 第二步；「总结上次回测」单步 | [x] |
+| 16 | `qt.ai.optimize.run_builtin` | L2 高副作用 | E-OPT | B-F3 **只 plan** | [x] |
+| 17 | `qt.ai.strategy.spec_from_nl` | L2 | E-SB | D1 五步第 1（只 plan） | [x] |
+| 18 | `qt.ai.strategy.codegen_hybrid` | L2 高副作用 | E-SB | 五步第 2；本手册默认不 `run` | [x] |
+| 19 | `qt.ai.strategy.sanity_check` | L2 | E-SB | 五步第 3 | [x] |
+| 20 | `qt.ai.operator.build_from_spec` | L2 | E-SB | 五步第 4 | [x] |
+| 21 | `qt.ai.pipeline.live_trade_plan_only` | L2 | E-LIVE | D-LIVE；**禁止 `run`** | [x] |
+| 22 | `qt.ai.system.fallback` | 系统 | E-CLR / E-UNS / E-USF | clarify / not_supported / unsafe | [x] |
 
 ### Job（官方 13 + 系统 5）
 
@@ -71,24 +71,24 @@ Registry = 覆盖闭包。来源：`build_default_registry()`（22 个）。**�
 
 | Job | 覆盖门 | 勾 |
 |-----|--------|----|
-| `env.ready` | E-ENV | [ ] |
-| `data.summary` | E-SUM | [ ] |
-| `data.export` | E-EXP | [ ] |
-| `data.refill` | E-REFILL-P | [ ] |
-| `data.read` | E-READ-H/R/S | [ ] |
-| `research.factor_ic` | E-IC | [ ] |
-| `research.screen` | E-SCR-TH / E-SCR-EN / E-TIE | [ ] |
-| `strategy.meta` | E-META-L / E-META-G | [ ] |
-| `backtest.builtin` | E-BT | [ ] |
-| `optimize.builtin` | E-OPT | [ ] |
-| `strategy.builder` | E-SB | [ ] |
-| `insight.last_backtest` | E-INS | [ ] |
-| `live.plan_only` | E-LIVE | [ ] |
-| `clarify` | E-MULTI / E-LIVE-RACE / E-OPEN-OK（系统 Job）；缺槽/坏日期见 E-REFILL-C、E-DATE、E-FREQ（`intent_job` 可仍是官方 Job，steps 为 fallback） | [ ] |
-| `not_supported` | E-UNS | [ ] |
-| `unsafe` | E-USF | [ ] |
-| `route_to_ask` | E-ASK | [ ] |
-| `open` | Mode-R 无 Provider **不开**（E-OPEN-OK → clarify）；Mode-D 0 命中才可能出现 | [ ] |
+| `env.ready` | E-ENV | [x] |
+| `data.summary` | E-SUM | [x] |
+| `data.export` | E-EXP | [x] |
+| `data.refill` | E-REFILL-P | [x] |
+| `data.read` | E-READ-H/R/S | [x] |
+| `research.factor_ic` | E-IC | [x] |
+| `research.screen` | E-SCR-TH / E-SCR-EN / E-TIE | [x] |
+| `strategy.meta` | E-META-L / E-META-G | [x] |
+| `backtest.builtin` | E-BT | [x] |
+| `optimize.builtin` | E-OPT | [x] |
+| `strategy.builder` | E-SB | [x] |
+| `insight.last_backtest` | E-INS | [x] |
+| `live.plan_only` | E-LIVE | [x] |
+| `clarify` | E-MULTI / E-LIVE-RACE / E-OPEN-OK（系统 Job）；缺槽/坏日期见 E-REFILL-C、E-DATE、E-FREQ（`intent_job` 可仍是官方 Job，steps 为 fallback） | [x] |
+| `not_supported` | E-UNS | [x] |
+| `unsafe` | E-USF | [x] |
+| `route_to_ask` | E-ASK | [x] |
+| `open` | Mode-R 无 Provider **不开**（E-OPEN-OK → clarify）；Mode-D 0 命中才可能出现 | [x] |
 
 ---
 
@@ -106,10 +106,10 @@ qteasy-ai provider-check
 
 记录：
 
-- [ ] `.qteasy/ai/runs/` 文件数（演练前）→ 记为 `runs_before`
-- [ ] 是否已有 `.qteasy/ai/env_facts.json` / `profile.json`
-- [ ] 本机是否已有 `000300.SH` 日线（仅 G5 可选 `run` 需要）
-- [ ] `strategies/` 里是否已有 `GeneratedSmaCross.py`（本手册默认 **不** 再 codegen `run`）
+- [x] `.qteasy/ai/runs/` 文件数（演练前）→ 记为 `runs_before`
+- [x] 是否已有 `.qteasy/ai/env_facts.json` / `profile.json`
+- [x] 本机是否已有 `000300.SH` 日线（仅 G5 可选 `run` 需要）
+- [x] `strategies/` 里是否已有 `GeneratedSmaCross.py`（本手册默认 **不** 再 codegen `run`）
 
 可选冒烟（非关单义务）：
 
@@ -329,45 +329,45 @@ qteasy-ai plan "xyzzy unmatched formula 12345" --raw
 - 申万完整 DSL / 无界下载真执行：1.0 明确不支持。
 - QAI4 G3 真 codegen+回测本手册默认 Skip。
 
-手测后补三栏（可推翻金标准的写进表）：
+手测后补三栏（2026-09-05 Jackie；可推翻金标准的写进表）：
 
 ### 命题对照
 
 | 命题 | Mode-R | Mode-D |
 |------|--------|--------|
-| 已知 Job 是否 `source=rule` 且无 `recipe_slots_from`？ | | |
-| 22 skill 是否各至少一次命中或负例？ | | —（抽测不跑全表） |
-| B4 是否已无 `screen_stocks`？ | | |
-| `download and start live` 是否 clarify 而非 live？ | | |
-| macd 参数是否仍是 meta 不是 Ask？ | | |
-| 无 Provider 0 命中是否 clarify 不开 open？ | | — |
-| 0 命中 open 是否守住 legal_edges？ | — | |
-| `--plan-id` 是否执行已审阅图、缺 id 英文 `PLAN_ID_NOT_FOUND`？ | | — |
-| pretty dry-run 是否含 “Dry-run plan (not executed)”？ | | |
+| 已知 Job 是否 `source=rule` 且无 `recipe_slots_from`？ | 是（G1 18 句 `gold_lock` / `single_trigger`） | 是（lock 四句仍 `gold_lock` + `source=rule`） |
+| 22 skill 是否各至少一次命中或负例？ | 是（#1–21 命中；#13 `screen_stocks` 负例；#22 G2 fallback） | —（抽测不跑全表） |
+| B4 是否已无 `screen_stocks`？ | 是（三步 L1） | 是（D-B4 同图） |
+| `download and start live` 是否 clarify 而非 live？ | 是（`multi_high_risk_intent`） | 是 |
+| macd 参数是否仍是 meta 不是 Ask？ | 是（E-META-G） | 是（D-META-G / `gold_lock:A2`） |
+| 无 Provider 0 命中是否 clarify 不开 open？ | 是（`xyzzy` → `zero_trigger_hit:no_provider`） | — |
+| 0 命中 open 是否守住 legal_edges？ | — | 本轮未 `open`：LLM 回非法 Job → `clarify`（`zero_trigger_hit:illegal_llm_job`） |
+| `--plan-id` 是否执行已审阅图、缺 id 英文 `PLAN_ID_NOT_FOUND`？ | 是（list `plan_00d219318e42`；缺 id 英文码） | — |
+| pretty dry-run 是否含 “Dry-run plan (not executed)”？ | 是（E-PRETTY；无 successfully / completed） | — |
 
 ### Top 5 问题
 
-1.
-2.
-3.
-4.
-5.
+1. Mode-R 改写/口语软：history/static、无 download 的 refill 易 0 命中 `clarify`（现行 H 预期；鲁棒抬到 **E.8 H′ Mode-D**）。
+2. 冲突表赢家：非正式改写「总结上次回测的结果」可被 tiebreak 成 `backtest` 再 `not_supported`（H′ Mode-R 多命中改 `clarify`）。
+3. 「筛选制造业并看波动率」走 `tiebreak` 定 `research.screen`，不是澄清（本轮按 H 过；H′ 将改）。
+4. 未知行业「公共交通」**plan** 仍出完整三步 DAG；`CLARIFY_REQUIRED` + `industry_samples` 在 **execute**（G4 可选 `run` 本轮未强制）。
+5. Mode-D `xyzzy` 未走到 `open` / `legal_edges`（非法 Job → clarify）；不挡关单。
 
 ### Top 5 隐藏用法
 
 1. `planner_trace.intent_job` / `source` / `rationale` 是意图门主观察口。
-2. CLI `run --plan-id` 对齐 Notebook `--confirm`（不重新 Hybrid）。
-3. 筛股无阈值仍出 universe + project，不整单澄清。
-4. `plan "explain PT and PS"` 会转 Ask。
-5. Mode-D lock 金句模型否决不了。
+2. CLI `run --plan-id` 对齐 Notebook `--confirm`（不重新 Hybrid）；`runs/` 一次执行常 +2 文件（`.json` + `.plan.md`）。
+3. 筛股无阈值仍出 universe + project，不整单澄清；未知行业澄清在 execute 不在 plan。
+4. `plan "explain PT and PS"` 会转 Ask（零 skill、无 `execution`）。
+5. Mode-D lock 金句模型否决不了（`provider_enabled=true` 仍 `source=rule`）。
 
 ### Top 5 新潜在场景
 
 1. 多轮改槽（F）。
 2. TUI/Web（G）。
-3. 开放句合法非菜谱短 DAG 的真实用户写法。
+3. **E.8 H′**：Mode-D 口语/错字；多意图自标不确定后 clarify。
 4. 选股 / 网格模板余量。
-5. 1.0 标签与发布清单。
+5. 1.0 标签与发布清单（仍归 G + §3.9）。
 
 ### 金标准可推翻清单 + 修复时机
 
@@ -376,26 +376,27 @@ qteasy-ai plan "xyzzy unmatched formula 12345" --raw
 | 多轮 / session 记忆 | **后面修（Q-AI.6）** | 本阶段单句 plan |
 | CLI/Notebook 会话 | **后面修（Q-AI.6）** | 入口无 REPL |
 | TUI/Web | **后面修（Q-AI.7）** | 开放方向已编号 |
+| Mode-R 多命中 tiebreak / 改写鲁棒 | **后面修（E.8 H′）** | 本轮实弹按现行 H 关单 |
 | 申万 / PE DSL | **不进 1.0** | `not_supported` |
 | 无界下载真执行 | **不进 1.0** | 安全协议 |
 
-关单后（**本手册不自动做**）：更新本页状态栏、展望 §7.1 Q-AI.5、`exec-phase-e`、RunLog 关单条。1.0 标签另议。
+关单后已记：本页状态栏、展望 §7.1 Q-AI.5、`exec-phase-e`、RunLog。**E.8 编码下一轮**。1.0 标签另议。
 
 ---
 
 ## 验收清单
 
-- [ ] G0 `provider-check` 为 Mode-R；已记 `runs_before`
-- [ ] G1：上表 18 句 Job / skill 序列符合；E-SCR-TH **无** `screen_stocks`
-- [ ] G2：MULTI / LIVE-RACE / UNS / USF / TIE / ASK / OPEN-OK / DATE / FREQ
-- [ ] G3：`--plan-id` 执行 list；缺 id → `PLAN_ID_NOT_FOUND`；`runs/` +1
-- [ ] G4：pretty 无 successfully；未知行业 samples（有表才强断言）；Ask PT/PS 无 `execution`
-- [ ] G5：有条件 B-P0 `run --plan-id` **或** Skip 并记原因；未 `run` 优化 / refill / live / 未审阅 D1
-- [ ] Mode-D：lock 4 + 对抗 3 + 0 命中 1；未对高副作用图 `run`
-- [ ] Skill / Job 覆盖矩阵全部打勾
-- [ ] G6 Top 5×3 + 可推翻清单已写
+- [x] G0 `provider-check` 为 Mode-R；已记 `runs_before`
+- [x] G1：上表 18 句 Job / skill 序列符合；E-SCR-TH **无** `screen_stocks`
+- [x] G2：MULTI / LIVE-RACE / UNS / USF / TIE / ASK / OPEN-OK / DATE / FREQ
+- [x] G3：`--plan-id` 执行 list；缺 id → `PLAN_ID_NOT_FOUND`；`runs/` +1
+- [x] G4：pretty 无 successfully；未知行业 samples（有表才强断言）；Ask PT/PS 无 `execution`
+- [x] G5：有条件 B-P0 `run --plan-id` **或** Skip 并记原因；未 `run` 优化 / refill / live / 未审阅 D1
+- [x] Mode-D：lock 4 + 对抗 3 + 0 命中 1；未对高副作用图 `run`
+- [x] Skill / Job 覆盖矩阵全部打勾
+- [x] G6 Top 5×3 + 可推翻清单已写
 - [ ] `manual_record_*.md` 已填（本地，不进仓；可选）
-- [ ] **关单**（日期 / Jackie）— 勾完后再改状态栏
+- [x] **关单**（2026-09-05 / Jackie）— 现行 H；E.8 下一轮
 
 明确不测 / 不进关单：F 多轮、G TUI/Web、场景三、申万完整 DSL、无界下载真执行、Notebook `%%qtai --confirm`、全量 `unittest discover`。
 
@@ -410,4 +411,4 @@ cd ~/Projects/qteasy-ai
 
 ---
 
-*手册角色：Q-AI.5 手测 · 2026-09-03（体例对齐 QAI4；关单前状态=待手测）*
+*手册角色：Q-AI.5 手测 · 2026-09-03 起草 · **2026-09-05 实弹关单（现行 H）**；下一编码 E.8 H′*
