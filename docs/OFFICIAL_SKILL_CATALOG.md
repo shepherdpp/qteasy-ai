@@ -1,6 +1,6 @@
 # Official Skill Catalog v1
 
-**状态：E.4 起草（2026-09-05）。** 1.0 签字归执行层 **G.5**。不升版。
+**状态：E.4 起草；Phase E 已关单（2026-09-05）。** 1.0 签字归执行层 **G.5**。不升版。
 
 对照：产品顶层 §3.8 / §3.9；意图门 **H′**；Registry = `build_default_registry()`（22 个 skill）。本目录按 **Job 出图**，不是扁平 skill 菜单。
 

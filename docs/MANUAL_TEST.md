@@ -10,7 +10,7 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 
 **Q-AI.4（阶段 D）实弹**：**已关单（2026-08-31）**。手册 [`LIVE_FIRE_DRILL_QAI4.md`](LIVE_FIRE_DRILL_QAI4.md) + 语料 [`tests/ai_corpus/d_manual_corpus.json`](../tests/ai_corpus/d_manual_corpus.json)。
 
-**Q-AI.5（阶段 E）实弹**：**已关单（2026-09-05，现行 H）**。手册 [`LIVE_FIRE_DRILL_QAI5.md`](LIVE_FIRE_DRILL_QAI5.md) + 语料 [`tests/ai_corpus/e_manual_corpus.json`](../tests/ai_corpus/e_manual_corpus.json)。**E.8 H′ 已编码**：补页 [`LIVE_FIRE_DRILL_QAI5_H_PRIME.md`](LIVE_FIRE_DRILL_QAI5_H_PRIME.md)。**E.4 已起草**：Catalog [`OFFICIAL_SKILL_CATALOG.md`](OFFICIAL_SKILL_CATALOG.md) + Journey [`tests/ai_corpus/beginner_journey.json`](../tests/ai_corpus/beginner_journey.json)。下一主线 **F**（session + **F.5 KB Pack**）。
+**Q-AI.5（阶段 E）**：**已关单（2026-09-05）**。实弹手册 [`LIVE_FIRE_DRILL_QAI5.md`](LIVE_FIRE_DRILL_QAI5.md) + 语料 [`tests/ai_corpus/e_manual_corpus.json`](../tests/ai_corpus/e_manual_corpus.json)。**E.8 H′**：补页 [`LIVE_FIRE_DRILL_QAI5_H_PRIME.md`](LIVE_FIRE_DRILL_QAI5_H_PRIME.md)。**E.4**：Catalog [`OFFICIAL_SKILL_CATALOG.md`](OFFICIAL_SKILL_CATALOG.md) + Journey [`tests/ai_corpus/beginner_journey.json`](../tests/ai_corpus/beginner_journey.json)。下一主线 **F**（session + **F.5 KB Pack**）。
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
