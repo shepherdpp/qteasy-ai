@@ -33,6 +33,30 @@
       "lock": true
     },
     {
+      "id": "E-READ-H",
+      "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {"channel": "history"},
+      "lock": true
+    },
+    {
+      "id": "E-READ-R",
+      "query": "get_reference_data cn_gdp from 20240101 to 20240131",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {"channel": "reference"},
+      "lock": true
+    },
+    {
+      "id": "E-READ-S",
+      "query": "get_static_data industry for 000001.SZ",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {"channel": "static"},
+      "lock": true
+    },
+    {
       "id": "B4",
       "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
       "job": "research.screen",

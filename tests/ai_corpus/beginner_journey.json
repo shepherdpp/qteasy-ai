@@ -1,0 +1,226 @@
+{
+  "meta": {
+    "stage": "E.4 / Beginner Journey",
+    "handbook": "docs/OFFICIAL_SKILL_CATALOG.md",
+    "notes": "Mode-R plan cases are CI. BJ-ASK-WHAT is Ask placeholder; KB gold belongs to F.5."
+  },
+  "cases": [
+    {
+      "id": "BJ-ASK-WHAT",
+      "stage": "1",
+      "mode": "ask",
+      "query": "qteasy 是什么",
+      "expected_job": "",
+      "expected_skills": [],
+      "tutorial": "docs/source/getting_started.md",
+      "run_policy": "ask",
+      "notes": "Ask 零 skill；KB Pack 归 F.5，本轮不强制金答案"
+    },
+    {
+      "id": "BJ-ENV",
+      "stage": "1",
+      "mode": "plan",
+      "query": "帮我看 Tushare 是否配好、本地缺哪些表",
+      "expected_job": "env.ready",
+      "expected_skills": [
+        "qt.ai.env.check_tushare",
+        "qt.ai.env.overview_tables"
+      ],
+      "tutorial": "docs/source/getting_started.md",
+      "run_policy": "plan_only",
+      "notes": "gold E1"
+    },
+    {
+      "id": "BJ-REFILL",
+      "stage": "2",
+      "mode": "plan",
+      "query": "download daily data from 20180101 to 20231231",
+      "expected_job": "data.refill",
+      "expected_skills": ["qt.ai.data.refill_basic_equity_and_index"],
+      "tutorial": "docs/source/tutorials/2.0-get-data.md",
+      "run_policy": "plan_only",
+      "notes": "gold B-F1；禁止无界 run"
+    },
+    {
+      "id": "BJ-REFILL-C",
+      "stage": "2",
+      "mode": "plan",
+      "query": "download A-share daily data to local datasource",
+      "expected_job": "data.refill",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "date_range",
+      "tutorial": "docs/source/tutorials/2.0-get-data.md",
+      "run_policy": "clarify",
+      "notes": "E-REFILL-C"
+    },
+    {
+      "id": "BJ-READ-H",
+      "stage": "2",
+      "mode": "plan",
+      "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
+      "expected_job": "data.read",
+      "expected_skills": ["qt.ai.data.read"],
+      "tutorial": "docs/source/tutorials/2.0-get-data.md",
+      "run_policy": "plan_only",
+      "notes": "gold E-READ-H；channel=history"
+    },
+    {
+      "id": "BJ-READ-R",
+      "stage": "2",
+      "mode": "plan",
+      "query": "get_reference_data cn_gdp from 20240101 to 20240131",
+      "expected_job": "data.read",
+      "expected_skills": ["qt.ai.data.read"],
+      "tutorial": "docs/source/tutorials/2.0-get-data.md",
+      "run_policy": "plan_only",
+      "notes": "gold E-READ-R；channel=reference"
+    },
+    {
+      "id": "BJ-READ-S",
+      "stage": "2",
+      "mode": "plan",
+      "query": "get_static_data industry for 000001.SZ",
+      "expected_job": "data.read",
+      "expected_skills": ["qt.ai.data.read"],
+      "tutorial": "docs/source/tutorials/2.0-get-data.md",
+      "run_policy": "plan_only",
+      "notes": "gold E-READ-S；channel=static"
+    },
+    {
+      "id": "BJ-SUM",
+      "stage": "3",
+      "mode": "plan",
+      "query": "kline summary of 000300.SH",
+      "expected_job": "data.summary",
+      "expected_skills": ["qt.ai.data.summary_kline"],
+      "tutorial": "docs/source/tutorials/2.4-historypanel-basics.md",
+      "run_policy": "plan_only",
+      "notes": "gold B2"
+    },
+    {
+      "id": "BJ-EXP",
+      "stage": "3",
+      "mode": "plan",
+      "query": "export kline of 000300.SH to png",
+      "expected_job": "data.export",
+      "expected_skills": ["qt.ai.visual.export_kline"],
+      "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
+      "run_policy": "plan_only",
+      "notes": "gold C1"
+    },
+    {
+      "id": "BJ-SCR",
+      "stage": "3",
+      "mode": "plan",
+      "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+      "expected_job": "research.screen",
+      "expected_skills": [
+        "qt.ai.research.universe_filter",
+        "qt.ai.research.price_predicate",
+        "qt.ai.research.project_universe"
+      ],
+      "forbidden_skills": ["qt.ai.research.screen_stocks"],
+      "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
+      "run_policy": "plan_only",
+      "notes": "gold B4"
+    },
+    {
+      "id": "BJ-IC",
+      "stage": "3",
+      "mode": "plan",
+      "query": "factor IC summary for selection pool",
+      "expected_job": "research.factor_ic",
+      "expected_skills": ["qt.ai.research.factor_ic_summary"],
+      "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
+      "run_policy": "plan_only",
+      "notes": "gold R1"
+    },
+    {
+      "id": "BJ-META-L",
+      "stage": "4",
+      "mode": "plan",
+      "query": "list built-in strategies",
+      "expected_job": "strategy.meta",
+      "expected_skills": ["qt.ai.strategy_meta.list"],
+      "tutorial": "docs/source/tutorials/4-build-in-strategies.md",
+      "run_policy": "plan_only",
+      "notes": "gold A1"
+    },
+    {
+      "id": "BJ-META-G",
+      "stage": "4",
+      "mode": "plan",
+      "query": "show me macd strategy parameters",
+      "expected_job": "strategy.meta",
+      "expected_skills": ["qt.ai.strategy_meta.get"],
+      "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
+      "run_policy": "plan_only",
+      "notes": "gold A2"
+    },
+    {
+      "id": "BJ-BT",
+      "stage": "4",
+      "mode": "plan",
+      "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
+      "expected_job": "backtest.builtin",
+      "expected_skills": [
+        "qt.ai.backtest.run_builtin",
+        "qt.ai.insight.summarize_backtest"
+      ],
+      "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
+      "run_policy": "plan_only",
+      "notes": "gold B-P0-dash"
+    },
+    {
+      "id": "BJ-SB",
+      "stage": "4",
+      "mode": "plan",
+      "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+      "expected_job": "strategy.builder",
+      "expected_skills": [
+        "qt.ai.strategy.spec_from_nl",
+        "qt.ai.strategy.codegen_hybrid",
+        "qt.ai.strategy.sanity_check",
+        "qt.ai.operator.build_from_spec",
+        "qt.ai.backtest.run_builtin"
+      ],
+      "tutorial": "docs/source/tutorials/5-first-self-defined-strategy.md",
+      "run_policy": "plan_only",
+      "notes": "gold D1"
+    },
+    {
+      "id": "BJ-OPT",
+      "stage": "5",
+      "mode": "plan",
+      "query": "optimize DMA parameters",
+      "expected_job": "optimize.builtin",
+      "expected_skills": ["qt.ai.optimize.run_builtin"],
+      "tutorial": "docs/source/tutorials/Tutorial 06 - 交易策略的优化.md",
+      "run_policy": "plan_only",
+      "notes": "gold B-F3"
+    },
+    {
+      "id": "BJ-INS",
+      "stage": "5",
+      "mode": "plan",
+      "query": "总结上次回测",
+      "expected_job": "insight.last_backtest",
+      "expected_skills": ["qt.ai.insight.summarize_backtest"],
+      "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
+      "run_policy": "plan_only",
+      "notes": "gold INSIGHT-1"
+    },
+    {
+      "id": "BJ-ASK-PT",
+      "stage": "1",
+      "mode": "plan",
+      "query": "explain PT and PS",
+      "expected_job": "route_to_ask",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
+      "run_policy": "ask",
+      "notes": "route_to_ask → Ask；KB 已有 pt_ps_vs"
+    }
+  ]
+}
