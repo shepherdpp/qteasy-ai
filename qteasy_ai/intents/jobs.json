@@ -1,18 +1,18 @@
 {
   "official": [
-    {"id": "env.ready", "summary": "Check Tushare token and local data tables."},
-    {"id": "data.summary", "summary": "K-line summary (volatility, trading days)."},
-    {"id": "data.export", "summary": "Export a K-line chart or image."},
-    {"id": "data.refill", "summary": "Bounded download of equity/index daily data."},
-    {"id": "data.read", "summary": "Read-only fetch via history, reference, or static channel."},
-    {"id": "research.factor_ic", "summary": "Factor IC summary for a selection pool."},
-    {"id": "research.screen", "summary": "Stock screen: universe plus optional return predicate and projection."},
-    {"id": "strategy.meta", "summary": "List or get built-in strategy metadata."},
-    {"id": "backtest.builtin", "summary": "Run a built-in strategy backtest; optional insight flag."},
-    {"id": "optimize.builtin", "summary": "Run built-in parameter optimization."},
-    {"id": "strategy.builder", "summary": "NL to spec, codegen, sanity, operator, optional backtest."},
-    {"id": "insight.last_backtest", "summary": "Read-only summary of an existing backtest run."},
-    {"id": "live.plan_only", "summary": "Live-trade checklist only; never auto-execute."}
+    {"id": "env.ready", "summary": "Check Tushare token and local data tables.", "workflow": "closed"},
+    {"id": "data.summary", "summary": "K-line summary (volatility, trading days).", "workflow": "closed"},
+    {"id": "data.export", "summary": "Export a K-line chart or image.", "workflow": "closed"},
+    {"id": "data.refill", "summary": "Bounded download of equity/index daily data.", "workflow": "closed"},
+    {"id": "data.read", "summary": "Read-only fetch via history, reference, or static channel.", "workflow": "closed"},
+    {"id": "research.factor_ic", "summary": "Factor IC summary for a selection pool.", "workflow": "closed"},
+    {"id": "research.screen", "summary": "Stock screen: universe plus optional return predicate and projection.", "workflow": "closed"},
+    {"id": "strategy.meta", "summary": "List or get built-in strategy metadata.", "workflow": "closed"},
+    {"id": "backtest.builtin", "summary": "Run a built-in strategy backtest; optional insight flag.", "workflow": "closed"},
+    {"id": "optimize.builtin", "summary": "Run built-in parameter optimization.", "workflow": "closed"},
+    {"id": "strategy.builder", "summary": "NL to spec, codegen, sanity, operator, optional backtest.", "workflow": "closed"},
+    {"id": "insight.last_backtest", "summary": "Read-only summary of an existing backtest run.", "workflow": "closed"},
+    {"id": "live.plan_only", "summary": "Live-trade checklist only; never auto-execute.", "workflow": "closed"}
   ],
   "system": [
     {"id": "clarify", "summary": "Ask the user to split or complete the request."},

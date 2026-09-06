@@ -1,0 +1,16 @@
+{
+  "id": "official_vs_user_kb",
+  "tags": ["kb", "user_kb", "ask"],
+  "keywords": [
+    "user kb",
+    "official kb",
+    "knowledge base",
+    "用户知识库",
+    "官方知识库"
+  ],
+  "title": "Official KB vs user_kb",
+  "summary": "Ask reads only official qteasy_ai/kb. user_kb is a local scaffold for later research loops.",
+  "narrative": "Official knowledge lives in the qteasy-ai package (`qteasy_ai/kb/*.json`). Ask retrieves those pages only. A missing hit returns NOT_FOUND and does not call an LLM.\n\n`user_kb/` under QTEASY_AI_HOME is created on first MemoryStore init: rules/, raw/{research,trades,factors,strategies}/, compiled/, plus an English README. Empty compile writes a valid empty catalog. Retrieval of user notes is not part of Ask in 1.0.",
+  "python_code": "from qteasy_ai.memory_store import MemoryStore\nfrom qteasy_ai.knowledge_base import KnowledgeBase\nstore = MemoryStore()\nprint(store.user_kb_partitions_ok())\nprint([e.id for e in KnowledgeBase().retrieve('what is qteasy')])",
+  "risk_notes": "Do not paste research notes into official kb/. Ask will ignore user_kb even if files exist."
+}

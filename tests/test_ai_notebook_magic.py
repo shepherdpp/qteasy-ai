@@ -135,6 +135,45 @@ class TestAiNotebookMagic(unittest.TestCase):
             self.assertIn("provider_enabled", payload["diagnostics"])
             self.assertIn("config_sources", payload["diagnostics"])
 
+    def test_notebook_session_id_followup(self) -> None:
+        """同一 --session-id 跟进能改槽。"""
+
+        print("\n[TestAiNotebookMagic] session-id follow-up")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            plan_cache = {}
+            first = parse_magic_command("--mode plan --raw --session-id nb-s1 帮我下载日线")
+            print(" parsed session_id:", first.session_id)
+            self.assertEqual(first.session_id, "nb-s1")
+            execute_magic_command(first, assistant=assistant, plan_cache=plan_cache)
+            second = parse_magic_command("--mode plan --raw --session-id nb-s1 20240101 到 20241231")
+            outcome = execute_magic_command(second, assistant=assistant, plan_cache=plan_cache)
+            payload = outcome["result"]
+            names = [s["skill_name"] for s in payload["plan"]["steps"]]
+            print(" skills:", names, "source:", payload["plan"]["planner_trace"].get("source"))
+            self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
+            self.assertEqual(payload["plan"]["planner_trace"].get("source"), "session")
+
+    def test_notebook_ask_session_zero_skill(self) -> None:
+        """Ask 带 session-id 仍无 execution。"""
+
+        print("\n[TestAiNotebookMagic] ask session-id")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            plan_cache = {}
+            command = parse_magic_command("--mode ask --raw --session-id nb-ask explain PT vs PS")
+            outcome = execute_magic_command(command, assistant=assistant, plan_cache=plan_cache)
+            payload = outcome["result"]
+            print(" mode:", payload.get("mode"), "keys:", sorted(payload.keys()) if isinstance(payload, dict) else type(payload))
+            self.assertEqual(payload["mode"], "ask")
+            self.assertNotIn("execution", payload)
+
 
 if __name__ == "__main__":
     unittest.main()

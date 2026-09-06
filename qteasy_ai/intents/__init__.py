@@ -100,6 +100,27 @@ class IntentCatalog:
 
         return int(self.legal_edges_doc.get("max_steps") or 3)
 
+    def job_workflow(self, job_id: str) -> str:
+        """返回 Job 的 ``workflow`` 气质，缺省 ``closed``。
+
+        Parameters
+        ----------
+        job_id : str
+            官方或系统 Job id。
+
+        Returns
+        -------
+        str
+            ``closed`` 或 ``open``。F 阶段不按此字段分叉。
+        """
+
+        wanted = str(job_id or "").strip()
+        for item in self.jobs_doc.get("official", []) + self.jobs_doc.get("system", []):
+            if str(item.get("id") or "") == wanted:
+                raw = str(item.get("workflow") or "closed").strip().lower()
+                return "open" if raw == "open" else "closed"
+        return "closed"
+
 
 def _read(path: Path) -> Dict[str, Any]:
     """读 JSON，缺文件则空 dict。"""

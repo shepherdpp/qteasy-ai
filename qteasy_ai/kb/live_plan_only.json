@@ -1,0 +1,15 @@
+{
+  "id": "live_plan_only",
+  "tags": ["live", "safety"],
+  "keywords": [
+    "live trade",
+    "实盘",
+    "live plan",
+    "never auto"
+  ],
+  "title": "Live trade is plan-only",
+  "summary": "Live-trade steps stay a checklist. They are never auto-executed.",
+  "narrative": "Mentioning 实盘 / live trade routes to `qt.ai.pipeline.live_trade_plan_only`. The skill writes a checklist and forbids sending orders.\n\nEven when session.agent_auto is true and every allow_* flag is true, live steps stay dry-run. There is no allow_live.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('准备实盘交易', response_style='raw')\nprint(plan['plan']['steps'][0]['skill_name'])",
+  "risk_notes": "Never treat a live checklist as an order ticket."
+}

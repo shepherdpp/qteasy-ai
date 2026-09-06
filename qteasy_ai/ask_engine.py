@@ -128,7 +128,13 @@ class AskEngine:
         self.knowledge_base = knowledge_base or KnowledgeBase()
         self.provider = provider
 
-    def ask(self, query: str, *, explanation_depth: str = "standard") -> AskResponse:
+    def ask(
+        self,
+        query: str,
+        *,
+        explanation_depth: str = "standard",
+        session_context: str = "",
+    ) -> AskResponse:
         """回答用户问题，不走 plan / skill。
 
         Parameters
@@ -155,9 +161,12 @@ class AskEngine:
 
         sources = [item.id for item in hits]
         if self.provider is not None:
-            answer = self._ask_llm(query=text, hits=hits)
+            answer = self._ask_llm(query=text, hits=hits, session_context=session_context)
         else:
             answer = self._offline_answer(hits)
+            if session_context:
+                answer = f"{answer}\n\nSession slots: {session_context}"
+        extra = {"session_context": session_context} if session_context else None
         return self._pack(
             query=text,
             answer=answer,
@@ -166,6 +175,7 @@ class AskEngine:
             depth=depth,
             ok=True,
             error=None,
+            extra_raw=extra,
         )
 
     @staticmethod
@@ -217,7 +227,7 @@ class AskEngine:
             error=error,
         )
 
-    def _ask_llm(self, *, query: str, hits: List[KbEntry]) -> str:
+    def _ask_llm(self, *, query: str, hits: List[KbEntry], session_context: str = "") -> str:
         """将检索片段注入 prompt 后调用 Provider。"""
 
         snippets = []
@@ -225,8 +235,10 @@ class AskEngine:
             snippets.append(
                 f"[{item.id}] {item.title}\n{item.narrative}\npython:\n{item.python_code}"
             )
+        context_block = f"\n\nConfirmed session slots: {session_context}\n" if session_context else "\n"
         prompt = (
-            f"Question: {query}\n\n"
+            f"Question: {query}"
+            f"{context_block}"
             "Knowledge snippets:\n"
             + "\n\n".join(snippets)
             + "\n\nWrite a concise answer in the same language as the Question, "

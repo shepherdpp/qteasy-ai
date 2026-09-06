@@ -1,0 +1,16 @@
+{
+  "id": "refill_bounded",
+  "tags": ["refill", "download", "data"],
+  "keywords": [
+    "refill",
+    "download daily",
+    "灌数据",
+    "下载日线",
+    "date_range"
+  ],
+  "title": "Bounded data refill",
+  "summary": "Download/refill always needs an explicit start and end. Unbounded history is rejected.",
+  "narrative": "data.refill writes local tables over the network. The planner requires start and end (YYYYMMDD or a year range). Missing dates become clarify_required / date_range.\n\nA session can fill those dates on the next turn without re-classifying the Job. Full-market refill without symbols is expensive; say so in assumptions.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.plan('download A-share daily data to local datasource', response_style='raw')['plan']['steps'][0]['inputs']['fallback_action'])",
+  "risk_notes": "Never run unbounded refill. Confirm before execute. allow_refill only gates agent_auto."
+}

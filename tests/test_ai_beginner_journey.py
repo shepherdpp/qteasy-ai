@@ -13,7 +13,8 @@ import unittest
 from pathlib import Path
 from typing import Any, Dict, List
 
-from qteasy_ai.app import build_default_registry
+from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 
 _CORPUS = Path(__file__).resolve().parent / "ai_corpus" / "beginner_journey.json"
@@ -44,15 +45,30 @@ class TestAiBeginnerJourney(unittest.TestCase):
         self.assertEqual(len(self.cases), 18)
         self.assertEqual(len(plan_cases), 17)
         self.assertEqual(len(ask_cases), 1)
-        for case in ask_cases:
-            print(
-                " skip ask:",
-                case.get("id"),
-                "query:",
-                case.get("query"),
-                "notes:",
-                case.get("notes"),
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                registry=self.registry,
             )
+            for case in ask_cases:
+                query = str(case.get("query") or "")
+                payload = assistant.ask(query, response_style="raw")
+                print(
+                    " ask:",
+                    case.get("id"),
+                    "query:",
+                    query,
+                    "sources:",
+                    payload.get("sources"),
+                    "ok:",
+                    payload.get("ok"),
+                )
+                self.assertEqual(payload.get("mode"), "ask")
+                self.assertNotIn("execution", payload)
+                self.assertTrue(payload.get("ok"))
+                self.assertIn("what_is_qteasy", payload.get("sources") or [])
         stage_counts: Dict[str, int] = {}
         for case in plan_cases:
             case_id = str(case.get("id") or "")

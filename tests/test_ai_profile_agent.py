@@ -102,6 +102,126 @@ class TestAiProfileAgent(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "SKILL_CONFIRM_REQUIRED")
         self.assertEqual(called["n"], 0)
 
+    def _registry_with_stubs(self, called: dict):
+        """用替身替换回测/实盘 handler，避免真跑长回测。"""
+
+        from qteasy_ai.registry import SkillRegistry
+
+        default = build_default_registry()
+        registry = SkillRegistry()
+
+        def backtest_stub(**_kwargs) -> dict:
+            called["backtest"] = called.get("backtest", 0) + 1
+            return {"ok": True, "payload": {"stub": True}}
+
+        def live_stub(**_kwargs) -> dict:
+            called["live"] = called.get("live", 0) + 1
+            return {"ok": True, "payload": {"stub": True}}
+
+        for meta in default.list_skills():
+            if meta.name == "qt.ai.backtest.run_builtin":
+                registry.register(meta, backtest_stub)
+            elif meta.name == "qt.ai.pipeline.live_trade_plan_only":
+                registry.register(meta, live_stub)
+            else:
+                registry.register(meta, default._impl[meta.name])
+        return registry
+
+    def test_agent_auto_blocks_backtest_when_disallowed(self) -> None:
+        """agent_auto + allow_backtest=False → dry-run，不调 backtest handler。"""
+
+        print("\n[TestAiProfileAgent] agent_auto block backtest")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            store.save_profile({"agent": {"allow_backtest": False}})
+            called = {}
+            assistant = QteasyAssistant(
+                memory_store=store,
+                registry=self._registry_with_stubs(called),
+            )
+            payload = assistant.run(
+                "用 macd 做回测，2018 到 2023",
+                response_style="raw",
+                session_id="auto-bt",
+                agent_auto=True,
+            )
+            print(" status:", payload["execution"]["status"], "called:", called)
+            print(" assumptions:", payload["plan"].get("assumptions"))
+            self.assertEqual(payload["execution"]["status"], "dry_run")
+            self.assertEqual(called.get("backtest", 0), 0)
+            self.assertIn("qt.ai.backtest.run_builtin", payload["plan"]["assumptions"].get("allow_gate_blocked") or [])
+
+    def test_agent_auto_executes_backtest_when_allowed(self) -> None:
+        """agent_auto + allow_backtest=True → 可 execute（替身 handler）。"""
+
+        print("\n[TestAiProfileAgent] agent_auto allow backtest")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            store.save_profile({"agent": {"allow_backtest": True}})
+            called = {}
+            assistant = QteasyAssistant(
+                memory_store=store,
+                registry=self._registry_with_stubs(called),
+            )
+            payload = assistant.run(
+                "用 macd 做回测，2018 到 2023",
+                response_style="raw",
+                session_id="auto-ok",
+                agent_auto=True,
+            )
+            print(" status:", payload["execution"]["status"], "called:", called)
+            self.assertIn(payload["execution"]["status"], ["success", "partial_failed"])
+            self.assertGreaterEqual(called.get("backtest", 0), 1)
+
+    def test_live_never_auto(self) -> None:
+        """live 步在 agent_auto 下永不执行。"""
+
+        print("\n[TestAiProfileAgent] live never auto")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            store.save_profile(
+                {
+                    "agent": {
+                        "allow_refill": True,
+                        "allow_backtest": True,
+                        "allow_optimize": True,
+                    }
+                }
+            )
+            called = {}
+            assistant = QteasyAssistant(
+                memory_store=store,
+                registry=self._registry_with_stubs(called),
+            )
+            payload = assistant.run(
+                "准备实盘交易",
+                response_style="raw",
+                session_id="auto-live",
+                agent_auto=True,
+            )
+            names = [s["skill_name"] for s in payload["plan"]["steps"]]
+            print(" skills:", names, "status:", payload["execution"]["status"], "called:", called)
+            self.assertIn("qt.ai.pipeline.live_trade_plan_only", names)
+            self.assertEqual(payload["execution"]["status"], "dry_run")
+            self.assertEqual(called.get("live", 0), 0)
+
+    def test_oneshot_run_still_ignores_allow_flags(self) -> None:
+        """一次性 run(query) 无 agent_auto 保持 B，不读开关。"""
+
+        print("\n[TestAiProfileAgent] oneshot run ignores allow")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            store.save_profile({"agent": {"allow_backtest": False}})
+            called = {}
+            assistant = QteasyAssistant(
+                memory_store=store,
+                registry=self._registry_with_stubs(called),
+            )
+            payload = assistant.run("用 macd 做回测，2018 到 2023", response_style="raw")
+            print(" status:", payload["execution"]["status"], "called:", called)
+            self.assertIn(payload["execution"]["status"], ["success", "partial_failed"])
+            self.assertGreaterEqual(called.get("backtest", 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,7 +52,8 @@ print(preview["plan"]["steps"][0]["skill_name"])
 - StrategyBuilder（阶段 D）：自然语言 → StrategySpec → 模板骨架写入 `.qteasy/ai/strategies/` → 静态校验 → 复用 `backtest.run_builtin`。Ask 不写策略文件。
 - 无日期或超长区间的全市场 refill：Plan 会 `clarify_required` / `date_range`，禁止无界下载。
 - 无匹配 skill 时返回 `clarify_required` / `not_supported_yet`，**禁止**静默落到 `summary_kline`。
-- Hybrid Planner（方案 H）：分类只出 **Job ID**（`planner_trace.intent_job` / `source` / `rationale`）；已知 Job 由代码菜谱出图。配置了 Provider 时，0 命中或冲突表未覆盖才让 LLM 选 Job；非法 JSON / 未知 id → `clarify`，禁止降级回扁平 skill 菜单。未配置 Provider 且 0 命中 → `clarify`。
+- Hybrid Planner（方案 H′）：分类只出 **Job ID**（`planner_trace.intent_job` / `source` / `rationale`）；已知 Job 由代码菜谱出图。配置了 Provider 时，0 命中或冲突表未覆盖才让 LLM 选 Job；非法 JSON / 未知 id → `clarify`，禁止降级回扁平 skill 菜单。未配置 Provider 且 0 命中 → `clarify`。
+- `profile.agent.allow_*` 只门控 session 内 `agent_auto`。一次性 `run "<query>"` 仍视为一次确认。
 
 ## 4. Provider
 
@@ -67,13 +68,36 @@ print(preview["plan"]["steps"][0]["skill_name"])
 qteasy-ai provider-check
 ```
 
-## 5. 更多
+## 5. Multi-turn session（Q-AI.6）
 
-- 快速上手：[tutorials/quickstart.md](tutorials/quickstart.md)
-- 阶段 A 设计备忘（含现状 vs 目标态）：[design/11-ai-shell-stage-a.md](design/11-ai-shell-stage-a.md)
-- 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
-- 阶段 E 手测：[LIVE_FIRE_DRILL_QAI5.md](LIVE_FIRE_DRILL_QAI5.md)（Mode-R 全清单 + Mode-D 抽测；入口 `qteasy-ai plan "<q>" --raw`）
-- 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`
+Use the same `session_id` on CLI and Notebook so a follow-up **revises** the last closed ToolPlan instead of starting a new one-shot classify.
+
+```bash
+qteasy-ai plan "帮我下载日线" --session-id demo
+qteasy-ai plan "20240101 到 20241231" --session-id demo
+qteasy-ai ask "what is qteasy"
+qteasy-ai ask "explain PT vs PS" --session-id demo
+```
+
+```python
+from qteasy_ai.app import QteasyAssistant
+
+assistant = QteasyAssistant()
+assistant.plan("帮我下载日线", session_id="demo", response_style="raw")
+filled = assistant.plan("20240101 到 20241231", session_id="demo", response_style="raw")
+assert filled["plan"]["planner_trace"]["source"] == "session"
+```
+
+Rules (user-facing):
+
+- Without `--session-id` / `session_id`, each sentence is independent (same as today).
+- Fill or change a slot: same Job, no new classify. A new Job while the current task is incomplete asks you to confirm abandon. The session id and history stay.
+- Clarification stops after 3 rounds on the same intent; the response stays `clarify` with missing fields listed.
+- Optional `profile.defaults` (shares / start / end / freq) may fill **optional** slots only. They show as defaults and stay unconfirmed until you say yes.
+- `allow_refill` / `allow_backtest` / `allow_optimize` apply only to unattended `agent_auto`. A one-shot `run "<query>"` is still one human confirmation. Live trade is never auto.
+- First init creates `user_kb/` (rules / raw / compiled + English README). Ask does **not** search it.
+
+Notebook: `%%qtai --mode plan --session-id demo`.
 
 ## 6. StrategyBuilder（Q-AI.4）
 
@@ -92,3 +116,13 @@ qteasy-ai plan "start live trade now" --raw
 期望 skill：`qt.ai.pipeline.live_trade_plan_only`（只出计划）。
 
 演示脚本：`examples/ai_shell_stage_d_strategybuilder_demo.py`。
+
+## 7. 更多
+
+- 快速上手：[tutorials/quickstart.md](tutorials/quickstart.md)
+- 阶段 A 设计备忘（含现状 vs 目标态）：[design/11-ai-shell-stage-a.md](design/11-ai-shell-stage-a.md)
+- 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
+- 阶段 E 手测：[LIVE_FIRE_DRILL_QAI5.md](LIVE_FIRE_DRILL_QAI5.md)（Mode-R 全清单 + Mode-D 抽测；入口 `qteasy-ai plan "<q>" --raw`）
+- 阶段 F 手测：[LIVE_FIRE_DRILL_QAI6.md](LIVE_FIRE_DRILL_QAI6.md)（session / Ask「什么是 qteasy」/ user_kb 骨架）
+- 官方 KB 目录：[KB_TIER1.md](KB_TIER1.md)
+- 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`

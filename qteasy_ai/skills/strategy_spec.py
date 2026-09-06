@@ -281,6 +281,8 @@ def build_strategy_spec_from_nl_skill(
         summary="Turn a natural-language strategy description into a machine-readable StrategySpec.",
         inputs_schema={
             "query": {"type": "string", "required": True},
+            "fast": {"type": "integer", "required": False},
+            "slow": {"type": "integer", "required": False},
         },
         outputs_schema={"spec": "dict", "assumptions": "list"},
         side_effects=SkillSideEffects(description="readonly NL to StrategySpec"),

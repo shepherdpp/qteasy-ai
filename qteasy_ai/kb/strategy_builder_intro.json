@@ -1,0 +1,16 @@
+{
+  "id": "strategy_builder_intro",
+  "tags": ["strategybuilder", "spec", "codegen"],
+  "keywords": [
+    "strategybuilder",
+    "generate a strategy",
+    "双均线",
+    "金叉",
+    "写策略"
+  ],
+  "title": "StrategyBuilder dual-MA template",
+  "summary": "Natural language to StrategySpec is Plan-only and currently dual-MA cross.",
+  "narrative": "StrategyBuilder is a closed Job: NL → spec → codegen → sanity → Operator, optionally backtest. This stage supports RuleIterator dual-MA golden/death cross with explicit fast/slow windows (for example 20/60).\n\nAsk does not write strategy files. Follow-up sentences in a session can change slots such as slow without starting a new Job.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('帮我写一个基于 20/60 日均线金叉死叉的择时策略', response_style='raw')\nprint([s['skill_name'] for s in plan['plan']['steps']])",
+  "risk_notes": "PT+VS in one sentence clarifies. Generated code lands under .qteasy/ai/strategies/."
+}

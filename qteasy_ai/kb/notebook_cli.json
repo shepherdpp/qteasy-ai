@@ -1,0 +1,16 @@
+{
+  "id": "notebook_cli",
+  "tags": ["cli", "notebook", "session"],
+  "keywords": [
+    "qteasy-ai cli",
+    "%%qtai",
+    "notebook magic",
+    "session-id",
+    "命令行"
+  ],
+  "title": "CLI and Notebook share session_id",
+  "summary": "qteasy-ai CLI and %%qtai use the same session_id protocol.",
+  "narrative": "CLI: `qteasy-ai plan \"...\" --session-id my-session`. Notebook: `%%qtai --mode plan --session-id my-session`. The same id revises the last closed ToolPlan instead of starting a new one-shot classify.\n\nWithout --session-id, each utterance is a single sentence (today's D/E behaviour). Ask can reuse the id for a short slot summary and still calls zero skills.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nassistant.plan('帮我下载日线', session_id='demo', response_style='raw')\nprint(assistant.plan('20240101 到 20241231', session_id='demo', response_style='raw')['plan']['planner_trace']['source'])",
+  "risk_notes": "Do not put secrets in session_id. Sessions live under QTEASY_AI_HOME/sessions/."
+}

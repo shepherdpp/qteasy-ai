@@ -40,8 +40,29 @@ DEFAULT_PROFILE: Dict[str, Any] = {
         "allow_refill": False,
         "allow_backtest": False,
         "allow_optimize": False,
-    }
+    },
+    "defaults": {},
 }
+
+USER_KB_RAW_PARTS = ("research", "trades", "factors", "strategies")
+USER_KB_README = """# user_kb (local research notes)
+
+This directory is YOUR knowledge workspace. It is created on first MemoryStore init.
+
+Layout:
+
+- `rules/` — curated rules you write by hand (not auto-ingested).
+- `raw/research/` `raw/trades/` `raw/factors/` `raw/strategies/` — source notes.
+- `compiled/` — machine output of compile. Do not edit by hand.
+
+Ask mode searches ONLY the official package KB (`qteasy_ai/kb/`). It does not read `user_kb/`.
+The 1.x open design loop is the main consumer of compiled user notes.
+
+Compile an empty catalog:
+
+    from qteasy_ai.memory_store import MemoryStore
+    MemoryStore().compile_user_kb()
+"""
 
 
 def apply_profile_defaults(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -64,6 +85,10 @@ def apply_profile_defaults(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(existing_agent, dict):
         existing_agent = {}
     profile["agent"] = {**agent_defaults, **existing_agent}
+    existing_defaults = profile.get("defaults")
+    if not isinstance(existing_defaults, dict):
+        existing_defaults = {}
+    profile["defaults"] = dict(existing_defaults)
     return profile
 
 
@@ -157,11 +182,15 @@ class MemoryStore:
         self.runs_dir = self.base_dir / "runs"
         self.pinned_dir = self.base_dir / "pinned"
         self.strategies_dir = self.base_dir / "strategies"
+        self.sessions_dir = self.base_dir / "sessions"
+        self.user_kb_dir = self.base_dir / "user_kb"
         # 初始化时确保目录存在，避免后续写入分支到处做 mkdir。
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.pinned_dir.mkdir(parents=True, exist_ok=True)
         self.strategies_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.ensure_user_kb_scaffold()
 
     @property
     def profile_path(self) -> Path:
@@ -403,3 +432,44 @@ class MemoryStore:
             "remaining_count": len(remaining),
             "remaining_total_mb": round(remaining_bytes / 1024 / 1024, 4),
         }
+
+    def ensure_user_kb_scaffold(self) -> None:
+        """落下用户 KB 分区与英文 README；不检索、不写入官方 kb。"""
+
+        self.user_kb_dir.mkdir(parents=True, exist_ok=True)
+        (self.user_kb_dir / "rules").mkdir(parents=True, exist_ok=True)
+        raw_root = self.user_kb_dir / "raw"
+        raw_root.mkdir(parents=True, exist_ok=True)
+        for part in USER_KB_RAW_PARTS:
+            (raw_root / part).mkdir(parents=True, exist_ok=True)
+        (self.user_kb_dir / "compiled").mkdir(parents=True, exist_ok=True)
+        readme = self.user_kb_dir / "README.md"
+        if not readme.exists():
+            readme.write_text(USER_KB_README, encoding="utf-8")
+
+    def user_kb_partitions_ok(self) -> bool:
+        """必有分区是否齐全。额外子目录允许存在。"""
+
+        if not (self.user_kb_dir / "rules").is_dir():
+            return False
+        if not (self.user_kb_dir / "compiled").is_dir():
+            return False
+        if not (self.user_kb_dir / "README.md").is_file():
+            return False
+        for part in USER_KB_RAW_PARTS:
+            if not (self.user_kb_dir / "raw" / part).is_dir():
+                return False
+        return True
+
+    def compile_user_kb(self) -> Dict[str, Any]:
+        """空库 compile：写出合法空 catalog。人手只改 raw/rules。"""
+
+        self.ensure_user_kb_scaffold()
+        catalog: Dict[str, Any] = {
+            "version": 1,
+            "entries": [],
+            "source": "user_kb",
+        }
+        path = self.user_kb_dir / "compiled" / "catalog.json"
+        self._write_json(path, catalog)
+        return catalog

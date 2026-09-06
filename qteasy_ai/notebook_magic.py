@@ -66,6 +66,8 @@ class MagicCommand:
     diag: bool
     query: str
     explanation_depth: str
+    session_id: str
+    agent_auto: bool
 
 
 def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
@@ -84,6 +86,8 @@ def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
         choices=["brief", "standard", "deep"],
         default="standard",
     )
+    parser.add_argument("--session-id", dest="session_id", default="")
+    parser.add_argument("--agent-auto", dest="agent_auto", action="store_true")
     parser.add_argument("query_parts", nargs="*")
 
     args = parser.parse_args(shlex.split(line))
@@ -101,6 +105,8 @@ def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
         diag=bool(args.diag),
         query=query_text,
         explanation_depth=str(args.depth),
+        session_id=str(args.session_id).strip(),
+        agent_auto=bool(args.agent_auto),
     )
 
 
@@ -186,6 +192,8 @@ def execute_magic_command(
             "confirm_hint": "",
         }
 
+    session_id = command.session_id or None
+    agent_auto = True if command.agent_auto else None
     if command.mode == "ask":
         result = assistant.ask(
             command.query,
@@ -193,6 +201,7 @@ def execute_magic_command(
             persist=command.persist,
             keep=command.keep,
             explanation_depth=command.explanation_depth,
+            session_id=session_id,
         )
         return {"mode": "ask", "result": result, "confirm_hint": ""}
 
@@ -203,11 +212,17 @@ def execute_magic_command(
             persist=command.persist,
             keep=command.keep,
             explanation_depth=command.explanation_depth,
+            session_id=session_id,
+            agent_auto=agent_auto,
         )
         return {"mode": "plan", "result": result, "confirm_hint": ""}
 
     # mode == run 且无 confirm：先产出 dry-run plan，再给确认 token。
-    plan = assistant.planner.build_plan(command.query, mode="plan")
+    plan, _session = assistant._assemble_plan(
+        command.query,
+        session_id=session_id,
+        agent_auto=agent_auto,
+    )
     plan.execution_mode = "execute"
     result = assistant._execute_and_format(
         plan=plan,
@@ -216,6 +231,7 @@ def execute_magic_command(
         persist=command.persist,
         keep=command.keep,
         explanation_depth=command.explanation_depth,
+        session=_session,
     )
     raw = result.raw if isinstance(result, AssistantOutput) else result
     plan_id = str(raw.get("plan", {}).get("plan_id", plan.plan_id))

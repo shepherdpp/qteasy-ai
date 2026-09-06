@@ -184,6 +184,107 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "PLAN_ID_NOT_FOUND")
         self.assertIn("plan_id", payload["error"]["message"].lower())
 
+    def test_cli_same_session_id_fills_slots(self) -> None:
+        """同一 --session-id 第二次跟进能改槽；不同 id 不继承。"""
+
+        print("\n[TestAiCliNotebookEntry] cli session-id follow-up")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = dict(os.environ)
+            env["QTEASY_AI_HOME"] = temp_dir
+            env.pop("QTEASY_AI_MODEL", None)
+            cmd1 = [
+                sys.executable,
+                "-m",
+                "qteasy_ai.cli",
+                "plan",
+                "帮我下载日线",
+                "--session-id",
+                "cli-s1",
+            ]
+            first = subprocess.run(cmd1, check=True, capture_output=True, text=True, env=env)
+            p1 = json.loads(first.stdout)
+            print(" first action:", p1["plan"]["steps"][0]["inputs"].get("fallback_action"))
+            cmd2 = [
+                sys.executable,
+                "-m",
+                "qteasy_ai.cli",
+                "plan",
+                "20240101 到 20241231",
+                "--session-id",
+                "cli-s1",
+            ]
+            second = subprocess.run(cmd2, check=True, capture_output=True, text=True, env=env)
+            p2 = json.loads(second.stdout)
+            names = [s["skill_name"] for s in p2["plan"]["steps"]]
+            print(" second skills:", names, "source:", p2["plan"]["planner_trace"].get("source"))
+            self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
+            self.assertEqual(p2["plan"]["planner_trace"].get("source"), "session")
+
+            other = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "qteasy_ai.cli",
+                    "plan",
+                    "20240101 到 20241231",
+                    "--session-id",
+                    "cli-other",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            p3 = json.loads(other.stdout)
+            print(" other job:", p3["plan"]["planner_trace"].get("intent_job"), p3["plan"]["steps"][0]["skill_name"])
+            self.assertNotEqual(p3["plan"]["planner_trace"].get("source"), "session")
+
+    def test_cli_ask_session_id_zero_skill(self) -> None:
+        """Ask --session-id 可带短槽摘要，仍无 execution.steps。"""
+
+        print("\n[TestAiCliNotebookEntry] cli ask session-id")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = dict(os.environ)
+            env["QTEASY_AI_HOME"] = temp_dir
+            env.pop("QTEASY_AI_MODEL", None)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "qteasy_ai.cli",
+                    "plan",
+                    "download daily data from 20180101 to 20231231",
+                    "--session-id",
+                    "cli-ask",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "qteasy_ai.cli",
+                    "ask",
+                    "explain PT vs PS",
+                    "--session-id",
+                    "cli-ask",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(completed.stdout)
+            print(" ask keys:", sorted(payload.keys()))
+            print(" sources:", payload.get("sources"))
+            self.assertEqual(payload["mode"], "ask")
+            self.assertNotIn("execution", payload)
+            self.assertNotIn("steps", payload)
+            self.assertIn("pt_ps_vs", payload.get("sources") or [])
+
 
 if __name__ == "__main__":
     unittest.main()

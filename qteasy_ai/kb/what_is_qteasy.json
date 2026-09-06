@@ -1,0 +1,17 @@
+{
+  "id": "what_is_qteasy",
+  "tags": ["product", "intro", "qteasy"],
+  "keywords": [
+    "what is qteasy",
+    "什么是qteasy",
+    "什么是 qteasy",
+    "qteasy是什么",
+    "qteasy 是什么",
+    "qteasy"
+  ],
+  "title": "What is qteasy",
+  "summary": "qteasy is a practical quantitative-research toolkit; qteasy-ai is the orchestration shell around it.",
+  "narrative": "qteasy is a Python toolkit for quantitative research: local market data, built-in strategies, backtest, and optimization. It is meant to be usable in real workflows, not a toy demo.\n\nqteasy-ai is the optional AI shell. Ask answers from the official knowledge base and never calls skills. Plan builds a reviewable ToolPlan. Run executes after confirmation.\n\nStart with Ask for concepts (this page), then Plan a bounded task such as listing strategies or a dated data download.",
+  "python_code": "import qteasy as qt\nprint(qt.__version__)\nfrom qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('what is qteasy', response_style='raw')['sources'])",
+  "risk_notes": "Ask never downloads data or runs a backtest. Use Plan, then confirm, before high-side-effect work."
+}

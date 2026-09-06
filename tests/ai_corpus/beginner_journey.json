@@ -2,7 +2,7 @@
   "meta": {
     "stage": "E.4 / Beginner Journey",
     "handbook": "docs/OFFICIAL_SKILL_CATALOG.md",
-    "notes": "Mode-R plan cases are CI. BJ-ASK-WHAT is Ask placeholder; KB gold belongs to F.5."
+    "notes": "Mode-R plan cases are CI. BJ-ASK-WHAT is Ask: must hit official what_is_qteasy (F.5)."
   },
   "cases": [
     {
@@ -14,7 +14,7 @@
       "expected_skills": [],
       "tutorial": "docs/source/getting_started.md",
       "run_policy": "ask",
-      "notes": "Ask 零 skill；KB Pack 归 F.5，本轮不强制金答案"
+      "notes": "Ask 零 skill；sources 含 what_is_qteasy"
     },
     {
       "id": "BJ-ENV",

@@ -8,7 +8,7 @@
 |----|------|
 | **用户轨** | [Beginner Journey](../tests/ai_corpus/beginner_journey.json)（18 步） |
 | **Mode-R 精确锁** | [`gold.json`](../qteasy_ai/intents/gold.json)（含三入口 `data.read`） |
-| **Ask FAQ** | `qteasy_ai/kb/`；整包 **F.5 / `exec-f-kb-tier1`**。Journey 的 `BJ-ASK-WHAT` 本轮只占位 |
+| **Ask FAQ** | `qteasy_ai/kb/`（[KB_TIER1.md](KB_TIER1.md)，18 条）。Journey `BJ-ASK-WHAT` 命中 `what_is_qteasy` |
 | **教程根** | qteasy 仓 `docs/source/` |
 
 每行：`Ask` 或 `Plan`、Job、主 skill、副作用、教程、Journey id。`run` 政策：Beginner 默认 **只 plan**（高副作用不在本轨执行）。

@@ -28,10 +28,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .ask_engine import AskEngine, AskResponse
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
+from .contracts import ToolPlan, new_plan_id
 from .executor import PlanExecutor
 from .knowledge_base import KnowledgeBase
 from .memory_store import MemoryStore, merge_env_facts
@@ -42,6 +43,8 @@ from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
+from .session import ConversationState, SessionStore
+from .session_gate import SessionGate, extract_patches, merge_facts
 from .skills import (
     build_backtest_run_skill,
     build_check_tushare_skill,
@@ -160,7 +163,16 @@ class QteasyAssistant:
             knowledge_base=KnowledgeBase(),
             provider=provider,
         )
+        self.session_store = SessionStore(self.memory_store)
+        self.session_gate = SessionGate(provider=provider)
         self._last_run_id = ""
+
+    _ALLOW_FLAGS = {
+        "qt.ai.data.refill_basic_equity_and_index": "allow_refill",
+        "qt.ai.backtest.run_builtin": "allow_backtest",
+        "qt.ai.optimize.run_builtin": "allow_optimize",
+    }
+    _LIVE_SKILLS = frozenset({"qt.ai.pipeline.live_trade_plan_only"})
 
     def _refresh_planner_env_facts(self) -> None:
         """从 MemoryStore 刷新 Planner 的 env_facts。"""
@@ -168,10 +180,11 @@ class QteasyAssistant:
         self.planner.env_facts = self.memory_store.load_env_facts()
 
     def _build_plan(self, query: str, *, mode: str) -> Any:
-        """加载最新 env_facts 后生成 ToolPlan。"""
+        """加载最新 env_facts 后生成 ToolPlan（无会话）。"""
 
         self._refresh_planner_env_facts()
-        return self.planner.build_plan(query, mode=mode)
+        profile = self.memory_store.load_profile()
+        return self.planner.build_plan(query, mode=mode, profile=profile)
 
     def ask(
         self,
@@ -181,6 +194,7 @@ class QteasyAssistant:
         persist: str | None = None,
         keep: bool = False,
         explanation_depth: str = "standard",
+        session_id: str | None = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Ask 目标态：LLMClient + KnowledgeBase 问答，不执行 skill。
 
@@ -207,14 +221,29 @@ class QteasyAssistant:
         """
 
         del persist, keep
-        result: AskResponse = self.ask_engine.ask(query, explanation_depth=explanation_depth)
+        session_context = ""
+        session = None
+        sid = str(session_id or "").strip()
+        if sid:
+            session = self.session_store.load(sid)
+            session_context = self._slot_summary(session)
+            session.turns.append({"query": query, "kind": "ask"})
+            self.session_store.save(session)
+        result: AskResponse = self.ask_engine.ask(
+            query,
+            explanation_depth=explanation_depth,
+            session_context=session_context,
+        )
+        payload = result.to_dict()
+        if session is not None:
+            payload["session"] = {"session_id": session.session_id, "slots_summary": session_context}
         if response_style == "raw":
-            return result.to_dict()
+            return payload
         return AssistantOutput(
             narrative=result.narrative,
             python_code=result.python_code,
             result_preview=result.result_preview,
-            raw=result.to_dict(),
+            raw=payload,
         )
 
     def preview(
@@ -225,6 +254,8 @@ class QteasyAssistant:
         persist: str | None = None,
         keep: bool = False,
         explanation_depth: str = "standard",
+        session_id: str | None = None,
+        agent_auto: Optional[bool] = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 预览别名：dry-run ToolPlan，不执行 skill。
 
@@ -238,6 +269,8 @@ class QteasyAssistant:
             persist=persist,
             keep=keep,
             explanation_depth=explanation_depth,
+            session_id=session_id,
+            agent_auto=agent_auto,
         )
 
     def plan(
@@ -248,6 +281,8 @@ class QteasyAssistant:
         persist: str | None = None,
         keep: bool = False,
         explanation_depth: str = "standard",
+        session_id: str | None = None,
+        agent_auto: Optional[bool] = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 模式：生成 dry_run 计划。
 
@@ -256,7 +291,11 @@ class QteasyAssistant:
         - plan / preview：生成可审阅 ToolPlan steps，不执行。
         """
 
-        plan = self._build_plan(query, mode="plan")
+        plan, session = self._assemble_plan(
+            query,
+            session_id=session_id,
+            agent_auto=agent_auto,
+        )
         if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
             return self.ask(
                 query,
@@ -264,6 +303,7 @@ class QteasyAssistant:
                 persist=persist,
                 keep=keep,
                 explanation_depth=explanation_depth,
+                session_id=session_id,
             )
         return self._execute_and_format(
             plan=plan,
@@ -272,6 +312,7 @@ class QteasyAssistant:
             persist=persist,
             keep=keep,
             explanation_depth=explanation_depth,
+            session=session,
         )
 
     def run(
@@ -282,22 +323,33 @@ class QteasyAssistant:
         persist: str | None = None,
         keep: bool = False,
         explanation_depth: str = "standard",
+        session_id: str | None = None,
+        agent_auto: Optional[bool] = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan + 确认执行。
 
-        CLI ``run`` 视为人在回路的一次确认：生成计划后 ``confirm=True`` 执行。
-        ``profile.agent.allow_*`` 本阶段不读取、不门控。
+        一次性 ``run(query)`` 保持 B：人敲了 run = 本轮确认，不读 ``allow_*``。
+        仅当 session 内 ``agent_auto=True`` 时，``allow_*`` 门控高副作用步。
+        live 步永不 auto。
         """
 
-        plan = self._build_plan(query, mode="plan")
+        plan, session = self._assemble_plan(
+            query,
+            session_id=session_id,
+            agent_auto=agent_auto,
+        )
+        confirm = True
         plan.execution_mode = "execute"
+        if session is not None and session.agent_auto:
+            plan, confirm = self._apply_agent_auto_gate(plan)
         return self._execute_and_format(
             plan=plan,
-            confirm=True,
+            confirm=confirm,
             response_style=response_style,
             persist=persist,
             keep=keep,
             explanation_depth=explanation_depth,
+            session=session,
         )
 
     def run_plan(
@@ -346,6 +398,7 @@ class QteasyAssistant:
         persist: str | None,
         keep: bool,
         explanation_depth: str = "standard",
+        session: Optional[ConversationState] = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """执行并按策略处理落盘与渲染。"""
 
@@ -357,7 +410,11 @@ class QteasyAssistant:
 
         if confirm:
             self._merge_env_facts_from_execution(payload)
+            if session is not None and str((payload.get("execution") or {}).get("status") or "") == "success":
+                session.task_complete = True
+                self.session_store.save(session)
 
+        self._attach_session_payload(payload, plan, session)
         if persist_run:
             run_id = str(payload.get("run_id", "")).strip()
             if run_id:
@@ -428,6 +485,202 @@ class QteasyAssistant:
         merged = merge_env_facts(old, probe)
         self.memory_store.save_env_facts(merged)
         self.planner.env_facts = merged
+
+    def _assemble_plan(
+        self,
+        query: str,
+        *,
+        session_id: str | None,
+        agent_auto: Optional[bool],
+    ) -> Tuple[Any, Optional[ConversationState]]:
+        """load → gate →（跳过或调用）classify → persist。"""
+
+        self._refresh_planner_env_facts()
+        profile = self.memory_store.load_profile()
+        sid = str(session_id or "").strip()
+        if not sid:
+            return self.planner.build_plan(query, mode="plan", profile=profile), None
+
+        state = self.session_store.load(sid)
+        if agent_auto is not None:
+            state.agent_auto = bool(agent_auto)
+        gate = self.session_gate.classify(state, query)
+
+        if gate.kind == "new_intent" and gate.needs_abandon and not gate.abandon_confirmed:
+            state.awaiting_abandon = True
+            state.turns.append({"query": query, "kind": "new_intent", "needs_abandon": True})
+            self.session_store.save(state)
+            return self._abandon_clarify_plan(query), state
+
+        skip_classify = False
+        if gate.abandon_confirmed:
+            self._reset_task(state, keep_turns=True)
+            state.original_query = query
+        elif gate.kind in {"fill_slot", "change_slot"}:
+            merge_facts(state, gate.patches, source="user", confirmed=True)
+            skip_classify = bool(state.active_intent)
+        elif gate.kind == "confirm":
+            for slot in state.slots.values():
+                slot.confirmed = True
+            skip_classify = bool(state.active_intent)
+        elif gate.kind == "clarify":
+            skip_classify = bool(state.active_intent)
+        else:
+            if state.active_intent and state.task_complete:
+                self._reset_task(state, keep_turns=True)
+            if not state.original_query:
+                state.original_query = query
+            merge_facts(state, extract_patches(query), source="extracted", confirmed=True)
+
+        plan = self.planner.build_plan(
+            query,
+            mode="plan",
+            session=state,
+            skip_classify=skip_classify,
+            profile=profile,
+        )
+        self._sync_session_from_plan(state, plan, query=query, skip_classify=skip_classify)
+        state.turns.append(
+            {
+                "query": query,
+                "kind": gate.kind,
+                "plan_id": plan.plan_id,
+                "skip_classify": skip_classify,
+            }
+        )
+        self.session_store.save(state)
+        return plan, state
+
+    @staticmethod
+    def _reset_task(state: ConversationState, *, keep_turns: bool) -> None:
+        """放弃当前闭合任务，保留 session_id / turns。"""
+
+        state.active_intent = None
+        state.slots = {}
+        state.missing = []
+        state.pending_clarification = None
+        state.current_plan_id = ""
+        state.clarify_round = 0
+        state.awaiting_abandon = False
+        state.original_query = ""
+        state.task_complete = False
+        if not keep_turns:
+            state.turns = []
+
+    def _sync_session_from_plan(
+        self,
+        state: ConversationState,
+        plan: Any,
+        *,
+        query: str,
+        skip_classify: bool,
+    ) -> None:
+        """把本轮 Job / 缺失槽 / 澄清回写会话。"""
+
+        job = str((plan.planner_trace or {}).get("intent_job") or "")
+        if job and job not in {"clarify", "route_to_ask", "unsafe", "open"}:
+            if not skip_classify or not state.active_intent:
+                state.active_intent = {"job": job, "flags": {}}
+        if not state.original_query:
+            state.original_query = query
+        missing = list((plan.assumptions or {}).get("session_missing") or [])
+        clarification = (plan.assumptions or {}).get("clarification")
+        if missing:
+            if state.clarify_round < 3:
+                state.clarify_round += 1
+            state.missing = missing
+            if isinstance(clarification, dict):
+                state.pending_clarification = clarification
+        else:
+            state.missing = []
+            if isinstance(clarification, dict):
+                state.pending_clarification = clarification
+            else:
+                state.pending_clarification = None
+        state.current_plan_id = str(getattr(plan, "plan_id", "") or "")
+
+    def _abandon_clarify_plan(self, query: str) -> Any:
+        """未完成任务遇到新意图时，先确认是否放弃。"""
+
+        step = self.planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.system.fallback",
+            inputs=self.planner._fallback_step_inputs(
+                query=query,
+                action="clarify_required",
+                reason="confirm_abandon_current_task",
+                hint="Current task is incomplete. Confirm abandon before starting a new job. Session is kept.",
+                missing_info="abandon_confirm",
+                next_step="Reply abandon to drop the current task, or continue filling slots.",
+            ),
+        )
+        return ToolPlan(
+            plan_id=new_plan_id(),
+            user_query=query,
+            steps=[step],
+            assumptions={
+                "clarification": {
+                    "restatement": f"You asked: {query}",
+                    "pending": [{"name": "abandon", "hint": "Confirm abandon of the current incomplete task."}],
+                    "confirm_prompt": "Reply abandon to drop the current task. Session id and turns stay.",
+                }
+            },
+            execution_mode="dry_run",
+            mode="plan",
+        )
+
+    @staticmethod
+    def _slot_summary(state: ConversationState) -> str:
+        """已确认槽的短摘要（截断）。"""
+
+        parts = []
+        for key, slot in (state.slots or {}).items():
+            if not slot.confirmed or slot.value in (None, ""):
+                continue
+            parts.append(f"{key}={slot.value}")
+        text = "; ".join(parts)
+        return text[:400]
+
+    def _attach_session_payload(
+        self,
+        payload: Dict[str, Any],
+        plan: Any,
+        session: Optional[ConversationState],
+    ) -> None:
+        """把 clarification / session 挂到响应。"""
+
+        clarification = (getattr(plan, "assumptions", None) or {}).get("clarification")
+        if isinstance(clarification, dict):
+            payload["clarification"] = clarification
+        if session is not None:
+            payload["session"] = {
+                "session_id": session.session_id,
+                "clarify_round": session.clarify_round,
+                "current_plan_id": session.current_plan_id,
+                "missing": list(session.missing),
+                "agent_auto": session.agent_auto,
+            }
+
+    def _apply_agent_auto_gate(self, plan: Any) -> Tuple[Any, bool]:
+        """agent_auto 下按 allow_* 拦截高副作用；live 永不执行。"""
+
+        profile = self.memory_store.load_profile()
+        agent = profile.get("agent") if isinstance(profile.get("agent"), dict) else {}
+        blocked: list[str] = []
+        for step in plan.steps:
+            name = step.skill_name
+            if name in self._LIVE_SKILLS:
+                blocked.append(name)
+                continue
+            flag = self._ALLOW_FLAGS.get(name)
+            if flag and not bool(agent.get(flag)):
+                blocked.append(name)
+        if blocked:
+            plan.execution_mode = "dry_run"
+            plan.assumptions = dict(plan.assumptions or {})
+            plan.assumptions["allow_gate_blocked"] = blocked
+            return plan, False
+        return plan, True
 
     def debug_config(self) -> Dict[str, Any]:
         """返回当前 AI 配置诊断信息（不泄露密钥）。"""

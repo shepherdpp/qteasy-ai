@@ -138,8 +138,29 @@ class Planner:
         self._strategy_alias_map: Optional[Dict[str, str]] = None
         self._skill_runtime = SkillRuntime()
 
-    def build_plan(self, user_query: str, *, mode: str = "plan") -> ToolPlan:
+    def build_plan(
+        self,
+        user_query: str,
+        *,
+        mode: str = "plan",
+        session: Any = None,
+        skip_classify: bool = False,
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
+
+        Parameters
+        ----------
+        user_query : str
+            本轮自然语言。
+        mode : {'plan', 'ask'}
+            计划或空步 Ask。
+        session : ConversationState, optional
+            多轮状态；补槽时 ``skip_classify=True``。
+        skip_classify : bool, default False
+            为 True 时用 session.active_intent 重出同一 Job 的 R。
+        profile : dict, optional
+            用户 profile，用于选填默认值。
 
         Returns
         -------
@@ -147,11 +168,25 @@ class Planner:
             已附带 `planner_trace` 的可执行计划对象。
         """
 
-        candidate = self.build_candidate_plan(user_query, mode=mode)
+        candidate = self.build_candidate_plan(
+            user_query,
+            mode=mode,
+            session=session,
+            skip_classify=skip_classify,
+            profile=profile,
+        )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
 
-    def build_candidate_plan(self, user_query: str, *, mode: str = "plan") -> ToolPlan:
+    def build_candidate_plan(
+        self,
+        user_query: str,
+        *,
+        mode: str = "plan",
+        session: Any = None,
+        skip_classify: bool = False,
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> ToolPlan:
         """生成候选计划。
 
         Parameters
@@ -183,11 +218,26 @@ class Planner:
         query = user_query.strip()
         q_lower = query.lower()
         self.intent_engine.provider = self.provider
-        decision = self.intent_engine.classify(query)
-        candidate_source = decision.source
-        downgrade_reason = ""
-        steps = compose_recipe(self, decision, query)
-        if decision.job == "open":
+        skip = bool(skip_classify and session is not None and getattr(session, "active_intent", None))
+        if skip:
+            intent = session.active_intent or {}
+            decision = IntentDecision(
+                job=str(intent.get("job") or "clarify"),
+                flags=dict(intent.get("flags") or {}),
+                source="session",
+                rationale="session_followup",
+            )
+            query = self._session_query_text(user_query, session)
+            q_lower = query.lower()
+            candidate_source = "session"
+            downgrade_reason = ""
+            steps = compose_recipe(self, decision, query)
+        else:
+            decision = self.intent_engine.classify(user_query.strip())
+            candidate_source = decision.source
+            downgrade_reason = ""
+            steps = compose_recipe(self, decision, query)
+        if decision.job == "open" and not skip:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:
                 downgrade_reason = open_reason
@@ -222,6 +272,14 @@ class Planner:
                 assumptions["opti_sample_count"] = step.inputs.get("opti_sample_count", 32)
             if step.skill_name == "qt.ai.research.screen_stocks":
                 assumptions["screen_end"] = "latest trading day in local datasource"
+        steps = self._overlay_session_slots(steps, session)
+        steps, default_notes = self._apply_optional_defaults(steps, decision.job, profile or {}, session)
+        if default_notes:
+            assumptions["slot_defaults"] = default_notes
+        missing = self._required_missing(decision.job, steps, session)
+        if missing:
+            assumptions["clarification"] = self._session_clarification(user_query, missing)
+            assumptions["session_missing"] = missing
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=user_query,
@@ -252,6 +310,193 @@ class Planner:
             "rationale": candidate_plan.assumptions.get("intent_rationale", ""),
         }
         return final_plan
+
+    @staticmethod
+    def _session_query_text(user_query: str, session: Any) -> str:
+        """把已确认槽拼进查询，供抽槽复用。"""
+
+        parts = [str(getattr(session, "original_query", "") or ""), str(user_query or "")]
+        slots = getattr(session, "slots", {}) or {}
+        for key, slot in slots.items():
+            value = getattr(slot, "value", None)
+            if value not in (None, ""):
+                parts.append(f"{key} {value}")
+        return " ".join(item for item in parts if item).strip()
+
+    def _overlay_session_slots(self, steps: List[ToolStep], session: Any) -> List[ToolStep]:
+        """用 session 槽覆盖步骤输入；补齐后可把 refill 澄清换成真步骤。"""
+
+        if session is None:
+            return steps
+        slots = getattr(session, "slots", {}) or {}
+
+        def _val(name: str) -> Any:
+            slot = slots.get(name)
+            return getattr(slot, "value", None) if slot is not None else None
+
+        for step in steps:
+            name = step.skill_name
+            if name == "qt.ai.data.refill_basic_equity_and_index":
+                if _val("start"):
+                    step.inputs["start"] = _val("start")
+                if _val("end"):
+                    step.inputs["end"] = _val("end")
+                if _val("shares"):
+                    step.inputs["symbols"] = _val("shares")
+            if name == "qt.ai.backtest.run_builtin":
+                if _val("shares"):
+                    step.inputs["asset_pool"] = _val("shares")
+                if _val("start"):
+                    step.inputs["invest_start"] = _val("start")
+                if _val("end"):
+                    step.inputs["invest_end"] = _val("end")
+                if _val("freq"):
+                    step.inputs["freq"] = _val("freq")
+                if _val("strategy_id"):
+                    step.inputs["strategy_id"] = _val("strategy_id")
+            if name == "qt.ai.optimize.run_builtin":
+                if _val("shares"):
+                    step.inputs["asset_pool"] = _val("shares")
+                if _val("strategy_id"):
+                    step.inputs["strategy_id"] = _val("strategy_id")
+            if name == "qt.ai.strategy.spec_from_nl":
+                if _val("slow") is not None:
+                    step.inputs["slow"] = _val("slow")
+                if _val("fast") is not None:
+                    step.inputs["fast"] = _val("fast")
+                if _val("slow") is not None or _val("fast") is not None:
+                    raw_query = str(step.inputs.get("query") or "")
+
+                    def _repl(match: Any) -> str:
+                        fast = int(_val("fast")) if _val("fast") is not None else int(match.group(1))
+                        slow = int(_val("slow")) if _val("slow") is not None else int(match.group(2))
+                        return f"{fast}/{slow} 日均线"
+
+                    rewritten, count = re.subn(
+                        r"(\d+)\s*[/／、,]\s*(\d+)\s*日?\s*均线",
+                        _repl,
+                        raw_query,
+                        count=1,
+                    )
+                    if count:
+                        step.inputs["query"] = rewritten
+        if self._is_clarify_fallback(steps):
+            job = str(((getattr(session, "active_intent", None) or {}).get("job") or ""))
+            if job == "data.refill" and _val("start") and _val("end"):
+                rebuilt = self._infer_refill_steps(
+                    query=self._session_query_text("", session),
+                    q_lower="",
+                    skip_query_guard=True,
+                )
+                if rebuilt:
+                    return rebuilt
+            if job == "backtest.builtin" and _val("strategy_id"):
+                rebuilt = self._infer_backtest_steps(
+                    query=self._session_query_text("", session),
+                    q_lower=self._session_query_text("", session).lower(),
+                    skip_query_guard=True,
+                )
+                if rebuilt:
+                    return rebuilt
+        return steps
+
+    def _apply_optional_defaults(
+        self,
+        steps: List[ToolStep],
+        job: str,
+        profile: Dict[str, Any],
+        session: Any,
+    ) -> Tuple[List[ToolStep], Dict[str, str]]:
+        """选填槽才吃 profile.defaults，必填不得悄悄齐。"""
+
+        defaults = profile.get("defaults") if isinstance(profile.get("defaults"), dict) else {}
+        optional = {
+            "backtest.builtin": ("shares", "start", "end", "freq"),
+            "optimize.builtin": ("shares", "start", "end", "freq"),
+            "data.summary": ("shares", "start", "end", "freq"),
+            "data.export": ("shares", "start", "end", "freq"),
+        }.get(job, ())
+        notes: Dict[str, str] = {}
+        slots = getattr(session, "slots", {}) if session is not None else {}
+        for key in optional:
+            if key in slots and getattr(slots[key], "value", None) not in (None, ""):
+                continue
+            if defaults.get(key) in (None, ""):
+                continue
+            value = defaults[key]
+            if session is not None:
+                session.set_slot(key, value, source="default", confirmed=False)
+            notes[key] = "profile"
+            for step in steps:
+                if key == "shares":
+                    if step.skill_name == "qt.ai.backtest.run_builtin":
+                        step.inputs.setdefault("asset_pool", value)
+                    elif step.skill_name == "qt.ai.optimize.run_builtin":
+                        step.inputs.setdefault("asset_pool", value)
+                    elif "shares" in (step.inputs or {}) or step.skill_name.startswith("qt.ai.data"):
+                        step.inputs.setdefault("shares", value)
+                if key == "start" and step.skill_name == "qt.ai.backtest.run_builtin":
+                    step.inputs.setdefault("invest_start", value)
+                if key == "end" and step.skill_name == "qt.ai.backtest.run_builtin":
+                    step.inputs.setdefault("invest_end", value)
+                if key == "freq" and step.skill_name == "qt.ai.backtest.run_builtin":
+                    step.inputs.setdefault("freq", value)
+        return steps, notes
+
+    @staticmethod
+    def _is_clarify_fallback(steps: List[ToolStep]) -> bool:
+        """是否整单 fallback 澄清。"""
+
+        if len(steps) != 1:
+            return False
+        step = steps[0]
+        if step.skill_name != "qt.ai.system.fallback":
+            return False
+        return str((step.inputs or {}).get("fallback_action") or "") == "clarify_required"
+
+    def _required_missing(self, job: str, steps: List[ToolStep], session: Any) -> List[str]:
+        """当前 Job 仍缺的必填槽。"""
+
+        required = {
+            "data.refill": ("start", "end"),
+            "backtest.builtin": ("strategy_id",),
+            "optimize.builtin": ("strategy_id",),
+        }.get(job, ())
+        slots = getattr(session, "slots", {}) if session is not None else {}
+        missing: List[str] = []
+        for key in required:
+            slot = slots.get(key)
+            if slot is not None and getattr(slot, "value", None) not in (None, ""):
+                continue
+            found = False
+            for step in steps:
+                inputs = step.inputs or {}
+                if key == "start" and (inputs.get("start") or inputs.get("invest_start")):
+                    found = True
+                elif key == "end" and (inputs.get("end") or inputs.get("invest_end")):
+                    found = True
+                elif key == "strategy_id" and inputs.get("strategy_id"):
+                    found = True
+            if not found:
+                missing.append(key)
+        if self._is_clarify_fallback(steps) and not missing and required:
+            info = str((steps[0].inputs or {}).get("missing_info") or "")
+            if "date" in info:
+                missing = ["start", "end"]
+            elif info:
+                missing = [part for part in info.replace("|", ",").split(",") if part]
+        return missing
+
+    @staticmethod
+    def _session_clarification(query: str, missing: List[str]) -> Dict[str, Any]:
+        """结构化澄清载荷（英文用户文案）。"""
+
+        pending = [{"name": name, "hint": f"Please provide {name}."} for name in missing]
+        return {
+            "restatement": f"You asked: {query}",
+            "pending": pending,
+            "confirm_prompt": "Reply with the missing fields, or say yes if the restatement is correct.",
+        }
 
     _DATA_INTENT_SKILLS = {
         "qt.ai.data.summary_kline",

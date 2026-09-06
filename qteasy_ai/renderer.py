@@ -108,9 +108,24 @@ class OutputRenderer:
 
         plan = payload.get("plan", {})
         n_steps = len(plan.get("steps") or [])
+        assumptions = plan.get("assumptions") or {}
+        extra = ""
+        defaults = assumptions.get("slot_defaults") if isinstance(assumptions, dict) else None
+        if isinstance(defaults, dict) and defaults:
+            extra += " Slot defaults from profile: " + ", ".join(
+                f"{key}={source}" for key, source in defaults.items()
+            )
+        clarification = payload.get("clarification") or (
+            assumptions.get("clarification") if isinstance(assumptions, dict) else None
+        )
+        if isinstance(clarification, dict):
+            extra += (
+                f" Clarification: {clarification.get('confirm_prompt') or ''} "
+                f"pending={clarification.get('pending')}"
+            )
         narrative = (
             f"Dry-run plan (not executed). First step: {skill_name or 'none'}. "
-            f"Step count: {n_steps}."
+            f"Step count: {n_steps}.{extra}"
         )
         python_code = "# Confirm the plan, then run with explicit confirmation."
         result_preview = f"execution.status=dry_run; planned_skill={skill_name}"

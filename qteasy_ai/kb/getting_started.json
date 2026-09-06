@@ -1,0 +1,17 @@
+{
+  "id": "getting_started",
+  "tags": ["intro", "quickstart", "setup"],
+  "keywords": [
+    "getting started",
+    "quickstart",
+    "入门",
+    "快速开始",
+    "how to start",
+    "first steps"
+  ],
+  "title": "Getting started with qteasy-ai",
+  "summary": "Install qteasy, set a local AI home, then Ask concepts or Plan a read-only task.",
+  "narrative": "Getting started: (1) install qteasy and qteasy-ai in the same Python env; (2) optionally set QTEASY_AI_HOME; (3) run `qteasy-ai ask \"what is qteasy\"` for concepts; (4) `qteasy-ai plan \"list built-in strategies\"` to review a ToolPlan without executing skills.\n\nFor data work, check Tushare / local tables first, then Plan a bounded download with explicit dates. Do not run unbounded refill.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('getting started', response_style='raw')['answer'][:200])\nprint(assistant.plan('list built-in strategies', response_style='raw')['plan']['steps'][0]['skill_name'])",
+  "risk_notes": "First-run refill without dates is rejected. Confirm side-effects before run."
+}

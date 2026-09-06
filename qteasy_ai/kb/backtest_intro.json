@@ -1,0 +1,16 @@
+{
+  "id": "backtest_intro",
+  "tags": ["backtest", "builtin", "intro"],
+  "keywords": [
+    "backtest intro",
+    "how to backtest",
+    "回测入门",
+    "怎么回测",
+    "run backtest"
+  ],
+  "title": "Built-in strategy backtest",
+  "summary": "Plan a built-in backtest with strategy_id and an explicit date window; confirm before run.",
+  "narrative": "A built-in backtest Job needs a strategy_id (for example macd or DMA). Dates and a symbol pool are optional slots: you can say them in the sentence or let profile.defaults fill optional shares/start/end/freq.\n\nPlan shows `qt.ai.backtest.run_builtin` as dry-run. CLI `run \"<query>\"` is one confirmation. Unattended `agent_auto` also needs `profile.agent.allow_backtest=true`.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('用 macd 在沪深300上跑 2018-2023 回测', response_style='raw')\nprint(plan['plan']['steps'][0]['skill_name'])",
+  "risk_notes": "Backtest is high-side-effect (heavy compute). Live trade is never auto-executed."
+}

@@ -106,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="standard",
         help="Explanation depth for Ask answers.",
     )
+    ask_parser.add_argument("--session-id", dest="session_id", default="", help="Reuse a conversation session.")
 
     preview_parser = sub.add_parser("preview", help="Dry-run plan preview (no skill execution).")
     preview_parser.add_argument("query", type=str, help="Natural language query")
@@ -117,6 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="standard",
         help="Explanation depth for pretty output.",
     )
+    preview_parser.add_argument("--session-id", dest="session_id", default="", help="Reuse a conversation session.")
 
     plan_parser = sub.add_parser("plan", help="Plan mode dry run.")
     plan_parser.add_argument("query", type=str, help="Natural language query")
@@ -133,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="standard",
         help="Explanation depth for pretty output.",
     )
+    plan_parser.add_argument("--session-id", dest="session_id", default="", help="Reuse a conversation session.")
 
     run_parser = sub.add_parser("run", help="Plan and execute, or execute a reviewed plan by id.")
     run_parser.add_argument("query", nargs="?", default="", help="Natural language query")
@@ -149,6 +152,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["brief", "standard", "deep"],
         default="standard",
         help="Explanation depth for pretty output.",
+    )
+    run_parser.add_argument("--session-id", dest="session_id", default="", help="Reuse a conversation session.")
+    run_parser.add_argument(
+        "--agent-auto",
+        dest="agent_auto",
+        action="store_true",
+        help="Session unattended mode; allow_* gates high-side-effect steps.",
     )
 
     sub.add_parser("provider-check", help="Check provider settings.")
@@ -170,6 +180,7 @@ def main() -> int:
     if getattr(args, "raw", False):
         response_style = "raw"
 
+    session_id = str(getattr(args, "session_id", "") or "").strip() or None
     if args.command == "ask":
         depth = getattr(args, "depth", "standard")
         _print_json(
@@ -178,6 +189,7 @@ def main() -> int:
                     args.query,
                     response_style=response_style,
                     explanation_depth=depth,
+                    session_id=session_id,
                 )
             )
         )
@@ -190,6 +202,7 @@ def main() -> int:
                     args.query,
                     response_style=response_style,
                     explanation_depth=depth,
+                    session_id=session_id,
                 )
             )
         )
@@ -227,6 +240,8 @@ def main() -> int:
                     query,
                     response_style=response_style,
                     explanation_depth=depth,
+                    session_id=session_id,
+                    agent_auto=bool(getattr(args, "agent_auto", False)) or None,
                 )
             )
         )

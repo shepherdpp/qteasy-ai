@@ -10,7 +10,9 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 
 **Q-AI.4（阶段 D）实弹**：**已关单（2026-08-31）**。手册 [`LIVE_FIRE_DRILL_QAI4.md`](LIVE_FIRE_DRILL_QAI4.md) + 语料 [`tests/ai_corpus/d_manual_corpus.json`](../tests/ai_corpus/d_manual_corpus.json)。
 
-**Q-AI.5（阶段 E）**：**已关单（2026-09-05）**。实弹手册 [`LIVE_FIRE_DRILL_QAI5.md`](LIVE_FIRE_DRILL_QAI5.md) + 语料 [`tests/ai_corpus/e_manual_corpus.json`](../tests/ai_corpus/e_manual_corpus.json)。**E.8 H′**：补页 [`LIVE_FIRE_DRILL_QAI5_H_PRIME.md`](LIVE_FIRE_DRILL_QAI5_H_PRIME.md)。**E.4**：Catalog [`OFFICIAL_SKILL_CATALOG.md`](OFFICIAL_SKILL_CATALOG.md) + Journey [`tests/ai_corpus/beginner_journey.json`](../tests/ai_corpus/beginner_journey.json)。下一主线 **F**（session + **F.5 KB Pack**）。
+**Q-AI.5（阶段 E）**：**已关单（2026-09-05）**。实弹手册 [`LIVE_FIRE_DRILL_QAI5.md`](LIVE_FIRE_DRILL_QAI5.md) + 语料 [`tests/ai_corpus/e_manual_corpus.json`](../tests/ai_corpus/e_manual_corpus.json)。**E.8 H′**：补页 [`LIVE_FIRE_DRILL_QAI5_H_PRIME.md`](LIVE_FIRE_DRILL_QAI5_H_PRIME.md)。**E.4**：Catalog [`OFFICIAL_SKILL_CATALOG.md`](OFFICIAL_SKILL_CATALOG.md) + Journey [`tests/ai_corpus/beginner_journey.json`](../tests/ai_corpus/beginner_journey.json)。
+
+**Q-AI.6（阶段 F）**：实弹手册 [`LIVE_FIRE_DRILL_QAI6.md`](LIVE_FIRE_DRILL_QAI6.md) + 官方 KB [`KB_TIER1.md`](KB_TIER1.md)。多轮 `--session-id`、Ask「什么是 qteasy」、`user_kb` 骨架、`allow_*` 仅门控 `agent_auto`。**不测开放环。不升版。**
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
@@ -76,7 +78,7 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 ## 5. Boundaries (must hold)
 
 - High side-effect skills: plan shows `side_effects`; **CLI `qteasy-ai run` = one human confirmation** and executes. Notebook `%%qtai --mode run` still requires `--confirm <plan_id>`.
-- `profile.agent.allow_*` defaults are all `false` and are **not** read by CLI/`assistant.run()` in this stage (reserved for unattended agents later).
+- `profile.agent.allow_*` defaults are all `false`. One-shot `assistant.run(query)` / `qteasy-ai run "<query>"` still ignores them (stage B). They gate refill/backtest/optimize only when `session.agent_auto=true`. Live steps never auto.
 - Ask target state: `assistant.ask(...)` → `mode=ask`, KnowledgeBase answer, **no** skill / PlanExecutor / `runs/` persist. Former empty-step plan preview is `preview()` / `plan --preview`.
 - Live trade uses `qt.ai.pipeline.live_trade_plan_only` (never execute orders). Skip-confirmation remains `not_supported_yet`.
 - StrategyBuilder: Plan DAG for dual-MA templates; Ask does not write strategy files.
