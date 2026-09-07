@@ -12,7 +12,7 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 
 **Q-AI.5（阶段 E）**：**已关单（2026-09-05）**。实弹手册 [`LIVE_FIRE_DRILL_QAI5.md`](LIVE_FIRE_DRILL_QAI5.md) + 语料 [`tests/ai_corpus/e_manual_corpus.json`](../tests/ai_corpus/e_manual_corpus.json)。**E.8 H′**：补页 [`LIVE_FIRE_DRILL_QAI5_H_PRIME.md`](LIVE_FIRE_DRILL_QAI5_H_PRIME.md)。**E.4**：Catalog [`OFFICIAL_SKILL_CATALOG.md`](OFFICIAL_SKILL_CATALOG.md) + Journey [`tests/ai_corpus/beginner_journey.json`](../tests/ai_corpus/beginner_journey.json)。
 
-**Q-AI.6（阶段 F）**：实弹手册 [`LIVE_FIRE_DRILL_QAI6.md`](LIVE_FIRE_DRILL_QAI6.md) + 官方 KB [`KB_TIER1.md`](KB_TIER1.md)。多轮 `--session-id`、Ask「什么是 qteasy」、`user_kb` 骨架、`allow_*` 仅门控 `agent_auto`。**不测开放环。不升版。**
+**Q-AI.6（阶段 F）**：**已关单（2026-09-07）**。实弹手册 [`LIVE_FIRE_DRILL_QAI6.md`](LIVE_FIRE_DRILL_QAI6.md) + 官方 KB [`KB_TIER1.md`](KB_TIER1.md)。多轮 `--session-id`、Ask「什么是 qteasy」、`user_kb` 骨架、`allow_*` 仅门控 `agent_auto`。**不测开放环。不升版。**
 
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 

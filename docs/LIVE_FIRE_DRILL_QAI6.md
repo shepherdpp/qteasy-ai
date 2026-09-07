@@ -1,6 +1,6 @@
 # Q-AI.6（阶段 F）实弹演练手册（Jackie 手动执行）
 
-**状态：编码完成，待 Jackie 手测关单。不升版。不测开放环 / 设计环 / Catalog `workflow`。**
+**状态：实弹已关单（Jackie，2026-09-07）。下一编码：G.0（Web/TUI 形态）。不升版。不测开放环 / 设计环 / Catalog `workflow`。**
 
 基线：qteasy-ai **0.1.x + 阶段 F 未发版改动** · qteasy **>=2.6** · Python **py39**
 
@@ -38,6 +38,8 @@
 | F8 | `run "用 macd 做回测，2018 到 2023" --session-id f6a --agent-auto` 且 `allow_backtest=false` | dry-run，不进 backtest handler |
 | F9 | 一次性 `run "list built-in strategies"`（无 agent_auto） | 保持 B，只读 skill 仍执行 |
 | F10 | 首次 `MemoryStore` / 任意 CLI | `.qteasy/ai/user_kb/rules`、`raw/{research,trades,factors,strategies}`、`compiled`、英文 README 存在 |
+
+**关单口径（2026-09-07）**：**Mode-R F1～F10 必测**；Mode-D 抽测同路径跟进（同 Job）。余量不挡关单：Mode-D overlay 槽名别名（`slow_line` vs `slow`）；`--pretty` 整包 JSON。不升版；1.0 标签仍由 Jackie 在 G.5 另决定。
 
 ---
 

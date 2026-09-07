@@ -123,6 +123,6 @@ qteasy-ai plan "start live trade now" --raw
 - 阶段 A 设计备忘（含现状 vs 目标态）：[design/11-ai-shell-stage-a.md](design/11-ai-shell-stage-a.md)
 - 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
 - 阶段 E 手测：[LIVE_FIRE_DRILL_QAI5.md](LIVE_FIRE_DRILL_QAI5.md)（Mode-R 全清单 + Mode-D 抽测；入口 `qteasy-ai plan "<q>" --raw`）
-- 阶段 F 手测：[LIVE_FIRE_DRILL_QAI6.md](LIVE_FIRE_DRILL_QAI6.md)（session / Ask「什么是 qteasy」/ user_kb 骨架）
+- 阶段 F 手测：[LIVE_FIRE_DRILL_QAI6.md](LIVE_FIRE_DRILL_QAI6.md)（**已关单 2026-09-07**；session / Ask「什么是 qteasy」/ user_kb 骨架）
 - 官方 KB 目录：[KB_TIER1.md](KB_TIER1.md)
 - 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`
