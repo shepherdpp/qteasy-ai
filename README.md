@@ -22,6 +22,8 @@
 ```bash
 pip install qteasy>=2.6.0
 pip install qteasy-ai
+# optional desktop Web + TUI
+pip install "qteasy-ai[workbench]"
 ```
 
 本地联调（两仓并列开发时）：
@@ -38,7 +40,7 @@ pip install -e /path/to/qteasy-ai
 - `QTEASY_AI_HOME` — 本地记忆目录（profile / env_facts / runs）
 - `QTEASY_AI_MODEL` / `QTEASY_AI_API_KEY` / `QTEASY_AI_BASE_URL` — OpenAI-compatible Provider
 
-详见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)、[docs/tutorials/quickstart.md](docs/tutorials/quickstart.md)。
+详见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)、[docs/tutorials/quickstart.md](docs/tutorials/quickstart.md)、[docs/WORKBENCH.md](docs/WORKBENCH.md)。
 
 ## 开发
 

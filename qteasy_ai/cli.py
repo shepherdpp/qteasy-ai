@@ -162,6 +162,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("provider-check", help="Check provider settings.")
+
+    serve_parser = sub.add_parser("serve", help="Start the workbench HTTP server (Ask/Plan/run-plan).")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host.")
+    serve_parser.add_argument("--port", type=int, default=8765, help="Bind port.")
+
+    tui_parser = sub.add_parser("tui", help="Start the minimal workbench TUI.")
+    tui_parser.add_argument("--session-id", dest="session_id", default="tui", help="Conversation session id.")
     return parser
 
 
@@ -248,6 +255,41 @@ def main() -> int:
         return 0
     if args.command == "provider-check":
         _print_json(_provider_check_payload())
+        return 0
+    if args.command == "serve":
+        try:
+            import uvicorn
+        except ImportError:
+            _print_json(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "WORKBENCH_EXTRA_REQUIRED",
+                        "message": "Install extra: pip install qteasy-ai[workbench]",
+                    },
+                }
+            )
+            return 1
+        from .workbench.http_app import create_app
+
+        app = create_app(assistant=assistant)
+        uvicorn.run(app, host=str(args.host), port=int(args.port))
+        return 0
+    if args.command == "tui":
+        try:
+            from .workbench.tui_app import run_tui
+        except ImportError:
+            _print_json(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "WORKBENCH_EXTRA_REQUIRED",
+                        "message": "Install extra: pip install qteasy-ai[workbench]",
+                    },
+                }
+            )
+            return 1
+        run_tui(assistant=assistant, session_id=str(getattr(args, "session_id", "") or "tui"))
         return 0
     return 1
 

@@ -285,6 +285,22 @@ class TestAiCliNotebookEntry(unittest.TestCase):
             self.assertNotIn("steps", payload)
             self.assertIn("pt_ps_vs", payload.get("sources") or [])
 
+    def test_cli_parser_has_serve_and_tui(self) -> None:
+        """CLI 仍保留 ask/plan/run，并增加 serve/tui。"""
+
+        print("\n[TestAiCliNotebookEntry] workbench subcommands")
+        from qteasy_ai.cli import build_parser
+
+        parser = build_parser()
+        serve = parser.parse_args(["serve", "--port", "9000"])
+        tui = parser.parse_args(["tui", "--session-id", "demo"])
+        print(" serve:", serve.command, serve.port)
+        print(" tui:", tui.command, tui.session_id)
+        self.assertEqual(serve.command, "serve")
+        self.assertEqual(int(serve.port), 9000)
+        self.assertEqual(tui.command, "tui")
+        self.assertEqual(tui.session_id, "demo")
+
 
 if __name__ == "__main__":
     unittest.main()

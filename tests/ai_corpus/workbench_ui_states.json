@@ -1,0 +1,169 @@
+{
+  "meta": {
+    "stage": "G.4 / Workbench UI states",
+    "notes": "Keys must stay aligned with web/src/types.ts and WorkbenchState.to_dict()."
+  },
+  "required_state_keys": [
+    "mode",
+    "session_id",
+    "messages",
+    "plan_card",
+    "sidebar",
+    "artifacts",
+    "execution",
+    "error",
+    "run_id",
+    "sources"
+  ],
+  "required_message_keys": ["kind", "text", "payload"],
+  "required_plan_card_keys": ["plan_id", "steps", "plan_md", "confirmable", "needs_confirm"],
+  "required_sidebar_keys": [
+    "active_intent",
+    "slots",
+    "missing",
+    "env_summary",
+    "current_plan_id",
+    "clarify_round"
+  ],
+  "states": {
+    "ask_bubble": {
+      "mode": "ask",
+      "session_id": "s-ask",
+      "messages": [
+        {"kind": "user_text", "text": "what is qteasy", "payload": {}},
+        {"kind": "ask_text", "text": "qteasy is a quantitative research toolkit.", "payload": {"sources": ["what_is_qteasy"]}}
+      ],
+      "plan_card": null,
+      "sidebar": {
+        "active_intent": null,
+        "slots": [],
+        "missing": [],
+        "env_summary": {},
+        "current_plan_id": "",
+        "clarify_round": 0
+      },
+      "artifacts": [],
+      "execution": {"status": "", "steps": []},
+      "error": null,
+      "run_id": "",
+      "sources": ["what_is_qteasy"]
+    },
+    "clarification_form": {
+      "mode": "plan",
+      "session_id": "s-clarify",
+      "messages": [
+        {"kind": "user_text", "text": "download daily bars", "payload": {}},
+        {
+          "kind": "clarification",
+          "text": "Reply with the missing fields.",
+          "payload": {
+            "restatement": "You asked: download daily bars",
+            "pending": [{"name": "start", "hint": "Please provide start."}, {"name": "end", "hint": "Please provide end."}]
+          }
+        }
+      ],
+      "plan_card": {
+        "plan_id": "plan_clarify",
+        "steps": [
+          {
+            "step_id": "step_1",
+            "skill_name": "qt.ai.system.fallback",
+            "side_effects": {"network": false, "filesystem_write": false, "local_state_change": false, "heavy_compute": false, "description": ""},
+            "needs_confirm": false,
+            "status": "pending"
+          }
+        ],
+        "plan_md": "",
+        "confirmable": false,
+        "needs_confirm": false
+      },
+      "sidebar": {
+        "active_intent": {"job": "data.refill", "flags": {}},
+        "slots": [],
+        "missing": ["start", "end"],
+        "env_summary": {},
+        "current_plan_id": "plan_clarify",
+        "clarify_round": 1
+      },
+      "artifacts": [],
+      "execution": {"status": "dry_run", "steps": []},
+      "error": null,
+      "run_id": "run_clarify",
+      "sources": []
+    },
+    "plan_card_side_effects": {
+      "mode": "plan",
+      "session_id": "s-plan",
+      "messages": [
+        {"kind": "user_text", "text": "list built-in strategies", "payload": {}},
+        {"kind": "plan_card", "text": "Review plan before execute.", "payload": {"plan_id": "plan_list"}}
+      ],
+      "plan_card": {
+        "plan_id": "plan_list",
+        "steps": [
+          {
+            "step_id": "step_1",
+            "skill_name": "qt.ai.strategy_meta.list",
+            "side_effects": {"network": false, "filesystem_write": false, "local_state_change": false, "heavy_compute": false, "description": "readonly"},
+            "needs_confirm": false,
+            "status": "pending"
+          }
+        ],
+        "plan_md": "# Plan",
+        "confirmable": true,
+        "needs_confirm": false
+      },
+      "sidebar": {
+        "active_intent": {"job": "strategy.meta", "flags": {}},
+        "slots": [],
+        "missing": [],
+        "env_summary": {},
+        "current_plan_id": "plan_list",
+        "clarify_round": 0
+      },
+      "artifacts": [],
+      "execution": {"status": "dry_run", "steps": []},
+      "error": null,
+      "run_id": "run_list",
+      "sources": []
+    },
+    "executing_steps": {
+      "mode": "plan",
+      "session_id": "s-run",
+      "messages": [
+        {"kind": "step_status", "text": "Execution steps", "payload": {"steps": [{"step_id": "step_1", "skill_name": "qt.ai.strategy_meta.list", "status": "done", "ok": true}]}}
+      ],
+      "plan_card": {
+        "plan_id": "plan_run",
+        "steps": [
+          {
+            "step_id": "step_1",
+            "skill_name": "qt.ai.strategy_meta.list",
+            "side_effects": {"network": false, "filesystem_write": false, "local_state_change": false, "heavy_compute": false, "description": "readonly"},
+            "needs_confirm": false,
+            "status": "done"
+          }
+        ],
+        "plan_md": "",
+        "confirmable": false,
+        "needs_confirm": false
+      },
+      "sidebar": {
+        "active_intent": {"job": "strategy.meta", "flags": {}},
+        "slots": [],
+        "missing": [],
+        "env_summary": {},
+        "current_plan_id": "plan_run",
+        "clarify_round": 0
+      },
+      "artifacts": [],
+      "execution": {
+        "status": "success",
+        "steps": [{"step_id": "step_1", "skill_name": "qt.ai.strategy_meta.list", "status": "done", "ok": true}]
+      },
+      "error": null,
+      "run_id": "run_ok",
+      "sources": []
+    }
+  }
+}

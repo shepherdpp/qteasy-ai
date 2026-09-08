@@ -99,7 +99,19 @@ Rules (user-facing):
 
 Notebook: `%%qtai --mode plan --session-id demo`.
 
-## 6. StrategyBuilder（Q-AI.4）
+## 6. Workbench Web / TUI（Q-AI.7）
+
+Desktop three-pane Web and a minimal TUI wrap the same `QteasyAssistant` as CLI/Notebook. They share `runs/`. Completing slots still only shows a Plan confirm card; nothing executes until you confirm.
+
+```bash
+pip install "qteasy-ai[workbench]"
+qteasy-ai serve --host 127.0.0.1 --port 8765
+qteasy-ai tui --session-id demo
+```
+
+Details: [WORKBENCH.md](WORKBENCH.md). Hand-off checklist: [LIVE_FIRE_DRILL_QAI7.md](LIVE_FIRE_DRILL_QAI7.md).
+
+## 7. StrategyBuilder（Q-AI.4）
 
 自然语言写策略走 **Plan**，不是 Ask。本阶段只支持 **RuleIterator 双均线择时** 模板（如 20/60 金叉死叉）。生成源码写入 `.qteasy/ai/strategies/`，不写 qteasy 安装包、默认不写 `examples/`。
 
@@ -117,12 +129,13 @@ qteasy-ai plan "start live trade now" --raw
 
 演示脚本：`examples/ai_shell_stage_d_strategybuilder_demo.py`。
 
-## 7. 更多
+## 8. 更多
 
 - 快速上手：[tutorials/quickstart.md](tutorials/quickstart.md)
 - 阶段 A 设计备忘（含现状 vs 目标态）：[design/11-ai-shell-stage-a.md](design/11-ai-shell-stage-a.md)
 - 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
 - 阶段 E 手测：[LIVE_FIRE_DRILL_QAI5.md](LIVE_FIRE_DRILL_QAI5.md)（Mode-R 全清单 + Mode-D 抽测；入口 `qteasy-ai plan "<q>" --raw`）
 - 阶段 F 手测：[LIVE_FIRE_DRILL_QAI6.md](LIVE_FIRE_DRILL_QAI6.md)（**已关单 2026-09-07**；session / Ask「什么是 qteasy」/ user_kb 骨架）
+- 阶段 G 工作台：[WORKBENCH.md](WORKBENCH.md)；手测 [LIVE_FIRE_DRILL_QAI7.md](LIVE_FIRE_DRILL_QAI7.md)（编码完成；1.0 标签待 Jackie）
 - 官方 KB 目录：[KB_TIER1.md](KB_TIER1.md)
-- 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`
+- 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`、`examples/ai_shell_stage_g_workbench_demo.py`

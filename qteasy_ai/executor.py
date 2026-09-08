@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from .contracts import (
     PlanExecutionRecord,
@@ -56,7 +56,14 @@ class PlanExecutor:
         self.registry = registry
         self.memory_store = memory_store
 
-    def execute(self, plan: ToolPlan, *, confirm: bool = False, persist_run: bool = True) -> Dict[str, Any]:
+    def execute(
+        self,
+        plan: ToolPlan,
+        *,
+        confirm: bool = False,
+        persist_run: bool = True,
+        on_step: Optional[Callable[[PlanStepRecord], None]] = None,
+    ) -> Dict[str, Any]:
         """执行计划，支持 dry_run 与 execute。
 
         Parameters
@@ -65,6 +72,10 @@ class PlanExecutor:
             待执行计划。
         confirm : bool, default False
             是否确认执行。即使 plan 为 execute，当 confirm=False 时也会按 dry_run 返回。
+        persist_run : bool, default True
+            是否立刻写入 ``runs/``。
+        on_step : callable, optional
+            每步完成后的回调（``PlanStepRecord``）。dry_run 不触发真实执行回调。
 
         Returns
         -------
@@ -125,15 +136,15 @@ class PlanExecutor:
                         "skip_reason": "run_if condition not satisfied",
                     }
                     ended_at = _utc_now_iso()
-                    step_records.append(
-                        PlanStepRecord(
-                            step_id=step.step_id,
-                            skill_name=step.skill_name,
-                            started_at=started_at,
-                            ended_at=ended_at,
-                            result=result,
-                        )
+                    record = PlanStepRecord(
+                        step_id=step.step_id,
+                        skill_name=step.skill_name,
+                        started_at=started_at,
+                        ended_at=ended_at,
+                        result=result,
                     )
+                    step_records.append(record)
+                    self._emit_on_step(on_step, record)
                     completed_ids.add(step_id)
                     step_results[step_id] = result
                     continue
@@ -144,15 +155,15 @@ class PlanExecutor:
                     step_results=step_results,
                 )
                 ended_at = _utc_now_iso()
-                step_records.append(
-                    PlanStepRecord(
-                        step_id=step.step_id,
-                        skill_name=step.skill_name,
-                        started_at=started_at,
-                        ended_at=ended_at,
-                        result=result,
-                    )
+                record = PlanStepRecord(
+                    step_id=step.step_id,
+                    skill_name=step.skill_name,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    result=result,
                 )
+                step_records.append(record)
+                self._emit_on_step(on_step, record)
                 completed_ids.add(step_id)
                 step_results[step_id] = result
 
@@ -181,15 +192,15 @@ class PlanExecutor:
                             },
                         },
                     }
-                    step_records.append(
-                        PlanStepRecord(
-                            step_id=step.step_id,
-                            skill_name=step.skill_name,
-                            started_at=started_at,
-                            ended_at=ended_at,
-                            result=result,
-                        )
+                    record = PlanStepRecord(
+                        step_id=step.step_id,
+                        skill_name=step.skill_name,
+                        started_at=started_at,
+                        ended_at=ended_at,
+                        result=result,
                     )
+                    step_records.append(record)
+                    self._emit_on_step(on_step, record)
                     step_results[cycle_step_id] = result
                     completed_ids.add(cycle_step_id)
                 pending_steps.clear()
@@ -217,6 +228,17 @@ class PlanExecutor:
             run_file = self.memory_store.save_run(run_id, payload)
             payload["run_file"] = run_file
         return payload
+
+    @staticmethod
+    def _emit_on_step(
+        on_step: Optional[Callable[[PlanStepRecord], None]],
+        record: PlanStepRecord,
+    ) -> None:
+        """安全触发逐步回调。"""
+
+        if on_step is None:
+            return
+        on_step(record)
 
     @staticmethod
     def _plan_to_dict(plan: ToolPlan) -> Dict[str, Any]:

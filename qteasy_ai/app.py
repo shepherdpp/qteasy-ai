@@ -325,6 +325,7 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session_id: str | None = None,
         agent_auto: Optional[bool] = None,
+        on_step: Any = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan + 确认执行。
 
@@ -350,6 +351,7 @@ class QteasyAssistant:
             keep=keep,
             explanation_depth=explanation_depth,
             session=session,
+            on_step=on_step,
         )
 
     def run_plan(
@@ -360,6 +362,7 @@ class QteasyAssistant:
         persist: str | None = None,
         keep: bool = False,
         explanation_depth: str = "standard",
+        on_step: Any = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """从 ``runs/`` 加载已审阅 ToolPlan 并执行，禁止重新 Hybrid。
 
@@ -387,6 +390,7 @@ class QteasyAssistant:
             persist=persist,
             keep=keep,
             explanation_depth=explanation_depth,
+            on_step=on_step,
         )
 
     def _execute_and_format(
@@ -399,12 +403,13 @@ class QteasyAssistant:
         keep: bool,
         explanation_depth: str = "standard",
         session: Optional[ConversationState] = None,
+        on_step: Optional[Any] = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """执行并按策略处理落盘与渲染。"""
 
         persist_mode = persist or self.run_policy.persist_mode
         persist_run = persist_mode in {"bounded", "audit"}
-        payload = self.executor.execute(plan, confirm=confirm, persist_run=False)
+        payload = self.executor.execute(plan, confirm=confirm, persist_run=False, on_step=on_step)
         plan_md = tool_plan_to_markdown(payload.get("plan") or plan)
         payload["plan_md"] = plan_md
 

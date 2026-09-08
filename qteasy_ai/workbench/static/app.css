@@ -1,0 +1,36 @@
+:root {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: #e8edf5;
+  background: #10141c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+#root { min-height: 100vh; }
+.topbar, .inputbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  background: #1b2230;
+  border-bottom: 1px solid #2c3548;
+}
+.inputbar { border-top: 1px solid #2c3548; border-bottom: 0; }
+.layout {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 0.9fr;
+  min-height: calc(100vh - 96px);
+}
+.col { padding: 12px; overflow: auto; border-right: 1px solid #2c3548; }
+.col h2 { margin: 0 0 8px; font-size: 14px; color: #9db0cc; }
+.mode-badge { padding: 4px 8px; border-radius: 4px; background: #2a3a58; font-size: 12px; }
+.msg { margin: 8px 0; padding: 8px; border-radius: 6px; background: #222b3b; }
+.msg.user { background: #24344f; }
+.card { padding: 10px; border: 1px solid #3a4a66; border-radius: 6px; margin: 8px 0; }
+button { cursor: pointer; margin-right: 6px; }
+textarea, input, select { width: 100%; background: #0f1622; color: #e8edf5; border: 1px solid #3a4a66; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.tab { padding: 4px 8px; background: #2a3a58; border-radius: 4px; cursor: pointer; }
+.tab.active { background: #3d6dff; }
+.step.done { color: #7dffa0; }
+.step.error { color: #ff8b8b; }
+.warn { color: #ffcc66; font-size: 12px; }

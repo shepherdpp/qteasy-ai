@@ -34,6 +34,14 @@ Documentation = "https://github.com/shepherdpp/qteasy-ai#readme"
 Issues = "https://github.com/shepherdpp/qteasy-ai/issues"
 Repository = "https://github.com/shepherdpp/qteasy-ai"
 
+[project.optional-dependencies]
+workbench = [
+    "starlette>=0.27",
+    "uvicorn>=0.22",
+    "httpx>=0.24",
+    "textual>=0.47",
+]
+
 [project.scripts]
 qteasy-ai = "qteasy_ai.cli:main"
 
@@ -42,4 +50,4 @@ where = ["."]
 include = ["qteasy_ai*"]
 
 [tool.setuptools.package-data]
-qteasy_ai = ["kb/*.json", "intents/*.json"]
+qteasy_ai = ["kb/*.json", "intents/*.json", "workbench/static/*"]
