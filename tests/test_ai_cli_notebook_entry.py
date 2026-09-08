@@ -42,7 +42,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
     def test_cli_plan_command(self) -> None:
         """验证 CLI plan 子命令可执行。"""
 
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies"]
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies", "--raw"]
         completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
         payload = json.loads(completed.stdout)
 
@@ -64,6 +64,34 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         self.assertIn("python_code", payload)
         self.assertIn("result_preview", payload)
         self.assertIn("raw", payload)
+
+    def test_cli_plan_command_human_default(self) -> None:
+        """CLI 默认 human：对话区文本，不是 JSON。"""
+
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies"]
+        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print("\n[TestAiCliNotebookEntry] cli human stdout:", completed.stdout[:400])
+        self.assertIn("[MODE: PLAN]", completed.stdout)
+        self.assertIn("Job:", completed.stdout)
+        self.assertIn("Calls: qteasy.built_in_list", completed.stdout)
+        self.assertIn("qt.ai.strategy_meta.list", completed.stdout)
+        self.assertIn("Confirm: qteasy-ai run --plan-id", completed.stdout)
+        self.assertIn("Storage:", completed.stdout)
+        self.assertIn("run_id:", completed.stdout)
+        self.assertNotIn("# ToolPlan", completed.stdout)
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(completed.stdout)
+
+    def test_cli_ask_command_human_default(self) -> None:
+        """Ask 默认 human：含答案，无 plan 确认。"""
+
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "ask", "explain PT vs PS"]
+        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print("\n[TestAiCliNotebookEntry] cli ask human:", completed.stdout[:400])
+        self.assertIn("[MODE: ASK]", completed.stdout)
+        self.assertIn("PT", completed.stdout)
+        self.assertIn("PS", completed.stdout)
+        self.assertNotIn("Confirm: qteasy-ai run --plan-id", completed.stdout)
 
     def test_cli_provider_check_diagnostics(self) -> None:
         """验证 provider-check 返回配置诊断信息。"""
@@ -125,10 +153,11 @@ class TestAiCliNotebookEntry(unittest.TestCase):
     def test_cli_ask_command_target_state(self) -> None:
         """验证 CLI ask 返回 Ask 目标态，不含 execution。"""
 
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "ask", "explain PT vs PS"]
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "ask", "explain PT vs PS", "--raw"]
         completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print("\n[TestAiCliNotebookEntry] cli ask stdout head:", completed.stdout[:80])
         payload = json.loads(completed.stdout)
-        print("\n[TestAiCliNotebookEntry] cli ask:", payload.get("mode"), payload.get("sources"))
+        print(" cli ask:", payload.get("mode"), payload.get("sources"))
         print(" answer:", str(payload.get("answer", ""))[:240])
         self.assertEqual(payload["mode"], "ask")
         self.assertNotIn("execution", payload)
@@ -139,8 +168,8 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         """验证 preview 与 plan --preview 走出 strategy_meta.list。"""
 
         for cmd in (
-            [sys.executable, "-m", "qteasy_ai.cli", "preview", "list built-in strategies"],
-            [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies", "--preview"],
+            [sys.executable, "-m", "qteasy_ai.cli", "preview", "list built-in strategies", "--raw"],
+            [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies", "--preview", "--raw"],
         ):
             completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
             payload = json.loads(completed.stdout)
@@ -176,7 +205,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
     def test_cli_run_plan_id_missing_english_error(self) -> None:
         """缺 plan 记录 → 英文错误，不改走 query run。"""
 
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "run", "--plan-id", "plan_does_not_exist"]
+        cmd = [sys.executable, "-m", "qteasy_ai.cli", "run", "--plan-id", "plan_does_not_exist", "--raw"]
         completed = subprocess.run(cmd, capture_output=True, text=True)
         payload = json.loads(completed.stdout)
         print("\n[TestAiCliNotebookEntry] missing plan_id:", payload)
@@ -200,6 +229,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
                 "帮我下载日线",
                 "--session-id",
                 "cli-s1",
+                "--raw",
             ]
             first = subprocess.run(cmd1, check=True, capture_output=True, text=True, env=env)
             p1 = json.loads(first.stdout)
@@ -212,6 +242,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
                 "20240101 到 20241231",
                 "--session-id",
                 "cli-s1",
+                "--raw",
             ]
             second = subprocess.run(cmd2, check=True, capture_output=True, text=True, env=env)
             p2 = json.loads(second.stdout)
@@ -229,6 +260,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
                     "20240101 到 20241231",
                     "--session-id",
                     "cli-other",
+                    "--raw",
                 ],
                 check=True,
                 capture_output=True,
@@ -256,6 +288,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
                     "download daily data from 20180101 to 20231231",
                     "--session-id",
                     "cli-ask",
+                    "--raw",
                 ],
                 check=True,
                 capture_output=True,
@@ -271,6 +304,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
                     "explain PT vs PS",
                     "--session-id",
                     "cli-ask",
+                    "--raw",
                 ],
                 check=True,
                 capture_output=True,
@@ -294,12 +328,17 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         parser = build_parser()
         serve = parser.parse_args(["serve", "--port", "9000"])
         tui = parser.parse_args(["tui", "--session-id", "demo"])
+        plan_default = parser.parse_args(["plan", "list built-in strategies"])
+        plan_raw = parser.parse_args(["plan", "x", "--raw"])
         print(" serve:", serve.command, serve.port)
         print(" tui:", tui.command, tui.session_id)
+        print(" plan default format:", plan_default.output_format, "raw:", plan_raw.output_format)
         self.assertEqual(serve.command, "serve")
         self.assertEqual(int(serve.port), 9000)
         self.assertEqual(tui.command, "tui")
         self.assertEqual(tui.session_id, "demo")
+        self.assertEqual(plan_default.output_format, "human")
+        self.assertEqual(plan_raw.output_format, "raw")
 
 
 if __name__ == "__main__":

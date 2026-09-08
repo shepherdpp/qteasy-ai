@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 from .app import QteasyAssistant
 from .ask_engine import AskResponse
 from .output import AssistantOutput
+from .workbench.human import format_human_from_payload
 
 try:
     from IPython.core.magic import Magics, line_cell_magic, magics_class
@@ -60,6 +61,7 @@ class MagicCommand:
 
     mode: str
     response_style: str
+    output_format: str
     persist: Optional[str]
     keep: bool
     confirm_plan_id: str
@@ -77,6 +79,7 @@ def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
     parser.add_argument("--mode", choices=["ask", "plan", "run", "preview"], default="plan")
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--raw", action="store_true")
+    parser.add_argument("--human", action="store_true")
     parser.add_argument("--persist", choices=["bounded", "audit", "none"], default=None)
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--confirm", dest="confirm_plan_id", default="")
@@ -92,13 +95,19 @@ def parse_magic_command(line: str, cell: Optional[str] = None) -> MagicCommand:
 
     args = parser.parse_args(shlex.split(line))
     if args.raw:
+        output_format = "raw"
         response_style = "raw"
-    else:
+    elif args.pretty:
+        output_format = "pretty"
         response_style = "user_friendly"
+    else:
+        output_format = "human"
+        response_style = "raw"
     query_text = (cell if cell is not None else " ".join(args.query_parts)).strip()
     return MagicCommand(
         mode=args.mode,
         response_style=response_style,
+        output_format=output_format,
         persist=args.persist,
         keep=args.keep,
         confirm_plan_id=str(args.confirm_plan_id).strip(),
@@ -318,6 +327,75 @@ def render_magic_result(mode: str, result: Any, *, confirm_hint: str = "") -> st
     return "\n".join(sections)
 
 
+def render_magic_display(
+    mode: str,
+    result: Any,
+    *,
+    output_format: str = "human",
+    confirm_hint: str = "",
+    query: str = "",
+    assistant: Optional[QteasyAssistant] = None,
+    session_id: str = "",
+) -> str:
+    """按档位渲染 Notebook display 文本。
+
+    Parameters
+    ----------
+    mode : str
+        ask / plan / run / diag。
+    result : Any
+        ``execute_magic_command`` 的 result。
+    output_format : {'human', 'pretty', 'raw'}, default 'human'
+        display 档位。
+    confirm_hint : str, optional
+        ``%%qtai --confirm`` 提示。
+    query : str, optional
+        本轮问句。
+    assistant : QteasyAssistant, optional
+        用于加载 session / env_facts。
+    session_id : str, optional
+        会话 id。
+
+    Returns
+    -------
+    str
+        Markdown 或纯文本。
+    """
+
+    fmt = str(output_format or "human")
+    if fmt == "pretty":
+        return render_magic_result(mode, result, confirm_hint=confirm_hint)
+    if fmt == "raw":
+        raw = _result_to_raw_dict(result)
+        parts = [
+            f"[MODE: {mode.upper()}]",
+            "",
+            "```json",
+            json.dumps(raw, ensure_ascii=False, indent=2),
+            "```",
+        ]
+        if confirm_hint:
+            parts.extend(["", "### Confirm To Execute", "```python", confirm_hint, "```"])
+        return "\n".join(parts)
+    session = None
+    env = None
+    registry = None
+    if assistant is not None:
+        sid = str(session_id or "").strip()
+        if sid:
+            session = assistant.session_store.load(sid)
+        env = assistant.memory_store.load_env_facts()
+        registry = assistant.registry
+    return format_human_from_payload(
+        result,
+        query=query,
+        session=session,
+        env_facts=env,
+        confirm_hint=confirm_hint,
+        registry=registry,
+    )
+
+
 @magics_class
 class QtAiMagics(Magics):  # type: ignore[misc]
     """qteasy AI notebook 魔法命令。"""
@@ -338,10 +416,14 @@ class QtAiMagics(Magics):  # type: ignore[misc]
 
         command = parse_magic_command(line=line, cell=cell)
         execution = execute_magic_command(command, assistant=assistant, plan_cache=plan_cache)
-        markdown_text = render_magic_result(
+        markdown_text = render_magic_display(
             execution["mode"],
             execution["result"],
+            output_format=command.output_format,
             confirm_hint=str(execution.get("confirm_hint", "")),
+            query=command.query,
+            assistant=assistant,
+            session_id=command.session_id,
         )
         if display is not None and Markdown is not None:
             display(Markdown(markdown_text))

@@ -11,7 +11,17 @@
 | **preview** | `assistant.preview()` / `qteasy-ai preview` / `plan --preview` | 与 Plan 相同 | 原 `ask()` 的「只看 plan 不执行」迁移入口 |
 | **Agent（run）** | `assistant.run()` / `qteasy-ai run`；已审阅图用 `run --plan-id` | **是**（CLI 视为一次人在回路确认） | 下载/回测/优化等已确认任务 |
 
-Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm <plan_id>` 才真正执行。
+Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm <plan_id>` 才真正执行。默认 **display 为 human**（对话区文本）；`--pretty` 为三通道卡片；`--raw` 为 JSON。
+
+## 1.1 输出档位（CLI / Notebook）
+
+| 档位 | CLI | Notebook | 内容 |
+|------|-----|----------|------|
+| **human（默认）** | `qteasy-ai plan "..."` | `%%qtai --mode plan` | 回答 / 澄清 / 英文错误 / Plan 解读卡 / **run 结果解读卡**。 |
+| **pretty** | `--pretty` | `--pretty` | 结构化 `narrative` + `python_code` + `result_preview`（JSON 或三通道 Markdown） |
+| **raw** | `--raw` | `--raw` | 装配层 payload，供脚本与实弹 |
+
+槽齐不会自动执行。human 的 Plan 卡是**解读层**（Job / 步数 / 每步 API·参数·期望结果）；**run 成功后**再披露实际 Result（如策略 docstring、列表 id、metrics），不是只打 skill 名。``plan.md`` 仍落盘。磁盘文件名是 **``run_<id>.json`` / ``run_<id>.plan.md``**，不是 ``plan_<id>``。``plan_id`` 只写在 JSON 里，供 ``run --plan-id`` 使用。
 
 ## 2. Ask 目标态（Q-AI.3）
 

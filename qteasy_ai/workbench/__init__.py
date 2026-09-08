@@ -11,6 +11,13 @@
 """工作台壳：Web 与最小 TUI 共用 DTO，不重做 Planner。"""
 
 from .dto import WorkbenchState
+from .human import format_human, format_human_from_payload
 from .mapper import classify_artifacts, map_assistant_payload
 
-__all__ = ["WorkbenchState", "classify_artifacts", "map_assistant_payload"]
+__all__ = [
+    "WorkbenchState",
+    "classify_artifacts",
+    "format_human",
+    "format_human_from_payload",
+    "map_assistant_payload",
+]

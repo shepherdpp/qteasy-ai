@@ -42,7 +42,10 @@ Ask 是只读问答：KnowledgeBase + 可选 LLM，**不**生成可执行 steps�
 ```bash
 qteasy-ai ask "explain PT vs PS"
 qteasy-ai ask "explain PT vs PS" --depth deep
+qteasy-ai ask "explain PT vs PS" --raw
 ```
+
+默认 **human**：只打印对话区文本。脚本请加 `--raw`。
 
 ### 2.1b preview（原 ask 的 plan 预览）
 
@@ -60,6 +63,8 @@ qteasy-ai plan "show kline summary of 000300.SH from 20240101"
 qteasy-ai plan "show kline summary of 000300.SH from 20240101" --pretty
 qteasy-ai plan "show kline summary of 000300.SH from 20240101" --raw
 ```
+
+无 flag 时为 human（Job / 步骤解读卡 + `run --plan-id`）。`--pretty` 仍是结构化 JSON。
 
 ### 2.3 Run 模式
 

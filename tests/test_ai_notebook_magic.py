@@ -16,6 +16,7 @@ from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.notebook_magic import (
     execute_magic_command,
     parse_magic_command,
+    render_magic_display,
 )
 
 
@@ -32,6 +33,7 @@ class TestAiNotebookMagic(unittest.TestCase):
         print("\n[TestAiNotebookMagic] parsed command:", command)
         self.assertEqual(command.mode, "run")
         self.assertEqual(command.response_style, "raw")
+        self.assertEqual(command.output_format, "raw")
         self.assertEqual(command.persist, "none")
         self.assertTrue(command.keep)
         self.assertEqual(command.confirm_plan_id, "plan_abc")
@@ -173,6 +175,61 @@ class TestAiNotebookMagic(unittest.TestCase):
             print(" mode:", payload.get("mode"), "keys:", sorted(payload.keys()) if isinstance(payload, dict) else type(payload))
             self.assertEqual(payload["mode"], "ask")
             self.assertNotIn("execution", payload)
+
+
+    def test_parse_default_is_human(self) -> None:
+        """无 flag 时 display 为 human，内部仍取 raw。"""
+
+        command = parse_magic_command("--mode ask explain PT vs PS")
+        print("\n[TestAiNotebookMagic] default format:", command.output_format, command.response_style)
+        self.assertEqual(command.output_format, "human")
+        self.assertEqual(command.response_style, "raw")
+        pretty = parse_magic_command("--mode plan --pretty list built-in strategies")
+        print(" pretty format:", pretty.output_format, pretty.response_style)
+        self.assertEqual(pretty.output_format, "pretty")
+        self.assertEqual(pretty.response_style, "user_friendly")
+
+    def test_human_display_ask_and_plan(self) -> None:
+        """Notebook human display：Ask 有答案；Plan 有确认提示。"""
+
+        print("\n[TestAiNotebookMagic] human display")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            plan_cache = {}
+            ask_cmd = parse_magic_command("--mode ask explain PT vs PS")
+            ask_out = execute_magic_command(ask_cmd, assistant=assistant, plan_cache=plan_cache)
+            ask_text = render_magic_display(
+                ask_out["mode"],
+                ask_out["result"],
+                output_format=ask_cmd.output_format,
+                query=ask_cmd.query,
+                assistant=assistant,
+            )
+            print(" ask display:", ask_text[:400])
+            self.assertIn("[MODE: ASK]", ask_text)
+            self.assertIn("PT", ask_text)
+            self.assertNotIn("### Python Code", ask_text)
+
+            plan_cmd = parse_magic_command("--mode plan list built-in strategies")
+            plan_out = execute_magic_command(plan_cmd, assistant=assistant, plan_cache=plan_cache)
+            hint = str(plan_out.get("confirm_hint") or "")
+            plan_text = render_magic_display(
+                plan_out["mode"],
+                plan_out["result"],
+                output_format=plan_cmd.output_format,
+                confirm_hint=hint,
+                query=plan_cmd.query,
+                assistant=assistant,
+            )
+            print(" plan display:", plan_text[:400])
+            self.assertIn("qt.ai.strategy_meta.list", plan_text)
+            self.assertIn("Calls: qteasy.built_in_list", plan_text)
+            self.assertIn("Job:", plan_text)
+            self.assertNotIn("# ToolPlan", plan_text)
+            self.assertIn("Confirm: qteasy-ai run --plan-id", plan_text)
 
 
 if __name__ == "__main__":
