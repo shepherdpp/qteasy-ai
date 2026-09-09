@@ -341,6 +341,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertTrue(any("qteasy" in str(t).lower() and m == "ask_text" for m, t in zip(kinds, texts)))
             self.assertNotIn("s-chat.transcript", listed)
             self.assertTrue(store.ui_transcript_path("s-chat").is_file())
+            print(" restored mode:", sess.json().get("mode"))
+            self.assertEqual(sess.json().get("mode"), "ask")
 
 
 if __name__ == "__main__":

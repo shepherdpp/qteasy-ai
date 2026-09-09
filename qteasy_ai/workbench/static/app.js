@@ -313,6 +313,18 @@ function applyLayoutFlags() {
   if (wsBtn) wsBtn.textContent = workspaceCollapsed ? "«" : "»";
 }
 
+function applySessionMode(dto) {
+  const raw = String((dto && dto.mode) || "").toLowerCase();
+  if (raw === "ask") mode = "ask";
+  else if (raw === "run" || raw === "agent") mode = "agent";
+  else if (raw === "plan") mode = "plan";
+}
+
+function dismissModeNotice() {
+  modeNotice = "";
+  renderMode();
+}
+
 function setMode(next) {
   if (busy) return;
   const prev = mode;
@@ -340,7 +352,11 @@ function renderMode() {
   const notice = $("mode-notice");
   if (notice) {
     notice.hidden = !modeNotice;
-    notice.textContent = modeNotice;
+    notice.innerHTML = modeNotice
+      ? `${escapeHtml(modeNotice)} <button type="button" class="ghost" id="btn-dismiss-notice">Dismiss</button>`
+      : "";
+    const dismiss = $("btn-dismiss-notice");
+    if (dismiss) dismiss.onclick = dismissModeNotice;
   }
 }
 
@@ -476,6 +492,7 @@ function mergeRestoredTranscript(dto) {
 async function sendQuery(query, { keepDraft } = {}) {
   const text = String(query || "").trim();
   if (!text || busy) return;
+  dismissModeNotice();
   const input = $("query-input");
   if (!keepDraft && input) input.value = "";
   transcript.push({ kind: "user_text", text });
@@ -648,6 +665,7 @@ function onArtifactClick(ev) {
     if (editor) codeCache._draft = editor.value;
     artifactTab = Number(t.dataset.tab || 0);
     pendingCodeRun = false;
+    filePreview = null;
     renderArtifacts();
   }
   if (t.id === "btn-code-run") {
@@ -657,6 +675,10 @@ function onArtifactClick(ev) {
   if (t.id === "btn-code-confirm") {
     pendingCodeRun = false;
     confirmPlan();
+  }
+  if (t.id === "btn-file-back") {
+    filePreview = null;
+    renderArtifacts();
   }
 }
 
@@ -710,6 +732,7 @@ async function switchSession(id) {
   transcript = [];
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
   ingestDto(dto);
+  applySessionMode(dto);
   const server = Array.isArray(dto.transcript) ? dto.transcript : [];
   if (server.length) {
     transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
@@ -924,12 +947,14 @@ function renderArtifacts() {
   const editor = $("code-editor");
   if (editor) codeCache._draft = editor.value;
   const arts = state.artifacts || [];
-  if (filePreview) {
-    host.innerHTML = `<div class="card"><h3>${escapeHtml(filePreview.name)}</h3><p class="warn">${escapeHtml(filePreview.path)}</p><textarea rows="16" readonly>${escapeHtml(filePreview.content)}</textarea></div>`;
-    return;
-  }
+  const fileCard = filePreview
+    ? `<div class="card"><div class="artifact-toolbar"><span class="art-type">file</span>
+        <button type="button" id="btn-file-back">Back to artifacts</button></div>
+        <h3>${escapeHtml(filePreview.name)}</h3><p class="warn">${escapeHtml(filePreview.path)}</p>
+        <textarea rows="16" readonly>${escapeHtml(filePreview.content)}</textarea></div>`
+    : "";
   if (!arts.length) {
-    host.innerHTML = `<p class="empty-hint">No artifacts yet. Confirm a plan to see tables, charts, or code here.</p>`;
+    host.innerHTML = fileCard || `<p class="empty-hint">No artifacts yet. Confirm a plan to see tables, charts, or code here.</p>`;
     return;
   }
   const tabs = arts
@@ -938,6 +963,15 @@ function renderArtifacts() {
         `<div class="tab ${i === artifactTab ? "active" : ""}" data-tab="${i}">${escapeHtml(a.type)} <small>${escapeHtml(a.run_id)}</small></div>`
     )
     .join("");
+  if (filePreview) {
+    host.innerHTML = `<div class="tabs">${arts
+      .map(
+        (a, i) =>
+          `<div class="tab ${i === artifactTab ? "active" : ""}" data-tab="${i}">${escapeHtml(a.type)} <small>${escapeHtml(a.run_id)}</small></div>`
+      )
+      .join("")}</div><div data-testid="artifact-panel">${fileCard}</div>`;
+    return;
+  }
   const current = arts[artifactTab] || arts[0];
   let body = artifactToolbar(current);
   if (current.type === "data_table") {
@@ -1088,6 +1122,7 @@ async function restoreCurrentSession() {
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
   if (dto && !dto.error) {
     ingestDto(dto);
+    applySessionMode(dto);
     const server = Array.isArray(dto.transcript) ? dto.transcript : [];
     if (server.length) {
       transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");

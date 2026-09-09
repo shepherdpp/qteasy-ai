@@ -426,6 +426,10 @@ class WorkbenchHttp:
                 if isinstance(msg, dict) and msg.get("kind") not in {"plan_card", "step_status", "user_text"}:
                     hist.append(msg)
         dumped["transcript"] = hist
+        if conv.turns:
+            last = conv.turns[-1] if isinstance(conv.turns[-1], dict) else {}
+            if str(last.get("kind") or "") == "ask":
+                dumped["mode"] = "ask"
         return JSONResponse(dumped)
 
     async def list_sessions(self, request: Request) -> JSONResponse:
