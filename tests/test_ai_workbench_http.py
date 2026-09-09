@@ -227,6 +227,87 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" loaded session_id:", loaded.session_id)
             self.assertEqual(loaded.session_id, "web-demo")
 
+    def test_get_session_restores_plan_from_plan_id(self) -> None:
+        """GET /v1/session 按 current_plan_id 回填 plan_card / execution。"""
+
+        print("\n[TestAiWorkbenchHttp] session restore plan")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, asst = self._client(temp_dir)
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": "s-restore"},
+            )
+            body = planned.json()
+            plan_id = (body.get("plan_card") or {}).get("plan_id")
+            print(" plan status:", planned.status_code)
+            print(" plan_id:", plan_id)
+            loaded = asst.session_store.load("s-restore")
+            print(" current_plan_id:", loaded.current_plan_id)
+            self.assertTrue(plan_id)
+            self.assertEqual(loaded.current_plan_id, plan_id)
+            sess = client.get("/v1/session/s-restore")
+            restored = sess.json()
+            card = restored.get("plan_card") or {}
+            print(" restore status:", sess.status_code)
+            print(" restored plan_id:", card.get("plan_id"))
+            print(" restored steps:", card.get("steps"))
+            print(" execution:", restored.get("execution"))
+            print(" turns:", restored.get("turns"))
+            self.assertEqual(sess.status_code, 200)
+            self.assertEqual(card.get("plan_id"), plan_id)
+            self.assertTrue(card.get("steps"))
+            self.assertEqual(card["steps"][0].get("skill_name"), "qt.ai.strategy_meta.list")
+            self.assertEqual((restored.get("execution") or {}).get("status"), "dry_run")
+            self.assertTrue(card.get("confirmable"))
+            self.assertTrue(restored.get("turns"))
+
+    def test_run_plan_optional_sse_keeps_default_json(self) -> None:
+        """?stream=1 返回 SSE；默认 POST 仍是 JSON 且含 steps。"""
+
+        print("\n[TestAiWorkbenchHttp] run-plan sse optional")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            planned = client.post("/v1/plan", json={"query": "list built-in strategies"}).json()
+            plan_id = planned["plan_card"]["plan_id"]
+            default = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": "s-sse"})
+            print(" json status:", default.status_code)
+            print(" json ctype:", default.headers.get("content-type"))
+            print(" json steps:", (default.json().get("execution") or {}).get("steps"))
+            self.assertEqual(default.status_code, 200)
+            self.assertIn("application/json", default.headers.get("content-type") or "")
+            self.assertTrue((default.json().get("execution") or {}).get("steps"))
+            planned2 = client.post("/v1/plan", json={"query": "list built-in strategies"}).json()
+            plan_id2 = planned2["plan_card"]["plan_id"]
+            streamed = client.post(
+                "/v1/run-plan",
+                params={"stream": "1"},
+                json={"plan_id": plan_id2, "session_id": "s-sse"},
+                headers={"Accept": "text/event-stream"},
+            )
+            print(" sse status:", streamed.status_code)
+            print(" sse ctype:", streamed.headers.get("content-type"))
+            print(" sse text:", streamed.text[:400])
+            self.assertEqual(streamed.status_code, 200)
+            self.assertIn("text/event-stream", streamed.headers.get("content-type") or "")
+            self.assertIn("event: step_status", streamed.text)
+            self.assertIn("event: state", streamed.text)
+            self.assertIn("qt.ai.strategy_meta.list", streamed.text)
+
+    def test_http_error_includes_next_action(self) -> None:
+        """4xx 错误含英文 next_action。"""
+
+        print("\n[TestAiWorkbenchHttp] error next_action")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            missing = client.post("/v1/run-plan", json={})
+            body = missing.json()
+            print(" missing:", missing.status_code, body)
+            self.assertEqual(missing.status_code, 400)
+            err = body.get("error") or {}
+            self.assertRegex(str(err.get("message") or ""), r"[A-Za-z]")
+            self.assertRegex(str(err.get("next_action") or ""), r"[A-Za-z]")
+            self.assertIn("Confirm", str(err.get("next_action") or ""))
+
 
 if __name__ == "__main__":
     unittest.main()

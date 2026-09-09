@@ -149,6 +149,77 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
 .layout.workspace-collapsed .now-chips { display: flex; }
 .chip { background: #2d2d2d; border-radius: 10px; padding: 2px 8px; }
 .chip.warn { color: var(--warn); }
+.mode-notice {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-bright);
+  background: #243044;
+  border-bottom: 1px solid var(--border);
+}
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.badge.ok { background: #1f3d2b; color: var(--ok); }
+.badge.warn { background: #3d3414; color: var(--warn); }
+.skill-id { font-size: 11px; color: var(--text-muted); }
+.job-line { font-weight: 600; color: var(--text-bright); }
+.card.compact { padding: 8px 10px; }
+.next-action { margin-top: 6px; color: var(--text-bright); font-size: 12px; }
+.decision-actions { margin-top: 10px; }
+.artifact-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.artifact-toolbar .art-type { font-weight: 600; color: var(--text-bright); }
+.artifact-toolbar .art-id { color: var(--text-muted); font-family: var(--mono); font-size: 11px; }
+.export-link { color: var(--accent); }
+.now-block .now-k {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 10px 0 2px;
+}
+.now-block .now-job .now-v { font-size: 14px; color: var(--text-bright); font-weight: 600; }
+.now-block .ok-line { color: var(--ok); }
+.now-block .missing { color: var(--warn); }
+.now-block .slot-edit {
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  text-align: left;
+  width: 100%;
+  color: inherit;
+}
+.now-block .slot.confirmed { color: var(--ok); }
+.now-block .slot.default { color: var(--text-muted); }
+.now-block .slot.unconfirmed { color: var(--warn); }
+.slot-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+.now-audit { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 4px; }
+.files-k {
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.file-tree button.file.current-run { color: var(--accent); }
 
 .chat-log { flex: 1; overflow: auto; padding: 12px; }
 .msg { margin: 8px 0; max-width: 92%; }

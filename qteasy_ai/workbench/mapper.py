@@ -27,6 +27,24 @@ from .dto import (
 
 _PREVIEW_ROW_CAP = 50
 
+_SKILL_TITLES = {
+    "qt.ai.strategy_meta.list": "List built-in strategies",
+    "qt.ai.strategy_meta.get": "Show strategy parameters",
+    "qt.ai.data.refill_basic_equity_and_index": "Download daily bars (bounded window)",
+    "qt.ai.data.read": "Read market data (history / reference / static)",
+    "qt.ai.data.summary_kline": "Summarize k-line statistics",
+    "qt.ai.visual.export_kline": "Export a k-line chart",
+    "qt.ai.backtest.run_builtin": "Run a built-in backtest",
+    "qt.ai.optimize.run_builtin": "Run built-in parameter optimization",
+    "qt.ai.strategy.codegen_hybrid": "Generate strategy source from spec",
+    "qt.ai.pipeline.live_trade_plan_only": "Live-trade checklist (never auto-executes)",
+    "qt.ai.system.fallback": "Need a more specific request",
+}
+
+_DEFAULT_NEXT_ACTION = (
+    "Fix the issue above, then retry this step. You do not need to start over."
+)
+
 _HIGH_SIDE_EFFECT_SKILLS = frozenset(
     {
         "qt.ai.data.refill_basic_equity_and_index",
@@ -211,6 +229,28 @@ def _is_ask_payload(payload: Dict[str, Any]) -> bool:
     return False
 
 
+def _step_summary(skill: str, raw: Dict[str, Any]) -> str:
+    """人话步骤标题：payload.summary 优先，否则内置对照表。
+
+    Parameters
+    ----------
+    skill : str
+        注册 skill 名。
+    raw : dict
+        ToolPlan 步原始 dict。
+
+    Returns
+    -------
+    str
+        确认卡标题；未知 skill 为空串。
+    """
+
+    explicit = str(raw.get("summary") or "").strip()
+    if explicit:
+        return explicit
+    return str(_SKILL_TITLES.get(skill) or "")
+
+
 def _plan_steps(plan: Dict[str, Any]) -> List[WorkbenchPlanStep]:
     """ToolPlan.steps → 确认卡步骤。"""
 
@@ -233,6 +273,7 @@ def _plan_steps(plan: Dict[str, Any]) -> List[WorkbenchPlanStep]:
                 },
                 needs_confirm=step_needs_confirm(skill, effects),
                 status="pending",
+                summary=_step_summary(skill, raw),
             )
         )
     return rows
@@ -273,11 +314,45 @@ def _execution_view(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _enrich_error(err: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """为错误补英文 next_action，便于 Retry。
+
+    Parameters
+    ----------
+    err : dict or None
+        装配层 error。
+
+    Returns
+    -------
+    dict or None
+        含 ``next_action`` 的拷贝。
+    """
+
+    if not isinstance(err, dict) or not err:
+        return err
+    out = dict(err)
+    if str(out.get("next_action") or "").strip():
+        return out
+    message = str(out.get("message") or "").lower()
+    code = str(out.get("code") or "")
+    if code == "ALLOW_GATE_BLOCKED" or "allow_" in message:
+        out["next_action"] = (
+            "Confirm the plan manually, or enable the matching allow_* flag in profile, then retry."
+        )
+    elif "token" in message:
+        out["next_action"] = "Set the Tushare token in env_facts or profile, then retry this step."
+    elif "not found" in message or code.endswith("NOT_FOUND"):
+        out["next_action"] = "Create or select a plan in this session, then Confirm."
+    else:
+        out["next_action"] = _DEFAULT_NEXT_ACTION
+    return out
+
+
 def _first_step_error(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """取第一个英文 error。"""
 
     if isinstance(payload.get("error"), dict) and payload.get("error"):
-        return dict(payload["error"])
+        return _enrich_error(dict(payload["error"]))
     execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
     for raw in execution.get("steps") or []:
         if not isinstance(raw, dict):
@@ -285,7 +360,7 @@ def _first_step_error(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
         err = result.get("error")
         if isinstance(err, dict) and err.get("message"):
-            return dict(err)
+            return _enrich_error(dict(err))
     return None
 
 
@@ -366,7 +441,7 @@ def map_assistant_payload(
         sources = [str(item) for item in (raw.get("sources") or [])]
         answer = str(raw.get("answer") or raw.get("narrative") or "")
         messages.append(WorkbenchMessage(kind="ask_text", text=answer, payload={"sources": sources}))
-        err = raw.get("error") if isinstance(raw.get("error"), dict) else None
+        err = _enrich_error(raw.get("error") if isinstance(raw.get("error"), dict) else None)
         if err:
             messages.append(
                 WorkbenchMessage(kind="error", text=str(err.get("message") or ""), payload=dict(err))
@@ -448,14 +523,16 @@ def map_assistant_payload(
     err = _first_step_error(raw)
     blocked = (plan.get("assumptions") or {}).get("allow_gate_blocked")
     if isinstance(blocked, list) and blocked and err is None:
-        err = {
-            "code": "ALLOW_GATE_BLOCKED",
-            "message": (
-                "Agent auto cannot execute high side-effect steps without allow_* flags: "
-                + ", ".join(str(item) for item in blocked)
-                + "."
-            ),
-        }
+        err = _enrich_error(
+            {
+                "code": "ALLOW_GATE_BLOCKED",
+                "message": (
+                    "Agent auto cannot execute high side-effect steps without allow_* flags: "
+                    + ", ".join(str(item) for item in blocked)
+                    + "."
+                ),
+            }
+        )
     if err:
         messages.append(
             WorkbenchMessage(kind="error", text=str(err.get("message") or ""), payload=dict(err))

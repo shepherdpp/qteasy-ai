@@ -13,13 +13,15 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from urllib.parse import unquote
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, FileResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -31,14 +33,77 @@ from .mapper import map_assistant_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+_NEXT_ACTION = {
+    "QUERY_REQUIRED": "Type a question in the composer, then press Ctrl+Enter to send.",
+    "PLAN_ID_REQUIRED": "Confirm a plan from this session, or send a new Plan request.",
+    "PLAN_ID_NOT_FOUND": "Create a plan first, then press Confirm. The plan_id lives in runs/, not as a filename.",
+    "SESSION_ID_REQUIRED": "Select a session from the left rail, or click New.",
+    "PATH_REQUIRED": "Pick a file under Workspace → Files.",
+    "FILE_NOT_FOUND": "Choose a file inside runs/, strategies/, or user_kb/.",
+    "FILE_NOT_TEXT": "Only text workspace files can be previewed. Export binaries from Artifacts.",
+    "FILE_TOO_LARGE": "Pick a smaller file, or open it on disk under the memory root.",
+    "RUN_NOT_FOUND": "Open a run from Workspace → Files, or Confirm a plan to create one.",
+    "ARTIFACT_NOT_FOUND": "Export only files that belong to this run_id.",
+    "RUN_FAILED": "Read the error, then press Retry. You do not need to start over.",
+}
+
 
 def _error(code: str, message: str, status: int) -> JSONResponse:
-    """英文错误 JSON。"""
+    """英文错误 JSON，含可行动 next_action。"""
 
     return JSONResponse(
-        {"ok": False, "error": {"code": code, "message": message}},
+        {
+            "ok": False,
+            "error": {
+                "code": code,
+                "message": message,
+                "next_action": _NEXT_ACTION.get(
+                    code, "Fix the issue above, then retry. You do not need to start over."
+                ),
+            },
+        },
         status_code=status,
     )
+
+
+def _wants_stream(request: Request) -> bool:
+    """Accept: text/event-stream 或 ?stream=1 时走 SSE。
+
+    Parameters
+    ----------
+    request : Request
+        当前 HTTP 请求。
+
+    Returns
+    -------
+    bool
+        是否以 SSE 流式返回。
+    """
+
+    flag = str(request.query_params.get("stream") or "").strip().lower()
+    if flag in {"1", "true", "yes"}:
+        return True
+    accept = (request.headers.get("accept") or "").lower()
+    return "text/event-stream" in accept
+
+
+def _sse_line(event: str, data: Any) -> str:
+    """一条 SSE 记录。
+
+    Parameters
+    ----------
+    event : str
+        事件名。
+    data : Any
+        JSON 可序列化载荷。
+
+    Returns
+    -------
+    str
+        SSE 文本块。
+    """
+
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 class WorkbenchHttp:
@@ -78,6 +143,105 @@ class WorkbenchHttp:
         dumped = state.to_dict()
         dumped["ok"] = dumped.get("error") is None
         return dumped
+
+    def _stream_execute(
+        self,
+        runner: Callable[[Any], Dict[str, Any]],
+        *,
+        query: str = "",
+        session_id: str = "",
+    ) -> Iterator[str]:
+        """在线程中执行 runner，按 on_step 推 SSE，最后推 state。
+
+        Parameters
+        ----------
+        runner : callable
+            接收 on_step，返回 raw payload。
+        query : str, optional
+            写入 DTO 的用户句。
+        session_id : str, optional
+            侧栏会话。
+
+        Returns
+        -------
+        iterator of str
+            SSE 文本块。
+        """
+
+        bucket: List[Dict[str, Any]] = []
+        q: "queue.Queue[Any]" = queue.Queue()
+        box: Dict[str, Any] = {}
+
+        def on_step(record: PlanStepRecord) -> None:
+            self._record_step(bucket, record)
+            q.put(("step", dict(bucket[-1])))
+
+        def worker() -> None:
+            try:
+                box["payload"] = runner(on_step)
+            except Exception as exc:
+                box["exc"] = exc
+            q.put(("end", None))
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            kind, data = q.get()
+            if kind == "step":
+                yield _sse_line("step_status", data)
+            else:
+                break
+        exc = box.get("exc")
+        if isinstance(exc, ValueError):
+            yield _sse_line(
+                "error",
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "PLAN_ID_NOT_FOUND",
+                        "message": str(exc),
+                        "next_action": _NEXT_ACTION["PLAN_ID_NOT_FOUND"],
+                    },
+                },
+            )
+            return
+        if exc is not None:
+            yield _sse_line(
+                "error",
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "RUN_FAILED",
+                        "message": str(exc) or "Run failed.",
+                        "next_action": _NEXT_ACTION["RUN_FAILED"],
+                    },
+                },
+            )
+            return
+        dto = self._to_dto(box.get("payload") or {}, query=query, session_id=session_id)
+        run_id = str(dto.get("run_id") or "")
+        if run_id:
+            self.events[run_id] = list(bucket)
+        yield _sse_line("state", dto)
+
+    def _sse_response(self, iterator: Iterator[str]) -> StreamingResponse:
+        """SSE 响应头。
+
+        Parameters
+        ----------
+        iterator : iterator of str
+            ``_stream_execute`` 产出。
+
+        Returns
+        -------
+        StreamingResponse
+            ``text/event-stream``。
+        """
+
+        return StreamingResponse(
+            iterator,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     async def _read_json(self, request: Request) -> Dict[str, Any]:
         """解析 JSON 体。"""
@@ -120,8 +284,8 @@ class WorkbenchHttp:
         )
         return JSONResponse(self._to_dto(payload, query=query, session_id=session_id))
 
-    async def run(self, request: Request) -> JSONResponse:
-        """POST /v1/run（显式 Agent 入口）。"""
+    async def run(self, request: Request) -> Response:
+        """POST /v1/run（显式 Agent 入口）。默认 JSON；可选 SSE。"""
 
         body = await self._read_json(request)
         query = str(body.get("query") or "").strip()
@@ -129,26 +293,34 @@ class WorkbenchHttp:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
         session_id = str(body.get("session_id") or "").strip()
         agent_auto = body.get("agent_auto")
+
+        def runner(on_step: Any) -> Dict[str, Any]:
+            return self.assistant.run(
+                query,
+                response_style="raw",
+                session_id=session_id or None,
+                agent_auto=bool(agent_auto) if agent_auto is not None else None,
+                on_step=on_step,
+            )
+
+        if _wants_stream(request):
+            return self._sse_response(
+                self._stream_execute(runner, query=query, session_id=session_id)
+            )
         bucket: List[Dict[str, Any]] = []
 
         def on_step(record: PlanStepRecord) -> None:
             self._record_step(bucket, record)
 
-        payload = self.assistant.run(
-            query,
-            response_style="raw",
-            session_id=session_id or None,
-            agent_auto=bool(agent_auto) if agent_auto is not None else None,
-            on_step=on_step,
-        )
+        payload = runner(on_step)
         dto = self._to_dto(payload, query=query, session_id=session_id)
         run_id = str(dto.get("run_id") or "")
         if run_id:
             self.events[run_id] = list(bucket)
         return JSONResponse(dto)
 
-    async def run_plan(self, request: Request) -> JSONResponse:
-        """POST /v1/run-plan：按已审阅 plan_id 执行，禁止重新 Hybrid。"""
+    async def run_plan(self, request: Request) -> Response:
+        """POST /v1/run-plan：按已审阅 plan_id 执行，禁止重新 Hybrid。默认 JSON。"""
 
         body = await self._read_json(request)
         plan_id = str(body.get("plan_id") or "").strip()
@@ -158,44 +330,58 @@ class WorkbenchHttp:
                 "Provide plan_id. Missing plan_id is not executed as a new query.",
                 400,
             )
+        session_id = str(body.get("session_id") or "").strip()
+
+        def runner(on_step: Any) -> Dict[str, Any]:
+            return self.assistant.run_plan(
+                plan_id,
+                response_style="raw",
+                on_step=on_step,
+            )
+
+        if _wants_stream(request):
+            return self._sse_response(
+                self._stream_execute(runner, query="", session_id=session_id)
+            )
         bucket: List[Dict[str, Any]] = []
 
         def on_step(record: PlanStepRecord) -> None:
             self._record_step(bucket, record)
 
         try:
-            payload = self.assistant.run_plan(
-                plan_id,
-                response_style="raw",
-                on_step=on_step,
-            )
+            payload = runner(on_step)
         except ValueError as exc:
             return _error("PLAN_ID_NOT_FOUND", str(exc), 404)
-        dto = self._to_dto(payload, query="")
+        dto = self._to_dto(payload, query="", session_id=session_id)
         run_id = str(dto.get("run_id") or "")
         if run_id:
             self.events[run_id] = list(bucket)
         return JSONResponse(dto)
 
     async def get_session(self, request: Request) -> JSONResponse:
-        """GET /v1/session/{session_id}。"""
+        """GET /v1/session/{session_id}：有 current_plan_id 则按 plan_id 回填 DTO。"""
 
         session_id = str(request.path_params.get("session_id") or "").strip()
         if not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
-        state = SessionStore(self.assistant.memory_store).load(session_id)
-        empty = map_assistant_payload(
-            {
-                "mode": "plan",
-                "plan": {"plan_id": state.current_plan_id, "steps": []},
-                "execution": {"status": "", "steps": []},
-            },
-            session=state,
-            env_facts=self.assistant.memory_store.load_env_facts(),
-        )
-        dumped = empty.to_dict()
+        conv = SessionStore(self.assistant.memory_store).load(session_id)
+        env = self.assistant.memory_store.load_env_facts()
+        payload: Dict[str, Any] = {
+            "mode": "plan",
+            "plan": {"plan_id": conv.current_plan_id, "steps": []},
+            "execution": {"status": "", "steps": []},
+        }
+        if conv.current_plan_id:
+            found = self.assistant.memory_store.find_run_by_plan_id(conv.current_plan_id)
+            if found:
+                payload = dict(found)
+        if conv.pending_clarification and not payload.get("clarification"):
+            payload = dict(payload)
+            payload["clarification"] = dict(conv.pending_clarification)
+        mapped = map_assistant_payload(payload, session=conv, env_facts=env)
+        dumped = mapped.to_dict()
         dumped["ok"] = True
-        dumped["turns"] = list(state.turns)
+        dumped["turns"] = list(conv.turns)
         return JSONResponse(dumped)
 
     async def list_sessions(self, request: Request) -> JSONResponse:

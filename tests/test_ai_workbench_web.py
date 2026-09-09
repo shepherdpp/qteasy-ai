@@ -56,8 +56,17 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("textarea", js.text)
             self.assertIn("Workspace", js.text)
             self.assertIn("btn-code-confirm", js.text)
+            self.assertIn("text/event-stream", js.text)
+            self.assertIn("btn-retry", js.text)
+            self.assertIn("next_action", js.text)
+            self.assertIn("persistTranscript", js.text)
+            self.assertIn("data-now-edit", js.text)
+            self.assertIn("Switched to", js.text)
             self.assertEqual(css.status_code, 200)
             self.assertIn("grid-template-columns", css.text)
+            print(" css has slot-tag:", "slot-tag" in css.text)
+            self.assertIn("slot-tag", css.text)
+            self.assertIn("artifact-toolbar", css.text)
 
     def test_fixture_keys_match_types_ts(self) -> None:
         """fixture 四态 + types.ts WORKBENCH_STATE_KEYS 对齐。"""

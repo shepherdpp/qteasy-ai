@@ -68,6 +68,8 @@ class TestAiWorkbenchDto(unittest.TestCase):
             self.assertIn("side_effects", steps[0])
             self.assertIn("network", steps[0]["side_effects"])
             self.assertTrue(dumped["plan_card"]["plan_id"])
+            print(" summary:", steps[0].get("summary"))
+            self.assertIn("List", steps[0].get("summary") or "")
 
     def test_refill_missing_dates_clarification(self) -> None:
         """缺槽 refill → clarification 消息、sidebar missing、无 execute success。"""
@@ -206,6 +208,8 @@ class TestAiWorkbenchDto(unittest.TestCase):
         self.assertTrue(message)
         self.assertRegex(message, r"[A-Za-z]")
         self.assertIn("channel", message.lower())
+        print(" next_action:", dumped["error"].get("next_action"))
+        self.assertRegex(str(dumped["error"].get("next_action") or ""), r"[A-Za-z]")
 
     def test_high_side_effect_needs_confirm(self) -> None:
         """refill 步 needs_confirm=true。"""
@@ -237,6 +241,8 @@ class TestAiWorkbenchDto(unittest.TestCase):
         print(" steps:", dumped["plan_card"]["steps"])
         self.assertTrue(dumped["plan_card"]["steps"][0]["needs_confirm"])
         self.assertTrue(dumped["plan_card"]["needs_confirm"])
+        print(" summary:", dumped["plan_card"]["steps"][0].get("summary"))
+        self.assertIn("Download", dumped["plan_card"]["steps"][0].get("summary") or "")
 
 
 if __name__ == "__main__":

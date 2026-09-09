@@ -1,6 +1,7 @@
 const STORAGE_SESSION = "qteasy-ai.session_id";
 const STORAGE_RAIL = "qteasy-ai.session-rail";
 const STORAGE_WORKSPACE = "qteasy-ai.workspace";
+const STORAGE_TRANSCRIPTS = "qteasy-ai.transcripts";
 
 const SLOT_LABELS = {
   shares: "Symbol",
@@ -12,6 +13,20 @@ const SLOT_LABELS = {
   fast: "Fast window",
   asset_pool: "Asset pool",
   channel: "Data channel",
+};
+
+const SKILL_TITLES = {
+  "qt.ai.strategy_meta.list": "List built-in strategies",
+  "qt.ai.strategy_meta.get": "Show strategy parameters",
+  "qt.ai.data.refill_basic_equity_and_index": "Download daily bars (bounded window)",
+  "qt.ai.data.read": "Read market data",
+  "qt.ai.data.summary_kline": "Summarize k-line statistics",
+  "qt.ai.visual.export_kline": "Export a k-line chart",
+  "qt.ai.backtest.run_builtin": "Run a built-in backtest",
+  "qt.ai.optimize.run_builtin": "Run built-in parameter optimization",
+  "qt.ai.strategy.codegen_hybrid": "Generate strategy source",
+  "qt.ai.pipeline.live_trade_plan_only": "Live-trade checklist (never auto-executes)",
+  "qt.ai.system.fallback": "Need a more specific request",
 };
 
 const EXAMPLES = [
@@ -28,6 +43,7 @@ let transcript = [];
 let artifactTab = 0;
 let pendingCodeRun = false;
 let editingParams = false;
+let editingNowSlot = "";
 let busy = false;
 let shellReady = false;
 let codeCache = {};
@@ -36,6 +52,7 @@ let sessions = [];
 let workspace = { trees: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
+let modeNotice = "";
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -83,6 +100,11 @@ function skillLabel(name) {
   return parts.slice(-2).join(".") || raw || "step";
 }
 
+function stepTitle(step) {
+  if (!step) return "step";
+  return String(step.summary || SKILL_TITLES[step.skill_name] || skillLabel(step.skill_name));
+}
+
 function riskLines(effects) {
   const e = effects || {};
   if (e.description) return [String(e.description)];
@@ -92,6 +114,17 @@ function riskLines(effects) {
   if (e.local_state_change) lines.push("Will change local data or config.");
   if (e.heavy_compute) lines.push("May run a heavy compute job.");
   return lines.length ? lines : ["Read-only / low side-effect."];
+}
+
+function riskBadges(effects) {
+  const e = effects || {};
+  const tags = [];
+  if (e.network) tags.push(["network", "warn"]);
+  if (e.filesystem_write) tags.push(["write", "warn"]);
+  if (e.local_state_change) tags.push(["state", "warn"]);
+  if (e.heavy_compute) tags.push(["heavy", "warn"]);
+  if (!tags.length) tags.push(["read-only", "ok"]);
+  return tags.map(([label, kind]) => `<span class="badge ${kind}">${escapeHtml(label)}</span>`).join("");
 }
 
 function composerHint() {
@@ -107,8 +140,34 @@ function pendingDecision() {
   return Boolean((card && card.confirmable) || missing.length || clar);
 }
 
+function isCompactPlan(card) {
+  const steps = (card && card.steps) || [];
+  if (!steps.length || steps.length > 2) return false;
+  return steps.every((s) => !s.needs_confirm);
+}
+
 function $(id) {
   return document.getElementById(id);
+}
+
+function readTranscriptMap() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_TRANSCRIPTS) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch (exc) {
+    return {};
+  }
+}
+
+function persistTranscript() {
+  const all = readTranscriptMap();
+  all[sessionId] = transcript;
+  localStorage.setItem(STORAGE_TRANSCRIPTS, JSON.stringify(all));
+}
+
+function loadTranscriptFor(id) {
+  const all = readTranscriptMap();
+  return Array.isArray(all[id]) ? all[id] : [];
 }
 
 function mountShell() {
@@ -140,6 +199,7 @@ function mountShell() {
       <section class="session-col" id="chat-col">
         <div class="col-head"><h2>Session</h2></div>
         <div class="now-chips" id="now-chips"></div>
+        <div class="mode-notice" id="mode-notice" hidden></div>
         <div class="chat-log" id="chat-log"></div>
         <div class="composer">
           <div class="composer-meta">
@@ -202,6 +262,7 @@ function bindShell() {
   $("artifact-panel").addEventListener("click", onArtifactClick);
   $("session-list").addEventListener("click", onSessionListClick);
   $("workspace-files").addEventListener("click", onWorkspaceFileClick);
+  $("workspace-now").addEventListener("click", onNowClick);
 }
 
 function toggleWorkspace() {
@@ -221,8 +282,17 @@ function applyLayoutFlags() {
 }
 
 function setMode(next) {
+  if (busy) return;
+  const prev = mode;
   mode = next === "ask" || next === "agent" ? next : "plan";
+  if (prev !== mode) {
+    const gate = pendingDecision()
+      ? " Existing Confirm / Cancel still apply; this switch does not execute."
+      : "";
+    modeNotice = `Switched to ${mode.toUpperCase()}. ${composerHint()}${gate}`;
+  }
   renderMode();
+  renderChat();
 }
 
 function renderMode() {
@@ -232,8 +302,14 @@ function renderMode() {
   });
   document.querySelectorAll("button[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
+    btn.disabled = busy;
   });
   $("composer-mode-hint").textContent = composerHint();
+  const notice = $("mode-notice");
+  if (notice) {
+    notice.hidden = !modeNotice;
+    notice.textContent = modeNotice;
+  }
 }
 
 function setBusy(next) {
@@ -244,25 +320,85 @@ function setBusy(next) {
   if (send) send.disabled = busy;
   const label = $("busy-label");
   if (label) label.hidden = !busy;
+  document.querySelectorAll("button[data-mode]").forEach((btn) => {
+    btn.disabled = busy;
+  });
+  ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-retry"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = busy;
+  });
+}
+
+function errorFromHttp(data) {
+  const err = (data && data.error) || { message: "Request failed." };
+  return {
+    ...emptyState(),
+    error: err,
+    messages: [{ kind: "error", text: err.message || "Request failed.", payload: err }],
+  };
 }
 
 async function api(path, options) {
   const res = await fetch(path, options);
+  const ctype = res.headers.get("content-type") || "";
+  if (ctype.includes("text/event-stream") && res.body) {
+    return consumeSse(res);
+  }
   let data = {};
   try {
     data = await res.json();
   } catch (exc) {
     data = {};
   }
-  if (!res.ok) {
-    const err = (data && data.error) || { message: "Request failed." };
-    return {
-      ...emptyState(),
-      error: err,
-      messages: [{ kind: "error", text: err.message || "Request failed.", payload: err }],
-    };
-  }
+  if (!res.ok) return errorFromHttp(data);
   return data;
+}
+
+async function consumeSse(res) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let finalDto = null;
+  let sseError = null;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buf += decoder.decode(chunk.value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() || "";
+    for (const block of parts) {
+      const eventMatch = block.match(/^event:\s*(.+)$/m);
+      const dataMatch = block.match(/^data:\s*(.+)$/m);
+      if (!dataMatch) continue;
+      let payload = {};
+      try {
+        payload = JSON.parse(dataMatch[1]);
+      } catch (exc) {
+        continue;
+      }
+      const ev = eventMatch ? eventMatch[1].trim() : "";
+      if (ev === "step_status") applyLiveStep(payload);
+      else if (ev === "state") finalDto = payload;
+      else if (ev === "error") sseError = payload;
+    }
+  }
+  if (sseError) return errorFromHttp(sseError);
+  return finalDto || errorFromHttp({ error: { message: "Stream ended without a state event." } });
+}
+
+function applyLiveStep(event) {
+  const steps = Array.isArray(state.execution && state.execution.steps) ? state.execution.steps.slice() : [];
+  const row = {
+    step_id: event.step_id,
+    skill_name: event.skill_name,
+    status: event.status || (event.ok ? "done" : "error"),
+    ok: event.ok,
+  };
+  const idx = steps.findIndex((s) => s.step_id && s.step_id === event.step_id);
+  if (idx >= 0) steps[idx] = Object.assign({}, steps[idx], row);
+  else steps.push(row);
+  state.execution = Object.assign({}, state.execution || {}, { status: "running", steps });
+  renderChat();
 }
 
 function ingestDto(dto, { appendUser } = {}) {
@@ -282,6 +418,27 @@ function ingestDto(dto, { appendUser } = {}) {
   if (prevCard && prevCard.plan_id !== (state.plan_card && state.plan_card.plan_id)) {
     editingParams = false;
   }
+  persistTranscript();
+}
+
+function mergeRestoredTranscript(dto) {
+  const local = loadTranscriptFor(sessionId);
+  const fromTurns = (dto.turns || [])
+    .filter((t) => t && t.query)
+    .map((t) => ({ kind: "user_text", text: String(t.query) }));
+  const fromDto = (dto.messages || []).filter(
+    (m) => m.kind !== "plan_card" && m.kind !== "step_status"
+  );
+  const seed = local.length ? local.slice() : fromTurns;
+  const seen = new Set(seed.map((m) => `${m.kind}:${m.text}`));
+  transcript = seed.slice();
+  for (const msg of fromDto) {
+    const key = `${msg.kind}:${msg.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    transcript.push(msg);
+  }
+  persistTranscript();
 }
 
 async function sendQuery(query, { keepDraft } = {}) {
@@ -290,12 +447,15 @@ async function sendQuery(query, { keepDraft } = {}) {
   const input = $("query-input");
   if (!keepDraft && input) input.value = "";
   transcript.push({ kind: "user_text", text });
+  persistTranscript();
   renderChat();
   setBusy(true);
   try {
     const body = JSON.stringify({ query: text, session_id: sessionId });
-    const path = mode === "ask" ? "/v1/ask" : mode === "agent" ? "/v1/run" : "/v1/plan";
-    const dto = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const path = mode === "ask" ? "/v1/ask" : mode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
+    const headers = { "Content-Type": "application/json" };
+    if (mode === "agent") headers.Accept = "text/event-stream";
+    const dto = await api(path, { method: "POST", headers, body });
     ingestDto(dto, { appendUser: true });
     artifactTab = 0;
     pendingCodeRun = false;
@@ -307,7 +467,9 @@ async function sendQuery(query, { keepDraft } = {}) {
     transcript.push({
       kind: "error",
       text: "Network error. Check that the workbench server is running.",
+      payload: { next_action: "Retry when the server is reachable. You do not need to start over." },
     });
+    persistTranscript();
     renderChat();
   } finally {
     setBusy(false);
@@ -319,10 +481,10 @@ async function confirmPlan() {
   if (!planId || (state.plan_card && state.plan_card.confirmable === false) || busy) return;
   setBusy(true);
   try {
-    const dto = await api("/v1/run-plan", {
+    const dto = await api("/v1/run-plan?stream=1", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan_id: planId }),
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ plan_id: planId, session_id: sessionId }),
     });
     ingestDto(dto, { appendUser: true });
     pendingCodeRun = false;
@@ -332,7 +494,9 @@ async function confirmPlan() {
     transcript.push({
       kind: "error",
       text: "Network error. Confirm did not complete. Retry when the server is reachable.",
+      payload: { next_action: "Press Retry. You do not need to start over." },
     });
+    persistTranscript();
     renderChat();
   } finally {
     setBusy(false);
@@ -340,10 +504,12 @@ async function confirmPlan() {
 }
 
 async function cancelPlan() {
+  if (busy) return;
   transcript.push({
     kind: "ask_text",
     text: "Plan cancelled. Type abandon if the session still holds an unfinished job.",
   });
+  persistTranscript();
   state = Object.assign({}, state, { plan_card: { ...(state.plan_card || {}), confirmable: false } });
   renderChat();
   await sendQuery("abandon", { keepDraft: true });
@@ -353,10 +519,26 @@ function followUp(text) {
   return sendQuery(text);
 }
 
+function retryLast() {
+  if (busy) return;
+  const planId = state.plan_card && state.plan_card.plan_id;
+  const failed = ((state.execution && state.execution.steps) || []).some((s) => s.status === "error");
+  if (planId && (failed || state.error)) {
+    confirmPlan();
+    return;
+  }
+  if (planId && state.plan_card && state.plan_card.confirmable) {
+    confirmPlan();
+    return;
+  }
+  const lastUser = [...transcript].reverse().find((m) => m.kind === "user_text");
+  if (lastUser) sendQuery(lastUser.text);
+}
+
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
-  if (t.id === "btn-confirm") confirmPlan();
+  if (t.id === "btn-confirm" || t.id === "btn-code-confirm") confirmPlan();
   if (t.id === "btn-cancel") cancelPlan();
   if (t.id === "btn-edit") {
     editingParams = true;
@@ -368,6 +550,7 @@ function onChatClick(ev) {
   }
   if (t.id === "btn-edit-submit") submitParamEdits();
   if (t.id === "btn-clarify") submitClarification();
+  if (t.classList.contains("btn-retry") || t.id === "btn-retry") retryLast();
   if (t.dataset.example) {
     const ex = EXAMPLES[Number(t.dataset.example)];
     if (ex) {
@@ -391,9 +574,9 @@ function submitClarification() {
 }
 
 function submitParamEdits() {
-  const bits = Array.from(document.querySelectorAll("#chat-log input[data-edit-slot]"))
+  const bits = Array.from(document.querySelectorAll("#chat-log input[data-edit-slot], #workspace-now input[data-now-slot]"))
     .map((el) => {
-      const name = el.getAttribute("data-edit-slot");
+      const name = el.getAttribute("data-edit-slot") || el.getAttribute("data-now-slot");
       const value = String(el.value || "").trim();
       if (!value) return "";
       if (name === "slow" || name === "fast") return `把${name === "slow" ? "慢线" : "快线"}改成 ${value}`;
@@ -401,11 +584,28 @@ function submitParamEdits() {
     })
     .filter(Boolean);
   editingParams = false;
+  editingNowSlot = "";
   if (!bits.length) {
     renderChat();
+    renderNow();
     return;
   }
   followUp(bits.join("；"));
+}
+
+function onNowClick(ev) {
+  const t = ev.target;
+  if (!(t instanceof HTMLElement)) return;
+  if (t.dataset.nowEdit) {
+    editingNowSlot = t.dataset.nowEdit;
+    renderNow();
+    return;
+  }
+  if (t.id === "btn-now-apply") submitParamEdits();
+  if (t.id === "btn-now-cancel") {
+    editingNowSlot = "";
+    renderNow();
+  }
 }
 
 function onArtifactClick(ev) {
@@ -443,36 +643,44 @@ async function onWorkspaceFileClick(ev) {
     filePreview = { path, name: dto.name || path, content: dto.content };
     renderArtifacts();
   } else if (dto.error) {
-    transcript.push({ kind: "error", text: dto.error.message || "Cannot preview this file." });
+    transcript.push({
+      kind: "error",
+      text: dto.error.message || "Cannot preview this file.",
+      payload: dto.error,
+    });
+    persistTranscript();
     renderChat();
   }
 }
 
 async function createSession() {
+  persistTranscript();
   sessionId = newSessionId();
   localStorage.setItem(STORAGE_SESSION, sessionId);
   state = emptyState();
   transcript = [];
+  persistTranscript();
   artifactTab = 0;
   pendingCodeRun = false;
   editingParams = false;
+  editingNowSlot = "";
   filePreview = null;
+  modeNotice = "";
   renderPanes();
   await refreshSessions();
 }
 
 async function switchSession(id) {
-  if (!id || id === sessionId) return;
+  if (!id || id === sessionId || busy) return;
+  persistTranscript();
   sessionId = id;
   localStorage.setItem(STORAGE_SESSION, sessionId);
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
   ingestDto(dto);
-  transcript = [];
-  for (const turn of dto.turns || []) {
-    if (turn && turn.query) transcript.push({ kind: "user_text", text: String(turn.query) });
-  }
+  mergeRestoredTranscript(dto);
   artifactTab = 0;
   filePreview = null;
+  editingNowSlot = "";
   renderPanes();
 }
 
@@ -524,7 +732,10 @@ function renderChat() {
     if (msg.kind === "user_text") {
       parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
     } else if (msg.kind === "error") {
-      parts.push(`<div class="msg"><div class="msg-role">Error</div><div class="bubble err-text">${escapeHtml(msg.text || "Something went wrong.")}</div></div>`);
+      const next = (msg.payload && msg.payload.next_action) || "";
+      parts.push(`<div class="msg"><div class="msg-role">Error</div><div class="bubble err-text">${escapeHtml(msg.text || "Something went wrong.")}${
+        next ? `<div class="next-action">${escapeHtml(next)}</div>` : ""
+      }<div class="actions"><button type="button" class="primary btn-retry" id="btn-retry">Retry</button></div></div></div>`);
     } else {
       const src = (msg.payload && msg.payload.sources) || state.sources || [];
       const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
@@ -555,18 +766,36 @@ function renderClarification() {
     })
     .join("");
   const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit.</p>";
-  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify">Submit slots</button></div></div>`;
+  const lock = busy ? "disabled" : "";
+  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${lock}>Submit slots</button></div></div>`;
+}
+
+function renderDecisionActions(extra = "") {
+  const lock = busy ? "disabled" : "";
+  return `<div class="actions decision-actions">
+      <button type="button" class="primary" id="btn-confirm" ${lock}>Confirm</button>
+      <button type="button" id="btn-edit" ${lock}>Change params</button>
+      <button type="button" class="danger" id="btn-cancel" ${lock}>Cancel</button>
+      ${extra}
+    </div>`;
 }
 
 function renderPlanCard() {
   const card = state.plan_card;
-  if (!card || !card.confirmable || mode === "ask") return "";
+  const missing = (state.sidebar && state.sidebar.missing) || [];
+  if (!card || !card.confirmable || mode === "ask" || missing.length) return "";
+  const compact = isCompactPlan(card);
+  const job = (state.sidebar && state.sidebar.active_intent && state.sidebar.active_intent.job) || "";
   const steps = (card.steps || [])
     .map((s) => {
       const risks = riskLines(s.side_effects)
         .map((line) => `<div class="risk">${escapeHtml(line)}</div>`)
         .join("");
-      return `<li><strong>${escapeHtml(skillLabel(s.skill_name))}</strong>${risks}</li>`;
+      const badges = riskBadges(s.side_effects);
+      if (compact) {
+        return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}</li>`;
+      }
+      return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}<div class="skill-id">${escapeHtml(skillLabel(s.skill_name))}</div>${risks}</li>`;
     })
     .join("");
   let editor = "";
@@ -582,28 +811,30 @@ function renderPlanCard() {
       : `<div class="slot-row"><label>Follow-up<input data-edit-slot="note" placeholder="Describe the change" /></label></div>`;
     editor = `${rows}<div class="actions"><button type="button" class="primary" id="btn-edit-submit">Apply changes</button><button type="button" id="btn-edit-cancel">Back</button></div>`;
   }
-  const busyLock = busy ? "disabled" : "";
-  return `<div class="card" data-testid="plan-card"><h3>Review plan</h3>
+  const heading = compact ? "Ready to run" : "Review plan";
+  const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
+  return `<div class="card ${compact ? "compact" : ""}" data-testid="plan-card"><h3>${heading}</h3>
+    ${jobLine}
     <p class="warn">Plan ${escapeHtml(card.plan_id)}</p>
     <ol>${steps}</ol>
     ${editor}
-    <div class="actions">
-      <button type="button" class="primary" id="btn-confirm" ${busyLock}>Confirm</button>
-      <button type="button" id="btn-edit">Change params</button>
-      <button type="button" class="danger" id="btn-cancel">Cancel</button>
-    </div></div>`;
+    ${renderDecisionActions()}</div>`;
 }
 
 function renderSteps() {
   const steps = (state.execution && state.execution.steps) || [];
   if (!steps.length) return "";
+  const failed = steps.some((s) => s.status === "error");
+  const retry = failed
+    ? `<div class="actions"><button type="button" class="primary btn-retry" id="btn-retry">Retry failed step</button></div>`
+    : "";
   return `<ol class="step-list" data-testid="step-list">${steps
     .map((s) => {
       const st = s.status || "pending";
-      const mark = st === "done" ? "✓" : st === "error" ? "✕" : "•";
-      return `<li class="step ${escapeHtml(st)}">${mark} ${escapeHtml(skillLabel(s.skill_name || s.step_id))} <small>${escapeHtml(st)}</small></li>`;
+      const mark = st === "done" ? "✓" : st === "error" ? "✕" : st === "running" ? "…" : "•";
+      return `<li class="step ${escapeHtml(st)}">${mark} ${escapeHtml(stepTitle(s) || skillLabel(s.skill_name || s.step_id))} <small>${escapeHtml(st)}</small></li>`;
     })
-    .join("")}</ol>`;
+    .join("")}</ol>${retry}`;
 }
 
 function tableFromRows(rows) {
@@ -633,6 +864,20 @@ function metricsCards(metrics) {
     .join("")}</div>`;
 }
 
+function exportLink(art, label) {
+  if (!art || !art.export_path || !art.run_id) return "";
+  const href = `/v1/artifacts/${encodeURIComponent(art.run_id)}?path=${encodeURIComponent(art.export_path)}`;
+  return `<a class="export-link" href="${href}">${escapeHtml(label || "Export")}</a>`;
+}
+
+function artifactToolbar(art) {
+  const bits = [`<span class="art-type">${escapeHtml(art.type)}</span>`];
+  if (art.run_id) bits.push(`<span class="art-id">run ${escapeHtml(art.run_id)}</span>`);
+  const exp = exportLink(art, art.type === "chart" ? "Download PNG" : art.type === "backtest_report" ? "trade_log" : "Export");
+  if (exp) bits.push(exp);
+  return `<div class="artifact-toolbar">${bits.join("")}</div>`;
+}
+
 function renderArtifacts() {
   const host = $("artifact-panel");
   if (!host) return;
@@ -654,32 +899,32 @@ function renderArtifacts() {
     )
     .join("");
   const current = arts[artifactTab] || arts[0];
-  let body = "";
+  let body = artifactToolbar(current);
   if (current.type === "data_table") {
     const rows = (current.preview && current.preview.preview_rows) || [];
     const summary = (current.preview && current.preview.data_summary) || {};
-    body = `${metricsCards(summary)}${tableFromRows(rows)}`;
-    if (current.export_path) {
-      body += `<p><a href="/v1/artifacts/${encodeURIComponent(current.run_id)}?path=${encodeURIComponent(current.export_path)}">Export</a></p>`;
-    }
+    body += `${metricsCards(summary)}${tableFromRows(rows)}`;
   } else if (current.type === "chart") {
     if (current.warnings && current.warnings.length) body += `<p class="warn">${escapeHtml(current.warnings.join(" "))}</p>`;
     if (current.export_path) {
       const href = `/v1/artifacts/${encodeURIComponent(current.run_id)}?path=${encodeURIComponent(current.export_path)}`;
-      body += `<p><a href="${href}">Download PNG</a></p><img class="chart-img" alt="chart" src="${href}" />`;
+      body += `<img class="chart-img" alt="chart" src="${href}" />`;
     } else body += `<p class="warn">Chart file path is missing.</p>`;
   } else if (current.type === "strategy_code") {
     const path = (current.preview && current.preview.path) || current.export_path || "";
     const draft = codeCache._draft != null ? codeCache._draft : codeCache[path] || "";
-    body = `<textarea id="code-editor" rows="12">${escapeHtml(draft)}</textarea>
+    body += `<textarea id="code-editor" rows="12">${escapeHtml(draft)}</textarea>
       <div class="actions"><button type="button" id="btn-code-run">Run (requires confirm)</button></div>
-      ${pendingCodeRun ? `<div class="card">Confirm running edited strategy?<button type="button" class="primary" id="btn-code-confirm">Confirm run</button></div>` : ""}`;
+      ${
+        pendingCodeRun
+          ? `<div class="card" data-testid="plan-card"><h3>Confirm running edited strategy</h3>
+              ${renderDecisionActions(`<button type="button" class="primary" id="btn-code-confirm">Confirm run</button>`)}</div>`
+          : ""
+      }`;
     if (path && codeCache[path] == null) loadCode(path);
   } else if (current.type === "backtest_report") {
     const metrics = (current.preview && current.preview.metrics) || {};
-    body = `${metricsCards(metrics)}
-      ${current.export_path ? `<p><a href="/v1/artifacts/${encodeURIComponent(current.run_id)}?path=${encodeURIComponent(current.export_path)}">trade_log</a></p>` : ""}
-      <p class="warn">run_id ${escapeHtml(current.run_id)}</p>`;
+    body += `${metricsCards(metrics)}`;
   }
   host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${body}</div>`;
   const ta = $("code-editor");
@@ -711,21 +956,42 @@ function envLine(summary) {
   return bits.join(" · ") || `${keys.length} env keys`;
 }
 
+function slotTone(slot) {
+  if (slot.confirmed) return "confirmed";
+  if (slot.source === "default") return "default";
+  return "unconfirmed";
+}
+
 function renderNow() {
   const host = $("workspace-now");
   if (!host) return;
   const bar = state.sidebar || {};
   const job = (bar.active_intent && bar.active_intent.job) || "—";
-  const missing = (bar.missing || []).map(slotLabel).join(", ") || "—";
-  const slots = (bar.slots || [])
-    .map((s) => `<li>${escapeHtml(slotLabel(s.name))}: ${escapeHtml(s.value == null ? "—" : String(s.value))}${s.confirmed ? "" : " (unconfirmed)"}</li>`)
+  const missing = bar.missing || [];
+  const slots = bar.slots || [];
+  const slotRows = slots
+    .map((s) => {
+      const tone = slotTone(s);
+      const tag = tone === "confirmed" ? "confirmed" : tone === "default" ? "default" : "unconfirmed";
+      if (editingNowSlot === s.name) {
+        return `<li class="slot ${tag}"><label>${escapeHtml(slotLabel(s.name))}<input data-now-slot="${escapeHtml(s.name)}" value="${escapeHtml(s.value == null ? "" : String(s.value))}" /></label>
+          <div class="actions"><button type="button" class="primary" id="btn-now-apply">Apply</button><button type="button" id="btn-now-cancel">Back</button></div></li>`;
+      }
+      const shown = s.value == null || s.value === "" ? "—" : String(s.value);
+      return `<li class="slot ${tag}"><button type="button" class="slot-edit" data-now-edit="${escapeHtml(s.name)}">${escapeHtml(slotLabel(s.name))}: ${escapeHtml(shown)} <span class="slot-tag">${tag}</span></button></li>`;
+    })
     .join("");
-  host.innerHTML = `<p><strong>Now</strong></p>
-    <p>Job: ${escapeHtml(job)}</p>
-    <p>Missing: ${escapeHtml(missing)}</p>
-    <p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
-    <p>${escapeHtml(envLine(bar.env_summary))}</p>
-    <ul>${slots || "<li>No slots yet.</li>"}</ul>`;
+  const missingLine = missing.length
+    ? `<p class="missing">Missing: ${escapeHtml(missing.map(slotLabel).join(", "))}</p>`
+    : `<p class="ok-line">Slots complete</p>`;
+  host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p></div>
+    ${missingLine}
+    <div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows || "<li>No slots yet. Click a slot name here to edit after a plan fills them.</li>"}</ul></div>
+    <div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(envLine(bar.env_summary))}</p></div>
+    <div class="now-audit"><p class="now-k">Audit</p>
+      <p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
+      <p>Run: ${escapeHtml(state.run_id || "—")}</p>
+    </div>`;
   renderNowChips();
 }
 
@@ -741,12 +1007,14 @@ function renderNowChips() {
 }
 
 function renderFileTree(nodes) {
+  const currentRun = String(state.run_id || "");
   return `<ul class="file-tree">${(nodes || [])
     .map((node) => {
       if (node.kind === "dir") {
         return `<li><div class="dir-name">${escapeHtml(node.name)}</div>${renderFileTree(node.children)}</li>`;
       }
-      return `<li><button type="button" class="file" data-file-path="${escapeHtml(node.path)}">${escapeHtml(node.name)}</button></li>`;
+      const current = currentRun && String(node.name || "").includes(currentRun) ? "current-run" : "";
+      return `<li><button type="button" class="file ${current}" data-file-path="${escapeHtml(node.path)}">${escapeHtml(node.name)}</button></li>`;
     })
     .join("")}</ul>`;
 }
@@ -756,7 +1024,7 @@ function renderWorkspace() {
   const host = $("workspace-files");
   if (!host) return;
   const trees = workspace.trees || [];
-  host.innerHTML = `<p style="padding:0 8px;color:var(--text-muted);font-size:11px;text-transform:uppercase;">Files</p>${renderFileTree(trees)}`;
+  host.innerHTML = `<p class="files-k">Files</p>${renderFileTree(trees)}`;
 }
 
 function renderPanes() {
@@ -774,4 +1042,17 @@ function render() {
 
 mountShell();
 renderMode();
-refreshSessions().then(() => refreshWorkspace()).then(() => renderPanes());
+
+async function restoreCurrentSession() {
+  transcript = loadTranscriptFor(sessionId);
+  const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
+  if (dto && !dto.error) {
+    ingestDto(dto);
+    mergeRestoredTranscript(dto);
+  }
+  await refreshSessions();
+  await refreshWorkspace();
+  renderPanes();
+}
+
+restoreCurrentSession();

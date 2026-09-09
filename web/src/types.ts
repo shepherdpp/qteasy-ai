@@ -26,6 +26,7 @@ export interface WorkbenchPlanStep {
   };
   needs_confirm: boolean;
   status: string;
+  summary?: string;
 }
 
 export interface WorkbenchPlanCard {
