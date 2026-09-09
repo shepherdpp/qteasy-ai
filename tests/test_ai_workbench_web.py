@@ -55,6 +55,10 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("ctrlKey", js.text)
             self.assertIn("textarea", js.text)
             self.assertIn("Workspace", js.text)
+            self.assertNotIn("btn-toggle-workspace", js.text)
+            self.assertIn("btn-collapse-workspace", js.text)
+            self.assertIn("composer-meta", js.text)
+            print(" topbar has mode-group:", js.text.split("topbar")[1].split("layout")[0].count("mode-group"))
             self.assertIn("btn-code-confirm", js.text)
             self.assertIn("text/event-stream", js.text)
             self.assertIn("btn-retry", js.text)
@@ -67,6 +71,8 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" css has slot-tag:", "slot-tag" in css.text)
             self.assertIn("slot-tag", css.text)
             self.assertIn("artifact-toolbar", css.text)
+            self.assertIn("workspace-col.collapsed", css.text)
+            self.assertNotIn("display: none", css.text.split(".workspace-col")[1].split(".col-head")[0] if ".workspace-col" in css.text else "")
 
     def test_fixture_keys_match_types_ts(self) -> None:
         """fixture 四态 + types.ts WORKBENCH_STATE_KEYS 对齐。"""

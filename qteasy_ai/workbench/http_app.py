@@ -131,6 +131,7 @@ class WorkbenchHttp:
         *,
         query: str = "",
         session_id: str = "",
+        persist_transcript: bool = False,
     ) -> Dict[str, Any]:
         """raw payload → WorkbenchState JSON。"""
 
@@ -142,6 +143,30 @@ class WorkbenchHttp:
         state = map_assistant_payload(payload, session=session, query=query, env_facts=env)
         dumped = state.to_dict()
         dumped["ok"] = dumped.get("error") is None
+        extra = list(dumped.get("messages") or [])
+        card = dumped.get("plan_card") or {}
+        if card.get("confirmable") and not any(
+            isinstance(item, dict) and item.get("kind") == "ask_text" for item in extra
+        ):
+            titles = [
+                str(step.get("summary") or step.get("skill_name") or "").strip()
+                for step in (card.get("steps") or [])
+                if isinstance(step, dict)
+            ]
+            titles = [item for item in titles if item]
+            extra.append(
+                {
+                    "kind": "ask_text",
+                    "text": "Plan ready: " + ("; ".join(titles) or card.get("plan_id") or "review steps"),
+                    "payload": {"plan_id": card.get("plan_id") or ""},
+                }
+            )
+        if persist_transcript and sid:
+            dumped["transcript"] = self.assistant.memory_store.append_ui_transcript(sid, extra)
+        elif sid:
+            dumped["transcript"] = self.assistant.memory_store.load_ui_transcript(sid)
+        else:
+            dumped["transcript"] = []
         return dumped
 
     def _stream_execute(
@@ -217,7 +242,12 @@ class WorkbenchHttp:
                 },
             )
             return
-        dto = self._to_dto(box.get("payload") or {}, query=query, session_id=session_id)
+        dto = self._to_dto(
+            box.get("payload") or {},
+            query=query,
+            session_id=session_id,
+            persist_transcript=True,
+        )
         run_id = str(dto.get("run_id") or "")
         if run_id:
             self.events[run_id] = list(bucket)
@@ -267,7 +297,9 @@ class WorkbenchHttp:
             explanation_depth=depth,
             session_id=session_id or None,
         )
-        return JSONResponse(self._to_dto(payload, query=query, session_id=session_id))
+        return JSONResponse(
+            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
+        )
 
     async def plan(self, request: Request) -> JSONResponse:
         """POST /v1/plan。"""
@@ -282,7 +314,9 @@ class WorkbenchHttp:
             response_style="raw",
             session_id=session_id or None,
         )
-        return JSONResponse(self._to_dto(payload, query=query, session_id=session_id))
+        return JSONResponse(
+            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
+        )
 
     async def run(self, request: Request) -> Response:
         """POST /v1/run（显式 Agent 入口）。默认 JSON；可选 SSE。"""
@@ -313,7 +347,7 @@ class WorkbenchHttp:
             self._record_step(bucket, record)
 
         payload = runner(on_step)
-        dto = self._to_dto(payload, query=query, session_id=session_id)
+        dto = self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
         run_id = str(dto.get("run_id") or "")
         if run_id:
             self.events[run_id] = list(bucket)
@@ -352,7 +386,7 @@ class WorkbenchHttp:
             payload = runner(on_step)
         except ValueError as exc:
             return _error("PLAN_ID_NOT_FOUND", str(exc), 404)
-        dto = self._to_dto(payload, query="", session_id=session_id)
+        dto = self._to_dto(payload, query="", session_id=session_id, persist_transcript=True)
         run_id = str(dto.get("run_id") or "")
         if run_id:
             self.events[run_id] = list(bucket)
@@ -382,6 +416,16 @@ class WorkbenchHttp:
         dumped = mapped.to_dict()
         dumped["ok"] = True
         dumped["turns"] = list(conv.turns)
+        hist = self.assistant.memory_store.load_ui_transcript(session_id)
+        if not hist:
+            hist = []
+            for turn in conv.turns or []:
+                if isinstance(turn, dict) and turn.get("query"):
+                    hist.append({"kind": "user_text", "text": str(turn.get("query")), "payload": {}})
+            for msg in dumped.get("messages") or []:
+                if isinstance(msg, dict) and msg.get("kind") not in {"plan_card", "step_status", "user_text"}:
+                    hist.append(msg)
+        dumped["transcript"] = hist
         return JSONResponse(dumped)
 
     async def list_sessions(self, request: Request) -> JSONResponse:

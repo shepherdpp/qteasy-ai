@@ -260,6 +260,13 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual((restored.get("execution") or {}).get("status"), "dry_run")
             self.assertTrue(card.get("confirmable"))
             self.assertTrue(restored.get("turns"))
+            kinds = [m.get("kind") for m in (restored.get("transcript") or [])]
+            texts = [m.get("text") for m in (restored.get("transcript") or [])]
+            print(" transcript kinds:", kinds)
+            print(" transcript texts:", texts)
+            self.assertIn("user_text", kinds)
+            self.assertTrue(any(k in {"ask_text", "clarification"} for k in kinds))
+            self.assertTrue(any("Plan ready" in str(t) or "Clarif" in str(t) or "qteasy" in str(t).lower() for t in texts))
 
     def test_run_plan_optional_sse_keeps_default_json(self) -> None:
         """?stream=1 返回 SSE；默认 POST 仍是 JSON 且含 steps。"""
@@ -307,6 +314,33 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertRegex(str(err.get("message") or ""), r"[A-Za-z]")
             self.assertRegex(str(err.get("next_action") or ""), r"[A-Za-z]")
             self.assertIn("Confirm", str(err.get("next_action") or ""))
+
+    def test_session_transcript_keeps_assistant_reply(self) -> None:
+        """同一 session 先 Ask 再 GET：transcript 含用户句与助手回答。"""
+
+        print("\n[TestAiWorkbenchHttp] session transcript dialogue")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            asked = client.post(
+                "/v1/ask",
+                json={"query": "What is qteasy?", "session_id": "s-chat"},
+            )
+            print(" ask status:", asked.status_code)
+            print(" ask kinds:", [m.get("kind") for m in (asked.json().get("messages") or [])])
+            self.assertEqual(asked.status_code, 200)
+            sess = client.get("/v1/session/s-chat")
+            hist = sess.json().get("transcript") or []
+            kinds = [m.get("kind") for m in hist]
+            texts = [m.get("text") for m in hist]
+            print(" restore kinds:", kinds)
+            print(" restore texts:", texts)
+            listed = [row.get("session_id") for row in client.get("/v1/sessions").json().get("sessions") or []]
+            print(" listed sessions:", listed)
+            self.assertIn("user_text", kinds)
+            self.assertIn("ask_text", kinds)
+            self.assertTrue(any("qteasy" in str(t).lower() and m == "ask_text" for m, t in zip(kinds, texts)))
+            self.assertNotIn("s-chat.transcript", listed)
+            self.assertTrue(store.ui_transcript_path("s-chat").is_file())
 
 
 if __name__ == "__main__":

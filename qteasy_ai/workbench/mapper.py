@@ -274,6 +274,7 @@ def _plan_steps(plan: Dict[str, Any]) -> List[WorkbenchPlanStep]:
                 needs_confirm=step_needs_confirm(skill, effects),
                 status="pending",
                 summary=_step_summary(skill, raw),
+                inputs=dict(raw.get("inputs") or {}) if isinstance(raw.get("inputs"), dict) else {},
             )
         )
     return rows

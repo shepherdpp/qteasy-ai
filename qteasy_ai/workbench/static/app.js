@@ -140,6 +140,37 @@ function pendingDecision() {
   return Boolean((card && card.confirmable) || missing.length || clar);
 }
 
+function formatInputs(inputs) {
+  const raw = inputs && typeof inputs === "object" ? inputs : {};
+  const bits = Object.entries(raw)
+    .filter(([key, val]) => val != null && val !== "" && !String(key).startsWith("upstream_"))
+    .map(([key, val]) => `${slotLabel(key)}=${typeof val === "string" ? val : JSON.stringify(val)}`);
+  return bits.slice(0, 8).join(" · ");
+}
+
+const JOB_STAGE = {
+  "data.read": "data",
+  "data.refill": "data",
+  "data.summary": "data",
+  "data.export": "data",
+  "env.ready": "data",
+  "research.screen": "analysis",
+  "research.factor_ic": "analysis",
+  "strategy.meta": "strategy",
+  "strategy.builder": "strategy",
+  "backtest.builtin": "backtest",
+  "optimize.builtin": "backtest",
+  "insight.last_backtest": "backtest",
+  "live.plan_only": "backtest",
+};
+
+function pipelineHtml(job) {
+  const current = JOB_STAGE[job] || "";
+  return ["data", "analysis", "strategy", "backtest"]
+    .map((name) => `<span class="pipe ${name === current ? "active" : ""}">${name}</span>`)
+    .join("<span class=\"pipe-sep\">→</span>");
+}
+
 function isCompactPlan(card) {
   const steps = (card && card.steps) || [];
   if (!steps.length || steps.length > 2) return false;
@@ -175,15 +206,8 @@ function mountShell() {
   root.innerHTML = `
     <div class="topbar">
       <span class="brand">qteasy-ai Workbench</span>
-      <span class="mode-badge" data-testid="mode-badge">Mode: PLAN</span>
-      <div class="mode-group">
-        <button type="button" data-mode="ask">Ask</button>
-        <button type="button" data-mode="plan">Plan</button>
-        <button type="button" data-mode="agent">Agent</button>
-      </div>
       <span class="spacer"></span>
       <span class="session-title" id="session-title"></span>
-      <button type="button" class="ghost" id="btn-toggle-workspace" title="Toggle Workspace">Workspace</button>
     </div>
     <div class="layout" id="layout">
       <aside class="rail" id="session-rail">
@@ -203,7 +227,12 @@ function mountShell() {
         <div class="chat-log" id="chat-log"></div>
         <div class="composer">
           <div class="composer-meta">
-            <span class="mode-badge" id="composer-mode">Mode: PLAN</span>
+            <span class="mode-badge" data-testid="mode-badge" id="composer-mode">Mode: PLAN</span>
+            <div class="mode-group">
+              <button type="button" data-mode="ask">Ask</button>
+              <button type="button" data-mode="plan">Plan</button>
+              <button type="button" data-mode="agent">Agent</button>
+            </div>
             <span id="composer-mode-hint"></span>
           </div>
           <textarea id="query-input" placeholder="Ask in natural language" rows="3"></textarea>
@@ -256,7 +285,6 @@ function bindShell() {
     localStorage.setItem(STORAGE_RAIL, railCollapsed ? "1" : "0");
     applyLayoutFlags();
   };
-  $("btn-toggle-workspace").onclick = toggleWorkspace;
   $("btn-collapse-workspace").onclick = toggleWorkspace;
   $("chat-log").addEventListener("click", onChatClick);
   $("artifact-panel").addEventListener("click", onArtifactClick);
@@ -278,7 +306,11 @@ function applyLayoutFlags() {
   layout.classList.toggle("rail-collapsed", railCollapsed);
   layout.classList.toggle("workspace-collapsed", workspaceCollapsed);
   rail.classList.toggle("collapsed", railCollapsed);
+  const workspaceCol = $("sidebar-col");
+  if (workspaceCol) workspaceCol.classList.toggle("collapsed", workspaceCollapsed);
   $("btn-toggle-rail").textContent = railCollapsed ? "»" : "«";
+  const wsBtn = $("btn-collapse-workspace");
+  if (wsBtn) wsBtn.textContent = workspaceCollapsed ? "«" : "»";
 }
 
 function setMode(next) {
@@ -675,9 +707,16 @@ async function switchSession(id) {
   persistTranscript();
   sessionId = id;
   localStorage.setItem(STORAGE_SESSION, sessionId);
+  transcript = [];
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
   ingestDto(dto);
-  mergeRestoredTranscript(dto);
+  const server = Array.isArray(dto.transcript) ? dto.transcript : [];
+  if (server.length) {
+    transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
+    persistTranscript();
+  } else {
+    mergeRestoredTranscript(dto);
+  }
   artifactTab = 0;
   filePreview = null;
   editingNowSlot = "";
@@ -792,10 +831,11 @@ function renderPlanCard() {
         .map((line) => `<div class="risk">${escapeHtml(line)}</div>`)
         .join("");
       const badges = riskBadges(s.side_effects);
+      const params = formatInputs(s.inputs);
       if (compact) {
-        return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}</li>`;
+        return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}${params ? `<div class="skill-id">${escapeHtml(params)}</div>` : ""}</li>`;
       }
-      return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}<div class="skill-id">${escapeHtml(skillLabel(s.skill_name))}</div>${risks}</li>`;
+      return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}<div class="skill-id">${escapeHtml(skillLabel(s.skill_name))}</div>${params ? `<div class="skill-id">${escapeHtml(params)}</div>` : ""}${risks}</li>`;
     })
     .join("");
   let editor = "";
@@ -984,7 +1024,8 @@ function renderNow() {
   const missingLine = missing.length
     ? `<p class="missing">Missing: ${escapeHtml(missing.map(slotLabel).join(", "))}</p>`
     : `<p class="ok-line">Slots complete</p>`;
-  host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p></div>
+  host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
+    <div class="pipeline">${pipelineHtml(job === "—" ? "" : job)}</div></div>
     ${missingLine}
     <div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows || "<li>No slots yet. Click a slot name here to edit after a plan fills them.</li>"}</ul></div>
     <div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(envLine(bar.env_summary))}</p></div>
@@ -1044,11 +1085,19 @@ mountShell();
 renderMode();
 
 async function restoreCurrentSession() {
-  transcript = loadTranscriptFor(sessionId);
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
   if (dto && !dto.error) {
     ingestDto(dto);
-    mergeRestoredTranscript(dto);
+    const server = Array.isArray(dto.transcript) ? dto.transcript : [];
+    if (server.length) {
+      transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
+      persistTranscript();
+    } else {
+      transcript = loadTranscriptFor(sessionId);
+      mergeRestoredTranscript(dto);
+    }
+  } else {
+    transcript = loadTranscriptFor(sessionId);
   }
   await refreshSessions();
   await refreshWorkspace();

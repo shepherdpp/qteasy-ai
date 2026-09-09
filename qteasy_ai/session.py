@@ -240,7 +240,7 @@ class SessionStore:
         paths = [
             path
             for path in self.sessions_dir.glob("*.json")
-            if ".corrupt" not in path.name
+            if ".corrupt" not in path.name and not path.name.endswith(".transcript.json")
         ]
         paths.sort(key=lambda item: item.stat().st_mtime, reverse=True)
         for path in paths:

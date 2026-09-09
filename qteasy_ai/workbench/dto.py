@@ -45,6 +45,7 @@ class WorkbenchPlanStep:
     needs_confirm: bool = False
     status: str = "pending"
     summary: str = ""
+    inputs: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """序列化。"""

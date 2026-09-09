@@ -246,6 +246,115 @@ class MemoryStore:
             f.write("\n")
         tmp_path.replace(path)
 
+    @staticmethod
+    def session_stem(session_id: str) -> str:
+        """会话文件名安全化。
+
+        Parameters
+        ----------
+        session_id : str
+            原始 session_id。
+
+        Returns
+        -------
+        str
+            仅保留字母数字与 ``-_``。
+        """
+
+        return "".join(
+            ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(session_id or "default")
+        )
+
+    def ui_transcript_path(self, session_id: str) -> Path:
+        """Web 对话副本路径（与 ``{id}.json`` 并列，不进 SessionStore 列举）。"""
+
+        return self.sessions_dir / f"{self.session_stem(session_id)}.transcript.json"
+
+    def load_ui_transcript(self, session_id: str) -> List[Dict[str, Any]]:
+        """读取工作台可见对话；缺文件为空列表。
+
+        Parameters
+        ----------
+        session_id : str
+            会话 id。
+
+        Returns
+        -------
+        list of dict
+            ``kind`` / ``text`` / ``payload`` 消息。
+        """
+
+        blob = self._read_json(self.ui_transcript_path(session_id), default={})
+        rows = blob.get("messages") if isinstance(blob, dict) else []
+        out: List[Dict[str, Any]] = []
+        for item in rows or []:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "").strip()
+            if not kind:
+                continue
+            out.append(
+                {
+                    "kind": kind,
+                    "text": str(item.get("text") or ""),
+                    "payload": dict(item.get("payload") or {})
+                    if isinstance(item.get("payload"), dict)
+                    else {},
+                }
+            )
+        return out
+
+    def append_ui_transcript(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """追加可见消息并落盘；同 kind+text 的尾部重复跳过。
+
+        Parameters
+        ----------
+        session_id : str
+            会话 id；空则不写。
+        messages : list of dict
+            本轮要追加的消息。
+
+        Returns
+        -------
+        list of dict
+            追加后的完整副本（最多 120 条）。
+        """
+
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        hist = self.load_ui_transcript(sid)
+        seen_tail = {(row.get("kind"), row.get("text")) for row in hist[-8:]}
+        for raw in messages or []:
+            if not isinstance(raw, dict):
+                continue
+            kind = str(raw.get("kind") or "").strip()
+            if kind in {"", "plan_card", "step_status"}:
+                continue
+            text = str(raw.get("text") or "")
+            if not text:
+                continue
+            key = (kind, text)
+            if key in seen_tail:
+                continue
+            seen_tail.add(key)
+            hist.append(
+                {
+                    "kind": kind,
+                    "text": text,
+                    "payload": dict(raw.get("payload") or {})
+                    if isinstance(raw.get("payload"), dict)
+                    else {},
+                }
+            )
+        hist = hist[-120:]
+        self._write_json(self.ui_transcript_path(sid), {"messages": hist})
+        return hist
+
     def load_profile(self) -> Dict[str, Any]:
         """读取 profile，并补齐默认 ``agent`` 授权开关。"""
 

@@ -67,9 +67,9 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
   flex-shrink: 0;
 }
 .topbar .brand { font-weight: 600; color: var(--text-bright); letter-spacing: 0.02em; }
-.topbar .mode-group { display: flex; gap: 4px; margin-left: 12px; }
-.topbar .mode-group button { padding: 3px 10px; font-size: 12px; }
-.topbar .mode-group button.active { background: var(--bg-active); border-color: #1177bb; color: #fff; }
+.mode-group { display: flex; gap: 4px; }
+.mode-group button { padding: 3px 10px; font-size: 12px; }
+.mode-group button.active { background: var(--bg-active); border-color: #1177bb; color: #fff; }
 .mode-badge {
   padding: 2px 8px;
   border-radius: 4px;
@@ -89,8 +89,8 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
   min-height: calc(100vh - 40px);
 }
 .layout.rail-collapsed { grid-template-columns: 44px 1.1fr 1.4fr 280px; }
-.layout.workspace-collapsed { grid-template-columns: 200px 1.1fr 1.4fr 0px; }
-.layout.rail-collapsed.workspace-collapsed { grid-template-columns: 44px 1.1fr 1.4fr 0px; }
+.layout.workspace-collapsed { grid-template-columns: 200px 1.1fr 1.4fr 44px; }
+.layout.rail-collapsed.workspace-collapsed { grid-template-columns: 44px 1.1fr 1.4fr 44px; }
 
 .rail, .session-col, .artifact-col, .workspace-col {
   min-width: 0;
@@ -100,7 +100,8 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
 }
 .rail { background: var(--bg-sidebar); display: flex; flex-direction: column; }
 .workspace-col { border-right: 0; background: var(--bg-sidebar); display: flex; flex-direction: column; }
-.layout.workspace-collapsed .workspace-col { display: none; }
+.workspace-col.collapsed .workspace-body { display: none; }
+.workspace-col.collapsed .col-head h2 { display: none; }
 
 .col-head {
   display: flex;
@@ -193,6 +194,10 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
   margin: 10px 0 2px;
 }
 .now-block .now-job .now-v { font-size: 14px; color: var(--text-bright); font-weight: 600; }
+.pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.pipe { color: var(--text-muted); }
+.pipe.active { color: var(--text-bright); background: var(--bg-active); border-radius: 8px; padding: 1px 6px; }
+.pipe-sep { color: var(--text-muted); }
 .now-block .ok-line { color: var(--ok); }
 .now-block .missing { color: var(--warn); }
 .now-block .slot-edit {
