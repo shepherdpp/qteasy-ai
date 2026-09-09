@@ -8,6 +8,7 @@
 # Unittest for Starlette workbench adapter (G.3)
 # ======================================
 
+import json
 import tempfile
 import unittest
 
@@ -188,8 +189,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(events.status_code, 200)
             self.assertIn("step_status", events.text)
 
-    def test_list_sessions_and_workspace_tree(self) -> None:
-        """GET /v1/sessions 与 /v1/workspace 只读列举 MemoryStore 目录。"""
+    def test_list_sessions_and_workspace_index(self) -> None:
+        """GET /v1/sessions 列举会话；/v1/workspace 按 session 返回产物索引。"""
 
         print("\n[TestAiWorkbenchHttp] sessions and workspace")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -203,19 +204,17 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(listed.status_code, 200)
             self.assertTrue(body.get("ok"))
             self.assertIn("web-demo", ids)
+            empty = client.get("/v1/workspace")
+            print(" workspace no session:", empty.status_code, empty.json())
+            self.assertEqual(empty.status_code, 200)
+            self.assertEqual(empty.json().get("artifacts"), [])
+            scoped = client.get("/v1/workspace", params={"session_id": "web-demo"})
+            print(" workspace scoped:", scoped.status_code, scoped.json())
+            self.assertEqual(scoped.status_code, 200)
+            self.assertEqual(scoped.json().get("session_id"), "web-demo")
+            self.assertIn("artifacts", scoped.json())
             demo = store.strategies_dir / "demo.py"
             demo.write_text("class Demo:\n    pass\n", encoding="utf-8")
-            tree = client.get("/v1/workspace")
-            payload = tree.json()
-            print(" workspace status:", tree.status_code)
-            print(" tree names:", [item.get("name") for item in (payload.get("trees") or [])])
-            self.assertEqual(tree.status_code, 200)
-            names = {item.get("name") for item in (payload.get("trees") or [])}
-            self.assertEqual(names, {"runs", "strategies", "user_kb"})
-            strat = next(item for item in payload["trees"] if item["name"] == "strategies")
-            child_names = [child.get("name") for child in (strat.get("children") or [])]
-            print(" strategy files:", child_names)
-            self.assertIn("demo.py", child_names)
             preview = client.get("/v1/workspace/file", params={"path": "strategies/demo.py"})
             print(" file status:", preview.status_code, preview.json().get("content", "")[:40])
             self.assertEqual(preview.status_code, 200)
@@ -225,7 +224,9 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(outside.status_code, 404)
             loaded = asst.session_store.load("web-demo")
             print(" loaded session_id:", loaded.session_id)
+            print(" loaded messages:", loaded.messages)
             self.assertEqual(loaded.session_id, "web-demo")
+            self.assertTrue(any(m.get("kind") == "user_text" for m in loaded.messages))
 
     def test_get_session_restores_plan_from_plan_id(self) -> None:
         """GET /v1/session 按 current_plan_id 回填 plan_card / execution。"""
@@ -340,9 +341,103 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertIn("ask_text", kinds)
             self.assertTrue(any("qteasy" in str(t).lower() and m == "ask_text" for m, t in zip(kinds, texts)))
             self.assertNotIn("s-chat.transcript", listed)
-            self.assertTrue(store.ui_transcript_path("s-chat").is_file())
+            disk = store.sessions_dir / "s-chat.json"
+            print(" session file:", disk.is_file(), (disk.read_text(encoding="utf-8")[:200] if disk.is_file() else ""))
+            self.assertTrue(disk.is_file())
+            saved = json.loads(disk.read_text(encoding="utf-8"))
+            print(" saved message kinds:", [m.get("kind") for m in saved.get("messages") or []])
+            self.assertTrue(any(m.get("kind") == "ask_text" for m in saved.get("messages") or []))
             print(" restored mode:", sess.json().get("mode"))
             self.assertEqual(sess.json().get("mode"), "ask")
+
+            other = client.post("/v1/ask", json={"query": "What is a DataSource?", "session_id": "s-other"})
+            print(" other ask:", other.status_code)
+            back = client.get("/v1/session/s-chat")
+            back_kinds = [m.get("kind") for m in (back.json().get("transcript") or [])]
+            back_texts = [m.get("text") for m in (back.json().get("transcript") or [])]
+            print(" after switch kinds:", back_kinds)
+            print(" after switch texts:", back_texts)
+            self.assertIn("ask_text", back_kinds)
+            self.assertTrue(any("qteasy" in str(t).lower() for t in back_texts))
+            other_arts = client.get("/v1/workspace", params={"session_id": "s-other"}).json().get("artifacts") or []
+            chat_arts = client.get("/v1/workspace", params={"session_id": "s-chat"}).json().get("artifacts") or []
+            print(" artifact counts other/chat:", len(other_arts), len(chat_arts))
+            other_runs = {a.get("run_id") for a in other_arts}
+            chat_runs = {a.get("run_id") for a in chat_arts}
+            self.assertTrue(other_runs.isdisjoint(chat_runs) or not other_runs or not chat_runs)
+
+            rewind = client.post(
+                "/v1/session/s-chat/rewind",
+                json={"message_index": 0, "query": "What is HistoryPanel?", "mode": "ask"},
+            )
+            print(" rewind:", rewind.status_code, rewind.json().get("transcript"))
+            self.assertEqual(rewind.status_code, 200)
+            rw = rewind.json().get("transcript") or []
+            print(" rewind kinds:", [m.get("kind") for m in rw])
+            self.assertTrue(any("HistoryPanel" in str(m.get("text") or "") for m in rw if m.get("kind") == "user_text"))
+            self.assertFalse(any(m.get("text") == "What is qteasy?" for m in rw if m.get("kind") == "user_text"))
+
+            prov = client.get("/v1/provider")
+            print(" provider:", prov.status_code, prov.json())
+            self.assertEqual(prov.status_code, 200)
+            self.assertNotIn("api_key", prov.json())
+            self.assertIn("api_key_present", prov.json())
+            self.assertIn("configured", prov.json())
+            denied = client.post("/v1/provider", json={"model": "x", "confirmed": False})
+            print(" provider deny:", denied.status_code, denied.json())
+            self.assertEqual(denied.status_code, 400)
+            ok_prov = client.post(
+                "/v1/provider",
+                json={"model": "demo-model", "base_url": "http://127.0.0.1:9", "api_key": "sk-test", "confirmed": True},
+            )
+            print(" provider save:", ok_prov.status_code, ok_prov.json())
+            self.assertEqual(ok_prov.status_code, 200)
+            self.assertNotIn("api_key", ok_prov.json())
+            self.assertTrue(ok_prov.json().get("api_key_present"))
+            self.assertEqual(ok_prov.json().get("mode"), "local_llm")
+
+    def test_workspace_artifacts_stay_on_own_session(self) -> None:
+        """Session A 的 run 产物不得出现在 Session B 的 workspace。"""
+
+        print("\n[TestAiWorkbenchHttp] artifacts scoped to session")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            run_id = "run_c6a"
+            store.save_run(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "execution": {
+                        "status": "success",
+                        "steps": [
+                            {
+                                "skill_name": "qt.ai.data.read",
+                                "result": {
+                                    "ok": True,
+                                    "data_summary": {"n_rows": 1},
+                                    "payload": {"preview_rows": [{"close": 1.0}]},
+                                },
+                            }
+                        ],
+                    },
+                },
+            )
+            from qteasy_ai.session import ConversationState, SessionStore
+
+            sessions = SessionStore(store)
+            left = ConversationState.empty("sess-a")
+            left.append_messages(
+                [{"kind": "ask_text", "text": "table ready", "payload": {"run_id": run_id, "executed": True}}]
+            )
+            sessions.save(left)
+            sessions.save(ConversationState.empty("sess-b"))
+            arts_a = client.get("/v1/workspace", params={"session_id": "sess-a"}).json().get("artifacts") or []
+            arts_b = client.get("/v1/workspace", params={"session_id": "sess-b"}).json().get("artifacts") or []
+            print(" arts A:", arts_a)
+            print(" arts B:", arts_b)
+            self.assertTrue(any(item.get("run_id") == run_id for item in arts_a))
+            self.assertTrue(all(item.get("session_id") == "sess-a" for item in arts_a))
+            self.assertFalse(any(item.get("run_id") == run_id for item in arts_b))
 
 
 if __name__ == "__main__":

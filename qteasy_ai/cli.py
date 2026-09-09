@@ -18,7 +18,7 @@ import json
 from typing import Any, Dict
 
 from .app import QteasyAssistant
-from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
+from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter, provider_diagnostics
 from .memory_store import MemoryStore
 from .provider import OpenAICompatProvider
 from .workbench.human import format_human_error, format_human_from_payload
@@ -44,32 +44,7 @@ def _build_provider_from_config() -> OpenAICompatProvider | None:
 def _provider_check_payload() -> Dict[str, Any]:
     """生成 provider-check 的可诊断信息。"""
 
-    config_center = ConfigCenter()
-    provider_cfg = config_center.resolve_provider_config()
-    trace = config_center.get_trace()
-    model = str(provider_cfg.get("model", "")).strip()
-    api_key = str(provider_cfg.get("api_key", "")).strip()
-    base_url = str(provider_cfg.get("base_url", "")).strip()
-    timeout = int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT))
-
-    mode = "rule"
-    if model:
-        if base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"):
-            mode = "local_llm"
-        else:
-            mode = "cloud_llm"
-
-    return {
-        "ok": bool(model and api_key),
-        "provider": "openai_compatible" if model else "none",
-        "mode": mode,
-        "model": model,
-        "base_url": base_url,
-        "timeout": timeout,
-        "api_key_present": bool(api_key),
-        "config_sources": {key: item.get("source", "") for key, item in trace.items()},
-        "message": "Provider configured." if (model and api_key) else "Provider not configured.",
-    }
+    return provider_diagnostics()
 
 
 def _print_json(payload: Dict[str, Any]) -> None:

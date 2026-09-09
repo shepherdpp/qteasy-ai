@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..session import ConversationState
@@ -99,6 +100,20 @@ def _slice_preview_rows(payload: Any) -> List[Any]:
     return [preview]
 
 
+def _read_text_file(path: str, *, cap: int = 200000) -> str:
+    """读取策略源码等文本；失败或过大返回空串。"""
+
+    target = Path(str(path or "").strip())
+    if not str(target) or not target.is_file():
+        return ""
+    try:
+        if target.stat().st_size > cap:
+            return ""
+        return target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """从 execution.steps 分类 Artifact。
 
@@ -157,13 +172,16 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
         if source_art is not None or skill == "qt.ai.strategy.codegen_hybrid":
             path = str((source_art or {}).get("path") or "")
             warnings = [] if path else ["Strategy source path is missing."]
+            source = _read_text_file(path)
+            if path and not source:
+                warnings.append("Strategy source could not be loaded.")
             items.append(
                 WorkbenchArtifact(
                     type="strategy_code",
                     run_id=rid,
                     title=skill or "strategy_code",
                     export_path=path,
-                    preview={"path": path},
+                    preview={"path": path, "source": source},
                     warnings=warnings,
                 )
             )
@@ -544,6 +562,11 @@ def map_assistant_payload(
     if isinstance(raw.get("execution"), dict):
         exec_steps = list(raw["execution"].get("steps") or [])
     artifacts = classify_artifacts(run_id, exec_steps) if exec_steps else []
+    tagged = []
+    for item in artifacts:
+        art = _artifact_from_dict(item)
+        art.session_id = sid
+        tagged.append(art)
 
     sidebar = _sidebar_from_session(session, raw, env_facts)
     if missing_from_pending and not sidebar.missing:
@@ -563,7 +586,7 @@ def map_assistant_payload(
         messages=messages,
         plan_card=plan_card,
         sidebar=sidebar,
-        artifacts=[_artifact_from_dict(item) for item in artifacts],
+        artifacts=tagged,
         execution=execution,
         error=err,
         run_id=run_id,
@@ -581,4 +604,5 @@ def _artifact_from_dict(item: Dict[str, Any]) -> WorkbenchArtifact:
         export_path=str(item.get("export_path") or ""),
         preview=dict(item.get("preview") or {}),
         warnings=list(item.get("warnings") or []),
+        session_id=str(item.get("session_id") or ""),
     )

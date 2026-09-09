@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional
 from .memory_store import MemoryStore, _json_safe
 
 SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"})
+VISIBLE_MESSAGE_KINDS = frozenset({"user_text", "ask_text", "error", "clarification"})
+_SKIP_MESSAGE_KINDS = frozenset({"", "plan_card", "step_status"})
 _STATE_KEYS = frozenset(
     {
         "session_id",
@@ -33,6 +35,7 @@ _STATE_KEYS = frozenset(
         "current_plan_id",
         "clarify_round",
         "turns",
+        "messages",
         "attachments",
         "agent_auto",
         "awaiting_abandon",
@@ -40,6 +43,43 @@ _STATE_KEYS = frozenset(
         "task_complete",
     }
 )
+
+
+def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
+    """把一条可见对话规范成 ``kind`` / ``text`` / ``payload``。
+
+    Parameters
+    ----------
+    raw : Any
+        原始消息。
+
+    Returns
+    -------
+    dict or None
+        非法或应跳过的 kind 返回 None。
+    """
+
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("kind") or "").strip()
+    if kind in _SKIP_MESSAGE_KINDS or not kind:
+        return None
+    text = str(raw.get("text") or "")
+    payload = dict(raw.get("payload") or {}) if isinstance(raw.get("payload"), dict) else {}
+    return {"kind": kind, "text": text, "payload": payload}
+
+
+def _coerce_messages(raw: Any) -> List[Dict[str, Any]]:
+    """从 JSON 恢复 messages 列表。"""
+
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        row = normalize_message(item)
+        if row is not None:
+            out.append(row)
+    return out
 
 
 @dataclass
@@ -83,6 +123,7 @@ class ConversationState:
     current_plan_id: str = ""
     clarify_round: int = 0
     turns: List[Dict[str, Any]] = field(default_factory=list)
+    messages: List[Dict[str, Any]] = field(default_factory=list)
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     agent_auto: bool = False
     awaiting_abandon: bool = False
@@ -109,6 +150,7 @@ class ConversationState:
             "current_plan_id": self.current_plan_id,
             "clarify_round": int(self.clarify_round),
             "turns": list(self.turns),
+            "messages": list(self.messages),
             "attachments": list(self.attachments),
             "agent_auto": bool(self.agent_auto),
             "awaiting_abandon": bool(self.awaiting_abandon),
@@ -150,6 +192,7 @@ class ConversationState:
             current_plan_id=str(data.get("current_plan_id") or ""),
             clarify_round=int(data.get("clarify_round") or 0),
             turns=list(data.get("turns") or []) if isinstance(data.get("turns"), list) else [],
+            messages=_coerce_messages(data.get("messages")),
             attachments=attachments,
             agent_auto=bool(data.get("agent_auto", False)),
             awaiting_abandon=bool(data.get("awaiting_abandon", False)),
@@ -172,6 +215,74 @@ class ConversationState:
         """写入或覆盖一个槽。"""
 
         self.slots[str(name)] = Slot(value=value, source=source, confirmed=confirmed)
+
+    def append_messages(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """追加可见对话；尾部同 kind+text 跳过。最多 120 条。
+
+        Parameters
+        ----------
+        rows : list of dict
+            本轮消息。
+
+        Returns
+        -------
+        list of dict
+            追加后的 ``messages``。
+        """
+
+        seen = {(row.get("kind"), row.get("text")) for row in self.messages[-8:]}
+        for raw in rows or []:
+            item = normalize_message(raw)
+            if item is None:
+                continue
+            if not str(item.get("text") or "") and item.get("kind") != "error":
+                continue
+            key = (item.get("kind"), item.get("text"))
+            if key in seen:
+                continue
+            seen.add(key)
+            self.messages.append(item)
+        self.messages = self.messages[-120:]
+        return list(self.messages)
+
+    def rewind_from_user_index(self, message_index: int, *, discard: bool = False) -> Dict[str, Any]:
+        """裁掉指定用户句之后的对话与 turns；不替换该句文本。
+
+        Parameters
+        ----------
+        message_index : int
+            ``messages`` 中目标 ``user_text`` 的下标。
+        discard : bool, optional
+            后缀含已执行 run 时须为 True，否则只报告需要确认。
+
+        Returns
+        -------
+        dict
+            ``ok`` / ``needs_confirm`` / ``executed_run_ids``。
+        """
+
+        idx = int(message_index)
+        if idx < 0 or idx >= len(self.messages):
+            return {"ok": False, "needs_confirm": False, "executed_run_ids": [], "error": "MESSAGE_INDEX_INVALID"}
+        if str(self.messages[idx].get("kind") or "") != "user_text":
+            return {"ok": False, "needs_confirm": False, "executed_run_ids": [], "error": "NOT_USER_MESSAGE"}
+        suffix = self.messages[idx + 1 :]
+        executed = []
+        for row in suffix:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            rid = str(payload.get("run_id") or "").strip()
+            if rid and payload.get("executed"):
+                executed.append(rid)
+        if executed and not discard:
+            return {"ok": False, "needs_confirm": True, "executed_run_ids": executed}
+        user_before = sum(1 for row in self.messages[:idx] if row.get("kind") == "user_text")
+        self.messages = list(self.messages[:idx])
+        self.turns = list(self.turns[:user_before])
+        self.current_plan_id = ""
+        self.pending_clarification = None
+        self.missing = []
+        self.task_complete = False
+        return {"ok": True, "needs_confirm": False, "executed_run_ids": executed}
 
 
 class SessionStore:

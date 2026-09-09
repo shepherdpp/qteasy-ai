@@ -129,6 +129,7 @@ class WorkbenchArtifact:
     export_path: str = ""
     preview: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    session_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """序列化。"""

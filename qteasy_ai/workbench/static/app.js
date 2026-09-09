@@ -49,10 +49,13 @@ let shellReady = false;
 let codeCache = {};
 let filePreview = null;
 let sessions = [];
-let workspace = { trees: [] };
+let workspace = { artifacts: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
 let modeNotice = "";
+let editingUserIndex = -1;
+let providerInfo = null;
+let pendingRewind = null;
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -297,7 +300,7 @@ function bindShell() {
   $("chat-log").addEventListener("click", onChatClick);
   $("artifact-panel").addEventListener("click", onArtifactClick);
   $("session-list").addEventListener("click", onSessionListClick);
-  $("workspace-files").addEventListener("click", onWorkspaceFileClick);
+  $("workspace-files").addEventListener("click", onWorkspaceArtifactClick);
   $("workspace-now").addEventListener("click", onNowClick);
 }
 
@@ -406,7 +409,10 @@ async function api(path, options) {
   } catch (exc) {
     data = {};
   }
-  if (!res.ok) return errorFromHttp(data);
+  if (!res.ok) {
+    if (data && data.needs_confirm) return data;
+    return errorFromHttp(data);
+  }
   return data;
 }
 
@@ -513,7 +519,8 @@ async function sendQuery(query, { keepDraft } = {}) {
     const headers = { "Content-Type": "application/json" };
     if (mode === "agent") headers.Accept = "text/event-stream";
     const dto = await api(path, { method: "POST", headers, body });
-    ingestDto(dto, { appendUser: true });
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
     artifactTab = 0;
     pendingCodeRun = false;
     filePreview = null;
@@ -543,7 +550,8 @@ async function confirmPlan() {
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ plan_id: planId, session_id: sessionId }),
     });
-    ingestDto(dto, { appendUser: true });
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
     pendingCodeRun = false;
     renderPanes();
     await refreshWorkspace();
@@ -608,6 +616,29 @@ function onChatClick(ev) {
   if (t.id === "btn-edit-submit") submitParamEdits();
   if (t.id === "btn-clarify") submitClarification();
   if (t.classList.contains("btn-retry") || t.id === "btn-retry") retryLast();
+  if (t.dataset.editUser != null) {
+    editingUserIndex = Number(t.dataset.editUser);
+    pendingRewind = null;
+    renderChat();
+    return;
+  }
+  if (t.id === "btn-rewind-cancel") {
+    editingUserIndex = -1;
+    pendingRewind = null;
+    renderChat();
+    return;
+  }
+  if (t.id === "btn-rewind-submit") {
+    const box = $("rewind-text");
+    rewindUserMessage(editingUserIndex, box ? box.value : "", false);
+    return;
+  }
+  if (t.id === "btn-rewind-discard") {
+    const box = $("rewind-text");
+    const text = (pendingRewind && pendingRewind.query) || (box ? box.value : "");
+    rewindUserMessage(editingUserIndex, text, true);
+    return;
+  }
   if (t.dataset.example) {
     const ex = EXAMPLES[Number(t.dataset.example)];
     if (ex) {
@@ -650,6 +681,25 @@ function submitParamEdits() {
   followUp(bits.join("；"));
 }
 
+async function submitProviderChange() {
+  const model = ($("prov-model") && $("prov-model").value) || "";
+  const baseUrl = ($("prov-url") && $("prov-url").value) || "";
+  const apiKey = ($("prov-key") && $("prov-key").value) || "";
+  const dto = await api("/v1/provider", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey, confirmed: true }),
+  });
+  if (dto && dto.error) {
+    transcript.push({ kind: "error", text: dto.error.message || "Provider update failed.", payload: dto.error });
+    renderChat();
+    return;
+  }
+  providerInfo = dto;
+  editingNowSlot = "";
+  renderNow();
+}
+
 function onNowClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
@@ -663,6 +713,17 @@ function onNowClick(ev) {
     editingNowSlot = "";
     renderNow();
   }
+  if (t.id === "btn-prov-edit") {
+    editingNowSlot = "__provider__";
+    renderNow();
+    return;
+  }
+  if (t.id === "btn-prov-cancel") {
+    editingNowSlot = "";
+    renderNow();
+    return;
+  }
+  if (t.id === "btn-prov-confirm") submitProviderChange();
 }
 
 function onArtifactClick(ev) {
@@ -696,23 +757,65 @@ function onSessionListClick(ev) {
   switchSession(btn.getAttribute("data-session-id"));
 }
 
-async function onWorkspaceFileClick(ev) {
-  const btn = ev.target.closest("[data-file-path]");
-  if (!btn) return;
-  const path = btn.getAttribute("data-file-path");
-  const dto = await api(`/v1/workspace/file?path=${encodeURIComponent(path)}`);
-  if (dto.content != null) {
-    filePreview = { path, name: dto.name || path, content: dto.content };
-    renderArtifacts();
-  } else if (dto.error) {
-    transcript.push({
-      kind: "error",
-      text: dto.error.message || "Cannot preview this file.",
-      payload: dto.error,
+async function rewindUserMessage(index, text, confirmDiscard) {
+  const query = String(text || "").trim();
+  if (!query || busy || index < 0) return;
+  setBusy(true);
+  try {
+    const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/rewind`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message_index: index,
+        query,
+        mode,
+        confirm_discard: Boolean(confirmDiscard),
+      }),
     });
-    persistTranscript();
-    renderChat();
+    if (dto && dto.needs_confirm) {
+      pendingRewind = { query, executed: dto.executed_run_ids || [] };
+      renderChat();
+      return;
+    }
+    if (dto && dto.error && !dto.transcript) {
+      transcript.push({
+        kind: "error",
+        text: (dto.error && dto.error.message) || "Rewind failed.",
+        payload: dto.error || {},
+      });
+      renderChat();
+      return;
+    }
+    editingUserIndex = -1;
+    pendingRewind = null;
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    artifactTab = 0;
+    filePreview = null;
+    renderPanes();
+    await refreshSessions();
+    await refreshWorkspace();
+  } finally {
+    setBusy(false);
+    focusComposer();
   }
+}
+
+function applyServerTranscript(dto) {
+  const server = Array.isArray(dto && dto.transcript) ? dto.transcript : [];
+  transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
+  persistTranscript();
+}
+
+async function onWorkspaceArtifactClick(ev) {
+  const btn = ev.target.closest("[data-art-index]");
+  if (!btn) return;
+  const idx = Number(btn.getAttribute("data-art-index") || 0);
+  artifactTab = idx;
+  filePreview = null;
+  const listed = workspace.artifacts || [];
+  if (listed.length) state.artifacts = listed;
+  renderArtifacts();
 }
 
 async function createSession() {
@@ -726,7 +829,11 @@ async function createSession() {
   pendingCodeRun = false;
   editingParams = false;
   editingNowSlot = "";
+  editingUserIndex = -1;
+  pendingRewind = null;
   filePreview = null;
+  workspace = { artifacts: [] };
+  state.artifacts = [];
   modeNotice = "";
   mode = "plan";
   renderPanes();
@@ -743,16 +850,14 @@ async function switchSession(id) {
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
   ingestDto(dto);
   applySessionMode(dto);
-  const server = Array.isArray(dto.transcript) ? dto.transcript : [];
-  if (server.length) {
-    transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
-    persistTranscript();
-  } else {
-    mergeRestoredTranscript(dto);
-  }
+  applyServerTranscript(dto);
   artifactTab = 0;
   filePreview = null;
   editingNowSlot = "";
+  editingUserIndex = -1;
+  pendingRewind = null;
+  await refreshWorkspace();
+  await refreshProvider();
   renderPanes();
   focusComposer();
 }
@@ -767,9 +872,17 @@ async function refreshSessions() {
 }
 
 async function refreshWorkspace() {
-  const data = await api("/v1/workspace");
-  workspace = data;
+  const data = await api(`/v1/workspace?session_id=${encodeURIComponent(sessionId)}`);
+  workspace = data && Array.isArray(data.artifacts) ? data : { artifacts: [] };
+  state.artifacts = workspace.artifacts || [];
   renderWorkspace();
+  renderArtifacts();
+}
+
+async function refreshProvider() {
+  const data = await api("/v1/provider");
+  if (data && !data.error) providerInfo = data;
+  renderNow();
 }
 
 function renderSessionList() {
@@ -801,7 +914,8 @@ function renderChat() {
       ).join("")}</div>
     </div>`);
   }
-  for (const msg of transcript) {
+  for (let i = 0; i < transcript.length; i += 1) {
+    const msg = transcript[i];
     if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "step_status") continue;
     if (
       msg.kind === "ask_text" &&
@@ -813,7 +927,20 @@ function renderChat() {
       continue;
     }
     if (msg.kind === "user_text") {
-      parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
+      if (editingUserIndex === i) {
+        const warn = pendingRewind
+          ? `<p class="warn">Later executed runs will be discarded: ${(pendingRewind.executed || []).join(", ") || "yes"}. Confirm to continue.</p>`
+          : "";
+        const discardBtn = pendingRewind
+          ? `<button type="button" class="primary" id="btn-rewind-discard">Confirm discard and resend</button>`
+          : `<button type="button" class="primary" id="btn-rewind-submit">Resend from here</button>`;
+        parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble">
+          ${warn}<textarea id="rewind-text" rows="3">${escapeHtml((pendingRewind && pendingRewind.query) || msg.text || "")}</textarea>
+          <div class="actions">${discardBtn}<button type="button" id="btn-rewind-cancel">Cancel</button></div>
+        </div></div>`);
+      } else {
+        parts.push(`<div class="msg user"><div class="msg-role">You <button type="button" class="ghost" data-edit-user="${i}">Edit</button></div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
+      }
     } else if (msg.kind === "error") {
       const next = (msg.payload && msg.payload.next_action) || "";
       parts.push(`<div class="msg"><div class="msg-role">Error</div><div class="bubble err-text">${escapeHtml(msg.text || "Something went wrong.")}${
@@ -1007,7 +1134,8 @@ function renderArtifacts() {
     } else body += `<p class="warn">Chart file path is missing.</p>`;
   } else if (current.type === "strategy_code") {
     const path = (current.preview && current.preview.path) || current.export_path || "";
-    const draft = codeCache._draft != null ? codeCache._draft : codeCache[path] || "";
+    const loaded = (current.preview && current.preview.source) || codeCache[path] || "";
+    const draft = codeCache._draft != null ? codeCache._draft : loaded;
     body += `<textarea id="code-editor" rows="12">${escapeHtml(draft)}</textarea>
       <div class="actions"><button type="button" id="btn-code-run">Run (requires confirm)</button></div>
       ${
@@ -1016,7 +1144,7 @@ function renderArtifacts() {
               ${renderDecisionActions(`<button type="button" class="primary" id="btn-code-confirm">Confirm run</button>`)}</div>`
           : ""
       }`;
-    if (path && codeCache[path] == null) loadCode(path);
+    if (path && !(current.preview && current.preview.source) && codeCache[path] == null) loadCode(path);
   } else if (current.type === "backtest_report") {
     const metrics = (current.preview && current.preview.metrics) || {};
     body += `${metricsCards(metrics)}`;
@@ -1084,6 +1212,7 @@ function renderNow() {
     ${missingLine}
     <div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows || "<li>No slots yet. Click a slot name here to edit after a plan fills them.</li>"}</ul></div>
     <div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(envLine(bar.env_summary))}</p></div>
+    <div class="now-provider" id="now-provider">${renderProviderBlock()}</div>
     <div class="now-audit"><p class="now-k">Audit</p>
       <p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
       <p>Run: ${escapeHtml(state.run_id || "—")}</p>
@@ -1115,12 +1244,39 @@ function renderFileTree(nodes) {
     .join("")}</ul>`;
 }
 
+function renderProviderBlock() {
+  const p = providerInfo || {};
+  const model = p.model || "—";
+  const modeLabel = p.mode || "rule";
+  const key = p.api_key_present ? "key set" : "no key";
+  if (editingNowSlot === "__provider__") {
+    return `<p class="now-k">Provider</p>
+      <label>Model <input id="prov-model" value="${escapeHtml(p.model || "")}" /></label>
+      <label>Base URL <input id="prov-url" value="${escapeHtml(p.base_url || "")}" /></label>
+      <label>API key <input id="prov-key" type="password" placeholder="${p.api_key_present ? "unchanged" : ""}" /></label>
+      <div class="actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
+      <button type="button" id="btn-prov-cancel">Cancel</button></div>`;
+  }
+  return `<p class="now-k">Provider</p><p>${escapeHtml(modeLabel)} · ${escapeHtml(model)} · ${escapeHtml(key)}</p>
+    <p class="hint">${escapeHtml(p.base_url || "")}</p>
+    <button type="button" class="ghost" id="btn-prov-edit">Change provider</button>`;
+}
+
 function renderWorkspace() {
   renderNow();
   const host = $("workspace-files");
   if (!host) return;
-  const trees = workspace.trees || [];
-  host.innerHTML = `<p class="files-k">Files</p>${renderFileTree(trees)}`;
+  const arts = workspace.artifacts || state.artifacts || [];
+  if (!arts.length) {
+    host.innerHTML = `<p class="files-k">Artifacts</p><p class="empty-hint">No artifacts in this session yet.</p>`;
+    return;
+  }
+  host.innerHTML = `<p class="files-k">Artifacts</p><ul class="file-tree">${arts
+    .map(
+      (art, i) =>
+        `<li><button type="button" class="file" data-art-index="${i}">${escapeHtml(art.type || "artifact")} · ${escapeHtml(art.title || art.run_id || "")}</button></li>`
+    )
+    .join("")}</ul>`;
 }
 
 function renderPanes() {
@@ -1144,19 +1300,13 @@ async function restoreCurrentSession() {
   if (dto && !dto.error) {
     ingestDto(dto);
     applySessionMode(dto);
-    const server = Array.isArray(dto.transcript) ? dto.transcript : [];
-    if (server.length) {
-      transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
-      persistTranscript();
-    } else {
-      transcript = loadTranscriptFor(sessionId);
-      mergeRestoredTranscript(dto);
-    }
+    applyServerTranscript(dto);
   } else {
-    transcript = loadTranscriptFor(sessionId);
+    transcript = [];
   }
   await refreshSessions();
   await refreshWorkspace();
+  await refreshProvider();
   renderPanes();
 }
 

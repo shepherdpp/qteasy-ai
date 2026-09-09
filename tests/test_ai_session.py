@@ -35,6 +35,7 @@ class TestAiSession(unittest.TestCase):
         self.assertEqual(payload["current_plan_id"], "")
         self.assertEqual(payload["clarify_round"], 0)
         self.assertEqual(payload["turns"], [])
+        self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["attachments"], [])
         self.assertNotIn("confidence", payload)
         self.assertNotIn("active_design", payload)
@@ -73,6 +74,18 @@ class TestAiSession(unittest.TestCase):
             self.assertEqual(loaded.missing, ["end"])
             self.assertEqual(loaded.current_plan_id, "plan-1")
             self.assertEqual(loaded.turns[0]["query"], "download daily")
+            self.assertEqual(loaded.messages, [])
+
+            state.messages = [{"kind": "user_text", "text": "hi", "payload": {}}]
+            sessions.save(state)
+            again = sessions.load("abc")
+            print(" messages roundtrip:", again.messages)
+            self.assertEqual(again.messages[0]["text"], "hi")
+            cut = again.rewind_from_user_index(0, discard=True)
+            print(" rewind:", cut, again.messages, again.turns)
+            self.assertTrue(cut["ok"])
+            self.assertEqual(again.messages, [])
+            self.assertEqual(again.turns, [])
 
     def test_load_ignores_unknown_keys(self) -> None:
         """未知键（如 active_design）不崩；再保存不写出开放环字段。"""

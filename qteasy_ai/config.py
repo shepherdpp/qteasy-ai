@@ -147,3 +147,107 @@ class ConfigCenter:
             "timeout": timeout_val,
         }
 
+
+def _blank_to_none(value: Any) -> Any:
+    """空字符串视为未覆盖。"""
+
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def provider_diagnostics(
+    overlay: Optional[Dict[str, Any]] = None,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    qt_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """生成 provider-check 诊断（不含 raw api_key）。
+
+    Parameters
+    ----------
+    overlay : dict, optional
+        MemoryStore 覆盖层；非空字段作为 explicit。
+    env : dict, optional
+        覆盖进程环境。
+    qt_config : dict, optional
+        覆盖 QT_CONFIG。
+
+    Returns
+    -------
+    dict
+        ``mode`` / ``model`` / ``base_url`` / ``api_key_present`` 等。
+    """
+
+    extra = overlay if isinstance(overlay, dict) else {}
+    config_center = ConfigCenter(env=env, qt_config=qt_config)
+    timeout_explicit = extra.get("timeout")
+    if timeout_explicit in ("", None):
+        timeout_explicit = None
+    elif isinstance(timeout_explicit, str) and timeout_explicit.isdigit():
+        timeout_explicit = int(timeout_explicit)
+    provider_cfg = config_center.resolve_provider_config(
+        model=_blank_to_none(extra.get("model")),
+        api_key=_blank_to_none(extra.get("api_key")),
+        base_url=_blank_to_none(extra.get("base_url")),
+        timeout=timeout_explicit,
+    )
+    trace = config_center.get_trace()
+    model = str(provider_cfg.get("model", "")).strip()
+    api_key = str(provider_cfg.get("api_key", "")).strip()
+    base_url = str(provider_cfg.get("base_url", "")).strip()
+    timeout = int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT))
+    mode = "rule"
+    if model:
+        if base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"):
+            mode = "local_llm"
+        else:
+            mode = "cloud_llm"
+    return {
+        "ok": bool(model and api_key),
+        "provider": "openai_compatible" if model else "none",
+        "mode": mode,
+        "model": model,
+        "base_url": base_url,
+        "timeout": timeout,
+        "api_key_present": bool(api_key),
+        "config_sources": {key: item.get("source", "") for key, item in trace.items()},
+        "message": "Provider configured." if (model and api_key) else "Provider not configured.",
+    }
+
+
+def build_provider_from_overlay(
+    overlay: Optional[Dict[str, Any]] = None,
+    *,
+    env: Optional[Dict[str, str]] = None,
+) -> Any:
+    """按覆盖层 + ConfigCenter 构建 OpenAI 兼容 Provider；无 model 则 None。"""
+
+    from .provider import OpenAICompatProvider
+
+    extra = overlay if isinstance(overlay, dict) else {}
+    config_center = ConfigCenter(env=env)
+    timeout_explicit = extra.get("timeout")
+    if timeout_explicit in ("", None):
+        timeout_explicit = None
+    provider_cfg = config_center.resolve_provider_config(
+        model=_blank_to_none(extra.get("model")),
+        api_key=_blank_to_none(extra.get("api_key")),
+        base_url=_blank_to_none(extra.get("base_url")),
+        timeout=timeout_explicit if not isinstance(timeout_explicit, str) else (
+            int(timeout_explicit) if str(timeout_explicit).isdigit() else None
+        ),
+    )
+    model = str(provider_cfg.get("model", "")).strip()
+    if not model:
+        return None
+    return OpenAICompatProvider(
+        model=model,
+        api_key=str(provider_cfg.get("api_key", "")),
+        base_url=str(provider_cfg.get("base_url", "https://api.openai.com/v1")),
+        timeout=int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT)),
+        config_center=config_center,
+    )
+

@@ -204,6 +204,36 @@ class MemoryStore:
 
         return self.base_dir / "env_facts.json"
 
+    @property
+    def provider_overlay_path(self) -> Path:
+        """工作台 Provider 覆盖层路径。"""
+
+        return self.base_dir / "provider.json"
+
+    def load_provider_overlay(self) -> Dict[str, Any]:
+        """读取工作台保存的 Provider 覆盖；缺文件为空字典。"""
+
+        blob = self._read_json(self.provider_overlay_path, default={})
+        return dict(blob) if isinstance(blob, dict) else {}
+
+    def save_provider_overlay(self, overlay: Dict[str, Any]) -> None:
+        """保存 Provider 覆盖层（不含完整 api_key 日志）。"""
+
+        payload = {
+            "model": str(overlay.get("model") or "").strip(),
+            "base_url": str(overlay.get("base_url") or "").strip(),
+            "timeout": overlay.get("timeout"),
+            "updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
+        key = str(overlay.get("api_key") or "").strip()
+        if key:
+            payload["api_key"] = key
+        elif "api_key" not in overlay:
+            old = self.load_provider_overlay()
+            if old.get("api_key"):
+                payload["api_key"] = old["api_key"]
+        self._write_json(self.provider_overlay_path, payload)
+
     def _read_json(self, path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
         """读取 JSON 文件，不存在或损坏时返回默认值。
 

@@ -25,11 +25,12 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from ..config import build_provider_from_overlay, provider_diagnostics
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
 from ..session import SessionStore
-from .mapper import map_assistant_payload
+from .mapper import classify_artifacts, map_assistant_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -38,13 +39,17 @@ _NEXT_ACTION = {
     "PLAN_ID_REQUIRED": "Confirm a plan from this session, or send a new Plan request.",
     "PLAN_ID_NOT_FOUND": "Create a plan first, then press Confirm. The plan_id lives in runs/, not as a filename.",
     "SESSION_ID_REQUIRED": "Select a session from the left rail, or click New.",
-    "PATH_REQUIRED": "Pick a file under Workspace → Files.",
-    "FILE_NOT_FOUND": "Choose a file inside runs/, strategies/, or user_kb/.",
+    "PATH_REQUIRED": "Pick an artifact in Workspace, or a strategy file to preview.",
+    "FILE_NOT_FOUND": "Choose a file inside the memory root, or an artifact from this session.",
     "FILE_NOT_TEXT": "Only text workspace files can be previewed. Export binaries from Artifacts.",
     "FILE_TOO_LARGE": "Pick a smaller file, or open it on disk under the memory root.",
-    "RUN_NOT_FOUND": "Open a run from Workspace → Files, or Confirm a plan to create one.",
+    "RUN_NOT_FOUND": "Confirm a plan to create a run, then open it from this session's artifacts.",
     "ARTIFACT_NOT_FOUND": "Export only files that belong to this run_id.",
     "RUN_FAILED": "Read the error, then press Retry. You do not need to start over.",
+    "MESSAGE_INDEX_INVALID": "Pick a user message in this session, then press Edit.",
+    "NOT_USER_MESSAGE": "Only user messages can be edited. Pick a You bubble.",
+    "REWIND_DISCARD_REQUIRED": "Editing this message discards later executed runs. Confirm to continue.",
+    "PROVIDER_CONFIRM_REQUIRED": "Review the new provider settings, then press Confirm.",
 }
 
 
@@ -161,13 +166,66 @@ class WorkbenchHttp:
                     "payload": {"plan_id": card.get("plan_id") or ""},
                 }
             )
+        run_status = str((dumped.get("execution") or {}).get("status") or "")
+        run_id = str(dumped.get("run_id") or "")
+        if run_id:
+            for item in extra:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("kind") or "") == "user_text":
+                    continue
+                payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+                payload["run_id"] = run_id
+                if run_status and run_status not in {"", "dry_run"}:
+                    payload["executed"] = True
+                arts = dumped.get("artifacts") or []
+                if arts:
+                    payload["artifact_refs"] = [
+                        {
+                            "type": str(art.get("type") or ""),
+                            "run_id": str(art.get("run_id") or run_id),
+                            "title": str(art.get("title") or ""),
+                        }
+                        for art in arts
+                        if isinstance(art, dict)
+                    ][:12]
+                item["payload"] = payload
         if persist_transcript and sid:
-            dumped["transcript"] = self.assistant.memory_store.append_ui_transcript(sid, extra)
+            conv = SessionStore(self.assistant.memory_store).load(sid)
+            conv.append_messages(extra)
+            SessionStore(self.assistant.memory_store).save(conv)
+            dumped["transcript"] = list(conv.messages)
+            dumped["artifacts"] = self._artifacts_for_session(conv)
         elif sid:
-            dumped["transcript"] = self.assistant.memory_store.load_ui_transcript(sid)
+            conv = SessionStore(self.assistant.memory_store).load(sid)
+            dumped["transcript"] = list(conv.messages)
+            dumped["artifacts"] = self._artifacts_for_session(conv)
         else:
             dumped["transcript"] = []
         return dumped
+
+    def _artifacts_for_session(self, conv: Any) -> List[Dict[str, Any]]:
+        """按 messages 中的 run_id 收集本 Session 产物。"""
+
+        sid = str(getattr(conv, "session_id", "") or "")
+        ordered: List[str] = []
+        seen = set()
+        for row in list(getattr(conv, "messages", None) or []):
+            payload = row.get("payload") if isinstance(row, dict) and isinstance(row.get("payload"), dict) else {}
+            rid = str(payload.get("run_id") or "").strip()
+            if rid and rid not in seen:
+                seen.add(rid)
+                ordered.append(rid)
+        items: List[Dict[str, Any]] = []
+        for rid in ordered:
+            run = self.assistant.memory_store.load_run(rid)
+            steps = []
+            if isinstance(run.get("execution"), dict):
+                steps = list(run["execution"].get("steps") or [])
+            for art in classify_artifacts(rid, steps):
+                art["session_id"] = sid
+                items.append(art)
+        return items
 
     def _stream_execute(
         self,
@@ -416,16 +474,13 @@ class WorkbenchHttp:
         dumped = mapped.to_dict()
         dumped["ok"] = True
         dumped["turns"] = list(conv.turns)
-        hist = self.assistant.memory_store.load_ui_transcript(session_id)
-        if not hist:
-            hist = []
-            for turn in conv.turns or []:
-                if isinstance(turn, dict) and turn.get("query"):
-                    hist.append({"kind": "user_text", "text": str(turn.get("query")), "payload": {}})
-            for msg in dumped.get("messages") or []:
-                if isinstance(msg, dict) and msg.get("kind") not in {"plan_card", "step_status", "user_text"}:
-                    hist.append(msg)
-        dumped["transcript"] = hist
+        if not conv.messages:
+            hist = self.assistant.memory_store.load_ui_transcript(session_id)
+            if hist:
+                conv.append_messages(hist)
+                SessionStore(self.assistant.memory_store).save(conv)
+        dumped["transcript"] = list(conv.messages)
+        dumped["artifacts"] = self._artifacts_for_session(conv)
         if conv.turns:
             last = conv.turns[-1] if isinstance(conv.turns[-1], dict) else {}
             if str(last.get("kind") or "") == "ask":
@@ -440,16 +495,106 @@ class WorkbenchHttp:
         rows = store.list_summaries()
         return JSONResponse({"ok": True, "sessions": rows})
 
-    async def get_workspace(self, request: Request) -> JSONResponse:
-        """GET /v1/workspace：只读 runs / strategies / user_kb 树。"""
+    async def rewind_session(self, request: Request) -> JSONResponse:
+        """POST /v1/session/{session_id}/rewind：裁掉某条用户句之后的历史并重发。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        body = await self._read_json(request)
+        try:
+            message_index = int(body.get("message_index"))
+        except (TypeError, ValueError):
+            return _error("MESSAGE_INDEX_INVALID", "Provide message_index of a user message.", 400)
+        query = str(body.get("query") or "").strip()
+        if not query:
+            return _error("QUERY_REQUIRED", "Provide the rewritten query.", 400)
+        discard = bool(body.get("confirm_discard") or body.get("discard"))
+        mode = str(body.get("mode") or "plan").strip().lower()
+        if mode not in {"ask", "plan", "agent", "run"}:
+            mode = "plan"
+        store = SessionStore(self.assistant.memory_store)
+        conv = store.load(session_id)
+        result = conv.rewind_from_user_index(message_index, discard=discard)
+        if result.get("needs_confirm"):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "REWIND_DISCARD_REQUIRED",
+                        "message": "Editing this message discards later executed runs.",
+                        "next_action": _NEXT_ACTION["REWIND_DISCARD_REQUIRED"],
+                    },
+                    "needs_confirm": True,
+                    "executed_run_ids": result.get("executed_run_ids") or [],
+                },
+                status_code=409,
+            )
+        if not result.get("ok"):
+            code = str(result.get("error") or "MESSAGE_INDEX_INVALID")
+            return _error(code, "Cannot rewind to that message.", 400)
+        store.save(conv)
+        if mode == "ask":
+            payload = self.assistant.ask(
+                query, response_style="raw", session_id=session_id
+            )
+        elif mode in {"agent", "run"}:
+            payload = self.assistant.run(query, response_style="raw", session_id=session_id)
+        else:
+            payload = self.assistant.plan(query, response_style="raw", session_id=session_id)
+        return JSONResponse(
+            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
+        )
+
+    async def get_provider(self, request: Request) -> JSONResponse:
+        """GET /v1/provider：provider-check 投影，不含 raw api_key。"""
 
         del request
-        trees = self.assistant.memory_store.list_workspace_tree()
+        overlay = self.assistant.memory_store.load_provider_overlay()
+        body = provider_diagnostics(overlay)
+        configured = bool(body.get("ok"))
+        body["ok"] = True
+        body["configured"] = configured
+        return JSONResponse(body)
+
+    async def post_provider(self, request: Request) -> JSONResponse:
+        """POST /v1/provider：确认后写入覆盖层并热替换 Provider。"""
+
+        body = await self._read_json(request)
+        if not bool(body.get("confirmed") or body.get("confirm")):
+            return _error(
+                "PROVIDER_CONFIRM_REQUIRED",
+                "Changing provider requires confirm.",
+                400,
+            )
+        overlay = {
+            "model": str(body.get("model") or "").strip(),
+            "base_url": str(body.get("base_url") or "").strip(),
+            "api_key": str(body.get("api_key") or "").strip(),
+            "timeout": body.get("timeout"),
+        }
+        self.assistant.memory_store.save_provider_overlay(overlay)
+        saved = self.assistant.memory_store.load_provider_overlay()
+        self.assistant.apply_provider(build_provider_from_overlay(saved))
+        diag = provider_diagnostics(saved)
+        configured = bool(diag.get("ok"))
+        diag["ok"] = True
+        diag["configured"] = configured
+        return JSONResponse(diag)
+
+    async def get_workspace(self, request: Request) -> JSONResponse:
+        """GET /v1/workspace：本 Session 产物索引。"""
+
+        session_id = str(request.query_params.get("session_id") or "").strip()
+        if not session_id:
+            return JSONResponse({"ok": True, "session_id": "", "artifacts": []})
+        conv = SessionStore(self.assistant.memory_store).load(session_id)
+        artifacts = self._artifacts_for_session(conv)
         return JSONResponse(
             {
                 "ok": True,
-                "root": str(self.assistant.memory_store.base_dir),
-                "trees": trees,
+                "session_id": session_id,
+                "artifacts": artifacts,
             }
         )
 
@@ -583,6 +728,9 @@ def create_app(
     """
 
     helper = assistant or QteasyAssistant(memory_store=memory_store or MemoryStore())
+    overlay = helper.memory_store.load_provider_overlay()
+    if overlay.get("model"):
+        helper.apply_provider(build_provider_from_overlay(overlay))
     api = WorkbenchHttp(helper)
     routes = [
         Route("/", api.index, methods=["GET"]),
@@ -591,7 +739,10 @@ def create_app(
         Route("/v1/run", api.run, methods=["POST"]),
         Route("/v1/run-plan", api.run_plan, methods=["POST"]),
         Route("/v1/sessions", api.list_sessions, methods=["GET"]),
+        Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
+        Route("/v1/provider", api.get_provider, methods=["GET"]),
+        Route("/v1/provider", api.post_provider, methods=["POST"]),
         Route("/v1/workspace/file", api.get_workspace_file, methods=["GET"]),
         Route("/v1/workspace", api.get_workspace, methods=["GET"]),
         Route("/v1/runs/{run_id}", api.get_run, methods=["GET"]),

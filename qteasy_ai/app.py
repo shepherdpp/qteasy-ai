@@ -167,6 +167,15 @@ class QteasyAssistant:
         self.session_gate = SessionGate(provider=provider)
         self._last_run_id = ""
 
+    def apply_provider(self, provider: Optional[BaseLLMProvider]) -> None:
+        """热替换 Ask / Planner / SessionGate 的 LLM Provider。"""
+
+        self.planner.provider = provider
+        if getattr(self.planner, "intent_engine", None) is not None:
+            self.planner.intent_engine.provider = provider
+        self.ask_engine.provider = provider
+        self.session_gate.provider = provider
+
     _ALLOW_FLAGS = {
         "qt.ai.data.refill_basic_equity_and_index": "allow_refill",
         "qt.ai.backtest.run_builtin": "allow_backtest",
