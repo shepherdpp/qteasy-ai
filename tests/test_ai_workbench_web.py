@@ -68,6 +68,7 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("applySessionMode", js.text)
             self.assertIn("btn-dismiss-notice", js.text)
             self.assertIn("Show Workspace", js.text)
+            self.assertIn("focusComposer", js.text)
             self.assertIn("Plan ready:", js.text)
             self.assertIn("data-now-edit", js.text)
             self.assertIn("Switched to", js.text)

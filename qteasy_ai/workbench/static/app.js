@@ -177,6 +177,11 @@ function isCompactPlan(card) {
   return steps.every((s) => !s.needs_confirm);
 }
 
+function focusComposer() {
+  const input = $("query-input");
+  if (input && !busy) input.focus();
+}
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -723,8 +728,10 @@ async function createSession() {
   editingNowSlot = "";
   filePreview = null;
   modeNotice = "";
+  mode = "plan";
   renderPanes();
   await refreshSessions();
+  focusComposer();
 }
 
 async function switchSession(id) {
@@ -747,6 +754,7 @@ async function switchSession(id) {
   filePreview = null;
   editingNowSlot = "";
   renderPanes();
+  focusComposer();
 }
 
 async function refreshSessions() {
