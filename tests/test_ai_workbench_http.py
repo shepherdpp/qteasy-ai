@@ -188,6 +188,45 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(events.status_code, 200)
             self.assertIn("step_status", events.text)
 
+    def test_list_sessions_and_workspace_tree(self) -> None:
+        """GET /v1/sessions 与 /v1/workspace 只读列举 MemoryStore 目录。"""
+
+        print("\n[TestAiWorkbenchHttp] sessions and workspace")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, asst = self._client(temp_dir)
+            client.post("/v1/plan", json={"query": "list built-in strategies", "session_id": "web-demo"})
+            listed = client.get("/v1/sessions")
+            body = listed.json()
+            ids = [row.get("session_id") for row in (body.get("sessions") or [])]
+            print(" sessions status:", listed.status_code)
+            print(" session ids:", ids)
+            self.assertEqual(listed.status_code, 200)
+            self.assertTrue(body.get("ok"))
+            self.assertIn("web-demo", ids)
+            demo = store.strategies_dir / "demo.py"
+            demo.write_text("class Demo:\n    pass\n", encoding="utf-8")
+            tree = client.get("/v1/workspace")
+            payload = tree.json()
+            print(" workspace status:", tree.status_code)
+            print(" tree names:", [item.get("name") for item in (payload.get("trees") or [])])
+            self.assertEqual(tree.status_code, 200)
+            names = {item.get("name") for item in (payload.get("trees") or [])}
+            self.assertEqual(names, {"runs", "strategies", "user_kb"})
+            strat = next(item for item in payload["trees"] if item["name"] == "strategies")
+            child_names = [child.get("name") for child in (strat.get("children") or [])]
+            print(" strategy files:", child_names)
+            self.assertIn("demo.py", child_names)
+            preview = client.get("/v1/workspace/file", params={"path": "strategies/demo.py"})
+            print(" file status:", preview.status_code, preview.json().get("content", "")[:40])
+            self.assertEqual(preview.status_code, 200)
+            self.assertIn("class Demo", preview.json().get("content") or "")
+            outside = client.get("/v1/workspace/file", params={"path": "../secret.py"})
+            print(" outside:", outside.status_code, outside.json())
+            self.assertEqual(outside.status_code, 404)
+            loaded = asst.session_store.load("web-demo")
+            print(" loaded session_id:", loaded.session_id)
+            self.assertEqual(loaded.session_id, "web-demo")
+
 
 if __name__ == "__main__":
     unittest.main()

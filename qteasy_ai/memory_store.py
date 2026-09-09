@@ -433,6 +433,89 @@ class MemoryStore:
             "remaining_total_mb": round(remaining_bytes / 1024 / 1024, 4),
         }
 
+    def resolve_under_base(self, rel_or_abs: str) -> Optional[Path]:
+        """将相对或绝对路径解析到 ``base_dir`` 内；越界返回 None。
+
+        Parameters
+        ----------
+        rel_or_abs : str
+            工作区相对路径或绝对路径。
+
+        Returns
+        -------
+        Path or None
+            解析后的真实路径；越界、空串则为 None。
+        """
+
+        raw = str(rel_or_abs or "").strip()
+        if not raw:
+            return None
+        base = self.base_dir.expanduser().resolve()
+        candidate = Path(raw).expanduser()
+        try:
+            target = candidate.resolve() if candidate.is_absolute() else (base / candidate).resolve()
+            target.relative_to(base)
+        except (OSError, ValueError):
+            return None
+        return target
+
+    def list_workspace_tree(self, *, max_depth: int = 3) -> List[Dict[str, Any]]:
+        """只读列举 runs / strategies / user_kb 树，供工作台 Workspace.Files。
+
+        Parameters
+        ----------
+        max_depth : int, optional
+            目录最大深度，默认 3。
+
+        Returns
+        -------
+        list of dict
+            三棵根目录的 ``name`` / ``kind`` / ``path`` / ``children``。
+        """
+
+        depth = max(0, int(max_depth))
+
+        def walk(dir_path: Path, rel: str, remaining: int) -> Dict[str, Any]:
+            children: List[Dict[str, Any]] = []
+            node: Dict[str, Any] = {
+                "name": dir_path.name or rel,
+                "kind": "dir",
+                "path": rel,
+                "children": children,
+            }
+            if remaining <= 0 or not dir_path.is_dir():
+                return node
+            try:
+                entries = sorted(
+                    dir_path.iterdir(),
+                    key=lambda item: (not item.is_dir(), item.name.lower()),
+                )
+            except OSError:
+                return node
+            for child in entries:
+                if child.name.startswith("."):
+                    continue
+                try:
+                    child_rel = str(child.relative_to(self.base_dir))
+                except ValueError:
+                    child_rel = child.name
+                if child.is_dir():
+                    children.append(walk(child, child_rel, remaining - 1))
+                elif child.is_file():
+                    children.append({"name": child.name, "kind": "file", "path": child_rel})
+            return node
+
+        roots = [
+            (self.runs_dir, "runs"),
+            (self.strategies_dir, "strategies"),
+            (self.user_kb_dir, "user_kb"),
+        ]
+        trees: List[Dict[str, Any]] = []
+        for folder, rel in roots:
+            folder.mkdir(parents=True, exist_ok=True)
+            trees.append(walk(folder, rel, depth))
+        return trees
+
     def ensure_user_kb_scaffold(self) -> None:
         """落下用户 KB 分区与英文 README；不检索、不写入官方 kb。"""
 

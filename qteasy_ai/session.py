@@ -222,3 +222,45 @@ class SessionStore:
             handle.write("\n")
         tmp_path.replace(path)
         return str(path)
+
+    def list_summaries(self) -> List[Dict[str, Any]]:
+        """列举已落盘会话的摘要（不含完整 turns）。
+
+        Parameters
+        ----------
+        无
+
+        Returns
+        -------
+        list of dict
+            每项含 ``session_id`` / ``title`` / ``job`` / ``mtime``。
+        """
+
+        rows: List[Dict[str, Any]] = []
+        paths = [
+            path
+            for path in self.sessions_dir.glob("*.json")
+            if ".corrupt" not in path.name
+        ]
+        paths.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        for path in paths:
+            sid = path.stem
+            state = self.load(sid)
+            title = str(state.original_query or "").strip()
+            if not title and state.turns:
+                last = state.turns[-1] if isinstance(state.turns[-1], dict) else {}
+                title = str(last.get("query") or "").strip()
+            if not title:
+                title = sid
+            job = ""
+            if isinstance(state.active_intent, dict):
+                job = str(state.active_intent.get("job") or "")
+            rows.append(
+                {
+                    "session_id": sid,
+                    "title": title[:80],
+                    "job": job,
+                    "mtime": path.stat().st_mtime,
+                }
+            )
+        return rows

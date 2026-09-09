@@ -195,7 +195,49 @@ class WorkbenchHttp:
         )
         dumped = empty.to_dict()
         dumped["ok"] = True
+        dumped["turns"] = list(state.turns)
         return JSONResponse(dumped)
+
+    async def list_sessions(self, request: Request) -> JSONResponse:
+        """GET /v1/sessions：只读列举已落盘会话。"""
+
+        del request
+        store = SessionStore(self.assistant.memory_store)
+        rows = store.list_summaries()
+        return JSONResponse({"ok": True, "sessions": rows})
+
+    async def get_workspace(self, request: Request) -> JSONResponse:
+        """GET /v1/workspace：只读 runs / strategies / user_kb 树。"""
+
+        del request
+        trees = self.assistant.memory_store.list_workspace_tree()
+        return JSONResponse(
+            {
+                "ok": True,
+                "root": str(self.assistant.memory_store.base_dir),
+                "trees": trees,
+            }
+        )
+
+    async def get_workspace_file(self, request: Request) -> JSONResponse:
+        """GET /v1/workspace/file?path=：读取 base_dir 内文本文件。"""
+
+        rel = unquote(str(request.query_params.get("path") or "")).strip()
+        if not rel:
+            return _error("PATH_REQUIRED", "Provide path query parameter.", 400)
+        target = self.assistant.memory_store.resolve_under_base(rel)
+        if target is None or not target.is_file():
+            return _error("FILE_NOT_FOUND", "Workspace file is not under the memory root.", 404)
+        suffix = target.suffix.lower()
+        if suffix not in {".py", ".json", ".md", ".txt", ".csv", ".yml", ".yaml", ".log"}:
+            return _error("FILE_NOT_TEXT", "Only text workspace files can be previewed.", 415)
+        try:
+            if target.stat().st_size > 512 * 1024:
+                return _error("FILE_TOO_LARGE", "Workspace file exceeds 512 KB preview limit.", 413)
+            content = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return _error("FILE_NOT_FOUND", "Workspace file cannot be read as text.", 404)
+        return JSONResponse({"ok": True, "path": rel, "name": target.name, "content": content})
 
     async def get_run(self, request: Request) -> JSONResponse:
         """GET /v1/runs/{run_id}。"""
@@ -314,7 +356,10 @@ def create_app(
         Route("/v1/plan", api.plan, methods=["POST"]),
         Route("/v1/run", api.run, methods=["POST"]),
         Route("/v1/run-plan", api.run_plan, methods=["POST"]),
+        Route("/v1/sessions", api.list_sessions, methods=["GET"]),
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
+        Route("/v1/workspace/file", api.get_workspace_file, methods=["GET"]),
+        Route("/v1/workspace", api.get_workspace, methods=["GET"]),
         Route("/v1/runs/{run_id}", api.get_run, methods=["GET"]),
         Route("/v1/runs/{run_id}/events", api.get_events, methods=["GET"]),
         Route("/v1/artifacts/{run_id}", api.export_artifact, methods=["GET"]),
