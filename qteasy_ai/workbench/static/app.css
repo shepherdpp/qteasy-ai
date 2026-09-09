@@ -147,7 +147,7 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
   font-size: 11px;
   color: var(--text-muted);
 }
-.layout.workspace-collapsed .now-chips { display: flex; }
+.layout.workspace-collapsed .now-chips { display: flex; cursor: pointer; }
 .chip { background: #2d2d2d; border-radius: 10px; padding: 2px 8px; }
 .chip.warn { color: var(--warn); }
 .mode-notice {

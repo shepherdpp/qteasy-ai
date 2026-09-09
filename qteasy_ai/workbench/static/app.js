@@ -286,6 +286,9 @@ function bindShell() {
     applyLayoutFlags();
   };
   $("btn-collapse-workspace").onclick = toggleWorkspace;
+  $("now-chips").addEventListener("click", () => {
+    if (workspaceCollapsed) toggleWorkspace();
+  });
   $("chat-log").addEventListener("click", onChatClick);
   $("artifact-panel").addEventListener("click", onArtifactClick);
   $("session-list").addEventListener("click", onSessionListClick);
@@ -773,7 +776,8 @@ function renderSessionList() {
       </button>`;
     })
     .join("");
-  $("session-title").textContent = sessionId;
+  const current = sessions.find((row) => row.session_id === sessionId);
+  $("session-title").textContent = (current && (current.title || current.job)) || sessionId;
 }
 
 function renderChat() {
@@ -791,6 +795,15 @@ function renderChat() {
   }
   for (const msg of transcript) {
     if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "step_status") continue;
+    if (
+      msg.kind === "ask_text" &&
+      String(msg.text || "").startsWith("Plan ready:") &&
+      state.plan_card &&
+      state.plan_card.confirmable &&
+      mode !== "ask"
+    ) {
+      continue;
+    }
     if (msg.kind === "user_text") {
       parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
     } else if (msg.kind === "error") {
@@ -1078,7 +1091,7 @@ function renderNowChips() {
   const missing = (bar.missing || []).map(slotLabel).join(", ");
   host.innerHTML = `<span class="chip">Job ${escapeHtml(job)}</span>${
     missing ? `<span class="chip warn">Missing ${escapeHtml(missing)}</span>` : ""
-  }`;
+  }<span class="chip ghost">Show Workspace</span>`;
 }
 
 function renderFileTree(nodes) {
