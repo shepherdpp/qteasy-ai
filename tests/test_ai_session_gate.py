@@ -83,6 +83,22 @@ class TestAiSessionGate(unittest.TestCase):
         print(" turns remain:", session.turns)
         self.assertEqual(len(session.turns), 1)
 
+    def test_awaiting_abandon_blocks_llm_followup(self) -> None:
+        """awaiting_abandon 时优先规则门，不被 LLM confirm 绕过。"""
+
+        print("\n[TestAiSessionGate] awaiting_abandon ignores llm")
+        provider = FakeLLMProvider(
+            replies=[json.dumps({"followup": "confirm", "patches": {}})]
+        )
+        gate = SessionGate(provider=provider)
+        session = _backtest_session()
+        session.missing = []
+        session.awaiting_abandon = True
+        decision = gate.classify(session, "list built-in strategies")
+        print(" kind:", decision.kind, "abandon_confirmed:", decision.abandon_confirmed)
+        self.assertEqual(decision.kind, "clarify")
+        self.assertFalse(decision.abandon_confirmed)
+
     def test_completed_task_allows_new_job(self) -> None:
         """任务完成后同句可走新 Job。"""
 
@@ -94,6 +110,36 @@ class TestAiSessionGate(unittest.TestCase):
         print(" kind:", decision.kind, "needs_abandon:", decision.needs_abandon)
         self.assertEqual(decision.kind, "new_intent")
         self.assertFalse(decision.needs_abandon)
+
+    def test_completed_task_blocks_llm_fill_slot(self) -> None:
+        """task_complete 后即使 LLM 说 fill_slot，也强制 new_intent。"""
+
+        print("\n[TestAiSessionGate] completed blocks llm fill_slot")
+        provider = FakeLLMProvider(
+            replies=[
+                json.dumps(
+                    {
+                        "followup": "fill_slot",
+                        "patches": {
+                            "strategy_type": "择时策略",
+                            "short_ma": 20,
+                            "long_ma": 60,
+                        },
+                    }
+                )
+            ]
+        )
+        gate = SessionGate(provider=provider)
+        session = ConversationState.empty("meta-done")
+        session.active_intent = {"job": "strategy.meta", "flags": {}}
+        session.task_complete = True
+        session.current_plan_id = "plan-old"
+        query = "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测"
+        decision = gate.classify(session, query)
+        print(" kind:", decision.kind, "rationale:", decision.rationale, "patches:", decision.patches)
+        self.assertEqual(decision.kind, "new_intent")
+        self.assertEqual(decision.rationale, "new_after_complete")
+        self.assertEqual(decision.patches, {})
 
     def test_mode_d_valid_followup(self) -> None:
         """FakeLLM 合法 followup JSON 才接受。"""

@@ -42,6 +42,18 @@ _SKILL_TITLES = {
     "qt.ai.system.fallback": "Need a more specific request",
 }
 
+
+def skill_step_title(skill: str, raw: Optional[Dict[str, Any]] = None) -> str:
+    """人话步骤标题：summary 优先，否则内置对照表。"""
+
+    if isinstance(raw, dict):
+        explicit = str(raw.get("summary") or "").strip()
+        if explicit:
+            return explicit
+    name = str(skill or "").strip()
+    return str(_SKILL_TITLES.get(name) or name)
+
+
 _DEFAULT_NEXT_ACTION = (
     "Fix the issue above, then retry this step. You do not need to start over."
 )
@@ -114,6 +126,22 @@ def _read_text_file(path: str, *, cap: int = 200000) -> str:
         return ""
 
 
+def _image_artifact(arts: List[Any]) -> Optional[Dict[str, Any]]:
+    """从 skill artifacts 里挑出图文件。"""
+
+    for item in arts or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        typ = str(item.get("type") or "").strip().lower()
+        path = str(item.get("path") or "")
+        if typ == "image" or kind in {"image", "chart", "png"}:
+            return item
+        if path.lower().endswith((".png", ".svg", ".html")):
+            return item
+    return None
+
+
 def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """从 execution.steps 分类 Artifact。
 
@@ -138,6 +166,58 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
         result = step.get("result") if isinstance(step.get("result"), dict) else {}
         skill = str(step.get("skill_name") or result.get("skill_name") or "")
         arts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else []
+        if skill == "qt.ai.strategy_meta.list":
+            payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+            strategies = payload.get("strategies") if isinstance(payload.get("strategies"), list) else []
+            summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
+            if not summary:
+                summary = {"count": len(strategies), "first_items": strategies[:10]}
+            preview_rows = [{"strategy": str(item)} for item in strategies[:500]]
+            items.append(
+                WorkbenchArtifact(
+                    type="data_table",
+                    run_id=rid,
+                    title=skill or "built-in strategies",
+                    export_path="",
+                    preview={
+                        "data_summary": summary,
+                        "preview_rows": preview_rows,
+                    },
+                )
+            )
+            continue
+        if skill == "qt.ai.strategy_meta.get":
+            payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+            sid = str(payload.get("strategy_id") or "").strip()
+            stype = str(payload.get("strategy_type") or "").strip()
+            doc = str(payload.get("doc") or "").strip()
+            summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
+            summary = {
+                **summary,
+                "strategy_id": sid,
+                "strategy_type": stype,
+                "doc_length": len(doc),
+            }
+            metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+            if metrics.get("doc_length") is not None:
+                summary["doc_length"] = metrics.get("doc_length")
+            lines = doc.splitlines()[:200] if doc else []
+            preview_rows = [{"line": line} for line in lines if str(line).strip()]
+            if not preview_rows:
+                preview_rows = [{"line": "(empty documentation)"}]
+            items.append(
+                WorkbenchArtifact(
+                    type="data_table",
+                    run_id=rid,
+                    title=skill or "strategy details",
+                    export_path="",
+                    preview={
+                        "data_summary": summary,
+                        "preview_rows": preview_rows,
+                    },
+                )
+            )
+            continue
         if skill in {"qt.ai.data.read", "qt.ai.data.summary_kline"} or (
             isinstance(result.get("data_summary"), dict)
             and skill.startswith("qt.ai.data.")
@@ -207,20 +287,22 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                     preview={"metrics": metrics, "path": path},
                 )
             )
-            continue
-        image_art = next(
-            (
-                item
-                for item in arts
-                if isinstance(item, dict)
-                and (
-                    str(item.get("type") or "") == "image"
-                    or str(item.get("kind") or "") in {"image", "chart", "png"}
-                    or str(item.get("path") or "").lower().endswith((".png", ".svg", ".html"))
+            image_art = _image_artifact(arts)
+            if image_art is not None:
+                img_path = str(image_art.get("path") or "")
+                warnings = [] if img_path else ["Chart file path is missing."]
+                items.append(
+                    WorkbenchArtifact(
+                        type="chart",
+                        run_id=rid,
+                        title="qt.ai.backtest.visual",
+                        export_path=img_path,
+                        preview={"path": img_path},
+                        warnings=warnings,
+                    )
                 )
-            ),
-            None,
-        )
+            continue
+        image_art = _image_artifact(arts)
         if image_art is not None or skill == "qt.ai.visual.export_kline":
             path = str((image_art or {}).get("path") or "")
             warnings = [] if path else ["Chart file path is missing."]
@@ -263,10 +345,7 @@ def _step_summary(skill: str, raw: Dict[str, Any]) -> str:
         确认卡标题；未知 skill 为空串。
     """
 
-    explicit = str(raw.get("summary") or "").strip()
-    if explicit:
-        return explicit
-    return str(_SKILL_TITLES.get(skill) or "")
+    return skill_step_title(skill, raw)
 
 
 def _plan_steps(plan: Dict[str, Any]) -> List[WorkbenchPlanStep]:

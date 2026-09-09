@@ -86,6 +86,30 @@ class TestAiSession(unittest.TestCase):
             self.assertTrue(cut["ok"])
             self.assertEqual(again.messages, [])
             self.assertEqual(again.turns, [])
+            again.awaiting_abandon = True
+            again.messages = [
+                {"kind": "user_text", "text": "a", "payload": {}},
+                {
+                    "kind": "ask_text",
+                    "text": "Plan ready: List built-in strategies",
+                    "payload": {"plan_id": "plan_1", "run_id": "run_1"},
+                },
+            ]
+            again.append_messages(
+                [
+                    {"kind": "user_text", "text": "b", "payload": {}},
+                    {
+                        "kind": "ask_text",
+                        "text": "Plan ready: List built-in strategies",
+                        "payload": {"plan_id": "plan_2", "run_id": "run_2"},
+                    },
+                ]
+            )
+            print(" dedupe keep second plan:", again.messages)
+            self.assertEqual(len([m for m in again.messages if m["kind"] == "ask_text"]), 2)
+            again.rewind_from_user_index(0, discard=True)
+            print(" rewind clears awaiting_abandon:", again.awaiting_abandon)
+            self.assertFalse(again.awaiting_abandon)
 
     def test_load_ignores_unknown_keys(self) -> None:
         """未知键（如 active_design）不崩；再保存不写出开放环字段。"""

@@ -39,7 +39,7 @@ _JOB_VERBS = (
     ("backtest.builtin", ("回测", "backtest")),
     ("data.refill", ("下载", "download", "refill", "灌数据")),
     ("research.screen", ("筛股", "筛选", "screen")),
-    ("strategy.builder", ("生成策略", "写策略", "创建策略", "strategybuilder")),
+    ("strategy.builder", ("生成策略", "写策略", "创建策略", "strategybuilder", "帮我写", "写一个")),
     ("data.summary", ("波动率", "摘要", "summary")),
 )
 
@@ -81,6 +81,12 @@ class SessionGate:
         """
 
         text = (query or "").strip()
+        # 放弃确认门优先于 LLM，避免 awaiting_abandon 被跟进分类绕过。
+        if session.awaiting_abandon:
+            return self._classify_rule(session, text)
+        # 已完成任务：下一句一律新意图，禁止再 fill_slot 进旧 Job（含 Mode-D）。
+        if session.task_complete and session.active_intent:
+            return GateDecision(kind="new_intent", rationale="new_after_complete")
         if self.provider is not None and session.active_intent:
             return self._classify_llm(session, text)
         return self._classify_rule(session, text)

@@ -371,6 +371,7 @@ class QteasyAssistant:
         persist: str | None = None,
         keep: bool = False,
         explanation_depth: str = "standard",
+        session_id: str | None = None,
         on_step: Any = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """从 ``runs/`` 加载已审阅 ToolPlan 并执行，禁止重新 Hybrid。
@@ -379,6 +380,8 @@ class QteasyAssistant:
         ----------
         plan_id : str
             已落盘计划的 ``plan_id``。
+        session_id : str, optional
+            若提供则回写 ``task_complete`` / 清除 ``awaiting_abandon``。
         """
 
         from .contracts import ToolPlan
@@ -392,6 +395,10 @@ class QteasyAssistant:
             )
         plan = ToolPlan.from_dict(plan_raw)
         plan.execution_mode = "execute"
+        session = None
+        sid = str(session_id or "").strip()
+        if sid:
+            session = self.session_store.load(sid)
         return self._execute_and_format(
             plan=plan,
             confirm=True,
@@ -399,6 +406,7 @@ class QteasyAssistant:
             persist=persist,
             keep=keep,
             explanation_depth=explanation_depth,
+            session=session,
             on_step=on_step,
         )
 
@@ -426,6 +434,9 @@ class QteasyAssistant:
             self._merge_env_facts_from_execution(payload)
             if session is not None and str((payload.get("execution") or {}).get("status") or "") == "success":
                 session.task_complete = True
+                session.awaiting_abandon = False
+                session.pending_clarification = None
+                session.missing = []
                 self.session_store.save(session)
 
         self._attach_session_payload(payload, plan, session)
@@ -531,8 +542,15 @@ class QteasyAssistant:
             self._reset_task(state, keep_turns=True)
             state.original_query = query
         elif gate.kind in {"fill_slot", "change_slot"}:
-            merge_facts(state, gate.patches, source="user", confirmed=True)
-            skip_classify = bool(state.active_intent)
+            # 双保险：完成态不应走到补槽（classify 已拦截；防旧调用方）。
+            if state.task_complete:
+                self._reset_task(state, keep_turns=True)
+                state.original_query = query
+                merge_facts(state, extract_patches(query), source="extracted", confirmed=True)
+                skip_classify = False
+            else:
+                merge_facts(state, gate.patches, source="user", confirmed=True)
+                skip_classify = bool(state.active_intent)
         elif gate.kind == "confirm":
             for slot in state.slots.values():
                 slot.confirmed = True

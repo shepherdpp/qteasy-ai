@@ -216,8 +216,20 @@ class ConversationState:
 
         self.slots[str(name)] = Slot(value=value, source=source, confirmed=confirmed)
 
+    @staticmethod
+    def _message_dedupe_key(row: Dict[str, Any]) -> tuple:
+        """去重键：同文案但不同 plan_id/run_id 视为不同条。"""
+
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        return (
+            row.get("kind"),
+            row.get("text"),
+            str(payload.get("plan_id") or ""),
+            str(payload.get("run_id") or ""),
+        )
+
     def append_messages(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """追加可见对话；尾部同 kind+text 跳过。最多 120 条。
+        """追加可见对话；尾部同 kind+text+plan/run 跳过。最多 120 条。
 
         Parameters
         ----------
@@ -230,17 +242,19 @@ class ConversationState:
             追加后的 ``messages``。
         """
 
-        seen = {(row.get("kind"), row.get("text")) for row in self.messages[-8:]}
+        seen = {self._message_dedupe_key(row) for row in self.messages[-8:]}
         for raw in rows or []:
             item = normalize_message(raw)
             if item is None:
                 continue
             if not str(item.get("text") or "") and item.get("kind") != "error":
                 continue
-            key = (item.get("kind"), item.get("text"))
-            if key in seen:
-                continue
-            seen.add(key)
+            # 用户句允许重复正文（再次发送同一请求）；助手句仍按 plan/run 区分。
+            if item.get("kind") != "user_text":
+                key = self._message_dedupe_key(item)
+                if key in seen:
+                    continue
+                seen.add(key)
             self.messages.append(item)
         self.messages = self.messages[-120:]
         return list(self.messages)
@@ -282,6 +296,7 @@ class ConversationState:
         self.pending_clarification = None
         self.missing = []
         self.task_complete = False
+        self.awaiting_abandon = False
         return {"ok": True, "needs_confirm": False, "executed_run_ids": executed}
 
 

@@ -301,6 +301,138 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertIn("event: state", streamed.text)
             self.assertIn("qt.ai.strategy_meta.list", streamed.text)
 
+    def test_confirm_list_strategies_persists_artifact(self) -> None:
+        """两次同文案 Plan 后 Confirm：messages 含 Finished，Artifacts 含策略表。"""
+
+        print("\n[TestAiWorkbenchHttp] confirm list strategies artifact")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, asst = self._client(temp_dir)
+            sid = "s-list-art"
+            first = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            second = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            plan_id = (second.get("plan_card") or {}).get("plan_id")
+            print(" first plan:", (first.get("plan_card") or {}).get("plan_id"))
+            print(" second plan:", plan_id)
+            self.assertTrue(plan_id)
+            loaded = asst.session_store.load(sid)
+            ready = [m for m in loaded.messages if str(m.get("text") or "").startswith("Plan ready:")]
+            print(" plan ready count:", len(ready), ready)
+            self.assertGreaterEqual(len(ready), 2)
+            self.assertTrue(all("List built-in strategies" in str(m.get("text") or "") for m in ready))
+            user_lines = [m for m in loaded.messages if m.get("kind") == "user_text"]
+            print(" user_text count:", len(user_lines))
+            self.assertEqual(len(user_lines), 2)
+            ran = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
+            body = ran.json()
+            print(" run status:", ran.status_code, (body.get("execution") or {}).get("status"))
+            print(" artifacts:", body.get("artifacts"))
+            print(" transcript:", body.get("transcript"))
+            self.assertEqual(ran.status_code, 200)
+            self.assertEqual((body.get("execution") or {}).get("status"), "success")
+            arts = body.get("artifacts") or []
+            self.assertTrue(arts)
+            self.assertEqual(arts[0].get("type"), "data_table")
+            rows = ((arts[0].get("preview") or {}).get("preview_rows")) or []
+            print(" strategy rows head:", rows[:5])
+            self.assertTrue(rows)
+            self.assertIn("strategy", rows[0])
+            texts = [str(m.get("text") or "") for m in (body.get("transcript") or [])]
+            self.assertTrue(any(t.startswith("Finished:") for t in texts))
+            again = asst.session_store.load(sid)
+            print(" task_complete:", again.task_complete, "awaiting_abandon:", again.awaiting_abandon)
+            self.assertTrue(again.task_complete)
+            self.assertFalse(again.awaiting_abandon)
+            ws = client.get("/v1/workspace", params={"session_id": sid}).json()
+            print(" workspace arts:", ws.get("artifacts"))
+            self.assertTrue(ws.get("artifacts"))
+
+    def test_after_list_complete_new_builder_query_is_new_intent(self) -> None:
+        """列策略 Confirm 完成后，再要写均线策略不得再走 strategy_meta.get。"""
+
+        print("\n[TestAiWorkbenchHttp] after list complete → builder")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, asst = self._client(temp_dir)
+            sid = "s-after-list"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "请帮我列出所有的内置交易策略", "session_id": sid},
+            ).json()
+            plan_id = (planned.get("plan_card") or {}).get("plan_id")
+            ran = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
+            print(" list exec:", ran.status_code, (ran.json().get("execution") or {}).get("status"))
+            self.assertEqual((ran.json().get("execution") or {}).get("status"), "success")
+            done = asst.session_store.load(sid)
+            print(" after list:", done.active_intent, "complete:", done.task_complete)
+            self.assertTrue(done.task_complete)
+            nxt = client.post(
+                "/v1/plan",
+                json={
+                    "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+                    "session_id": sid,
+                },
+            )
+            body = nxt.json()
+            loaded = asst.session_store.load(sid)
+            print(" next status:", nxt.status_code)
+            print(" next job:", (loaded.active_intent or {}).get("job"))
+            print(" next turn:", loaded.turns[-1] if loaded.turns else None)
+            print(" next card:", body.get("plan_card"))
+            print(" next messages:", body.get("transcript") or body.get("messages"))
+            self.assertEqual(nxt.status_code, 200)
+            self.assertEqual(loaded.turns[-1].get("kind"), "new_intent")
+            self.assertFalse(loaded.turns[-1].get("skip_classify"))
+            job = str((loaded.active_intent or {}).get("job") or "")
+            self.assertNotEqual(job, "strategy.meta")
+            steps = (body.get("plan_card") or {}).get("steps") or []
+            skills = [str(s.get("skill_name") or "") for s in steps]
+            print(" skills:", skills)
+            self.assertFalse(any(name == "qt.ai.strategy_meta.get" for name in skills))
+            self.assertFalse(any(name == "qt.ai.strategy_meta.list" for name in skills))
+
+    def test_confirm_bband_get_shows_strategy_doc_artifact(self) -> None:
+        """strategy_meta.get 执行后 Artifacts 含策略文档表。"""
+
+        print("\n[TestAiWorkbenchHttp] bband get artifact")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            sid = "s-bband"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "show me bband strategy parameters", "session_id": sid},
+            ).json()
+            plan_id = (planned.get("plan_card") or {}).get("plan_id")
+            skills = [
+                str(s.get("skill_name") or "")
+                for s in (planned.get("plan_card") or {}).get("steps") or []
+            ]
+            print(" plan_id:", plan_id, "skills:", skills)
+            self.assertTrue(plan_id)
+            self.assertIn("qt.ai.strategy_meta.get", skills)
+            ran = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
+            body = ran.json()
+            print(" exec:", (body.get("execution") or {}).get("status"))
+            print(" artifacts:", body.get("artifacts"))
+            self.assertEqual(ran.status_code, 200)
+            self.assertEqual((body.get("execution") or {}).get("status"), "success")
+            arts = body.get("artifacts") or []
+            self.assertTrue(arts)
+            self.assertEqual(arts[0].get("type"), "data_table")
+            summary = (arts[0].get("preview") or {}).get("data_summary") or {}
+            print(" summary:", summary)
+            self.assertEqual(summary.get("strategy_id"), "bband")
+            rows = (arts[0].get("preview") or {}).get("preview_rows") or []
+            print(" doc lines head:", rows[:3])
+            self.assertTrue(rows)
+            ws = client.get("/v1/workspace", params={"session_id": sid}).json()
+            print(" workspace:", len(ws.get("artifacts") or []))
+            self.assertTrue(ws.get("artifacts"))
+
     def test_http_error_includes_next_action(self) -> None:
         """4xx 错误含英文 next_action。"""
 

@@ -30,7 +30,7 @@ from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
 from ..session import SessionStore
-from .mapper import classify_artifacts, map_assistant_payload
+from .mapper import classify_artifacts, map_assistant_payload, skill_step_title
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -168,6 +168,25 @@ class WorkbenchHttp:
             )
         run_status = str((dumped.get("execution") or {}).get("status") or "")
         run_id = str(dumped.get("run_id") or "")
+        if run_status and run_status not in {"", "dry_run"}:
+            summary = self._execution_visible_summary(dumped)
+            if summary and not any(
+                isinstance(item, dict)
+                and item.get("kind") == "ask_text"
+                and str((item.get("payload") or {}).get("run_id") or "") == run_id
+                for item in extra
+            ):
+                extra.append(
+                    {
+                        "kind": "ask_text",
+                        "text": summary,
+                        "payload": {
+                            "run_id": run_id,
+                            "executed": True,
+                            "plan_id": str((card.get("plan_id") if isinstance(card, dict) else "") or ""),
+                        },
+                    }
+                )
         if run_id:
             for item in extra:
                 if not isinstance(item, dict):
@@ -203,6 +222,43 @@ class WorkbenchHttp:
         else:
             dumped["transcript"] = []
         return dumped
+
+    @staticmethod
+    def _execution_visible_summary(dumped: Dict[str, Any]) -> str:
+        """把执行结果收成一条可见助手摘要（写入 messages[]）。"""
+
+        execution = dumped.get("execution") if isinstance(dumped.get("execution"), dict) else {}
+        steps = list(execution.get("steps") or [])
+        labels: List[str] = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            skill = str(step.get("skill_name") or "").strip()
+            title = str(step.get("summary") or "").strip() or skill_step_title(skill)
+            status = str(step.get("status") or "").strip()
+            if not title:
+                continue
+            if status == "done":
+                labels.append(f"✓ {title}")
+            elif status == "error":
+                labels.append(f"✕ {title}")
+            else:
+                labels.append(title)
+        arts = dumped.get("artifacts") or []
+        if arts:
+            types = sorted(
+                {
+                    str(art.get("type") or "").strip()
+                    for art in arts
+                    if isinstance(art, dict) and art.get("type")
+                }
+            )
+            if types:
+                labels.append("Artifacts: " + ", ".join(types))
+        if labels:
+            return "Finished: " + "; ".join(labels)
+        status = str(execution.get("status") or "done").strip() or "done"
+        return f"Finished ({status})."
 
     def _artifacts_for_session(self, conv: Any) -> List[Dict[str, Any]]:
         """按 messages 中的 run_id 收集本 Session 产物。"""
@@ -428,6 +484,7 @@ class WorkbenchHttp:
             return self.assistant.run_plan(
                 plan_id,
                 response_style="raw",
+                session_id=session_id or None,
                 on_step=on_step,
             )
 

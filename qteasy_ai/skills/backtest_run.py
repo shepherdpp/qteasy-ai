@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
 
@@ -51,11 +52,53 @@ def _slice_backtest_output(raw: Any) -> tuple[Dict[str, Any], List[Dict[str, Any
         ("trade_log_file", "trade_log"),
         ("trade_log", "trade_log"),
         ("complete_values_file", "complete_values_file"),
+        ("visual_file", "chart"),
+        ("plot_file", "chart"),
     ):
         path = raw.get(key)
         if isinstance(path, str) and path.strip():
             artifacts.append({"kind": kind, "path": path.strip()})
     return metrics, artifacts
+
+
+def _save_backtest_visual_png(raw: Any, run_id: str) -> str:
+    """把 qteasy 标准回测 visual 图存成 PNG（Agg，不弹窗）。"""
+
+    if not isinstance(raw, dict):
+        return ""
+    values = raw.get("complete_values")
+    if values is None:
+        return ""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from qteasy.visual import _plot_loop_result
+    except Exception:
+        return ""
+    home = str(os.environ.get("QTEASY_AI_HOME") or "").strip() or ".qteasy/ai"
+    folder = Path(home) / "artifacts"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"backtest_{run_id}.png"
+    try:
+        _plot_loop_result(
+            loop_results=raw,
+            plot_title="Backtest Report",
+            show_positions=True,
+            buy_sell_markers=True,
+        )
+        plt.savefig(str(target), dpi=120)
+        plt.close("all")
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        return ""
+    if target.is_file():
+        return str(target)
+    return ""
 
 
 def build_backtest_run_skill(
@@ -216,6 +259,11 @@ def build_backtest_run_skill(
                 run_kwargs["invest_end"] = end_date
             raw = run_func(operator, **run_kwargs)
             metrics, artifacts = _slice_backtest_output(raw)
+            png_path = _save_backtest_visual_png(raw, run_id)
+            if png_path and not any(
+                isinstance(item, dict) and str(item.get("path") or "") == png_path for item in artifacts
+            ):
+                artifacts.append({"kind": "chart", "type": "image", "path": png_path})
             result = SkillResult(
                 ok=True,
                 skill_name=metadata.name,

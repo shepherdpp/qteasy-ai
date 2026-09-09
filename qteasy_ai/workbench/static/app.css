@@ -238,6 +238,42 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
 }
 .msg.user .bubble { background: var(--bg-user); color: #fff; }
 .msg-role { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.bubble.editing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.bubble.editing textarea#rewind-text {
+  width: 100%;
+  min-height: 4.5em;
+  box-sizing: border-box;
+  resize: vertical;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.18);
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+}
+.bubble.editing .actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.bubble.editing .actions button {
+  flex: 1 1 auto;
+  min-width: 7em;
+}
+.busy-bubble {
+  color: var(--accent);
+  font-style: italic;
+}
+.busy-dot { color: var(--accent); }
 .card {
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -274,7 +310,6 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
 .composer textarea { width: 100%; min-height: 72px; resize: vertical; }
 .composer-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .composer-row .hint { flex: 1; font-size: 11px; color: var(--text-muted); }
-.busy-dot { color: var(--accent); }
 
 .artifact-col { display: flex; flex-direction: column; }
 .artifact-body { flex: 1; overflow: auto; padding: 10px; }

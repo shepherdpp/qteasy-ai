@@ -246,7 +246,6 @@ function mountShell() {
           <textarea id="query-input" placeholder="Ask in natural language" rows="3"></textarea>
           <div class="composer-row">
             <span class="hint" id="composer-hint">Enter new line · Ctrl/⌘+Enter send</span>
-            <span class="busy-dot" id="busy-label" hidden>Working…</span>
             <button type="button" class="primary" id="btn-send">Send</button>
           </div>
         </div>
@@ -377,8 +376,6 @@ function setBusy(next) {
   const send = $("btn-send");
   if (input) input.disabled = busy;
   if (send) send.disabled = busy;
-  const label = $("busy-label");
-  if (label) label.hidden = !busy;
   document.querySelectorAll("button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
@@ -386,6 +383,7 @@ function setBusy(next) {
     const el = $(id);
     if (el) el.disabled = busy;
   });
+  renderChat();
 }
 
 function errorFromHttp(data) {
@@ -934,9 +932,9 @@ function renderChat() {
         const discardBtn = pendingRewind
           ? `<button type="button" class="primary" id="btn-rewind-discard">Confirm discard and resend</button>`
           : `<button type="button" class="primary" id="btn-rewind-submit">Resend from here</button>`;
-        parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble">
+        parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble editing">
           ${warn}<textarea id="rewind-text" rows="3">${escapeHtml((pendingRewind && pendingRewind.query) || msg.text || "")}</textarea>
-          <div class="actions">${discardBtn}<button type="button" id="btn-rewind-cancel">Cancel</button></div>
+          <div class="actions">${discardBtn}<button type="button" class="ghost" id="btn-rewind-cancel">Cancel</button></div>
         </div></div>`);
       } else {
         parts.push(`<div class="msg user"><div class="msg-role">You <button type="button" class="ghost" data-edit-user="${i}">Edit</button></div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
@@ -952,11 +950,14 @@ function renderChat() {
       parts.push(`<div class="msg"><div class="msg-role">Assistant</div><div class="bubble">${escapeHtml(msg.text || "")}${extra}</div></div>`);
     }
   }
+  if (busy) {
+    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot">Working…</span></div></div>`);
+  }
   parts.push(renderClarification());
   parts.push(renderPlanCard());
   parts.push(renderSteps());
   host.innerHTML = parts.join("");
-  if (stick) host.scrollTop = host.scrollHeight;
+  if (stick || busy) host.scrollTop = host.scrollHeight;
 }
 
 function renderClarification() {

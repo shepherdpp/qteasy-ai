@@ -34,6 +34,7 @@ class TestAiBacktestSkill(unittest.TestCase):
                 "recover_date": "2020-11-01",
                 "complete_values": "MUST_NOT_APPEAR",
                 "trade_log_file": "/tmp/trade_log_demo.csv",
+                "visual_file": "/tmp/backtest_visual.png",
             }
 
         def fake_operator(sid, run_freq="d"):
@@ -66,6 +67,9 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(result["metrics"]["recover_date"], "2020-11-01")
         self.assertNotIn("complete_values", result["metrics"])
         self.assertEqual(result["artifacts"][0]["kind"], "trade_log")
+        print(" artifact kinds:", [item.get("kind") for item in result["artifacts"]])
+        self.assertEqual(result["artifacts"][1]["kind"], "chart")
+        self.assertEqual(result["artifacts"][1]["path"], "/tmp/backtest_visual.png")
         self.assertEqual(captured.get("visual"), False)
         self.assertEqual(captured.get("report"), False)
         self.assertEqual(captured.get("trade_log"), True)
@@ -90,6 +94,16 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "UNKNOWN_STRATEGY_ID")
         self.assertIn("not_a_real_strategy", result["error"]["message"])
         self.assertEqual(called["n"], 0)
+
+    def test_save_visual_png_skips_without_complete_values(self) -> None:
+        """无 complete_values 时不写 PNG。"""
+
+        print("\n[TestAiBacktestSkill] visual png skip")
+        from qteasy_ai.skills.backtest_run import _save_backtest_visual_png
+
+        missing = _save_backtest_visual_png({"final_value": 1}, "run_x")
+        print(" missing complete_values:", repr(missing))
+        self.assertEqual(missing, "")
 
     def test_run_kwargs_exclude_freq_config_key(self) -> None:
         """qt.run 不得接收 freq：该键不是 QT_CONFIG 内置参数。"""

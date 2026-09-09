@@ -157,18 +157,64 @@ class TestAiWorkbenchDto(unittest.TestCase):
             "result": {
                 "ok": True,
                 "metrics": {"annual_rtn": 0.1, "mdd": -0.2},
-                "artifacts": [{"kind": "trade_log", "path": "/tmp/trade_log.csv"}],
+                "artifacts": [
+                    {"kind": "trade_log", "path": "/tmp/trade_log.csv"},
+                    {"kind": "chart", "path": "/tmp/backtest_visual.png"},
+                ],
             },
         }
         items = classify_artifacts(run_id, [table_step, chart_step, code_step, bt_step])
         types = [item["type"] for item in items]
         print(" types:", types)
         print(" items:", items)
-        self.assertEqual(types, ["data_table", "chart", "strategy_code", "backtest_report"])
+        self.assertEqual(types, ["data_table", "chart", "strategy_code", "backtest_report", "chart"])
+        self.assertEqual(items[-1]["export_path"], "/tmp/backtest_visual.png")
+        self.assertEqual(items[-1]["title"], "qt.ai.backtest.visual")
         for item in items:
             self.assertEqual(item["run_id"], run_id)
         self.assertEqual(items[0]["preview"]["data_summary"]["channel"], "history")
         self.assertEqual(len(items[0]["preview"]["preview_rows"]), 2)
+
+        list_step = {
+            "step_id": "s5",
+            "skill_name": "qt.ai.strategy_meta.list",
+            "result": {
+                "ok": True,
+                "skill_name": "qt.ai.strategy_meta.list",
+                "payload": {"strategies": ["macd", "trix", "dma"]},
+                "data_summary": {"count": 3, "first_items": ["macd", "trix", "dma"]},
+                "artifacts": [],
+            },
+        }
+        listed = classify_artifacts("run_list", [list_step])
+        print(" strategy list artifacts:", listed)
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["type"], "data_table")
+        self.assertEqual(listed[0]["preview"]["preview_rows"][0]["strategy"], "macd")
+        self.assertEqual(len(listed[0]["preview"]["preview_rows"]), 3)
+
+        get_step = {
+            "step_id": "s6",
+            "skill_name": "qt.ai.strategy_meta.get",
+            "result": {
+                "ok": True,
+                "skill_name": "qt.ai.strategy_meta.get",
+                "payload": {
+                    "strategy_id": "bband",
+                    "strategy_type": "BBAND",
+                    "doc": "BBAND strategy.\nParameters:\n- n: period (default 20)",
+                },
+                "metrics": {"doc_length": 52},
+                "data_summary": {"strategy_type": "BBAND"},
+                "artifacts": [],
+            },
+        }
+        got = classify_artifacts("run_bband", [get_step])
+        print(" strategy get artifact:", got)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["type"], "data_table")
+        self.assertEqual(got[0]["preview"]["data_summary"]["strategy_id"], "bband")
+        self.assertTrue(any("BBAND" in str(row.get("line") or "") for row in got[0]["preview"]["preview_rows"]))
 
     def test_data_read_invalid_channel_english_error(self) -> None:
         """非法 channel 的 data.read 结果 → error.message 英文非空。"""
