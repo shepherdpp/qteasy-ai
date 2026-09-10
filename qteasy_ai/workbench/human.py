@@ -165,6 +165,31 @@ def format_human(
             lines.append("Sources: " + ", ".join(sources))
         return _join(lines)
 
+    design = _first_message(state.messages, "design_card")
+    kb_write = _first_message(state.messages, "kb_write")
+    if design is not None or kb_write is not None:
+        if design is not None:
+            lines.append(str(design.text or "Design loop: refine the spec before a closed trial.").strip())
+            spec = design.payload.get("spec_draft") if isinstance(design.payload, dict) else {}
+            if not isinstance(spec, dict):
+                spec = {}
+            name = str(spec.get("name") or "").strip()
+            universe = str(spec.get("universe") or "").strip()
+            if name or universe:
+                lines.append(f"Spec: {name or 'unnamed'} · {universe or 'universe TBD'}")
+            hypothesis = str(spec.get("hypothesis") or "").strip()
+            if hypothesis:
+                lines.append(hypothesis)
+        if kb_write is not None:
+            lines.append(str(kb_write.text or "Confirm writing this note into user_kb/raw.").strip())
+            rel = ""
+            if isinstance(kb_write.payload, dict):
+                rel = str(kb_write.payload.get("relpath") or "").strip()
+            if rel:
+                lines.append(rel)
+            lines.append("Confirm: qteasy-ai plan --confirm-kb-write --session-id SESSION")
+        return _join(lines)
+
     if executed:
         if lines and lines[0].startswith("[MODE:"):
             lines[0] = "[MODE: RUN]  executed"

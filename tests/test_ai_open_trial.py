@@ -67,6 +67,9 @@ class TestAiOpenTrial(unittest.TestCase):
             state = asst.session_store.load(sid)
             print(" current_trial_plan_id:", state.current_trial_plan_id)
             self.assertTrue(state.current_trial_plan_id)
+            trial_inputs = steps[0].get("inputs") or {}
+            print(" trial inputs:", trial_inputs)
+            self.assertEqual(trial_inputs.get("factor_htype"), "momentum")
 
     def test_second_trial_queues_while_first_active(self) -> None:
         """第一张试错仍 active 时，第二张进队列。"""
@@ -139,6 +142,38 @@ class TestAiOpenTrial(unittest.TestCase):
             self.assertIsNone(state.active_design)
             dumped = state.to_dict()
             self.assertNotIn("active_design", dumped)
+            payload = asst.abandon_open(sid, response_style="raw")
+            dto = map_assistant_payload(payload, query="abandon open")
+            kinds = [item.kind for item in dto.messages]
+            texts = [item.text for item in dto.messages]
+            print(" abandon-open kinds:", kinds)
+            print(" abandon-open texts:", texts)
+            self.assertIn("ask_text", kinds)
+            self.assertTrue(any("abandoned" in str(text).lower() for text in texts))
+            self.assertTrue(dto.plan_card is None or not dto.plan_card.confirmable)
+
+    def test_lock_after_abandon_is_idle_not_llm_fallback(self) -> None:
+        """放弃开放 Job 后再 lock，英文说明而非 llm_uncertain 菜谱。"""
+
+        print("\n[TestAiOpenTrial] lock after abandon idle")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = self._assistant(temp_dir)
+            sid = "g7-lock-idle"
+            asst.plan(
+                "explore a useful momentum factor for hs300",
+                response_style="raw",
+                session_id=sid,
+            )
+            asst.abandon_open(sid, response_style="raw")
+            locked = asst.plan("lock this spec", response_style="raw", session_id=sid)
+            steps = (locked.get("plan") or {}).get("steps") or []
+            names = [item.get("skill_name") for item in steps]
+            assumptions = (locked.get("plan") or {}).get("assumptions") or {}
+            print(" skills:", names)
+            print(" open_idle:", assumptions.get("open_idle"), assumptions.get("open_idle_reason"))
+            self.assertTrue(assumptions.get("open_idle"))
+            self.assertEqual(assumptions.get("open_idle_reason"), "lock_spec")
+            self.assertNotIn("qt.ai.system.fallback", names)
 
     def test_cli_flags_require_session_id(self) -> None:
         """CLI 暴露 --abandon-trial / --abandon-open。"""

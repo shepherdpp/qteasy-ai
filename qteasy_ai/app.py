@@ -570,6 +570,8 @@ class QteasyAssistant:
             return self._abandon_clarify_plan(query), state
 
         skip_classify = False
+        if gate.kind == "open_idle":
+            return self._open_idle_plan(query, str(gate.rationale or "")), state
         if gate.kind == "abandon_trial":
             return self._abandon_trial_state(state, query), state
         if gate.kind == "lock_spec":
@@ -747,6 +749,23 @@ class QteasyAssistant:
             execution_mode="dry_run",
             mode="plan",
             planner_trace={"intent_job": "clarify", "source": "session", "rationale": "abandon_open"},
+        )
+
+    def _open_idle_plan(self, query: str, reason: str) -> Any:
+        """设计环未激活时的试错/锁定/回退。"""
+
+        return ToolPlan(
+            plan_id=new_plan_id(),
+            user_query=query,
+            steps=[],
+            assumptions={
+                "intent_job": "clarify",
+                "open_idle": True,
+                "open_idle_reason": str(reason or ""),
+            },
+            execution_mode="dry_run",
+            mode="plan",
+            planner_trace={"intent_job": "clarify", "source": "session", "rationale": "open_idle"},
         )
 
     def _nested_open_clarify_plan(self, query: str) -> Any:

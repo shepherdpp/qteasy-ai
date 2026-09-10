@@ -103,6 +103,12 @@ class SessionGate:
                 return GateDecision(kind="propose_trial", rationale="propose_trial")
             if action == "lock_spec":
                 return GateDecision(kind="lock_spec", rationale="lock_spec")
+        else:
+            from .open_workflow import classify_open_utterance
+
+            idle_action = classify_open_utterance(text)
+            if idle_action in {"lock_spec", "propose_trial", "abandon_trial", "abandon_open"}:
+                return GateDecision(kind="open_idle", rationale=idle_action)
         # 已完成任务：下一句一律新意图，禁止再 fill_slot 进旧 Job（含 Mode-D）。
         if session.task_complete and session.active_intent:
             return GateDecision(kind="new_intent", rationale="new_after_complete")

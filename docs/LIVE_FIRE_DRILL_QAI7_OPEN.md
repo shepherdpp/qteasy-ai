@@ -1,6 +1,6 @@
 # Q-AI.7 Open loop live-fire (G.7)
 
-**Status: coding complete; G.6 still Hang — do not close G.6, do not tag 1.0, do not bump semver.**
+**Status: Hang (2026-09-11).** Coding + CLI gold path landed; **do not close G.7**. Resume after **G.8** close-out. Do not close G.6, do not tag 1.0, do not bump semver.
 
 Baseline: qteasy-ai workbench extra · qteasy **>=2.6** · Python **py39**
 
@@ -39,9 +39,9 @@ Use Plan mode. Trigger words must **not** be a lone「因子 IC」.
 qteasy-ai plan "explore a useful momentum factor for hs300" --session-id g7 --raw
 qteasy-ai plan "try IC on this factor" --session-id g7 --raw
 qteasy-ai plan --abandon-trial --session-id g7
-qteasy-ai plan --abandon-open --session-id g7
 qteasy-ai plan "lock this spec" --session-id g7
 qteasy-ai plan --confirm-kb-write --session-id g7
+qteasy-ai plan --abandon-open --session-id g7
 
 # smoke only — do not demo on Web this slice
 qteasy-ai plan "还没想好规则，帮我设计一个策略" --session-id g7b --raw
@@ -51,9 +51,11 @@ qteasy-ai plan "帮我写一个基于 20/60 日均线金叉死叉的择时策略
 
 NL equivalents: `abandon trial` /「放弃这次试错」; `abandon open` /「放弃这个探索」.
 
+KB write order: **lock → `--confirm-kb-write` → then `--abandon-open`**. Abandon-open first clears the design; later lock has nothing to write.
+
 ## Close bar
 
-Jackie signs O1–O8. **Does not** close G.6. **Does not** ship 1.0 in this slice.
+Jackie signs O1–O8 **after G.8**. This slice stays Hang. **Does not** close G.6. **Does not** ship 1.0.
 
 ## Cross links
 

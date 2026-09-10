@@ -272,6 +272,11 @@ class Planner:
             )
             trial_q = trial_query_from_spec(spec)
             steps = compose_recipe(self, trial_decision, trial_q)
+            factor_name = str(spec.get("name") or "").strip()
+            if factor_name and factor_name not in {"unnamed_factor"}:
+                for step in steps:
+                    if step.skill_name == "qt.ai.research.factor_ic_summary":
+                        step.inputs["factor_htype"] = factor_name
         elif decision.job == "open" and not skip:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:

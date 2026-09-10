@@ -631,9 +631,41 @@ def map_assistant_payload(
         if skills and all(name == "qt.ai.system.fallback" for name in skills):
             confirmable = False
 
+    if assumptions.get("kb_write_path"):
+        messages.append(
+            WorkbenchMessage(
+                kind="ask_text",
+                text=f"Wrote user-KB note: {assumptions.get('kb_write_path')}",
+                payload={"path": str(assumptions.get("kb_write_path") or "")},
+            )
+        )
+    if assumptions.get("open_job_cleared"):
+        messages.append(
+            WorkbenchMessage(
+                kind="ask_text",
+                text="Open job abandoned. This session is still here.",
+                payload={"open_job_cleared": True},
+            )
+        )
+    idle_reason = str(assumptions.get("open_idle_reason") or "")
+    if assumptions.get("open_idle"):
+        idle_text = {
+            "lock_spec": "No open design loop is active. Explore a factor first, then lock the spec.",
+            "propose_trial": "No open design loop is active. Explore a factor first, then try a closed IC trial.",
+            "abandon_trial": "No active trial to abandon.",
+            "abandon_open": "No open job to abandon. This session is still here.",
+        }.get(idle_reason, "No open design loop is active.")
+        messages.append(
+            WorkbenchMessage(kind="ask_text", text=idle_text, payload={"open_idle": idle_reason})
+        )
+
     plan_card = None
-    skip_empty_design_card = bool(assumptions.get("design_loop")) and not card_steps
-    if (card_steps or plan.get("plan_id")) and not skip_empty_design_card:
+    skip_status_card = (
+        (bool(assumptions.get("design_loop")) and not card_steps)
+        or bool(assumptions.get("open_job_cleared"))
+        or bool(assumptions.get("open_idle"))
+    )
+    if (card_steps or plan.get("plan_id")) and not skip_status_card:
         plan_card = WorkbenchPlanCard(
             plan_id=str(plan.get("plan_id") or ""),
             steps=card_steps,

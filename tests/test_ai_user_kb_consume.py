@@ -59,7 +59,17 @@ class TestAiUserKbConsume(unittest.TestCase):
                 response_style="raw",
                 session_id=sid,
             )
-            asst.plan("lock this spec", response_style="raw", session_id=sid)
+            locked = asst.plan("lock this spec", response_style="raw", session_id=sid)
+            from qteasy_ai.workbench.human import format_human_from_payload
+
+            lock_human = format_human_from_payload(
+                locked,
+                query="lock this spec",
+                session=asst.session_store.load(sid),
+            )
+            print(" lock human:", lock_human)
+            self.assertIn("raw/factors/momentum.md", lock_human)
+            self.assertIn("Confirm writing", lock_human)
             target = store.user_kb_dir / "raw" / "factors" / "momentum.md"
             print(" exists before confirm:", target.exists())
             self.assertFalse(target.exists())
@@ -67,9 +77,16 @@ class TestAiUserKbConsume(unittest.TestCase):
                 asst.confirm_kb_write(sid, confirm=False, response_style="raw")
             print(" exists after reject:", target.exists())
             self.assertFalse(target.exists())
-            asst.confirm_kb_write(sid, confirm=True, response_style="raw")
+            wrote = asst.confirm_kb_write(sid, confirm=True, response_style="raw")
+            write_human = format_human_from_payload(
+                wrote,
+                query="confirm kb write",
+                session=asst.session_store.load(sid),
+            )
+            print(" write human:", write_human)
             print(" exists after confirm:", target.exists())
             print(" text head:", target.read_text(encoding="utf-8")[:80] if target.exists() else "")
+            self.assertIn("Wrote user-KB note", write_human)
             self.assertTrue(target.is_file())
             catalog = json.loads((store.user_kb_dir / "compiled" / "catalog.json").read_text(encoding="utf-8"))
             paths = [item.get("path") for item in catalog.get("entries") or []]
