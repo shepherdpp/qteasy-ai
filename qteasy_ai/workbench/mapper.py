@@ -478,6 +478,10 @@ def _sidebar_from_session(
             env_summary=dict(env_facts or {}),
             current_plan_id=str(session_blob.get("current_plan_id") or ""),
             clarify_round=int(session_blob.get("clarify_round") or 0),
+            design=dict(session_blob["active_design"])
+            if isinstance(session_blob.get("active_design"), dict)
+            else None,
+            trial_queue=list(session_blob.get("trial_queue") or []),
         )
     slots = [
         WorkbenchSidebarSlot(
@@ -495,6 +499,8 @@ def _sidebar_from_session(
         env_summary=dict(env_facts or {}),
         current_plan_id=str(session.current_plan_id or ""),
         clarify_round=int(session.clarify_round),
+        design=dict(session.active_design) if session.active_design else None,
+        trial_queue=list(session.trial_queue or []),
     )
 
 
@@ -559,6 +565,7 @@ def map_assistant_payload(
 
     plan = raw.get("plan") if isinstance(raw.get("plan"), dict) else {}
     plan_md = str(raw.get("plan_md") or "")
+    assumptions = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
     card_steps = _plan_steps(plan)
     needs = any(step.needs_confirm for step in card_steps)
     clarification = raw.get("clarification")
@@ -582,6 +589,30 @@ def map_assistant_payload(
     else:
         missing_from_pending = []
 
+    if assumptions.get("design_loop"):
+        spec = dict(assumptions.get("spec_draft") or {})
+        hits = list(assumptions.get("kb_hits") or raw.get("kb_hits") or [])
+        messages.append(
+            WorkbenchMessage(
+                kind="design_card",
+                text="Design loop: refine the spec before a closed trial.",
+                payload={
+                    "spec_draft": spec,
+                    "kb_hits": hits,
+                    "open_job": str(assumptions.get("open_job") or ""),
+                },
+            )
+        )
+        pending_write = assumptions.get("pending_kb_write")
+        if isinstance(pending_write, dict) and pending_write:
+            messages.append(
+                WorkbenchMessage(
+                    kind="kb_write",
+                    text="Confirm writing this note into user_kb/raw.",
+                    payload=dict(pending_write),
+                )
+            )
+
     execution = _execution_view(raw)
     if execution["steps"]:
         messages.append(
@@ -601,7 +632,8 @@ def map_assistant_payload(
             confirmable = False
 
     plan_card = None
-    if card_steps or plan.get("plan_id"):
+    skip_empty_design_card = bool(assumptions.get("design_loop")) and not card_steps
+    if (card_steps or plan.get("plan_id")) and not skip_empty_design_card:
         plan_card = WorkbenchPlanCard(
             plan_id=str(plan.get("plan_id") or ""),
             steps=card_steps,

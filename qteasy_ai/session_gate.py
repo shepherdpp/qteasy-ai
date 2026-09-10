@@ -39,11 +39,14 @@ _JOB_VERBS = (
     ("backtest.builtin", ("回测", "backtest")),
     ("data.refill", ("下载", "download", "refill", "灌数据")),
     ("research.screen", ("筛股", "筛选", "screen")),
-    ("strategy.builder", ("生成策略", "写策略", "创建策略", "strategybuilder", "帮我写", "写一个")),
+    ("research.factor_explore", ("因子探索", "explore a useful momentum", "找有用因子")),
+    ("strategy.builder", ("生成策略", "写策略", "创建策略", "strategybuilder", "帮我写", "写一个", "设计一个策略")),
     ("data.summary", ("波动率", "摘要", "summary")),
 )
 
-_FOLLOWUP_KINDS = frozenset({"fill_slot", "change_slot", "new_intent", "confirm", "clarify"})
+_FOLLOWUP_KINDS = frozenset(
+    {"fill_slot", "change_slot", "new_intent", "confirm", "clarify", "propose_trial", "abandon_trial", "lock_spec"}
+)
 
 
 @dataclass
@@ -84,6 +87,22 @@ class SessionGate:
         # 放弃确认门优先于 LLM，避免 awaiting_abandon 被跟进分类绕过。
         if session.awaiting_abandon:
             return self._classify_rule(session, text)
+        if session.active_design:
+            from .open_workflow import classify_open_utterance
+
+            action = classify_open_utterance(text)
+            if action == "abandon_trial":
+                return GateDecision(kind="abandon_trial", rationale="abandon_trial")
+            if action == "abandon_open":
+                return GateDecision(
+                    kind="new_intent",
+                    abandon_confirmed=True,
+                    rationale="abandon_open",
+                )
+            if action == "propose_trial":
+                return GateDecision(kind="propose_trial", rationale="propose_trial")
+            if action == "lock_spec":
+                return GateDecision(kind="lock_spec", rationale="lock_spec")
         # 已完成任务：下一句一律新意图，禁止再 fill_slot 进旧 Job（含 Mode-D）。
         if session.task_complete and session.active_intent:
             return GateDecision(kind="new_intent", rationale="new_after_complete")
@@ -209,6 +228,16 @@ def extract_patches(text: str) -> Dict[str, Any]:
     fast = re.search(r"快线\s*(?:改成|改为|换成|成|=|:|：)?\s*(\d+)", text)
     if fast:
         patches["fast"] = int(fast.group(1))
+    hyp = re.search(
+        r"hypothesis\s*(?:改成|改为|换成|为|=|:|：)\s*(.+)$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if hyp:
+        patches["hypothesis"] = hyp.group(1).strip()
+    named = re.search(r"(?:named|叫)\s+([A-Za-z0-9_]+)", text, flags=re.IGNORECASE)
+    if named:
+        patches["name"] = named.group(1)
     return patches
 
 

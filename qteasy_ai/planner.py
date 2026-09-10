@@ -30,6 +30,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .intent_engine import IntentEngine, IntentDecision
 from .intents.recipes import compose_recipe
+from .open_workflow import (
+    build_design_assumptions,
+    draft_factor_spec,
+    draft_strategy_spec,
+    is_design_loop,
+    maybe_mark_builder_open_loop,
+    trial_query_from_spec,
+)
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
@@ -219,6 +227,7 @@ class Planner:
         q_lower = query.lower()
         self.intent_engine.provider = self.provider
         skip = bool(skip_classify and session is not None and getattr(session, "active_intent", None))
+        open_action = str(getattr(session, "open_action", "") or "") if session is not None else ""
         if skip:
             intent = session.active_intent or {}
             decision = IntentDecision(
@@ -237,7 +246,33 @@ class Planner:
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
-        if decision.job == "open" and not skip:
+        decision = maybe_mark_builder_open_loop(decision, user_query.strip())
+        catalog = self.intent_engine.catalog
+        design = is_design_loop(catalog, decision) or (
+            session is not None and isinstance(getattr(session, "active_design", None), dict)
+            and skip
+        )
+        if design and open_action != "propose_trial" and decision.job != "open":
+            steps = []
+            downgrade_reason = ""
+        elif design and open_action == "propose_trial":
+            spec = {}
+            if session is not None and isinstance(getattr(session, "active_design", None), dict):
+                spec = dict((session.active_design or {}).get("spec_draft") or {})
+            if decision.job.startswith("strategy."):
+                spec = spec or draft_strategy_spec(user_query, session)
+            else:
+                spec = spec or draft_factor_spec(user_query, session)
+            trial_job = str(spec.get("suggested_job") or "research.factor_ic")
+            trial_decision = IntentDecision(
+                job=trial_job,
+                flags={},
+                source="session",
+                rationale="open_trial",
+            )
+            trial_q = trial_query_from_spec(spec)
+            steps = compose_recipe(self, trial_decision, trial_q)
+        elif decision.job == "open" and not skip:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:
                 downgrade_reason = open_reason
@@ -263,6 +298,29 @@ class Planner:
             "intent_source": decision.source,
             "intent_rationale": decision.rationale,
         }
+        if design and decision.job != "open":
+            if decision.job.startswith("strategy.") and bool((decision.flags or {}).get("open_loop")):
+                spec = draft_strategy_spec(user_query, session)
+            elif catalog.job_workflow(decision.job) == "open" or (
+                session is not None and getattr(session, "active_design", None)
+            ):
+                spec = draft_factor_spec(user_query, session)
+                if session is not None and isinstance(getattr(session, "active_design", None), dict):
+                    spec = dict((session.active_design or {}).get("spec_draft") or spec)
+            else:
+                spec = draft_factor_spec(user_query, session)
+            kb_hits = []
+            extra = {}
+            if open_action == "propose_trial":
+                extra["trial_job"] = str(spec.get("suggested_job") or "research.factor_ic")
+            assumptions.update(
+                build_design_assumptions(
+                    decision=decision,
+                    spec=spec,
+                    kb_hits=kb_hits,
+                    extra=extra,
+                )
+            )
         assumptions.update(gate_extras)
         for step in steps:
             if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):

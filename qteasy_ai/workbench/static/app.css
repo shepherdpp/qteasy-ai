@@ -345,4 +345,8 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
   width: 100%;
 }
 .file-tree .dir-name { color: var(--text-muted); padding: 4px 0; }
-.g7-slot { margin-top: 12px; padding: 8px; border: 1px dashed var(--border); border-radius: 4px; color: var(--text-muted); font-size: 11px; }
+.g7-slot { margin-top: 12px; padding: 8px; border: 1px dashed var(--border); border-radius: 4px; color: var(--text); font-size: 11px; }
+.g7-slot .actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.g7-slot .trial-queue { margin: 4px 0; padding-left: 16px; }
+.kb-draft { white-space: pre-wrap; font-size: 11px; max-height: 160px; overflow: auto; }
+.kb-hits { margin: 4px 0; padding-left: 16px; }

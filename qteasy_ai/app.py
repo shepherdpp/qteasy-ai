@@ -45,6 +45,14 @@ from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
 from .session import ConversationState, SessionStore
 from .session_gate import SessionGate, extract_patches, merge_facts
+from .open_workflow import (
+    apply_spec_patches,
+    is_design_loop,
+    maybe_mark_builder_open_loop,
+    pending_kb_write_from_spec,
+    search_user_kb,
+    write_confirmed_note,
+)
 from .skills import (
     build_backtest_run_skill,
     build_check_tushare_skill,
@@ -433,10 +441,20 @@ class QteasyAssistant:
         if confirm:
             self._merge_env_facts_from_execution(payload)
             if session is not None and str((payload.get("execution") or {}).get("status") or "") == "success":
-                session.task_complete = True
-                session.awaiting_abandon = False
-                session.pending_clarification = None
-                session.missing = []
+                if session.active_design:
+                    session.current_trial_plan_id = ""
+                    updated = []
+                    for item in session.trial_queue:
+                        row = dict(item)
+                        if str(row.get("status") or "") == "active":
+                            row["status"] = "done"
+                        updated.append(row)
+                    session.trial_queue = updated
+                else:
+                    session.task_complete = True
+                    session.awaiting_abandon = False
+                    session.pending_clarification = None
+                    session.missing = []
                 self.session_store.save(session)
 
         self._attach_session_payload(payload, plan, session)
@@ -531,6 +549,20 @@ class QteasyAssistant:
             state.agent_auto = bool(agent_auto)
         gate = self.session_gate.classify(state, query)
 
+        if (
+            gate.kind == "new_intent"
+            and gate.needs_abandon
+            and not gate.abandon_confirmed
+            and state.active_design
+        ):
+            peek = self.planner.intent_engine.classify(query)
+            peek = maybe_mark_builder_open_loop(peek, query)
+            parent_job = str((state.active_design or {}).get("job") or "")
+            if is_design_loop(self.planner.intent_engine.catalog, peek) and peek.job != parent_job:
+                state.turns.append({"query": query, "kind": "open_nested_open"})
+                self.session_store.save(state)
+                return self._nested_open_clarify_plan(query), state
+
         if gate.kind == "new_intent" and gate.needs_abandon and not gate.abandon_confirmed:
             state.awaiting_abandon = True
             state.turns.append({"query": query, "kind": "new_intent", "needs_abandon": True})
@@ -538,9 +570,25 @@ class QteasyAssistant:
             return self._abandon_clarify_plan(query), state
 
         skip_classify = False
+        if gate.kind == "abandon_trial":
+            return self._abandon_trial_state(state, query), state
+        if gate.kind == "lock_spec":
+            return self._lock_spec_plan(state, query), state
+        if gate.abandon_confirmed and str(gate.rationale or "") == "abandon_open":
+            self._reset_task(state, keep_turns=True)
+            state.turns.append({"query": query, "kind": "abandon_open"})
+            self.session_store.save(state)
+            return self._open_cleared_plan(query), state
         if gate.abandon_confirmed:
             self._reset_task(state, keep_turns=True)
             state.original_query = query
+        elif gate.kind == "propose_trial":
+            if state.current_trial_plan_id:
+                self._queue_trial(state, query)
+                self.session_store.save(state)
+                return self._design_status_plan(state, query, queued=True), state
+            state.open_action = "propose_trial"
+            skip_classify = True
         elif gate.kind in {"fill_slot", "change_slot"}:
             # 双保险：完成态不应走到补槽（classify 已拦截；防旧调用方）。
             if state.task_complete:
@@ -550,7 +598,13 @@ class QteasyAssistant:
                 skip_classify = False
             else:
                 merge_facts(state, gate.patches, source="user", confirmed=True)
-                skip_classify = bool(state.active_intent)
+                if state.active_design:
+                    spec = dict((state.active_design or {}).get("spec_draft") or {})
+                    state.active_design["spec_draft"] = apply_spec_patches(spec, gate.patches)
+                    skip_classify = True
+                    state.open_action = ""
+                else:
+                    skip_classify = bool(state.active_intent)
         elif gate.kind == "confirm":
             for slot in state.slots.values():
                 slot.confirmed = True
@@ -572,6 +626,7 @@ class QteasyAssistant:
             profile=profile,
         )
         self._sync_session_from_plan(state, plan, query=query, skip_classify=skip_classify)
+        state.open_action = ""
         state.turns.append(
             {
                 "query": query,
@@ -585,7 +640,7 @@ class QteasyAssistant:
 
     @staticmethod
     def _reset_task(state: ConversationState, *, keep_turns: bool) -> None:
-        """放弃当前闭合任务，保留 session_id / turns。"""
+        """放弃当前闭合或开放任务，保留 session_id / turns。"""
 
         state.active_intent = None
         state.slots = {}
@@ -596,8 +651,208 @@ class QteasyAssistant:
         state.awaiting_abandon = False
         state.original_query = ""
         state.task_complete = False
+        state.active_design = None
+        state.current_trial_plan_id = ""
+        state.trial_queue = []
+        state.open_action = ""
         if not keep_turns:
             state.turns = []
+
+    def _queue_trial(self, state: ConversationState, query: str) -> None:
+        """当前已有 active 试错时，新建议只进队列。"""
+
+        spec = dict((state.active_design or {}).get("spec_draft") or {})
+        state.trial_queue.append(
+            {
+                "job": str(spec.get("suggested_job") or "research.factor_ic"),
+                "reason": query,
+                "status": "queued",
+            }
+        )
+
+    def _design_status_plan(
+        self,
+        state: ConversationState,
+        query: str,
+        *,
+        queued: bool = False,
+        locked: bool = False,
+    ) -> Any:
+        """用当前设计草稿合成空步 ToolPlan。"""
+
+        design = dict(state.active_design or {})
+        spec = dict(design.get("spec_draft") or {})
+        assumptions = {
+            "planner": "hybrid_intent_h_prime",
+            "design_loop": True,
+            "spec_draft": spec,
+            "kb_hits": list(design.get("kb_hits") or []),
+            "open_job": str(design.get("job") or ""),
+            "intent_job": str(design.get("job") or ""),
+            "intent_source": "session",
+            "intent_rationale": "design_status",
+            "trial_queued": bool(queued),
+        }
+        if locked and design.get("pending_kb_write"):
+            assumptions["pending_kb_write"] = dict(design.get("pending_kb_write") or {})
+        return ToolPlan(
+            plan_id=new_plan_id(),
+            user_query=query,
+            steps=[],
+            assumptions=assumptions,
+            execution_mode="dry_run",
+            mode="plan",
+            planner_trace={
+                "intent_job": str(design.get("job") or ""),
+                "source": "session",
+                "rationale": "design_status",
+            },
+        )
+
+    def _abandon_trial_state(self, state: ConversationState, query: str) -> Any:
+        """放弃当前试错，Spec 草稿保留。"""
+
+        state.current_trial_plan_id = ""
+        state.trial_queue = [
+            item for item in state.trial_queue if str(item.get("status") or "") != "active"
+        ]
+        state.open_action = ""
+        state.turns.append({"query": query, "kind": "abandon_trial"})
+        self.session_store.save(state)
+        return self._design_status_plan(state, query)
+
+    def _lock_spec_plan(self, state: ConversationState, query: str) -> Any:
+        """锁定 Spec 并生成待确认的 KB 写入草案。"""
+
+        design = dict(state.active_design or {})
+        spec = dict(design.get("spec_draft") or {})
+        draft = pending_kb_write_from_spec(job=str(design.get("job") or ""), spec=spec)
+        design["pending_kb_write"] = draft
+        state.active_design = design
+        state.turns.append({"query": query, "kind": "lock_spec"})
+        self.session_store.save(state)
+        return self._design_status_plan(state, query, locked=True)
+
+    def _open_cleared_plan(self, query: str) -> Any:
+        """开放 Job 已放弃后的空计划。"""
+
+        return ToolPlan(
+            plan_id=new_plan_id(),
+            user_query=query,
+            steps=[],
+            assumptions={
+                "intent_job": "clarify",
+                "open_job_cleared": True,
+            },
+            execution_mode="dry_run",
+            mode="plan",
+            planner_trace={"intent_job": "clarify", "source": "session", "rationale": "abandon_open"},
+        )
+
+    def _nested_open_clarify_plan(self, query: str) -> Any:
+        """禁止 open 套 open。"""
+
+        step = self.planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.system.fallback",
+            inputs=self.planner._fallback_step_inputs(
+                query=query,
+                action="clarify_required",
+                reason="open_nested_open_not_allowed",
+                hint="An open design loop cannot nest another open job. Finish or abandon the current exploration first.",
+                missing_info="abandon_open_or_continue",
+                next_step="Abandon the current open job, or keep refining the current FactorSpec.",
+            ),
+        )
+        return ToolPlan(
+            plan_id=new_plan_id(),
+            user_query=query,
+            steps=[step],
+            assumptions={
+                "clarification": {
+                    "restatement": f"You asked: {query}",
+                    "pending": [{"name": "open_nest", "hint": "Open jobs cannot nest open jobs."}],
+                    "confirm_prompt": "Abandon the current open job or continue the current design loop.",
+                }
+            },
+            execution_mode="dry_run",
+            mode="plan",
+        )
+
+    def abandon_trial(
+        self,
+        session_id: str,
+        *,
+        response_style: str = "user_friendly",
+    ) -> Dict[str, Any] | AssistantOutput:
+        """放弃当前试错（CLI/HTTP 一等操作）。"""
+
+        state = self.session_store.load(str(session_id or "").strip() or "default")
+        plan = self._abandon_trial_state(state, "abandon trial")
+        return self._execute_and_format(
+            plan=plan,
+            confirm=False,
+            response_style=response_style,
+            persist=None,
+            keep=False,
+            session=state,
+        )
+
+    def abandon_open(
+        self,
+        session_id: str,
+        *,
+        response_style: str = "user_friendly",
+    ) -> Dict[str, Any] | AssistantOutput:
+        """放弃整个开放 Job，保留 session_id。"""
+
+        state = self.session_store.load(str(session_id or "").strip() or "default")
+        self._reset_task(state, keep_turns=True)
+        state.turns.append({"query": "abandon open", "kind": "abandon_open"})
+        self.session_store.save(state)
+        plan = self._open_cleared_plan("abandon open")
+        return self._execute_and_format(
+            plan=plan,
+            confirm=False,
+            response_style=response_style,
+            persist=None,
+            keep=False,
+            session=state,
+        )
+
+    def confirm_kb_write(
+        self,
+        session_id: str,
+        *,
+        confirm: bool = True,
+        response_style: str = "user_friendly",
+    ) -> Dict[str, Any] | AssistantOutput:
+        """确认后写入 user_kb/raw 并 compile。"""
+
+        sid = str(session_id or "").strip() or "default"
+        state = self.session_store.load(sid)
+        design = dict(state.active_design or {})
+        draft = dict(design.get("pending_kb_write") or {})
+        if not confirm:
+            raise ValueError("KB write requires explicit confirmation.")
+        if not draft:
+            raise ValueError("No pending user-KB write to confirm.")
+        path = write_confirmed_note(self.memory_store, draft)
+        design["pending_kb_write"] = None
+        design["last_kb_write"] = path
+        design["kb_hits"] = search_user_kb(self.memory_store, str((design.get("spec_draft") or {}).get("name") or ""))
+        state.active_design = design
+        self.session_store.save(state)
+        plan = self._design_status_plan(state, "confirm kb write", locked=True)
+        plan.assumptions["kb_write_path"] = path
+        return self._execute_and_format(
+            plan=plan,
+            confirm=False,
+            response_style=response_style,
+            persist=None,
+            keep=False,
+            session=state,
+        )
 
     def _sync_session_from_plan(
         self,
@@ -610,9 +865,57 @@ class QteasyAssistant:
         """把本轮 Job / 缺失槽 / 澄清回写会话。"""
 
         job = str((plan.planner_trace or {}).get("intent_job") or "")
-        if job and job not in {"clarify", "route_to_ask", "unsafe", "open"}:
+        flags = {}
+        if isinstance(state.active_intent, dict):
+            flags = dict(state.active_intent.get("flags") or {})
+        assumptions = getattr(plan, "assumptions", None) or {}
+        if assumptions.get("design_loop"):
+            hits = search_user_kb(self.memory_store, query)
+            spec = dict(assumptions.get("spec_draft") or {})
+            prev = dict(state.active_design or {})
+            design_blob = {
+                "job": job or str(assumptions.get("open_job") or prev.get("job") or ""),
+                "spec_draft": spec,
+                "kb_hits": hits,
+                "assumptions": list(spec.get("assumptions") or prev.get("assumptions") or []),
+            }
+            if prev.get("pending_kb_write"):
+                design_blob["pending_kb_write"] = dict(prev.get("pending_kb_write") or {})
+            if prev.get("last_kb_write"):
+                design_blob["last_kb_write"] = prev.get("last_kb_write")
+            state.active_design = design_blob
+            if hasattr(plan, "assumptions"):
+                plan.assumptions = dict(plan.assumptions or {})
+                plan.assumptions["kb_hits"] = hits
+            flags = dict(flags)
+            if assumptions.get("open_job") == "strategy.builder" or (
+                job == "strategy.builder" and (assumptions.get("spec_draft") or {})
+            ):
+                flags["open_loop"] = True
+            if job and job not in {"clarify", "route_to_ask", "unsafe", "open"}:
+                state.active_intent = {"job": job, "flags": flags}
+            if assumptions.get("trial_job") and plan.steps:
+                if state.current_trial_plan_id and state.current_trial_plan_id != plan.plan_id:
+                    self._queue_trial(state, query)
+                else:
+                    state.current_trial_plan_id = str(plan.plan_id)
+                    state.trial_queue = [
+                        item
+                        for item in state.trial_queue
+                        if str(item.get("status") or "") != "active"
+                    ]
+                    state.trial_queue.insert(
+                        0,
+                        {
+                            "job": str(assumptions.get("trial_job") or ""),
+                            "reason": query,
+                            "status": "active",
+                            "plan_id": plan.plan_id,
+                        },
+                    )
+        elif job and job not in {"clarify", "route_to_ask", "unsafe", "open"}:
             if not skip_classify or not state.active_intent:
-                state.active_intent = {"job": job, "flags": {}}
+                state.active_intent = {"job": job, "flags": flags}
         if not state.original_query:
             state.original_query = query
         missing = list((plan.assumptions or {}).get("session_missing") or [])
@@ -685,13 +988,19 @@ class QteasyAssistant:
         if isinstance(clarification, dict):
             payload["clarification"] = clarification
         if session is not None:
-            payload["session"] = {
+            blob = {
                 "session_id": session.session_id,
                 "clarify_round": session.clarify_round,
                 "current_plan_id": session.current_plan_id,
                 "missing": list(session.missing),
                 "agent_auto": session.agent_auto,
             }
+            if session.active_design:
+                blob["active_design"] = dict(session.active_design)
+                blob["current_trial_plan_id"] = session.current_trial_plan_id
+                blob["trial_queue"] = list(session.trial_queue)
+            payload["session"] = blob
+            payload["kb_hits"] = list((session.active_design or {}).get("kb_hits") or [])
 
     def _apply_agent_auto_gate(self, plan: Any) -> Tuple[Any, bool]:
         """agent_auto 下按 allow_* 拦截高副作用；live 永不执行。"""

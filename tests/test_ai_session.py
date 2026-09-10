@@ -112,7 +112,7 @@ class TestAiSession(unittest.TestCase):
             self.assertFalse(again.awaiting_abandon)
 
     def test_load_ignores_unknown_keys(self) -> None:
-        """未知键（如 active_design）不崩；再保存不写出开放环字段。"""
+        """未知键不崩；闭合 session 再保存仍不写出开放环字段。"""
 
         print("\n[TestAiSession] unknown keys forward-compat")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -133,8 +133,7 @@ class TestAiSession(unittest.TestCase):
                             }
                         },
                         "missing": [],
-                        "active_design": {"spec": "should-ignore"},
-                        "current_trial_plan": "trial-x",
+                        "future_field": {"spec": "should-ignore"},
                     },
                     ensure_ascii=False,
                 ),
@@ -148,13 +147,41 @@ class TestAiSession(unittest.TestCase):
             self.assertNotIn("confidence", loaded.slots["shares"].to_dict())
             dumped = loaded.to_dict()
             print(" dumped:", dumped)
+            self.assertNotIn("future_field", dumped)
             self.assertNotIn("active_design", dumped)
             self.assertNotIn("current_trial_plan", dumped)
             sessions.save(loaded)
             on_disk = json.loads(path.read_text(encoding="utf-8"))
             print(" on_disk keys:", sorted(on_disk.keys()))
             self.assertNotIn("active_design", on_disk)
-            self.assertNotIn("current_trial_plan", on_disk)
+            self.assertNotIn("future_field", on_disk)
+
+    def test_open_design_roundtrip(self) -> None:
+        """设计态写出 active_design / 队列并往返。"""
+
+        print("\n[TestAiSession] open design roundtrip")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("open1")
+            state.active_intent = {"job": "research.factor_explore", "flags": {}}
+            state.active_design = {
+                "job": "research.factor_explore",
+                "spec_draft": {"name": "momentum", "hypothesis": "hs300 momentum"},
+                "kb_hits": [],
+                "assumptions": [],
+            }
+            state.current_trial_plan_id = "plan-trial"
+            state.trial_queue = [{"job": "research.factor_ic", "reason": "ic", "status": "queued"}]
+            sessions.save(state)
+            loaded = sessions.load("open1")
+            dumped = loaded.to_dict()
+            print(" dumped keys:", sorted(dumped.keys()))
+            print(" spec:", (dumped.get("active_design") or {}).get("spec_draft"))
+            self.assertEqual(dumped["active_design"]["job"], "research.factor_explore")
+            self.assertEqual(dumped["current_trial_plan_id"], "plan-trial")
+            self.assertEqual(dumped["trial_queue"][0]["status"], "queued")
+            self.assertTrue(loaded.task_incomplete())
 
     def test_corrupt_session_falls_back(self) -> None:
         """损坏 JSON 降级为空会话。"""

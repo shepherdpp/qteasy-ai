@@ -76,6 +76,8 @@ function emptyState() {
       env_summary: {},
       current_plan_id: "",
       clarify_round: 0,
+      design: null,
+      trial_queue: [],
     },
     artifacts: [],
     execution: { status: "", steps: [] },
@@ -262,7 +264,7 @@ function mountShell() {
         <div class="workspace-body">
           <div class="now-block" id="workspace-now"></div>
           <div id="workspace-files"></div>
-          <div class="g7-slot">Design loop / trial queue reserved for G.7</div>
+          <div class="g7-slot" id="g7-slot"></div>
         </div>
       </aside>
     </div>`;
@@ -301,6 +303,7 @@ function bindShell() {
   $("session-list").addEventListener("click", onSessionListClick);
   $("workspace-files").addEventListener("click", onWorkspaceArtifactClick);
   $("workspace-now").addEventListener("click", onNowClick);
+  $("g7-slot").addEventListener("click", onChatClick);
 }
 
 function toggleWorkspace() {
@@ -382,6 +385,9 @@ function setBusy(next) {
   ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-retry"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy;
+  });
+  document.querySelectorAll(".btn-abandon-trial, .btn-abandon-open, .btn-kb-write").forEach((el) => {
+    el.disabled = busy;
   });
   renderChat();
 }
@@ -566,6 +572,82 @@ async function confirmPlan() {
   }
 }
 
+async function abandonTrial() {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const dto = await api("/v1/open/abandon-trial", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    renderPanes();
+  } catch (exc) {
+    transcript.push({
+      kind: "error",
+      text: "Could not abandon the trial. Retry when the server is reachable.",
+      payload: { next_action: "Press Abandon trial again." },
+    });
+    persistTranscript();
+    renderChat();
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function abandonOpen() {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const dto = await api("/v1/open/abandon-job", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    renderPanes();
+  } catch (exc) {
+    transcript.push({
+      kind: "error",
+      text: "Could not abandon the open job. Retry when the server is reachable.",
+      payload: { next_action: "Press Abandon open job again." },
+    });
+    persistTranscript();
+    renderChat();
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function confirmKbWrite() {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const dto = await api("/v1/kb/write", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, confirm: true }),
+    });
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    renderPanes();
+    await refreshWorkspace();
+  } catch (exc) {
+    transcript.push({
+      kind: "error",
+      text: "Could not write the user-KB note. Retry when the server is reachable.",
+      payload: { next_action: "Confirm the write again after reviewing the draft." },
+    });
+    persistTranscript();
+    renderChat();
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function cancelPlan() {
   if (busy) return;
   transcript.push({
@@ -635,6 +717,18 @@ function onChatClick(ev) {
     const box = $("rewind-text");
     const text = (pendingRewind && pendingRewind.query) || (box ? box.value : "");
     rewindUserMessage(editingUserIndex, text, true);
+    return;
+  }
+  if (t.id === "btn-abandon-trial" || t.classList.contains("btn-abandon-trial")) {
+    abandonTrial();
+    return;
+  }
+  if (t.id === "btn-abandon-open" || t.classList.contains("btn-abandon-open")) {
+    abandonOpen();
+    return;
+  }
+  if (t.id === "btn-kb-write" || t.classList.contains("btn-kb-write")) {
+    confirmKbWrite();
     return;
   }
   if (t.dataset.example) {
@@ -914,7 +1008,7 @@ function renderChat() {
   }
   for (let i = 0; i < transcript.length; i += 1) {
     const msg = transcript[i];
-    if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "step_status") continue;
+    if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") continue;
     if (
       msg.kind === "ask_text" &&
       String(msg.text || "").startsWith("Plan ready:") &&
@@ -954,10 +1048,60 @@ function renderChat() {
     parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot">Working…</span></div></div>`);
   }
   parts.push(renderClarification());
+  parts.push(renderDesignCard());
+  parts.push(renderKbWriteCard());
   parts.push(renderPlanCard());
   parts.push(renderSteps());
   host.innerHTML = parts.join("");
   if (stick || busy) host.scrollTop = host.scrollHeight;
+}
+
+function latestMessage(kind) {
+  const rows = transcript.concat(state.messages || []);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (rows[i] && rows[i].kind === kind) return rows[i];
+  }
+  return null;
+}
+
+function renderDesignCard() {
+  const msg = latestMessage("design_card");
+  const design = (state.sidebar && state.sidebar.design) || (msg && msg.payload) || null;
+  if (!design && !msg) return "";
+  const spec = (design && design.spec_draft) || (msg && msg.payload && msg.payload.spec_draft) || {};
+  const hits = (design && design.kb_hits) || (msg && msg.payload && msg.payload.kb_hits) || [];
+  const lock = busy ? "disabled" : "";
+  const hitLines = hits.length
+    ? `<ul class="kb-hits">${hits
+        .map((hit) => `<li>${escapeHtml(hit.path || hit.title || "")}</li>`)
+        .join("")}</ul>`
+    : `<p class="hint">No user-KB notes matched this draft.</p>`;
+  return `<div class="card" data-testid="design-card"><h3>Design loop</h3>
+    <p>${escapeHtml((msg && msg.text) || "Refine the FactorSpec before a closed trial.")}</p>
+    <p><strong>${escapeHtml(spec.name || "unnamed")}</strong> · ${escapeHtml(spec.universe || "universe TBD")}</p>
+    <p>${escapeHtml(spec.hypothesis || "")}</p>
+    <p class="hint">Suggested trial: ${escapeHtml(spec.suggested_job || "research.factor_ic")}</p>
+    <p class="files-k">User KB sources</p>${hitLines}
+    <div class="actions">
+      <button type="button" class="ghost btn-abandon-trial" ${lock}>Abandon trial</button>
+      <button type="button" class="danger btn-abandon-open" ${lock}>Abandon open job</button>
+    </div>
+  </div>`;
+}
+
+function renderKbWriteCard() {
+  const msg = latestMessage("kb_write");
+  const pending =
+    (msg && msg.payload) ||
+    ((state.sidebar && state.sidebar.design && state.sidebar.design.pending_kb_write) || null);
+  if (!pending || typeof pending !== "object") return "";
+  const lock = busy ? "disabled" : "";
+  return `<div class="card" data-testid="kb-write-card"><h3>Write user-KB note</h3>
+    <p>${escapeHtml((msg && msg.text) || "Confirm writing this note into user_kb/raw.")}</p>
+    <p class="hint">${escapeHtml(pending.relpath || "")}</p>
+    <pre class="kb-draft">${escapeHtml(pending.body || "")}</pre>
+    <div class="actions"><button type="button" class="primary btn-kb-write" ${lock}>Confirm write</button></div>
+  </div>`;
 }
 
 function renderClarification() {
@@ -1265,6 +1409,7 @@ function renderProviderBlock() {
 
 function renderWorkspace() {
   renderNow();
+  renderG7Slot();
   const host = $("workspace-files");
   if (!host) return;
   const arts = workspace.artifacts || state.artifacts || [];
@@ -1278,6 +1423,47 @@ function renderWorkspace() {
         `<li><button type="button" class="file" data-art-index="${i}">${escapeHtml(art.type || "artifact")} · ${escapeHtml(art.title || art.run_id || "")}</button></li>`
     )
     .join("")}</ul>`;
+}
+
+function renderG7Slot() {
+  const host = $("g7-slot");
+  if (!host) return;
+  const design = (state.sidebar && state.sidebar.design) || null;
+  const queue = (state.sidebar && state.sidebar.trial_queue) || [];
+  if (!design && !queue.length) {
+    host.innerHTML = "";
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  const spec = (design && design.spec_draft) || {};
+  const hits = (design && design.kb_hits) || [];
+  const lock = busy ? "disabled" : "";
+  const queueLines = queue.length
+    ? `<ul class="trial-queue">${queue
+        .map(
+          (item) =>
+            `<li data-status="${escapeHtml(item.status || "")}">${escapeHtml(item.job || "")} · ${escapeHtml(item.status || "")}${
+              item.reason ? ` · ${escapeHtml(item.reason)}` : ""
+            }</li>`
+        )
+        .join("")}</ul>`
+    : `<p class="hint">No closed trial queued.</p>`;
+  const pending = design && design.pending_kb_write;
+  const writeBtn = pending
+    ? `<button type="button" class="primary btn-kb-write" ${lock}>Confirm write</button>`
+    : "";
+  host.innerHTML = `<p class="files-k">Open loop</p>
+    <p><strong>${escapeHtml((spec && spec.name) || "draft")}</strong> · ${escapeHtml((spec && spec.universe) || "")}</p>
+    <p>${escapeHtml((spec && spec.hypothesis) || "")}</p>
+    <p class="files-k">Trial queue</p>${queueLines}
+    <p class="files-k">User KB</p>
+    <p class="hint">${hits.length ? hits.map((h) => h.path || h.title).join(", ") : "No matched notes"}</p>
+    <div class="actions">
+      <button type="button" class="ghost btn-abandon-trial" ${lock}>Abandon trial</button>
+      <button type="button" class="danger btn-abandon-open" ${lock}>Abandon open job</button>
+      ${writeBtn}
+    </div>`;
 }
 
 function renderPanes() {

@@ -10,7 +10,7 @@
 
 """闭合 Job 的多轮会话状态。
 
-加载忽略未知键（1.x 可加可选字段）。不预填开放环字段。
+加载忽略未知键。开放环字段仅在设计态写出。
 """
 
 from __future__ import annotations
@@ -23,7 +23,9 @@ from typing import Any, Dict, List, Optional
 from .memory_store import MemoryStore, _json_safe
 
 SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"})
-VISIBLE_MESSAGE_KINDS = frozenset({"user_text", "ask_text", "error", "clarification"})
+VISIBLE_MESSAGE_KINDS = frozenset(
+    {"user_text", "ask_text", "error", "clarification", "design_card", "kb_write"}
+)
 _SKIP_MESSAGE_KINDS = frozenset({"", "plan_card", "step_status"})
 _STATE_KEYS = frozenset(
     {
@@ -41,6 +43,9 @@ _STATE_KEYS = frozenset(
         "awaiting_abandon",
         "original_query",
         "task_complete",
+        "active_design",
+        "current_trial_plan_id",
+        "trial_queue",
     }
 )
 
@@ -129,6 +134,10 @@ class ConversationState:
     awaiting_abandon: bool = False
     original_query: str = ""
     task_complete: bool = False
+    active_design: Optional[Dict[str, Any]] = None
+    current_trial_plan_id: str = ""
+    trial_queue: List[Dict[str, Any]] = field(default_factory=list)
+    open_action: str = ""
 
     @classmethod
     def empty(cls, session_id: str) -> "ConversationState":
@@ -137,9 +146,9 @@ class ConversationState:
         return cls(session_id=str(session_id or "").strip() or "default")
 
     def to_dict(self) -> Dict[str, Any]:
-        """只写出 F 已知字段，不写 active_design / 试错队列。"""
+        """闭合态不写开放环键；设计态写出 active_design / 队列。"""
 
-        return {
+        payload = {
             "session_id": self.session_id,
             "active_intent": dict(self.active_intent) if self.active_intent else None,
             "slots": {key: slot.to_dict() for key, slot in self.slots.items()},
@@ -157,6 +166,11 @@ class ConversationState:
             "original_query": self.original_query,
             "task_complete": bool(self.task_complete),
         }
+        if self.active_design:
+            payload["active_design"] = dict(self.active_design)
+            payload["current_trial_plan_id"] = str(self.current_trial_plan_id or "")
+            payload["trial_queue"] = list(self.trial_queue or [])
+        return payload
 
     @classmethod
     def from_dict(cls, raw: Any, *, session_id: str = "") -> "ConversationState":
@@ -183,6 +197,15 @@ class ConversationState:
         pending = data.get("pending_clarification")
         if not isinstance(pending, dict):
             pending = None
+        design = data.get("active_design")
+        if not isinstance(design, dict):
+            design = None
+        queue_raw = data.get("trial_queue")
+        queue: List[Dict[str, Any]] = []
+        if isinstance(queue_raw, list):
+            for item in queue_raw:
+                if isinstance(item, dict):
+                    queue.append(dict(item))
         return cls(
             session_id=sid,
             active_intent=intent,
@@ -198,13 +221,18 @@ class ConversationState:
             awaiting_abandon=bool(data.get("awaiting_abandon", False)),
             original_query=str(data.get("original_query") or ""),
             task_complete=bool(data.get("task_complete", False)),
+            active_design=design,
+            current_trial_plan_id=str(data.get("current_trial_plan_id") or ""),
+            trial_queue=queue,
         )
 
     def task_incomplete(self) -> bool:
-        """当前闭合任务尚未完成（有缺失、澄清中或计划未确认）。"""
+        """当前闭合任务或开放设计尚未完成。"""
 
         if self.task_complete:
             return False
+        if self.active_design:
+            return True
         if not self.active_intent:
             return False
         if self.missing or self.pending_clarification:
@@ -297,6 +325,10 @@ class ConversationState:
         self.missing = []
         self.task_complete = False
         self.awaiting_abandon = False
+        self.active_design = None
+        self.current_trial_plan_id = ""
+        self.trial_queue = []
+        self.open_action = ""
         return {"ok": True, "needs_confirm": False, "executed_run_ids": executed}
 
 

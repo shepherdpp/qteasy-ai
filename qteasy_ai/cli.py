@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview_parser.add_argument("--session-id", dest="session_id", default="", help="Reuse a conversation session.")
 
     plan_parser = sub.add_parser("plan", help="Plan mode dry run.")
-    plan_parser.add_argument("query", type=str, help="Natural language query")
+    plan_parser.add_argument("query", nargs="?", default="", help="Natural language query")
     _add_format_flags(plan_parser)
     plan_parser.add_argument(
         "--preview",
@@ -185,6 +185,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explanation depth for pretty output.",
     )
     plan_parser.add_argument("--session-id", dest="session_id", default="", help="Reuse a conversation session.")
+    plan_parser.add_argument(
+        "--abandon-trial",
+        dest="abandon_trial",
+        action="store_true",
+        help="Abandon the current open-loop trial; keep the Spec draft.",
+    )
+    plan_parser.add_argument(
+        "--abandon-open",
+        dest="abandon_open",
+        action="store_true",
+        help="Abandon the entire open job; keep the session id.",
+    )
+    plan_parser.add_argument(
+        "--confirm-kb-write",
+        dest="confirm_kb_write",
+        action="store_true",
+        help="Confirm writing the pending design note into user_kb/raw.",
+    )
 
     run_parser = sub.add_parser("run", help="Plan and execute, or execute a reviewed plan by id.")
     run_parser.add_argument("query", nargs="?", default="", help="Natural language query")
@@ -251,12 +269,77 @@ def main() -> int:
         return 0
     if args.command in {"plan", "preview"}:
         depth = getattr(args, "depth", "standard")
-        payload = assistant.preview(
-            args.query,
-            response_style=response_style,
-            explanation_depth=depth,
-            session_id=session_id,
-        )
+        if bool(getattr(args, "abandon_trial", False)):
+            if not session_id:
+                _print_cli_error(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "SESSION_ID_REQUIRED",
+                            "message": "Provide --session-id with --abandon-trial.",
+                        },
+                    },
+                    output_format,
+                )
+                return 1
+            payload = assistant.abandon_trial(session_id, response_style=response_style)
+        elif bool(getattr(args, "abandon_open", False)):
+            if not session_id:
+                _print_cli_error(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "SESSION_ID_REQUIRED",
+                            "message": "Provide --session-id with --abandon-open.",
+                        },
+                    },
+                    output_format,
+                )
+                return 1
+            payload = assistant.abandon_open(session_id, response_style=response_style)
+        elif bool(getattr(args, "confirm_kb_write", False)):
+            if not session_id:
+                _print_cli_error(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "SESSION_ID_REQUIRED",
+                            "message": "Provide --session-id with --confirm-kb-write.",
+                        },
+                    },
+                    output_format,
+                )
+                return 1
+            try:
+                payload = assistant.confirm_kb_write(
+                    session_id, confirm=True, response_style=response_style
+                )
+            except ValueError as exc:
+                _print_cli_error(
+                    {"ok": False, "error": {"code": "KB_WRITE_NOT_PENDING", "message": str(exc)}},
+                    output_format,
+                )
+                return 1
+        else:
+            query = str(getattr(args, "query", "") or "").strip()
+            if not query:
+                _print_cli_error(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "QUERY_REQUIRED",
+                            "message": "Provide a query, or use --abandon-trial / --abandon-open / --confirm-kb-write.",
+                        },
+                    },
+                    output_format,
+                )
+                return 1
+            payload = assistant.preview(
+                query,
+                response_style=response_style,
+                explanation_depth=depth,
+                session_id=session_id,
+            )
         _print_result(
             payload,
             output_format=output_format,

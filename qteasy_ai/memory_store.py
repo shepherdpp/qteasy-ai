@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import shutil
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -684,12 +685,58 @@ class MemoryStore:
         return True
 
     def compile_user_kb(self) -> Dict[str, Any]:
-        """空库 compile：写出合法空 catalog。人手只改 raw/rules。"""
+        """从 rules/ 与 raw/ 生成 compiled/catalog.json；空库仍合法。"""
 
         self.ensure_user_kb_scaffold()
+        entries: List[Dict[str, Any]] = []
+        for folder in (self.user_kb_dir / "rules", self.user_kb_dir / "raw"):
+            if not folder.is_dir():
+                continue
+            for path in sorted(folder.rglob("*")):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in {".md", ".txt", ".json"}:
+                    continue
+                rel = path.relative_to(self.user_kb_dir).as_posix()
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                title = path.stem
+                first = ""
+                for line in text.splitlines():
+                    if line.strip():
+                        first = line.strip()
+                        break
+                if first.startswith("#"):
+                    title = first.lstrip("# ").strip() or title
+                elif first.startswith("{"):
+                    try:
+                        blob = json.loads(text)
+                        if isinstance(blob, dict) and blob.get("title"):
+                            title = str(blob.get("title"))
+                    except json.JSONDecodeError:
+                        pass
+                tags = [
+                    part
+                    for part in path.relative_to(self.user_kb_dir).parts[:-1]
+                    if part not in {"raw", "rules"}
+                ]
+                run_id = ""
+                match = re.search(r"run[_-]?id[:\s]+([A-Za-z0-9_-]+)", text, flags=re.IGNORECASE)
+                if match:
+                    run_id = match.group(1)
+                entries.append(
+                    {
+                        "title": title,
+                        "path": rel,
+                        "tags": tags,
+                        "run_id": run_id,
+                    }
+                )
         catalog: Dict[str, Any] = {
             "version": 1,
-            "entries": [],
+            "entries": entries,
             "source": "user_kb",
         }
         path = self.user_kb_dir / "compiled" / "catalog.json"

@@ -6,7 +6,9 @@ export type MessageKind =
   | "clarification"
   | "plan_card"
   | "step_status"
-  | "error";
+  | "error"
+  | "design_card"
+  | "kb_write";
 
 export interface WorkbenchMessage {
   kind: MessageKind;
@@ -51,6 +53,8 @@ export interface WorkbenchSidebar {
   env_summary: Record<string, unknown>;
   current_plan_id: string;
   clarify_round: number;
+  design?: Record<string, unknown> | null;
+  trial_queue?: Array<Record<string, unknown>>;
 }
 
 export interface WorkbenchArtifact {

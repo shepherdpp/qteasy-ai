@@ -50,6 +50,8 @@ _NEXT_ACTION = {
     "NOT_USER_MESSAGE": "Only user messages can be edited. Pick a You bubble.",
     "REWIND_DISCARD_REQUIRED": "Editing this message discards later executed runs. Confirm to continue.",
     "PROVIDER_CONFIRM_REQUIRED": "Review the new provider settings, then press Confirm.",
+    "CONFIRM_REQUIRED": "Set confirm=true after reviewing the note, then retry the write.",
+    "KB_WRITE_NOT_PENDING": "Lock the FactorSpec first (save this note), then confirm the write.",
 }
 
 
@@ -507,6 +509,49 @@ class WorkbenchHttp:
             self.events[run_id] = list(bucket)
         return JSONResponse(dto)
 
+    async def abandon_trial(self, request: Request) -> JSONResponse:
+        """POST /v1/open/abandon-trial。"""
+
+        body = await self._read_json(request)
+        session_id = str(body.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide session_id.", 400)
+        payload = self.assistant.abandon_trial(session_id, response_style="raw")
+        return JSONResponse(
+            self._to_dto(payload, query="abandon trial", session_id=session_id, persist_transcript=True)
+        )
+
+    async def abandon_open(self, request: Request) -> JSONResponse:
+        """POST /v1/open/abandon-job。"""
+
+        body = await self._read_json(request)
+        session_id = str(body.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide session_id.", 400)
+        payload = self.assistant.abandon_open(session_id, response_style="raw")
+        return JSONResponse(
+            self._to_dto(payload, query="abandon open", session_id=session_id, persist_transcript=True)
+        )
+
+    async def kb_write(self, request: Request) -> JSONResponse:
+        """POST /v1/kb/write：须 confirm=true。"""
+
+        body = await self._read_json(request)
+        session_id = str(body.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide session_id.", 400)
+        if not bool(body.get("confirm")):
+            return _error("CONFIRM_REQUIRED", "KB write requires confirm=true.", 400)
+        try:
+            payload = self.assistant.confirm_kb_write(
+                session_id, confirm=True, response_style="raw"
+            )
+        except ValueError as exc:
+            return _error("KB_WRITE_NOT_PENDING", str(exc), 400)
+        return JSONResponse(
+            self._to_dto(payload, query="confirm kb write", session_id=session_id, persist_transcript=True)
+        )
+
     async def get_session(self, request: Request) -> JSONResponse:
         """GET /v1/session/{session_id}：有 current_plan_id 则按 plan_id 回填 DTO。"""
 
@@ -795,6 +840,9 @@ def create_app(
         Route("/v1/plan", api.plan, methods=["POST"]),
         Route("/v1/run", api.run, methods=["POST"]),
         Route("/v1/run-plan", api.run_plan, methods=["POST"]),
+        Route("/v1/open/abandon-trial", api.abandon_trial, methods=["POST"]),
+        Route("/v1/open/abandon-job", api.abandon_open, methods=["POST"]),
+        Route("/v1/kb/write", api.kb_write, methods=["POST"]),
         Route("/v1/sessions", api.list_sessions, methods=["GET"]),
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),

@@ -169,6 +169,8 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
                 inputs=planner._extract_market_inputs(query),
             )
         ]
+    if job == "research.factor_explore":
+        return []
     if job == "research.screen":
         return _compose_screen(planner, query, q_lower)
     if job == "strategy.meta":

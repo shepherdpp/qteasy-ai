@@ -111,7 +111,7 @@ class IntentCatalog:
         Returns
         -------
         str
-            ``closed`` 或 ``open``。F 阶段不按此字段分叉。
+            ``closed`` 或 ``open``。系统 Job ``open``（合法边短 DAG）无此字段，缺省 ``closed``。
         """
 
         wanted = str(job_id or "").strip()

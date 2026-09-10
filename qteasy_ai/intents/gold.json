@@ -73,6 +73,30 @@
       "lock": true
     },
     {
+      "id": "G7-FX",
+      "query": "explore a useful momentum factor for hs300",
+      "job": "research.factor_explore",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "G7-FX-ZH",
+      "query": "帮我找一个沪深300上有用的动量因子",
+      "job": "research.factor_explore",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "G7-BUILDER-OPEN",
+      "query": "还没想好规则，帮我设计一个策略",
+      "job": "strategy.builder",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
       "id": "A2",
       "query": "show me macd strategy parameters",
       "job": "strategy.meta",
