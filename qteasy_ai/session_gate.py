@@ -5,7 +5,7 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# 跟进句三分类：补槽 / 改槽 / 新意图。
+# 跟进句分类：补槽 / 改槽 / 新意图 / 执行计划 / 只讨论 / 跳过澄清。
 # ======================================
 
 """会话门叠在 H′ 之上。补槽/改槽不调用 classify。"""
@@ -40,12 +40,48 @@ _JOB_VERBS = (
     ("data.refill", ("下载", "download", "refill", "灌数据")),
     ("research.screen", ("筛股", "筛选", "screen")),
     ("research.factor_explore", ("因子探索", "explore a useful momentum", "找有用因子")),
+    ("strategy.meta", ("list built-in", "list strategies", "内置交易策略", "内置策略", "列出所有内置")),
     ("strategy.builder", ("生成策略", "写策略", "创建策略", "strategybuilder", "帮我写", "写一个", "设计一个策略")),
     ("data.summary", ("波动率", "摘要", "summary")),
 )
 
 _FOLLOWUP_KINDS = frozenset(
-    {"fill_slot", "change_slot", "new_intent", "confirm", "clarify", "propose_trial", "abandon_trial", "lock_spec"}
+    {
+        "fill_slot",
+        "change_slot",
+        "new_intent",
+        "confirm",
+        "clarify",
+        "propose_trial",
+        "abandon_trial",
+        "lock_spec",
+        "execute_plan",
+        "discuss_only",
+        "skip_clarify",
+    }
+)
+_PLAN_ID_RE = re.compile(r"plan_[0-9a-f]+", flags=re.IGNORECASE)
+_DISCUSS_ONLY = (
+    "本次只讨论",
+    "不出计划",
+    "不运行",
+    "just discuss",
+    "discuss only",
+    "don't plan",
+    "do not plan",
+    "no plan this time",
+)
+_EXECUTE_PLAN_HINTS = (
+    "执行上面的计划",
+    "运行该计划",
+    "请执行计划",
+    "请运行计划",
+    "执行计划",
+    "运行计划",
+    "run this plan",
+    "execute the plan",
+    "run the plan",
+    "execute plan",
 )
 
 
@@ -84,7 +120,10 @@ class SessionGate:
         """
 
         text = (query or "").strip()
-        # 放弃确认门优先于 LLM，避免 awaiting_abandon 被跟进分类绕过。
+        hatch = _hatch_decision(session, text)
+        if hatch is not None:
+            return hatch
+        # 开放环放弃确认仍优先于 LLM（G.7）。闭合 Job 不再进入 awaiting_abandon。
         if session.awaiting_abandon:
             return self._classify_rule(session, text)
         if session.active_design:
@@ -109,8 +148,22 @@ class SessionGate:
             idle_action = classify_open_utterance(text)
             if idle_action in {"lock_spec", "propose_trial", "abandon_trial", "abandon_open"}:
                 return GateDecision(kind="open_idle", rationale=idle_action)
-        # 已完成任务：下一句一律新意图，禁止再 fill_slot 进旧 Job（含 Mode-D）。
+        hinted_job = self._hinted_job(text, text.lower())
+        active_job = str((session.active_intent or {}).get("job") or "")
+        if hinted_job and hinted_job != active_job:
+            return GateDecision(
+                kind="new_intent",
+                needs_abandon=bool(session.active_design),
+                rationale="new_intent_job_verb",
+            )
         if session.task_complete and session.active_intent:
+            if self._is_affirm(text, text.lower()):
+                return GateDecision(kind="confirm", rationale="affirm_after_plan")
+            patches = extract_patches(text)
+            if patches and self._is_change(text, text.lower()):
+                return GateDecision(kind="change_slot", patches=patches, rationale="change_after_complete")
+            if (session.pending_clarification or session.missing) and patches:
+                return GateDecision(kind="fill_slot", patches=patches, rationale="fill_after_complete")
             return GateDecision(kind="new_intent", rationale="new_after_complete")
         if self.provider is not None and session.active_intent:
             return self._classify_llm(session, text)
@@ -138,13 +191,11 @@ class SessionGate:
         hinted_job = self._hinted_job(text, lower)
         active_job = str((session.active_intent or {}).get("job") or "")
         if hinted_job and hinted_job != active_job:
-            if session.task_incomplete() and not session.task_complete:
-                return GateDecision(
-                    kind="new_intent",
-                    needs_abandon=True,
-                    rationale="new_intent_incomplete",
-                )
-            return GateDecision(kind="new_intent", rationale="new_intent_idle")
+            return GateDecision(
+                kind="new_intent",
+                needs_abandon=bool(session.active_design),
+                rationale="new_intent_job_verb",
+            )
 
         patches = extract_patches(text)
         if patches:
@@ -152,6 +203,8 @@ class SessionGate:
             return GateDecision(kind=kind, patches=patches, rationale=kind)
         if self._is_affirm(text, lower):
             return GateDecision(kind="confirm", rationale="affirm")
+        if not (session.pending_clarification or session.missing):
+            return GateDecision(kind="new_intent", rationale="followup_no_pending")
         return GateDecision(kind="fill_slot", patches={}, rationale="followup_no_patch")
 
     def _classify_llm(self, session: ConversationState, text: str) -> GateDecision:
@@ -159,7 +212,7 @@ class SessionGate:
 
         prompt = (
             "Classify a follow-up. Reply JSON only: "
-            '{"followup":"fill_slot|change_slot|new_intent|confirm","patches":{}} . '
+            '{"followup":"fill_slot|change_slot|new_intent|confirm|execute_plan|discuss_only","patches":{}} . '
             f"Active job: {(session.active_intent or {}).get('job')}. "
             f"Slots: { {k: v.to_dict() for k, v in session.slots.items()} }. "
             f"Missing: {session.missing}. Utterance: {text}"
@@ -174,9 +227,9 @@ class SessionGate:
         if "steps" in parsed:
             return GateDecision(kind="clarify", source="llm", rationale="steps_not_allowed")
         patches = parsed.get("patches") if isinstance(parsed.get("patches"), dict) else {}
-        needs_abandon = False
-        if kind == "new_intent" and session.task_incomplete():
-            needs_abandon = True
+        if kind == "fill_slot" and not (session.pending_clarification or session.missing):
+            return GateDecision(kind="new_intent", source="llm", rationale="fill_without_pending")
+        needs_abandon = bool(kind == "new_intent" and session.active_design)
         return GateDecision(
             kind=kind,
             patches=dict(patches),
@@ -217,10 +270,80 @@ class SessionGate:
         return ""
 
 
+def extract_plan_id(text: str) -> str:
+    """抽出 ``plan_[0-9a-f]+``；没有则空串。"""
+
+    match = _PLAN_ID_RE.search(str(text or ""))
+    return str(match.group(0)).lower() if match else ""
+
+
+def is_discuss_only(text: str) -> bool:
+    """plan/run 句是否明确只要讨论、不要计划。"""
+
+    raw = str(text or "")
+    lower = raw.lower()
+    return any(token in raw or token in lower for token in _DISCUSS_ONLY)
+
+
+def is_execute_plan_utterance(text: str) -> bool:
+    """是否口头执行当前或句中计划。"""
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    lower = raw.lower()
+    if any(token in raw or token in lower for token in _EXECUTE_PLAN_HINTS):
+        return True
+    compact = re.sub(r"\s+", "", raw).lower()
+    return bool(_PLAN_ID_RE.fullmatch(compact))
+
+
+def is_skip_clarify(text: str) -> bool:
+    """整句 skip / 跳过。"""
+
+    compact = re.sub(r"[\s,，。.!！]", "", str(text or "")).lower()
+    return compact in {"skip", "跳过", "跳过吧", "skipit"}
+
+
+def _hatch_decision(session: ConversationState, text: str) -> Optional[GateDecision]:
+    """模式缺口与 skip：优先于 LLM / 完成态一律 new_intent。"""
+
+    if is_discuss_only(text):
+        return GateDecision(kind="discuss_only", rationale="discuss_only")
+    if is_skip_clarify(text) and (session.pending_clarification or session.missing):
+        return GateDecision(kind="skip_clarify", rationale="skip_clarify")
+    if is_execute_plan_utterance(text):
+        patches: Dict[str, Any] = {}
+        plan_id = extract_plan_id(text)
+        if plan_id:
+            patches["plan_id"] = plan_id
+        return GateDecision(kind="execute_plan", patches=patches, rationale="execute_plan")
+    return None
+
+
 def extract_patches(text: str) -> Dict[str, Any]:
-    """从跟进句抽出槽补丁（日期 / 标的 / 慢线）。"""
+    """从跟进句抽出槽补丁（日期 / 标的 / 慢线 / strategy_id）。"""
 
     patches: Dict[str, Any] = {}
+    raw = str(text or "").strip()
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{1,31}", raw):
+        patches["strategy_id"] = raw
+    else:
+        named_sid = re.search(
+            r"strategy_id\s*(?:是|为|=|:|：)\s*([A-Za-z][A-Za-z0-9_]+)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if named_sid:
+            patches["strategy_id"] = named_sid.group(1)
+        else:
+            named_sid = re.search(
+                r"策略(?:\s*id)?\s*(?:是|为|=|:|：)\s*([A-Za-z][A-Za-z0-9_]+)",
+                raw,
+                flags=re.IGNORECASE,
+            )
+            if named_sid:
+                patches["strategy_id"] = named_sid.group(1)
     market = Planner._extract_market_inputs(text)
     for key in ("start", "end", "shares", "freq"):
         if market.get(key):

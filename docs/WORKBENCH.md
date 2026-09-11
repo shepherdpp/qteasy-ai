@@ -17,6 +17,7 @@ qteasy-ai serve --host 127.0.0.1 --port 8765
 Open `http://127.0.0.1:8765`. Columns: **Session** (conversation, clarification, Plan confirm card, step checklist, composer) · **Artifacts** (tables, charts, code, reports) · **Workspace** (Now: job/slots/env; Files: `runs/` · `strategies/` · `user_kb/` tree). Workspace is collapsible. Enter inserts a newline; Ctrl/⌘+Enter sends.
 
 - Ask / Plan / Agent are explicit. Completing slots does **not** auto-execute.
+- Plan success completes the utterance (keeps `plan_id`). Confirm is an optional shortcut for `run_plan` and does **not** block the composer. Cancel dismisses the card; it does not abandon a closed job.
 - Confirm runs `POST /v1/run-plan` with the reviewed `plan_id` (same as `qteasy-ai run --plan-id`). Editing `plan.md` does **not** change execution.
 - Runs are stored in the same `.qteasy/ai/runs/` directory as the CLI.
 - `GET /v1/sessions` lists saved sessions; `GET /v1/workspace` lists local files. Neither searches user KB.
@@ -31,7 +32,7 @@ qteasy-ai tui --session-id demo
 
 The TUI covers Ask, Plan confirmation, and `steps[]`. It does **not** show Artifact tabs; confirm still uses the DTO `plan_card`. Web reviews `plan.md` as a `plan` Artifact instead of dumping it into chat.
 
-Human-card review (G.8): [LIVE_FIRE_DRILL_QAI7_HUMAN.md](LIVE_FIRE_DRILL_QAI7_HUMAN.md).
+Human-card review (G.8/G.9): [LIVE_FIRE_DRILL_QAI7_HUMAN.md](LIVE_FIRE_DRILL_QAI7_HUMAN.md).
 
 ## Safety
 

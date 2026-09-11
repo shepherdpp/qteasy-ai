@@ -246,7 +246,8 @@ class Planner:
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
-        decision = maybe_mark_builder_open_loop(decision, user_query.strip())
+        mark_query = query if skip else user_query.strip()
+        decision = maybe_mark_builder_open_loop(decision, mark_query)
         catalog = self.intent_engine.catalog
         design = is_design_loop(catalog, decision) or (
             session is not None and isinstance(getattr(session, "active_design", None), dict)
@@ -443,6 +444,9 @@ class Planner:
                     )
                     if count:
                         step.inputs["query"] = rewritten
+            if name == "qt.ai.strategy_meta.get":
+                if _val("strategy_id"):
+                    step.inputs["strategy_id"] = _val("strategy_id")
         if self._is_clarify_fallback(steps):
             job = str(((getattr(session, "active_intent", None) or {}).get("job") or ""))
             if job == "data.refill" and _val("start") and _val("end"):
@@ -461,6 +465,15 @@ class Planner:
                 )
                 if rebuilt:
                     return rebuilt
+            if _val("strategy_id") and job in {"strategy.meta", "clarify", ""}:
+                sid = str(_val("strategy_id"))
+                return [
+                    self._make_step(
+                        step_id="step_1",
+                        skill_name="qt.ai.strategy_meta.get",
+                        inputs={"strategy_id": sid},
+                    )
+                ]
         return steps
 
     def _apply_optional_defaults(
@@ -542,12 +555,12 @@ class Planner:
                     found = True
             if not found:
                 missing.append(key)
-        if self._is_clarify_fallback(steps) and not missing and required:
+        if self._is_clarify_fallback(steps) and not missing:
             info = str((steps[0].inputs or {}).get("missing_info") or "")
             if "date" in info:
                 missing = ["start", "end"]
             elif info:
-                missing = [part for part in info.replace("|", ",").split(",") if part]
+                missing = [part.strip() for part in info.replace("|", ",").split(",") if part.strip()]
         return missing
 
     @staticmethod
@@ -555,11 +568,24 @@ class Planner:
         """结构化澄清载荷（英文用户文案）。"""
 
         pending = [{"name": name, "hint": f"Please provide {name}."} for name in missing]
-        return {
+        options: List[Dict[str, str]] = []
+        if "strategy_id" in missing:
+            for sid in ("macd", "dma", "bband", "rsi", "kdj"):
+                options.append({"id": sid, "label": sid})
+            prompt = (
+                "Which built-in strategy? Reply with an id such as macd, "
+                "or type skip to end this question."
+            )
+        else:
+            prompt = "Reply with the missing fields, or say yes if the restatement is correct."
+        blob: Dict[str, Any] = {
             "restatement": f"You asked: {query}",
             "pending": pending,
-            "confirm_prompt": "Reply with the missing fields, or say yes if the restatement is correct.",
+            "confirm_prompt": prompt,
         }
+        if options:
+            blob["options"] = options
+        return blob
 
     _DATA_INTENT_SKILLS = {
         "qt.ai.data.summary_kline",

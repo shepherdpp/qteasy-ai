@@ -1,6 +1,6 @@
 # Q-AI.7 Open loop live-fire (G.7)
 
-**Status: Hang (2026-09-11).** Coding + CLI gold path landed; **do not close G.7**. Resume after **G.8** close-out. Do not close G.6, do not tag 1.0, do not bump semver.
+**Status: Hang (2026-09-11).** Coding + CLI gold path landed; **do not close G.7**. Resume after **G.8+G.9** close-out. Do not close G.6, do not tag 1.0, do not bump semver.
 
 Baseline: qteasy-ai workbench extra · qteasy **>=2.6** · Python **py39**
 
@@ -55,7 +55,7 @@ KB write order: **lock → `--confirm-kb-write` → then `--abandon-open`**. Aba
 
 ## Close bar
 
-Jackie signs O1–O8 **after G.8**. This slice stays Hang. **Does not** close G.6. **Does not** ship 1.0.
+Jackie signs O1–O8 **after G.8+G.9**. This slice stays Hang. **Does not** close G.6. **Does not** ship 1.0.
 
 ## Cross links
 

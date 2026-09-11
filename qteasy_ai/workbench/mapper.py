@@ -625,6 +625,7 @@ def map_assistant_payload(
         missing_from_pending = []
 
     execution = _execution_view(raw)
+    # Confirm 是可选快捷，不作为 incomplete 门；澄清 fallback 仍不可点 Confirm。
     confirmable = str(execution.get("status") or "") == "dry_run" and bool(card_steps)
     if isinstance(clarification, dict) and clarification:
         skills = [step.skill_name for step in card_steps]

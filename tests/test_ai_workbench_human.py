@@ -95,17 +95,14 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             self.assertFalse((store.runs_dir / f"{plan_id}.json").exists())
             self.assertFalse((store.runs_dir / f"{plan_id}.plan.md").exists())
             self.assertIn("[MODE: PLAN]  dry_run — not executed", text)
-            self.assertIn("Job:", text)
-            self.assertIn("Steps: 1", text)
-            self.assertIn("Skill: qt.ai.strategy_meta.list", text)
-            self.assertIn("Calls: qteasy.built_in_list", text)
-            self.assertIn("Expects:", text)
-            self.assertIn("strategies", text)
-            self.assertIn("Confirm: qteasy-ai run --plan-id", text)
+            self.assertIn("Plan ready.", text)
             self.assertIn(plan_id, text)
-            self.assertIn(run_id, text)
-            self.assertIn(str(json_path), text)
-            self.assertIn(str(md_path), text)
+            self.assertIn("just discuss", text)
+            self.assertIn("run this plan", text)
+            self.assertNotIn("Job:", text)
+            self.assertNotIn("Skill: qt.ai.strategy_meta.list", text)
+            self.assertNotIn("Calls: qteasy.built_in_list", text)
+            self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
             self.assertNotIn("# ToolPlan", text)
             self.assertNotIn("**inputs**", text)
             self.assertNotIn("gold_lock", text)
@@ -152,14 +149,11 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             registry=registry,
         )
         print(" human:", text)
-        self.assertIn("Job: data.read", text)
-        self.assertIn("Steps: 1", text)
-        calls_lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("Calls:")]
-        print(" calls:", calls_lines)
-        self.assertEqual(calls_lines, ["Calls: qteasy.get_history_data"])
-        self.assertIn("names=close", text)
-        self.assertIn("shares=000300.SH", text)
-        self.assertIn("Expects:", text)
+        self.assertIn("Plan ready.", text)
+        self.assertIn("plan_id: plan_demo", text)
+        self.assertIn("just discuss", text)
+        self.assertNotIn("Job: data.read", text)
+        self.assertNotIn("Calls: qteasy.get_history_data", text)
         self.assertNotIn("# ToolPlan", text)
         self.assertNotIn("gold_lock", text)
 
@@ -222,15 +216,15 @@ class TestAiWorkbenchHuman(unittest.TestCase):
         print(" human:", text)
         self.assertIn("[MODE: RUN]  executed", text)
         self.assertIn("Status: success", text)
-        self.assertIn("Job: strategy.meta", text)
-        self.assertIn("macd", text)
-        self.assertIn("trix", text)
-        self.assertIn("2 built-in ids", text)
+        self.assertIn("count=2", text)
+        self.assertIn("2 items", text)
+        self.assertNotIn("Job: strategy.meta", text)
+        self.assertNotIn("macd, trix", text)
         self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
         self.assertNotIn("Review plan before execute.", text)
 
     def test_run_get_shows_strategy_doc(self) -> None:
-        """strategy_meta.get：human 打印 docstring，不只 skill 名。"""
+        """strategy_meta.get：result 只回显 JSON 标量，docstring 进 Artifact。"""
 
         print("\n[TestAiWorkbenchHuman] run get trix doc")
         registry = build_default_registry()
@@ -278,11 +272,11 @@ class TestAiWorkbenchHuman(unittest.TestCase):
         print(" human:", text)
         print(" gold doc:", doc)
         self.assertIn("[MODE: RUN]  executed", text)
-        self.assertIn("Skill: qt.ai.strategy_meta.get", text)
+        self.assertIn("Status: success", text)
         self.assertIn("strategy_id=trix", text)
-        self.assertIn("Calls: qteasy.built_in_doc, qteasy.get_built_in_strategy", text)
-        self.assertIn("n: period (default 14)", text)
-        self.assertIn("TRIX oscillator.", text)
+        self.assertNotIn("Skill: qt.ai.strategy_meta.get", text)
+        self.assertNotIn("n: period (default 14)", text)
+        self.assertNotIn("TRIX oscillator.", text)
         self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
 
     def test_run_failed_step_shows_error(self) -> None:
@@ -325,8 +319,8 @@ class TestAiWorkbenchHuman(unittest.TestCase):
         print(" human:", text)
         self.assertIn("[MODE: RUN]  executed", text)
         self.assertIn("Status: partial_failed", text)
-        self.assertIn("Result: FAILED", text)
         self.assertIn("Failed to get strategy details: unknown id.", text)
+        self.assertNotIn("Result: FAILED", text)
 
     def test_run_data_read_shows_summary_not_rows(self) -> None:
         """data.read：只打 summary/metrics，不倾倒行数据。"""
@@ -371,14 +365,17 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             registry=build_default_registry(),
         )
         print(" human:", text)
-        self.assertIn("summary: channel=history, n_rows=200", text)
+        self.assertIn("Status: success", text)
+        self.assertIn("n_rows=200", text)
         self.assertIn("close_min=1", text)
-        self.assertIn("Calls: qteasy.get_history_data", text)
+        self.assertIn("200 items", text)
+        self.assertNotIn("summary: channel=history, n_rows=200", text)
+        self.assertNotIn("Calls: qteasy.get_history_data", text)
         self.assertNotIn("close=199", text)
         self.assertNotIn("[{'close': 0}", text)
 
     def test_run_live_get_trix_includes_built_in_doc(self) -> None:
-        """实跑 get trix：human 含 built_in_doc 金句。"""
+        """实跑 get trix：human 含 strategy_id 标量，不含整份 docstring。"""
 
         print("\n[TestAiWorkbenchHuman] live run trix parameters")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -397,12 +394,13 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             print(" skill:", result.get("skill_name"))
             print(" doc head:", doc[:180])
             self.assertIn("[MODE: RUN]  executed", text)
-            self.assertIn("qt.ai.strategy_meta.get", text)
+            self.assertIn("Status: success", text)
             self.assertIn("trix", text.lower())
+            self.assertNotIn("qt.ai.strategy_meta.get", text)
             gold = next((line.strip() for line in doc.splitlines() if line.strip()), "")
             print(" gold line:", gold)
             self.assertTrue(gold)
-            self.assertIn(gold[:40], text)
+            self.assertNotIn(gold[:40], text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
 
 

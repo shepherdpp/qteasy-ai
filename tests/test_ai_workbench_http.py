@@ -324,7 +324,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             ready = [m for m in loaded.messages if m.get("kind") == "plan_ready"]
             print(" plan ready count:", len(ready), ready)
             self.assertGreaterEqual(len(ready), 2)
-            self.assertTrue(all("List built-in strategies" in str(m.get("text") or "") for m in ready))
+            self.assertTrue(all("Plan ready." in str(m.get("text") or "") for m in ready))
+            self.assertTrue(all("plan_id:" in str(m.get("text") or "") for m in ready))
             user_lines = [m for m in loaded.messages if m.get("kind") == "user_text"]
             print(" user_text count:", len(user_lines))
             self.assertEqual(len(user_lines), 2)

@@ -225,11 +225,14 @@ class TestAiNotebookMagic(unittest.TestCase):
                 assistant=assistant,
             )
             print(" plan display:", plan_text[:400])
-            self.assertIn("qt.ai.strategy_meta.list", plan_text)
-            self.assertIn("Calls: qteasy.built_in_list", plan_text)
-            self.assertIn("Job:", plan_text)
+            self.assertIn("Plan ready.", plan_text)
+            self.assertIn("plan_id:", plan_text)
+            self.assertIn("just discuss", plan_text)
+            self.assertNotIn("qt.ai.strategy_meta.list", plan_text)
+            self.assertNotIn("Calls: qteasy.built_in_list", plan_text)
+            self.assertNotIn("Job:", plan_text)
             self.assertNotIn("# ToolPlan", plan_text)
-            self.assertIn("Confirm: qteasy-ai run --plan-id", plan_text)
+            self.assertNotIn("Confirm: qteasy-ai run --plan-id", plan_text)
 
 
 if __name__ == "__main__":

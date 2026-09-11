@@ -226,6 +226,19 @@ def execute_magic_command(
         )
         return {"mode": "plan", "result": result, "confirm_hint": ""}
 
+    hatched = assistant._maybe_hatch_mode_gap(
+        command.query,
+        session_id=session_id,
+        requested_mode="run",
+        response_style=command.response_style,
+        persist=command.persist,
+        keep=command.keep,
+        explanation_depth=command.explanation_depth,
+        agent_auto=agent_auto,
+    )
+    if hatched is not None:
+        return {"mode": "run", "result": hatched, "confirm_hint": ""}
+
     # mode == run 且无 confirm：先产出 dry-run plan，再给确认 token。
     plan, _session = assistant._assemble_plan(
         command.query,

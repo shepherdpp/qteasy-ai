@@ -60,10 +60,10 @@ class TestAiSessionGate(unittest.TestCase):
         self.assertEqual(session.slots["shares"].source, "user")
         self.assertTrue(session.slots["shares"].confirmed)
 
-    def test_new_intent_needs_abandon_keeps_session(self) -> None:
-        """未确认回测时「再帮我优化」要放弃确认，不是 Job 栈。"""
+    def test_new_intent_skips_without_abandon_card(self) -> None:
+        """未执行的回测上换题：new_intent，不要闭合 abandon 卡。"""
 
-        print("\n[TestAiSessionGate] new_intent abandon")
+        print("\n[TestAiSessionGate] new_intent skip no abandon")
         gate = SessionGate(provider=None)
         session = _backtest_session()
         session.missing = []
@@ -71,17 +71,38 @@ class TestAiSessionGate(unittest.TestCase):
         print(" kind:", decision.kind, "needs_abandon:", decision.needs_abandon)
         print(" active still:", session.active_intent)
         self.assertEqual(decision.kind, "new_intent")
-        self.assertTrue(decision.needs_abandon)
+        self.assertFalse(decision.needs_abandon)
         self.assertEqual(session.active_intent["job"], "backtest.builtin")
-        session.awaiting_abandon = True
-        confirm = gate.classify(session, "放弃")
-        print(" abandon confirm:", confirm.kind, confirm.abandon_confirmed)
-        self.assertEqual(confirm.kind, "new_intent")
-        self.assertTrue(confirm.abandon_confirmed)
         self.assertEqual(session.session_id, "g1")
-        session.turns.append({"query": "再帮我优化参数"})
-        print(" turns remain:", session.turns)
-        self.assertEqual(len(session.turns), 1)
+
+    def test_execute_plan_and_discuss_only(self) -> None:
+        """口头执行 / 只讨论 优先于完成态一律 new_intent。"""
+
+        print("\n[TestAiSessionGate] execute_plan discuss_only")
+        gate = SessionGate(provider=None)
+        session = _backtest_session(complete=True)
+        session.missing = []
+        run_it = gate.classify(session, "请执行上面的计划")
+        print(" execute:", run_it.kind, run_it.patches)
+        self.assertEqual(run_it.kind, "execute_plan")
+        named = gate.classify(session, "请运行计划plan_a2c183f29899")
+        print(" named:", named.kind, named.patches)
+        self.assertEqual(named.kind, "execute_plan")
+        self.assertEqual(named.patches.get("plan_id"), "plan_a2c183f29899")
+        talk = gate.classify(session, "本次只讨论，什么是 qteasy")
+        print(" discuss:", talk.kind)
+        self.assertEqual(talk.kind, "discuss_only")
+
+    def test_skip_clarify_utterance(self) -> None:
+        """澄清中 skip → skip_clarify。"""
+
+        print("\n[TestAiSessionGate] skip clarify")
+        gate = SessionGate(provider=None)
+        session = _backtest_session()
+        session.pending_clarification = {"confirm_prompt": "Which strategy?"}
+        decision = gate.classify(session, "跳过")
+        print(" kind:", decision.kind)
+        self.assertEqual(decision.kind, "skip_clarify")
 
     def test_awaiting_abandon_blocks_llm_followup(self) -> None:
         """awaiting_abandon 时优先规则门，不被 LLM confirm 绕过。"""
@@ -138,7 +159,6 @@ class TestAiSessionGate(unittest.TestCase):
         decision = gate.classify(session, query)
         print(" kind:", decision.kind, "rationale:", decision.rationale, "patches:", decision.patches)
         self.assertEqual(decision.kind, "new_intent")
-        self.assertEqual(decision.rationale, "new_after_complete")
         self.assertEqual(decision.patches, {})
 
     def test_mode_d_valid_followup(self) -> None:

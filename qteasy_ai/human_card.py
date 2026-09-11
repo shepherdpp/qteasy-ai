@@ -200,6 +200,33 @@ def project_human_cards(
     if include_user_text and asked:
         cards.append(make_card("user_text", asked, {}))
 
+    if raw.get("topic_skipped"):
+        cards.append(
+            make_card(
+                "mode_notice",
+                "Previous topic skipped.",
+                {"requested_mode": requested, "effective_kind": "skip"},
+            )
+        )
+    hatch = str(raw.get("hatch") or "").strip()
+    hatch_pid = str(raw.get("hatch_plan_id") or "").strip()
+    if hatch == "plan_mode_execute" and hatch_pid:
+        cards.append(
+            make_card(
+                "mode_notice",
+                f"You asked to run {hatch_pid} from Plan mode.",
+                {"requested_mode": requested, "effective_kind": "run", "plan_id": hatch_pid},
+            )
+        )
+    elif hatch == "run_plan_id" and hatch_pid:
+        cards.append(
+            make_card(
+                "mode_notice",
+                f"You asked to run {hatch_pid}.",
+                {"requested_mode": requested, "effective_kind": "run", "plan_id": hatch_pid},
+            )
+        )
+
     if requested in {"plan", "run"} and effective == "ask":
         cards.append(
             make_card(
@@ -318,16 +345,7 @@ def project_human_cards(
                 {"plan_id": plan_id, "run_id": run_id, "steps": _step_ticks(exec_steps)},
             )
         )
-        brief = _run_brief_lines(plan=plan, execution=execution, registry=registry, query=asked)
-        brief.extend(
-            _storage_lines(
-                plan_id=plan_id,
-                run_id=run_id,
-                run_file=str(raw.get("run_file") or ""),
-                plan_md_file="",
-                show_markdown=False,
-            )
-        )
+        brief = _slim_result_lines(plan=plan, execution=execution)
         result_text = "\n".join(brief)
         if not str(result_text or "").strip():
             result_text = "No rows or metrics in the result."
@@ -349,19 +367,15 @@ def project_human_cards(
         skills = [row["skill_name"] for row in card_steps]
         if skills and all(name == "qt.ai.system.fallback" for name in skills):
             confirmable = False
-        brief = _plan_brief_lines(plan=plan, card_steps=card_steps, registry=registry, query=asked)
-        if confirmable and plan_id:
-            brief.append(f"Confirm: qteasy-ai run --plan-id {plan_id}")
-        brief.extend(
-            _storage_lines(
-                plan_id=plan_id,
-                run_id=run_id,
-                run_file=str(raw.get("run_file") or ""),
-                plan_md_file=str(raw.get("plan_md_file") or ""),
-                show_markdown=True,
-            )
+        brief = _slim_plan_ready_lines(
+            plan=plan,
+            card_steps=card_steps,
+            plan_id=plan_id,
+            run_id=run_id,
+            plan_md_file=str(raw.get("plan_md_file") or ""),
+            confirmable=confirmable,
         )
-        text = "\n".join(["Plan ready."] + brief)
+        text = "\n".join(brief)
         cards.append(
             make_card(
                 "plan_ready",
@@ -725,96 +739,85 @@ def _storage_lines(
             lines.append(f"- Markdown: {md_path}")
         elif rid:
             lines.append(f"- Markdown: <QTEASY_AI_HOME>/runs/{rid}.plan.md")
-    lines.append("There is no plan_<id>.json; grep runs/*.json for the plan_id.")
     return lines
 
 
-def _plan_brief_lines(
+def _slim_plan_ready_lines(
     *,
     plan: Dict[str, Any],
     card_steps: Sequence[Dict[str, Any]],
-    registry: Any,
-    query: str,
+    plan_id: str,
+    run_id: str,
+    plan_md_file: str,
+    confirmable: bool,
 ) -> List[str]:
-    """Job / 步数 / API / 参数；不引用 plan.md 正文。"""
+    """plan_ready 短通知：已创建、plan_id、风险一句、Artifact、两条缺口。"""
 
-    raw_steps = [item for item in (plan.get("steps") or []) if isinstance(item, dict)]
-    raw_by_id = {str(item.get("step_id") or ""): item for item in raw_steps}
-    steps = list(card_steps or [])
-    asked = str(plan.get("user_query") or query or "").strip()
-    effects_rows = [dict(step.get("side_effects") or {}) for step in steps]
-    lines = [f"Job: {_job_name(plan)}"]
-    if asked:
-        lines.append(f"You asked: {asked}")
-    lines.append(f"Steps: {len(steps)}")
-    lines.append(f"Overall risk: {_overall_risk(effects_rows)}")
-    for idx, step in enumerate(steps, start=1):
-        raw = raw_by_id.get(str(step.get("step_id") or ""))
-        if raw is None and idx - 1 < len(raw_steps):
-            raw = raw_steps[idx - 1]
-        if not isinstance(raw, dict):
-            raw = {}
-        inputs = raw.get("inputs") if isinstance(raw.get("inputs"), dict) else {}
-        effects = effects_rows[idx - 1] if idx - 1 < len(effects_rows) else {}
-        skill = str(step.get("skill_name") or "")
-        meta = _lookup_meta(registry, skill)
-        title = str(getattr(meta, "summary", "") or "").strip() or skill
-        schema = getattr(meta, "outputs_schema", None) if meta is not None else None
-        lines.append(f"{idx}. {title}")
-        lines.append(f"   Skill: {skill}")
-        lines.append(f"   Calls: {_format_calls(skill, meta, inputs)}")
-        lines.append(f"   Parameters: {_format_params(inputs)}")
-        lines.append(f"   Expects: {_format_expects(schema)}")
-        lines.append(
-            f"   Risk: {_risk_label(effects, needs_confirm=bool(step.get('needs_confirm')))}"
-        )
+    effects_rows = [dict(step.get("side_effects") or {}) for step in card_steps]
+    risk = _overall_risk(effects_rows)
+    lines = ["Plan ready."]
+    pid = str(plan_id or "").strip()
+    if pid:
+        lines.append(f"plan_id: {pid}")
+    if confirmable and risk not in {"readonly"} and "readonly" not in risk.lower():
+        lines.append(f"Risk: {risk} (needs confirm to execute).")
+    else:
+        label = "read-only" if risk in {"readonly"} or "readonly" in risk.lower() else risk
+        lines.append(f"Risk: {label}.")
+    md_path = str(plan_md_file or "").strip()
+    rid = str(run_id or "").strip()
+    if md_path:
+        lines.append(f"Artifact: {md_path}")
+    elif rid:
+        lines.append(f"Artifact: <QTEASY_AI_HOME>/runs/{rid}.plan.md")
+    lines.append(
+        "To execute, say so in Plan mode (run this plan / 执行上面的计划) or use Confirm."
+    )
+    lines.append("To discuss only, say just discuss / 本次只讨论 (Ask; no plan).")
+    del plan
     return lines
 
 
-def _run_brief_lines(
-    *,
-    plan: Dict[str, Any],
-    execution: Dict[str, Any],
-    registry: Any,
-    query: str,
-) -> List[str]:
-    """Job / 参数 / result.payload。"""
+def _slim_result_lines(*, plan: Dict[str, Any], execution: Dict[str, Any]) -> List[str]:
+    """result 短摘要：status、少数 JSON 标量、计数、下一步。"""
 
-    raw_plan_steps = [item for item in (plan.get("steps") or []) if isinstance(item, dict)]
-    plan_by_id = {str(item.get("step_id") or ""): item for item in raw_plan_steps}
-    exec_steps = [item for item in (execution.get("steps") or []) if isinstance(item, dict)]
-    asked = str(plan.get("user_query") or query or "").strip()
     status = str(execution.get("status") or "").strip() or "unknown"
-    lines = [f"Job: {_job_name(plan)}"]
-    if asked:
-        lines.append(f"You asked: {asked}")
-    lines.append(f"Status: {status}")
-    lines.append(f"Steps: {len(exec_steps)}")
-    for idx, item in enumerate(exec_steps, start=1):
+    lines = [f"Status: {status}"]
+    scalars: List[str] = []
+    counts: List[str] = []
+    saw_body = False
+    for item in execution.get("steps") or []:
+        if not isinstance(item, dict):
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        skill_name = str(item.get("skill_name") or result.get("skill_name") or "step")
-        step_id = str(item.get("step_id") or "")
-        plan_step = plan_by_id.get(step_id)
-        if plan_step is None and idx - 1 < len(raw_plan_steps):
-            plan_step = raw_plan_steps[idx - 1]
-        inputs: Dict[str, Any] = {}
-        if isinstance(plan_step, dict) and isinstance(plan_step.get("inputs"), dict):
-            inputs = dict(plan_step["inputs"])
-        echo = result.get("inputs_echo") if isinstance(result.get("inputs_echo"), dict) else {}
-        if not inputs and echo:
-            inputs = {key: value for key, value in echo.items() if key not in _SKIP_INPUT_KEYS}
-        meta = _lookup_meta(registry, skill_name)
-        title = str(getattr(meta, "summary", "") or "").strip() or skill_name
-        ok = result.get("ok")
-        if ok is None:
-            ok = bool(item.get("ok")) or str(item.get("status") or "") == "done"
-        skipped = bool(result.get("skipped")) or str(item.get("status") or "") == "skipped"
-        flag = "skip" if skipped else ("ok" if ok else "x")
-        lines.append(f"{idx}. [{flag}] {title}")
-        lines.append(f"   Skill: {skill_name}")
-        lines.append(f"   Calls: {_format_calls(skill_name, meta, inputs)}")
-        lines.append(f"   Parameters: {_format_params(inputs)}")
-        lines.extend(_format_result_lines(skill_name, result, skipped=skipped))
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        if result.get("ok") is False:
+            continue
+        for key, value in metrics.items():
+            text = _scalar_text(value)
+            if text is not None:
+                scalars.append(f"{key}={text}")
+                saw_body = True
+        for key, value in payload.items():
+            if str(key) in _SKIP_INPUT_KEYS:
+                continue
+            if isinstance(value, list):
+                counts.append(f"{len(value)} items")
+                saw_body = True
+                continue
+            text = _scalar_text(value)
+            if text is not None:
+                scalars.append(f"{key}={text}")
+                saw_body = True
+    for item in scalars[:3]:
+        lines.append(item)
+    for item in counts[:2]:
+        lines.append(item)
+    if not saw_body and status == "success":
+        lines.append("No rows or metrics in the result.")
+    lines.append("Next: start a new topic, or say run this plan if a plan_id is still current.")
+    del plan
     return lines
 
 

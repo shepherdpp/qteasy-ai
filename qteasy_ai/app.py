@@ -45,7 +45,15 @@ from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
 from .session import ConversationState, SessionStore
-from .session_gate import SessionGate, extract_patches, merge_facts
+from .session_gate import (
+    SessionGate,
+    extract_patches,
+    extract_plan_id,
+    is_discuss_only,
+    is_execute_plan_utterance,
+    is_skip_clarify,
+    merge_facts,
+)
 from .open_workflow import (
     apply_spec_patches,
     is_design_loop,
@@ -316,6 +324,18 @@ class QteasyAssistant:
         - plan / preview：生成可审阅 ToolPlan steps，不执行。
         """
 
+        hatched = self._maybe_hatch_mode_gap(
+            query,
+            session_id=session_id,
+            requested_mode="plan",
+            response_style=response_style,
+            persist=persist,
+            keep=keep,
+            explanation_depth=explanation_depth,
+            agent_auto=agent_auto,
+        )
+        if hatched is not None:
+            return hatched
         plan, session = self._assemble_plan(
             query,
             session_id=session_id,
@@ -362,6 +382,19 @@ class QteasyAssistant:
         live 步永不 auto。
         """
 
+        hatched = self._maybe_hatch_mode_gap(
+            query,
+            session_id=session_id,
+            requested_mode="run",
+            response_style=response_style,
+            persist=persist,
+            keep=keep,
+            explanation_depth=explanation_depth,
+            agent_auto=agent_auto,
+            on_step=on_step,
+        )
+        if hatched is not None:
+            return hatched
         plan, session = self._assemble_plan(
             query,
             session_id=session_id,
@@ -404,6 +437,8 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session_id: str | None = None,
         on_step: Any = None,
+        requested_mode: str = "run",
+        hatch: str = "",
     ) -> Dict[str, Any] | AssistantOutput:
         """从 ``runs/`` 加载已审阅 ToolPlan 并执行，禁止重新 Hybrid。
 
@@ -413,6 +448,10 @@ class QteasyAssistant:
             已落盘计划的 ``plan_id``。
         session_id : str, optional
             若提供则回写 ``task_complete`` / 清除 ``awaiting_abandon``。
+        requested_mode : str, default 'run'
+            用户入口；Plan 模式口头执行时为 ``plan``。
+        hatch : str, optional
+            模式缺口标记，写入人读 ``mode_notice``。
         """
 
         from .contracts import ToolPlan
@@ -440,7 +479,9 @@ class QteasyAssistant:
             session=session,
             on_step=on_step,
             query=str(getattr(plan, "user_query", "") or ""),
-            requested_mode="run",
+            requested_mode=str(requested_mode or "run"),
+            hatch=str(hatch or ""),
+            hatch_plan_id=str(plan_id or ""),
         )
 
     def _execute_and_format(
@@ -456,44 +497,69 @@ class QteasyAssistant:
         on_step: Optional[Any] = None,
         query: str = "",
         requested_mode: str = "plan",
+        hatch: str = "",
+        hatch_plan_id: str = "",
     ) -> Dict[str, Any] | AssistantOutput:
         """执行并按策略处理落盘与渲染。"""
 
         persist_mode = persist or self.run_policy.persist_mode
         persist_run = persist_mode in {"bounded", "audit"}
+        execute_requested = bool(confirm)
+        clarify_plan = self._plan_is_clarify(plan)
+        if clarify_plan:
+            confirm = False
         payload = self.executor.execute(plan, confirm=confirm, persist_run=False, on_step=on_step)
         plan_md = tool_plan_to_markdown(payload.get("plan") or plan)
         if confirm:
             payload["plan_md"] = ""
+        elif execute_requested:
+            payload["plan_md"] = ""
         else:
             payload["plan_md"] = plan_md
+        if hatch:
+            payload["hatch"] = hatch
+            payload["hatch_plan_id"] = str(hatch_plan_id or "")
+        assumptions = getattr(plan, "assumptions", None) or {}
+        if assumptions.get("topic_skipped"):
+            payload["topic_skipped"] = True
 
         if confirm:
             self._merge_env_facts_from_execution(payload)
-            if session is not None and str((payload.get("execution") or {}).get("status") or "") == "success":
+            if session is not None:
+                status = str((payload.get("execution") or {}).get("status") or "")
                 if session.active_design:
-                    session.current_trial_plan_id = ""
-                    updated = []
-                    for item in session.trial_queue:
-                        row = dict(item)
-                        if str(row.get("status") or "") == "active":
-                            row["status"] = "done"
-                        updated.append(row)
-                    session.trial_queue = updated
+                    if status == "success":
+                        session.current_trial_plan_id = ""
+                        updated = []
+                        for item in session.trial_queue:
+                            row = dict(item)
+                            if str(row.get("status") or "") == "active":
+                                row["status"] = "done"
+                            updated.append(row)
+                        session.trial_queue = updated
                 else:
                     session.task_complete = True
                     session.awaiting_abandon = False
-                    session.pending_clarification = None
-                    session.missing = []
+                    if status == "success":
+                        session.pending_clarification = None
+                        session.missing = []
                 self.session_store.save(session)
+        elif session is not None and not session.active_design:
+            if clarify_plan or session.pending_clarification or session.missing:
+                session.task_complete = False
+            else:
+                session.task_complete = True
+            session.awaiting_abandon = False
+            self.session_store.save(session)
 
         self._attach_session_payload(payload, plan, session)
+        write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
         if persist_run:
             run_id = str(payload.get("run_id", "")).strip()
             if run_id:
                 run_file = self.memory_store.save_run(run_id, payload)
                 payload["run_file"] = run_file
-                if confirm:
+                if confirm or not write_plan_md:
                     payload["plan_md_file"] = ""
                 else:
                     md_file = self.memory_store.save_plan_md(run_id, plan_md)
@@ -532,7 +598,7 @@ class QteasyAssistant:
             context={"persist_mode": persist_mode},
             explanation_depth=explanation_depth,
         )
-        if (not confirm) and plan_md:
+        if write_plan_md and plan_md:
             first_lines = "\n".join(plan_md.strip().splitlines()[:6])
             rendered.narrative = rendered.narrative + f"\n\nPlan (markdown preview):\n{first_lines}"
         if self.run_policy.show_save_hint:
@@ -569,6 +635,166 @@ class QteasyAssistant:
         merged = merge_env_facts(old, probe)
         self.memory_store.save_env_facts(merged)
         self.planner.env_facts = merged
+
+    def _maybe_hatch_mode_gap(
+        self,
+        query: str,
+        *,
+        session_id: str | None,
+        requested_mode: str,
+        response_style: str,
+        persist: str | None,
+        keep: bool,
+        explanation_depth: str,
+        agent_auto: Optional[bool] = None,
+        on_step: Any = None,
+    ) -> Optional[Dict[str, Any] | AssistantOutput]:
+        """两条模式缺口与 skip 澄清：不走 Hybrid。"""
+
+        del agent_auto
+        if is_discuss_only(query):
+            return self.ask(
+                query,
+                response_style=response_style,
+                persist=persist,
+                keep=keep,
+                explanation_depth=explanation_depth,
+                session_id=session_id,
+                requested_mode=requested_mode,
+            )
+        sid = str(session_id or "").strip()
+        session = self.session_store.load(sid) if sid else None
+        if is_skip_clarify(query) and session is not None and (
+            session.pending_clarification or session.missing
+        ):
+            return self._skip_clarification_result(
+                session,
+                query=query,
+                requested_mode=requested_mode,
+                response_style=response_style,
+            )
+        run_hatch = is_execute_plan_utterance(query) or (
+            requested_mode == "run" and bool(extract_plan_id(query))
+        )
+        if not run_hatch:
+            return None
+        plan_id = extract_plan_id(query) or (str(session.current_plan_id) if session is not None else "")
+        if not plan_id:
+            return self._closed_error_result(
+                query=query,
+                requested_mode=requested_mode,
+                response_style=response_style,
+                session=session,
+                code="PLAN_ID_MISSING",
+                message="No current plan to run. Create a plan first, or name plan_id in the sentence.",
+                next_action="Run plan() first, or include plan_xxxxxxxx in the sentence.",
+            )
+        hatch = "plan_mode_execute" if requested_mode == "plan" else "run_plan_id"
+        try:
+            return self.run_plan(
+                plan_id,
+                response_style=response_style,
+                persist=persist,
+                keep=keep,
+                explanation_depth=explanation_depth,
+                session_id=sid or None,
+                on_step=on_step,
+                requested_mode=requested_mode,
+                hatch=hatch,
+            )
+        except ValueError as exc:
+            return self._closed_error_result(
+                query=query,
+                requested_mode=requested_mode,
+                response_style=response_style,
+                session=session,
+                code="PLAN_ID_NOT_FOUND",
+                message=str(exc),
+                next_action="Create or select a plan in this session, then Confirm.",
+            )
+
+    def _skip_clarification_result(
+        self,
+        session: ConversationState,
+        *,
+        query: str,
+        requested_mode: str,
+        response_style: str,
+    ) -> Dict[str, Any] | AssistantOutput:
+        """skip 澄清：本句失败结束。"""
+
+        session.pending_clarification = None
+        session.missing = []
+        session.task_complete = True
+        session.awaiting_abandon = False
+        session.turns.append({"query": query, "kind": "skip_clarify"})
+        self.session_store.save(session)
+        return self._closed_error_result(
+            query=query,
+            requested_mode=requested_mode,
+            response_style=response_style,
+            session=session,
+            code="CLARIFICATION_SKIPPED",
+            message="Clarification skipped. This request ended.",
+            next_action="Start a new question, or provide the missing field next time.",
+        )
+
+    def _closed_error_result(
+        self,
+        *,
+        query: str,
+        requested_mode: str,
+        response_style: str,
+        session: Optional[ConversationState],
+        code: str,
+        message: str,
+        next_action: str,
+    ) -> Dict[str, Any] | AssistantOutput:
+        """闭合 Job 的英文 error 卡（不走 Executor）。"""
+
+        payload: Dict[str, Any] = {
+            "error": {
+                "code": str(code),
+                "message": str(message),
+                "next_action": str(next_action),
+            },
+            "execution": {"status": "failed", "steps": []},
+        }
+        if session is not None:
+            session.task_complete = True
+            session.awaiting_abandon = False
+            self.session_store.save(session)
+        dummy = ToolPlan(
+            plan_id="",
+            user_query=query,
+            steps=[],
+            assumptions={},
+            execution_mode="dry_run",
+            mode="plan",
+        )
+        self._attach_session_payload(payload, dummy, session)
+        self._attach_human_cards(
+            payload,
+            query=query,
+            requested_mode=requested_mode,
+            session=session,
+        )
+        if response_style == "raw":
+            return payload
+        return self.renderer.render(payload, style="user_friendly", context={}, explanation_depth="standard")
+
+    @staticmethod
+    def _plan_is_clarify(plan: Any) -> bool:
+        """单步 fallback clarify_required，本轮不得 execute。"""
+
+        steps = list(getattr(plan, "steps", None) or [])
+        if len(steps) != 1:
+            assumptions = getattr(plan, "assumptions", None) or {}
+            return isinstance(assumptions.get("clarification"), dict) and bool(assumptions.get("clarification"))
+        step = steps[0]
+        if str(getattr(step, "skill_name", "") or "") != "qt.ai.system.fallback":
+            return False
+        return str((getattr(step, "inputs", None) or {}).get("fallback_action") or "") == "clarify_required"
 
     def _assemble_plan(
         self,
@@ -611,6 +837,7 @@ class QteasyAssistant:
             return self._abandon_clarify_plan(query), state
 
         skip_classify = False
+        topic_skipped = False
         if gate.kind == "open_idle":
             return self._open_idle_plan(query, str(gate.rationale or "")), state
         if gate.kind == "abandon_trial":
@@ -633,13 +860,7 @@ class QteasyAssistant:
             state.open_action = "propose_trial"
             skip_classify = True
         elif gate.kind in {"fill_slot", "change_slot"}:
-            # 双保险：完成态不应走到补槽（classify 已拦截；防旧调用方）。
-            if state.task_complete:
-                self._reset_task(state, keep_turns=True)
-                state.original_query = query
-                merge_facts(state, extract_patches(query), source="extracted", confirmed=True)
-                skip_classify = False
-            else:
+            if gate.kind == "change_slot":
                 merge_facts(state, gate.patches, source="user", confirmed=True)
                 if state.active_design:
                     spec = dict((state.active_design or {}).get("spec_draft") or {})
@@ -648,14 +869,35 @@ class QteasyAssistant:
                     state.open_action = ""
                 else:
                     skip_classify = bool(state.active_intent)
+                    state.task_complete = False
+            elif state.pending_clarification or state.missing:
+                merge_facts(state, gate.patches, source="user", confirmed=True)
+                skip_classify = bool(state.active_intent)
+            else:
+                topic_skipped = bool(state.current_plan_id or state.active_intent)
+                self._reset_task(state, keep_turns=True)
+                state.original_query = query
+                merge_facts(state, extract_patches(query), source="extracted", confirmed=True)
+                skip_classify = False
         elif gate.kind == "confirm":
             for slot in state.slots.values():
                 slot.confirmed = True
             skip_classify = bool(state.active_intent)
         elif gate.kind == "clarify":
             skip_classify = bool(state.active_intent)
+        elif gate.kind == "new_intent" and not state.active_design:
+            topic_skipped = bool(
+                state.pending_clarification
+                or state.missing
+                or state.current_plan_id
+                or state.active_intent
+            )
+            self._reset_task(state, keep_turns=True)
+            state.original_query = query
+            merge_facts(state, extract_patches(query), source="extracted", confirmed=True)
         else:
-            if state.active_intent and state.task_complete:
+            if state.active_intent and state.task_complete and not state.active_design:
+                topic_skipped = bool(state.current_plan_id or state.active_intent)
                 self._reset_task(state, keep_turns=True)
             if not state.original_query:
                 state.original_query = query
@@ -668,6 +910,9 @@ class QteasyAssistant:
             skip_classify=skip_classify,
             profile=profile,
         )
+        if topic_skipped:
+            plan.assumptions = dict(plan.assumptions or {})
+            plan.assumptions["topic_skipped"] = True
         self._sync_session_from_plan(state, plan, query=query, skip_classify=skip_classify)
         state.open_action = ""
         state.turns.append(

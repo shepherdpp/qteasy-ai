@@ -183,6 +183,21 @@ class TestAiSession(unittest.TestCase):
             self.assertEqual(dumped["trial_queue"][0]["status"], "queued")
             self.assertTrue(loaded.task_incomplete())
 
+    def test_plan_ready_is_not_incomplete(self) -> None:
+        """有 current_plan_id 且 task_complete 时不是 incomplete。"""
+
+        print("\n[TestAiSession] plan ready not incomplete")
+        state = ConversationState.empty("plan-ready")
+        state.active_intent = {"job": "strategy.meta", "flags": {}}
+        state.current_plan_id = "plan_abc"
+        state.task_complete = True
+        print(" incomplete:", state.task_incomplete(), "plan_id:", state.current_plan_id)
+        self.assertFalse(state.task_incomplete())
+        state.task_complete = False
+        state.pending_clarification = {"confirm_prompt": "Which id?"}
+        print(" clarifying incomplete:", state.task_incomplete())
+        self.assertTrue(state.task_incomplete())
+
     def test_corrupt_session_falls_back(self) -> None:
         """损坏 JSON 降级为空会话。"""
 

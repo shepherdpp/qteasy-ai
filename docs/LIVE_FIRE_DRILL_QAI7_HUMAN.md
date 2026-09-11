@@ -1,6 +1,6 @@
-# Q-AI.7 G.8 人读卡实弹（Jackie 审阅）
+# Q-AI.7 G.8/G.9 人读卡与闭合 Job 实弹（Jackie 审阅）
 
-**状态：编码已落地（2026-09-11）；等人读观感反馈。不关 G.6。不关 G.7。不升版。**
+**状态：G.9 编码已落地（2026-09-12）；等人读观感与生命周期手测。不关 G.6。不关 G.7。不升版。**
 
 基线：qteasy-ai 工作台 extra · qteasy **>=2.6** · Python **py39** · **Mode-R**（可不配 Provider）
 
@@ -88,8 +88,8 @@ qteasy-ai serve --host 127.0.0.1 --port 8765
 
 | # | 操作 | 原始信息 | 人读卡（当前实现） | CLI | Web | 观感 |
 |---|------|----------|-------------------|-----|-----|------|
-| H4 | `plan "list built-in strategies"` | `execution.status=dry_run`；`plan.steps[0].skill_name=qt.ai.strategy_meta.list`；磁盘 `{run_id}.json` **和** `{run_id}.plan.md`；`plan_id` ≠ `run_id` | `[MODE: PLAN]  dry_run — not executed` + `plan_ready` 以 `Plan ready.` 开头，含 `Job: strategy.meta`、`Steps: 1`、`Skill: qt.ai.strategy_meta.list`、`Calls: qteasy.built_in_list`、`Confirm: qteasy-ai run --plan-id <plan_id>`、`Storage:` 下 `plan_id` / `run_id`。对话**不含** `# ToolPlan`。Web Artifact 有 `type=plan`，正文才是 md | ☐ | ☐ Plan；打开 Artifact `plan` 页 |  |
-| H5 | 同句 `run "list built-in strategies"`（一次性确认） | `execution.status=success`；steps 含 list skill；**无**新的 `{run_id}.plan.md`；JSON 仍在 | `[MODE: RUN]  executed` + 短卡 `executing`：`Running steps.` + `result`：`Status: success`、`N built-in ids`、若干策略 id（来自 JSON `payload.strategies` / `metrics.count`）。**无** `type=plan` Artifact。数字须能在 `--raw` 的 `metrics` / `payload` 对上 | ☐ | ☐ Agent 发同一句 |  |
+| H4 | `plan "list built-in strategies"` | `execution.status=dry_run`；`plan.steps[0].skill_name=qt.ai.strategy_meta.list`；磁盘 `{run_id}.json` **和** `{run_id}.plan.md`；`plan_id` ≠ `run_id`；有 session 时 `task_complete=true` 且保留 `current_plan_id` | `[MODE: PLAN]  dry_run — not executed` + `plan_ready` 以 `Plan ready.` 开头，含 `plan_id`、风险一句、Artifact 路径、两条缺口（execute / just discuss）。对话**不含** `# ToolPlan`、不含 Job/Calls 整表。Web Artifact 有 `type=plan`，正文才是 md。Confirm 可选，不阻塞输入 | ☐ | ☐ Plan；打开 Artifact `plan` 页 |  |
+| H5 | 同句 `run "list built-in strategies"`（一次性确认） | `execution.status=success`；steps 含 list skill；**无**新的 `{run_id}.plan.md`；JSON 仍在 | `[MODE: RUN]  executed` + 短卡 `executing`：`Running steps.` + `result`：`Status: success`、`count=N` / `N items`。**无** 73 个 id 全文、**无** `type=plan` Artifact。数字须能在 `--raw` 的 `metrics` / `payload` 对上 | ☐ | ☐ Agent 发同一句 |  |
 | H6 | H4 之后 `run --plan-id <H4 的 plan_id>` | 只执行 JSON steps；与改磁盘 md 无关 | 同 H5 结果卡；`plan_id` 仍是 H4 那个 | ☐ | ☐ Artifact / 确认卡点 Run |  |
 
 ### C. 澄清中断（先停，再补槽）
@@ -97,8 +97,11 @@ qteasy-ai serve --host 127.0.0.1 --port 8765
 | # | 操作 | 原始信息 | 人读卡（当前实现） | CLI | Web | 观感 |
 |---|------|----------|-------------------|-----|-----|------|
 | H7 | `plan "帮我下载日线" --session-id h8` | `clarify_required`；`pending_clarification.pending` 含 start/end；`execution=dry_run`；本轮**不** execute | `kind=clarify`，正文优先 `confirm_prompt`：`Reply with the missing fields, or say yes if the restatement is correct.`（或 restatement `You asked: 帮我下载日线`）。Web 是澄清表单，不是可 Confirm 执行卡 | ☐ | ☐ Plan |  |
-| H8 | 同 session：`plan "start 20240101 end 20241231" --session-id h8` | `fill_slot`；`active_intent.job` 仍为 `data.refill`；`planner_trace.source=session`；**不要**当新 H′ | 槽齐后应出 **H4 同类** `plan_ready`（Job refill、skill `qt.ai.data.refill_basic_equity_and_index`、高风险 / Confirm）。**不要**再只停在 clarify。**不要 Confirm**（无 token / 全市场） | ☐ | ☐ 同一 Session 补日期 |  |
-| H9 | 新 session：先 `plan "list built-in strategies" --session-id h8a`（不 run），再 `plan "download daily bars from 20180101 to 20201231" --session-id h8a` | 未完成任务 + 新意图 → `awaiting_abandon`；`clarification.options` 非空 | `clarify`：`Reply abandon to drop the current task. Session id and turns stay.`；`payload.options` 含 `{id: abandon}` / `{id: continue}`。Web 应能看见选项语义，不是空表单 | ☐ | ☐ |  |
+| H8 | 同 session：`plan "start 20240101 end 20241231" --session-id h8` | `fill_slot`；`active_intent.job` 仍为 `data.refill`；`planner_trace.source=session`；**不要**当新 H′ | 槽齐后应出短 `plan_ready`（`Plan ready.`、`plan_id`、风险一句、Artifact、两条缺口）。Job/Calls 整表在 Artifact，不进对话。**不要**再只停在 clarify。Confirm 可选、不阻塞；本条 **不要**点 Confirm（无 token / 全市场） | ☐ | ☐ 同一 Session 补日期 |  |
+| H9 | 新 session：先 `plan "list built-in strategies" --session-id h8a`（不 run），再 `plan "download daily bars from 20180101 to 20201231" --session-id h8a` | PlanReady 已完成；换题 **无** `awaiting_abandon` | `mode_notice`：`Previous topic skipped.` 然后新 Job 的 `plan_ready`。**无** abandon 选项卡。Composer 可直接输入 | ☐ | ☐ |  |
+| H9b | 同 session：`plan "请执行上面的计划"` | 装配层 `run_plan` 原 `plan_id`，不新 Hybrid | `mode_notice`：`You asked to run plan_xxx from Plan mode.` + `executing` / `result`。`--human` 可见 | ☐ | ☐ |  |
+| H9c | `plan "本次只讨论，什么是 qteasy"` | Ask，无 `plan_ready` | `mode_notice`（requested PLAN vs Ask）+ `ask` 卡 | ☐ | ☐ |  |
+| H9d | `run "请帮我列出内置交易策略的参数"` 再 `macd` / `skip` | 先 `clarify` + pending，**不** `partial_failed` | 下一句 `macd` 走 get；`skip` → `error`「Clarification skipped」+ `task_complete` | ☐ | ☐ |  |
 
 ### D. 错误、空结果、json_wins
 
@@ -114,14 +117,14 @@ H12 若走进开放环设计卡：记一笔「走了 design_card」，**不要**
 
 | # | 操作 | 原始信息 | 人读卡（当前实现） | CLI | Web | 观感 |
 |---|------|----------|-------------------|-----|-----|------|
-| H13 | `run "show me bband strategy parameters"`（或 Plan + Confirm） | `qt.ai.strategy_meta.get`；`payload.strategy_id=bband`；`payload.doc` 非空 | `result` 含 `id=bband` 与 docstring 摘要（过长会截断并写 `… truncated; use --raw`）。**不要**编造夏普/回撤 | ☐ | ☐ |  |
+| H13 | `run "show me bband strategy parameters"`（或 Plan + Confirm） | `qt.ai.strategy_meta.get`；`payload.strategy_id=bband`；`payload.doc` 非空（`--raw` / Artifact） | `result` 含 `strategy_id=bband` 等少量 JSON 标量。**不要**把整份 docstring 贴进对话。**不要**编造夏普/回撤 | ☐ | ☐ |  |
 | H14 | （可选，需本地库）`plan` 再 Confirm：`show summary of 000300.SH from 20240101 to 20241231` | `data.summary` / `metrics` 标量在 JSON | `result` 只回显 JSON 里已有的 `summary:` / `metrics:` `k=v`。对话区数字与 `--raw` **逐个对得上** | ☐ | ☐ |  |
 
 ### F. 对照与禁止项（抽查即可）
 
 | # | 操作 | 期望 |
 |---|------|------|
-| H15 | 任意成功 Plan：对比 CLI `--human` 与 Web 气泡 | 同一套 `Plan ready.` / Job / Confirm；Web **多** Artifact `plan` 页，不把 md 塞回对话 |
+| H15 | 任意成功 Plan：对比 CLI `--human` 与 Web 气泡 | 同一套短 `Plan ready.`（plan_id / 风险 / Artifact / 两条缺口）；Web **多** Artifact `plan` 页，不把 md 塞回对话。Confirm 可选 |
 | H16 | 任意成功 Ask / Plan：`--human` 与 `--raw` 的 `human_cards[].text` 拼接 | 除 `[MODE: …]` 与 Ask 的 `Sources:` 行外，正文一致 |
 | H17 | 全文搜索对话 / `--human` | **无** `gold_lock`、`hybrid_intent`、`# ToolPlan` |
 | H18 | TUI（可选）`qteasy-ai tui --session-id h8t` 再 Plan list | 确认卡仍是 steps / side-effects；**无** Artifact Tab；聊天可见 `plan_ready` 短文 |

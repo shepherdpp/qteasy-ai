@@ -135,14 +135,13 @@ function riskBadges(effects) {
 function composerHint() {
   if (mode === "ask") return "Ask: handbook Q&A. Does not execute.";
   if (mode === "agent") return "Agent: same confirm gate; live never auto.";
-  return "Plan: review steps, then confirm.";
+  return "Plan: review the artifact. Confirm is optional; you can type freely.";
 }
 
 function pendingDecision() {
-  const card = state.plan_card;
   const missing = (state.sidebar && state.sidebar.missing) || [];
   const clar = transcript.some((m) => m.kind === "clarification" || m.kind === "clarify");
-  return Boolean((card && card.confirmable) || missing.length || clar);
+  return Boolean(missing.length || clar);
 }
 
 function formatInputs(inputs) {
@@ -651,13 +650,12 @@ async function confirmKbWrite() {
 async function cancelPlan() {
   if (busy) return;
   transcript.push({
-    kind: "ask",
-    text: "Plan cancelled. Type abandon if the session still holds an unfinished job.",
+    kind: "mode_notice",
+    text: "Plan card dismissed. Type freely; Confirm remains optional.",
   });
   persistTranscript();
   state = Object.assign({}, state, { plan_card: { ...(state.plan_card || {}), confirmable: false } });
   renderChat();
-  await sendQuery("abandon", { keepDraft: true });
 }
 
 function followUp(text) {
@@ -1183,7 +1181,7 @@ function renderPlanCard() {
       : `<div class="slot-row"><label>Follow-up<input data-edit-slot="note" placeholder="Describe the change" /></label></div>`;
     editor = `${rows}<div class="actions"><button type="button" class="primary" id="btn-edit-submit">Apply changes</button><button type="button" id="btn-edit-cancel">Back</button></div>`;
   }
-  const heading = compact ? "Ready to run" : "Review plan";
+  const heading = compact ? "Plan ready" : "Review plan";
   const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
   return `<div class="card ${compact ? "compact" : ""}" data-testid="plan-card"><h3>${heading}</h3>
     ${jobLine}

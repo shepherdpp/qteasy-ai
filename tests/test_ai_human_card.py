@@ -33,7 +33,7 @@ class TestAiHumanCardProjector(unittest.TestCase):
     """切片 A：投影器 schema / Mode-R 数字 / 空结果 / error。"""
 
     def test_plan_ready_projects_json_scalars_without_invented_pct(self) -> None:
-        """合成 dry-run：kind=plan_ready，正文含 Job/步数，不含捏造百分比。"""
+        """合成 dry-run：kind=plan_ready 短通知，不含捏造百分比。"""
 
         print("\n[TestAiHumanCardProjector] plan_ready Mode-R")
         payload = {
@@ -67,12 +67,14 @@ class TestAiHumanCardProjector(unittest.TestCase):
         self.assertIn("user_text", kinds)
         self.assertIn("plan_ready", kinds)
         self.assertIn(ready["kind"], HUMAN_CARD_KINDS)
-        self.assertIn("Job: strategy.meta", ready["text"])
-        self.assertIn("Steps: 1", ready["text"])
-        self.assertIn("qt.ai.strategy_meta.list", ready["text"])
+        self.assertIn("Plan ready.", ready["text"])
+        self.assertIn("plan_id: plan_demo", ready["text"])
+        self.assertIn("just discuss", ready["text"])
+        self.assertIn("run this plan", ready["text"])
+        self.assertNotIn("Job: strategy.meta", ready["text"])
+        self.assertNotIn("# ToolPlan", ready["text"])
         self.assertNotIn("+12.3%", ready["text"])
         self.assertNotIn("gold_lock", ready["text"])
-        self.assertNotIn("# ToolPlan", ready["text"])
 
     def test_empty_success_result_has_body(self) -> None:
         """ok=True 且空 payload → result 有 no rows 正文。"""
@@ -413,10 +415,10 @@ class TestAiHumanCardClarify(unittest.TestCase):
             print(" follow kinds:", [item["kind"] for item in (follow.get("human_cards") or [])])
             self.assertEqual((again.active_intent or {}).get("job"), "data.refill")
 
-    def test_abandon_clarify_has_options(self) -> None:
-        """放弃确认：payload.options 非空。"""
+    def test_topic_change_skips_without_abandon_options(self) -> None:
+        """PlanReady 后换题：skip 提示，无 abandon 选项卡。"""
 
-        print("\n[TestAiHumanCardClarify] abandon options")
+        print("\n[TestAiHumanCardClarify] topic skip no abandon")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=build_default_registry(),
@@ -428,15 +430,18 @@ class TestAiHumanCardClarify(unittest.TestCase):
             session = asst.session_store.load(sid)
             cards = payload.get("human_cards") or []
             clarify = next((item for item in cards if item["kind"] == "clarify"), None)
+            notice = next((item for item in cards if item["kind"] == "mode_notice"), None)
             print(" awaiting:", session.awaiting_abandon)
-            print(" pending:", session.pending_clarification)
-            print(" clarify:", None if clarify is None else clarify)
+            print(" complete:", session.task_complete)
             print(" kinds:", [item["kind"] for item in cards])
-            self.assertIsNotNone(clarify)
-            options = (clarify or {}).get("payload", {}).get("options") or []
-            print(" options:", options)
-            self.assertTrue(options)
-            self.assertTrue(any(str(item.get("id") or "") == "abandon" for item in options if isinstance(item, dict)))
+            print(" notice:", None if notice is None else notice.get("text"))
+            print(" clarify:", None if clarify is None else clarify.get("text"))
+            self.assertFalse(session.awaiting_abandon)
+            self.assertIsNone(clarify)
+            self.assertIsNotNone(notice)
+            self.assertIn("Previous topic skipped.", str((notice or {}).get("text") or ""))
+            options = ((clarify or {}).get("payload") or {}).get("options") or []
+            self.assertFalse(any(str(item.get("id") or "") == "abandon" for item in options if isinstance(item, dict)))
 
 
 class TestAiHumanCardHumanCli(unittest.TestCase):
@@ -463,9 +468,10 @@ class TestAiHumanCardHumanCli(unittest.TestCase):
             print(" kernel:", kernel)
             self.assertEqual(text, kernel)
             self.assertIn("[MODE: PLAN]", text)
-            self.assertIn("Confirm: qteasy-ai run --plan-id", text)
             self.assertIn("plan_id:", text)
-            self.assertIn("run_id:", text)
+            self.assertIn("just discuss", text)
+            self.assertIn("run this plan", text)
+            self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
             self.assertNotIn("gold_lock", text)
             lone = asst.plan("list built-in strategies", response_style="raw")
             lone_text = format_human_from_payload(lone, query="list built-in strategies", registry=asst.registry)
@@ -503,6 +509,199 @@ class TestAiHumanCardMapperNoDoubleWrite(unittest.TestCase):
             arts = classify_artifacts(str(payload.get("run_id") or ""), [])
             print(" classify empty exec:", arts)
             self.assertEqual(arts, [])
+
+
+class TestAiJobLifecycleG9(unittest.TestCase):
+    """G.9：闭合完成态、两条缺口、clarify skip、瘦卡。"""
+
+    def test_plan_list_completes_and_keeps_plan_id(self) -> None:
+        """Plan list 成功：task_complete，current_plan_id 仍在，无 awaiting_abandon。"""
+
+        print("\n[TestAiJobLifecycleG9] plan list complete")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            payload = asst.plan("请列出所有内置交易策略", response_style="raw", session_id="test01")
+            session = asst.session_store.load("test01")
+            plan_id = str((payload.get("plan") or {}).get("plan_id") or "")
+            print(" plan_id:", plan_id)
+            print(" complete:", session.task_complete, "incomplete:", session.task_incomplete())
+            print(" awaiting:", session.awaiting_abandon)
+            print(" current:", session.current_plan_id)
+            self.assertTrue(plan_id.startswith("plan_"))
+            self.assertTrue(session.task_complete)
+            self.assertFalse(session.task_incomplete())
+            self.assertFalse(session.awaiting_abandon)
+            self.assertEqual(session.current_plan_id, plan_id)
+
+    def test_plan_execute_utterance_runs_same_plan_id(self) -> None:
+        """同 session「请执行上面的计划」走 run_plan 原 id，不新 plan_id。"""
+
+        print("\n[TestAiJobLifecycleG9] execute above plan")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            first = asst.plan("请列出所有内置交易策略", response_style="raw", session_id="test01")
+            plan_id = str((first.get("plan") or {}).get("plan_id") or "")
+            print(" first plan_id:", plan_id)
+            second = asst.plan("请执行上面的计划", response_style="raw", session_id="test01")
+            exec_plan = str((second.get("plan") or {}).get("plan_id") or "")
+            status = str((second.get("execution") or {}).get("status") or "")
+            kinds = [item["kind"] for item in (second.get("human_cards") or [])]
+            notice = next(
+                (item for item in (second.get("human_cards") or []) if item.get("kind") == "mode_notice"),
+                None,
+            )
+            print(" second plan_id:", exec_plan, "status:", status, "kinds:", kinds)
+            print(" notice:", None if notice is None else notice.get("text"))
+            print(" hatch:", second.get("hatch"), second.get("hatch_plan_id"))
+            self.assertEqual(exec_plan, plan_id)
+            self.assertEqual(status, "success")
+            self.assertIn("mode_notice", kinds)
+            self.assertIn("from Plan mode", str((notice or {}).get("text") or ""))
+            self.assertNotIn("llm_uncertain", str(second))
+
+    def test_run_named_plan_id_executes_json_skill(self) -> None:
+        """run「请运行计划plan_xxx」执行 JSON skill，不是 llm_uncertain。"""
+
+        print("\n[TestAiJobLifecycleG9] run named plan_id")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            planned = asst.plan("list built-in strategies", response_style="raw")
+            plan_id = str((planned.get("plan") or {}).get("plan_id") or "")
+            print(" stored plan_id:", plan_id)
+            payload = asst.run(f"请运行计划{plan_id}", response_style="raw")
+            steps = (payload.get("execution") or {}).get("steps") or []
+            names = [str(item.get("skill_name") or "") for item in steps]
+            status = str((payload.get("execution") or {}).get("status") or "")
+            print(" status:", status, "skills:", names)
+            print(" hatch:", payload.get("hatch"))
+            self.assertEqual(status, "success")
+            self.assertIn("qt.ai.strategy_meta.list", names)
+            self.assertNotIn("qt.ai.system.fallback", names)
+
+    def test_discuss_only_goes_to_ask(self) -> None:
+        """plan「本次只讨论」→ Ask + mode_notice，无 plan_ready。"""
+
+        print("\n[TestAiJobLifecycleG9] discuss only")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            payload = asst.plan("本次只讨论，什么是 qteasy", response_style="raw")
+            kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
+            print(" kinds:", kinds)
+            print(" mode:", payload.get("mode"), "effective:", payload.get("effective_kind"))
+            self.assertEqual(payload.get("mode"), "ask")
+            self.assertIn("ask", kinds)
+            self.assertIn("mode_notice", kinds)
+            self.assertNotIn("plan_ready", kinds)
+
+    def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
+        """缺 strategy_id：clarify 不 partial_failed；macd 走 get；skip 失败收口。"""
+
+        print("\n[TestAiJobLifecycleG9] clarify params")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            first = asst.run("请帮我列出内置交易策略的参数", response_style="raw", session_id="s-clar")
+            session = asst.session_store.load("s-clar")
+            kinds = [item["kind"] for item in (first.get("human_cards") or [])]
+            status = str((first.get("execution") or {}).get("status") or "")
+            print(" first status:", status, "kinds:", kinds)
+            print(" pending:", session.pending_clarification)
+            print(" complete:", session.task_complete, "missing:", session.missing)
+            self.assertIn("clarify", kinds)
+            self.assertNotEqual(status, "partial_failed")
+            self.assertIsInstance(session.pending_clarification, dict)
+            self.assertFalse(session.task_complete)
+            prompt = str((session.pending_clarification or {}).get("confirm_prompt") or "")
+            print(" prompt:", prompt)
+            self.assertIn("strategy", prompt.lower())
+            filled = asst.run("macd", response_style="raw", session_id="s-clar")
+            filled_session = asst.session_store.load("s-clar")
+            fill_steps = (filled.get("execution") or {}).get("steps") or []
+            fill_names = [str(item.get("skill_name") or "") for item in fill_steps]
+            fill_status = str((filled.get("execution") or {}).get("status") or "")
+            print(" fill status:", fill_status, "skills:", fill_names)
+            print(" fill complete:", filled_session.task_complete)
+            self.assertIn("qt.ai.strategy_meta.get", fill_names)
+            self.assertEqual(fill_status, "success")
+
+            asst2 = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            asst2.run("请帮我列出内置交易策略的参数", response_style="raw", session_id="s-skip")
+            skipped = asst2.run("skip", response_style="raw", session_id="s-skip")
+            skip_session = asst2.session_store.load("s-skip")
+            skip_kinds = [item["kind"] for item in (skipped.get("human_cards") or [])]
+            print(" skip kinds:", skip_kinds)
+            print(" skip error:", skipped.get("error"))
+            print(" skip complete:", skip_session.task_complete)
+            self.assertIn("error", skip_kinds)
+            self.assertIn("Clarification skipped", str((skipped.get("error") or {}).get("message") or ""))
+            self.assertTrue(skip_session.task_complete)
+            self.assertFalse(skip_session.task_incomplete())
+
+    def test_slim_cards_omit_id_dump_and_toolplan(self) -> None:
+        """plan_ready / list result 不含 73 个 id 全文、不含 # ToolPlan。"""
+
+        print("\n[TestAiJobLifecycleG9] slim cards")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            planned = asst.plan("list built-in strategies", response_style="raw", session_id="s-slim")
+            ready = next(item for item in (planned.get("human_cards") or []) if item["kind"] == "plan_ready")
+            print(" plan_ready:", ready["text"])
+            self.assertNotIn("# ToolPlan", ready["text"])
+            self.assertNotIn("Job: strategy.meta", ready["text"])
+            ran = asst.run("list built-in strategies", response_style="raw")
+            result = next(item for item in (ran.get("human_cards") or []) if item["kind"] == "result")
+            print(" result:", result["text"])
+            self.assertIn("Status: success", result["text"])
+            self.assertIn("items", result["text"])
+            self.assertNotIn("# ToolPlan", result["text"])
+            names = (((ran.get("execution") or {}).get("steps") or [{}])[0].get("result") or {}).get("payload") or {}
+            strategies = list(names.get("strategies") or [])
+            print(" strategy count:", len(strategies))
+            self.assertGreater(len(strategies), 10)
+            dumped = sum(1 for sid in strategies if str(sid) in result["text"])
+            print(" ids in result card:", dumped)
+            self.assertLess(dumped, 5)
+
+    def test_oneshot_run_list_has_no_plan_md(self) -> None:
+        """一次性 run list 仍 success，无新 *.plan.md。"""
+
+        print("\n[TestAiJobLifecycleG9] oneshot run no plan.md")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=store,
+            )
+            before = list(store.runs_dir.glob("*.plan.md"))
+            payload = asst.run("list built-in strategies", response_style="raw")
+            after = list(store.runs_dir.glob("*.plan.md"))
+            status = str((payload.get("execution") or {}).get("status") or "")
+            print(" status:", status)
+            print(" md before:", before, "after:", after)
+            print(" plan_md_file:", payload.get("plan_md_file"))
+            self.assertEqual(status, "success")
+            self.assertEqual(before, after)
+            self.assertFalse(str(payload.get("plan_md_file") or "").strip())
 
 
 if __name__ == "__main__":

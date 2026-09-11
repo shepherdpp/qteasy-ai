@@ -228,17 +228,20 @@ class ConversationState:
         )
 
     def task_incomplete(self) -> bool:
-        """当前闭合任务或开放设计尚未完成。"""
+        """当前闭合任务或开放设计尚未完成。
 
-        if self.task_complete:
-            return False
+        仅澄清暂停（``pending_clarification`` / ``missing``）或开放
+        ``active_design`` 为未完成。已有 ``current_plan_id`` 的 PlanReady
+        **不是** incomplete。
+        """
+
         if self.active_design:
             return True
-        if not self.active_intent:
+        if self.task_complete:
             return False
-        if self.missing or self.pending_clarification:
+        if self.pending_clarification or self.missing:
             return True
-        return bool(self.current_plan_id) and not self.task_complete
+        return False
 
     def set_slot(self, name: str, value: Any, *, source: str, confirmed: bool) -> None:
         """写入或覆盖一个槽。"""
