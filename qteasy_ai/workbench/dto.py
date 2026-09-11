@@ -16,9 +16,24 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 MESSAGE_KINDS = frozenset(
-    {"user_text", "ask_text", "clarification", "plan_card", "step_status", "error", "design_card", "kb_write"}
+    {
+        "user_text",
+        "ask",
+        "ask_text",
+        "clarify",
+        "clarification",
+        "plan_ready",
+        "executing",
+        "result",
+        "mode_notice",
+        "plan_card",
+        "step_status",
+        "error",
+        "design_card",
+        "kb_write",
+    }
 )
-ARTIFACT_TYPES = frozenset({"data_table", "chart", "strategy_code", "backtest_report"})
+ARTIFACT_TYPES = frozenset({"data_table", "chart", "strategy_code", "backtest_report", "plan"})
 
 
 @dataclass

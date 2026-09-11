@@ -14,6 +14,8 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 
 **Q-AI.6（阶段 F）**：**已关单（2026-09-07）**。实弹手册 [`LIVE_FIRE_DRILL_QAI6.md`](LIVE_FIRE_DRILL_QAI6.md) + 官方 KB [`KB_TIER1.md`](KB_TIER1.md)。多轮 `--session-id`、Ask「什么是 qteasy」、`user_kb` 骨架、`allow_*` 仅门控 `agent_auto`。**不测开放环。不升版。**
 
+**Q-AI.7 G.8 人读卡**：**等人读观感**。手册 [`LIVE_FIRE_DRILL_QAI7_HUMAN.md`](LIVE_FIRE_DRILL_QAI7_HUMAN.md)。对照「原始 `--raw` → CLI `--human` / Web 气泡」。不关 G.6 / G.7，不升版。
+
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
 ## 1. Environment

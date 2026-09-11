@@ -45,7 +45,7 @@ class TestAiWorkbenchDto(unittest.TestCase):
             card = dumped["plan_card"]
             self.assertTrue(card is None or card.get("confirmable") is False or not card.get("steps"))
             kinds = [item["kind"] for item in dumped["messages"]]
-            self.assertIn("ask_text", kinds)
+            self.assertIn("ask", kinds)
             self.assertNotIn("plan_card", kinds)
 
     def test_plan_list_strategies_dry_run_card(self) -> None:
@@ -85,8 +85,8 @@ class TestAiWorkbenchDto(unittest.TestCase):
             print(" kinds:", kinds)
             print(" missing:", dumped["sidebar"]["missing"])
             print(" execution:", dumped["execution"]["status"])
-            print(" clarification msg:", [m for m in dumped["messages"] if m["kind"] == "clarification"])
-            self.assertIn("clarification", kinds)
+            print(" clarification msg:", [m for m in dumped["messages"] if m["kind"] in {"clarification", "clarify"}])
+            self.assertIn("clarify", kinds)
             self.assertTrue(dumped["sidebar"]["missing"] or dumped["messages"])
             self.assertNotEqual(dumped["execution"]["status"], "success")
             self.assertEqual(dumped["execution"]["status"], "dry_run")

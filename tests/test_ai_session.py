@@ -90,7 +90,7 @@ class TestAiSession(unittest.TestCase):
             again.messages = [
                 {"kind": "user_text", "text": "a", "payload": {}},
                 {
-                    "kind": "ask_text",
+                    "kind": "plan_ready",
                     "text": "Plan ready: List built-in strategies",
                     "payload": {"plan_id": "plan_1", "run_id": "run_1"},
                 },
@@ -99,14 +99,14 @@ class TestAiSession(unittest.TestCase):
                 [
                     {"kind": "user_text", "text": "b", "payload": {}},
                     {
-                        "kind": "ask_text",
+                        "kind": "plan_ready",
                         "text": "Plan ready: List built-in strategies",
                         "payload": {"plan_id": "plan_2", "run_id": "run_2"},
                     },
                 ]
             )
             print(" dedupe keep second plan:", again.messages)
-            self.assertEqual(len([m for m in again.messages if m["kind"] == "ask_text"]), 2)
+            self.assertEqual(len([m for m in again.messages if m["kind"] == "plan_ready"]), 2)
             again.rewind_from_user_index(0, discard=True)
             print(" rewind clears awaiting_abandon:", again.awaiting_abandon)
             self.assertFalse(again.awaiting_abandon)

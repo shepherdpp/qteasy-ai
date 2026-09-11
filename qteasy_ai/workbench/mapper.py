@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..human_card import normalize_card_kind, project_human_cards
 from ..session import ConversationState
 from .dto import (
     WorkbenchArtifact,
@@ -504,6 +505,56 @@ def _sidebar_from_session(
     )
 
 
+def _cards_to_messages(cards: Any) -> List[WorkbenchMessage]:
+    """人读卡 list → WorkbenchMessage。"""
+
+    rows: List[WorkbenchMessage] = []
+    for item in cards or []:
+        if not isinstance(item, dict):
+            continue
+        kind = normalize_card_kind(item.get("kind"))
+        if not kind:
+            continue
+        payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+        rows.append(WorkbenchMessage(kind=kind, text=str(item.get("text") or ""), payload=payload))
+    return rows
+
+
+def _messages_from_payload(raw: Dict[str, Any], query: str) -> List[WorkbenchMessage]:
+    """优先消费内核卡，缺失时现场投影同一套规则。"""
+
+    cards = raw.get("human_cards")
+    if not isinstance(cards, list) or not cards:
+        cards = project_human_cards(
+            raw,
+            requested_mode=str(raw.get("requested_mode") or ""),
+            query=query,
+        )
+    return _cards_to_messages(cards)
+
+
+def _plan_review_artifact(raw: Dict[str, Any], run_id: str, session_id: str) -> Optional[WorkbenchArtifact]:
+    """Plan dry-run 的 plan.md 审阅 Artifact。"""
+
+    execution = raw.get("execution") if isinstance(raw.get("execution"), dict) else {}
+    if str(execution.get("status") or "") != "dry_run":
+        return None
+    md = str(raw.get("plan_md") or "")
+    path = str(raw.get("plan_md_file") or "")
+    if not md and not path:
+        return None
+    cap = 200000
+    preview_md = md[:cap] if md else ""
+    return WorkbenchArtifact(
+        type="plan",
+        run_id=str(run_id or ""),
+        title="plan.md",
+        export_path=path,
+        preview={"markdown": preview_md, "path": path},
+        session_id=session_id,
+    )
+
+
 def map_assistant_payload(
     payload: Dict[str, Any],
     *,
@@ -537,19 +588,11 @@ def map_assistant_payload(
     elif isinstance(raw.get("session"), dict):
         sid = str(raw["session"].get("session_id") or "")
 
-    messages: List[WorkbenchMessage] = []
-    if query:
-        messages.append(WorkbenchMessage(kind="user_text", text=str(query)))
+    messages = _messages_from_payload(raw, query)
 
     if _is_ask_payload(raw):
         sources = [str(item) for item in (raw.get("sources") or [])]
-        answer = str(raw.get("answer") or raw.get("narrative") or "")
-        messages.append(WorkbenchMessage(kind="ask_text", text=answer, payload={"sources": sources}))
         err = _enrich_error(raw.get("error") if isinstance(raw.get("error"), dict) else None)
-        if err:
-            messages.append(
-                WorkbenchMessage(kind="error", text=str(err.get("message") or ""), payload=dict(err))
-            )
         return WorkbenchState(
             mode="ask",
             session_id=sid,
@@ -573,14 +616,6 @@ def map_assistant_payload(
         clarification = (plan.get("assumptions") or {}).get("clarification")
     if isinstance(clarification, dict) and clarification:
         pending = clarification.get("pending") or []
-        text = str(clarification.get("confirm_prompt") or clarification.get("restatement") or "Clarification required.")
-        messages.append(
-            WorkbenchMessage(
-                kind="clarification",
-                text=text,
-                payload=dict(clarification),
-            )
-        )
         missing_from_pending = [
             str(item.get("name") or "")
             for item in pending
@@ -589,75 +624,12 @@ def map_assistant_payload(
     else:
         missing_from_pending = []
 
-    if assumptions.get("design_loop"):
-        spec = dict(assumptions.get("spec_draft") or {})
-        hits = list(assumptions.get("kb_hits") or raw.get("kb_hits") or [])
-        messages.append(
-            WorkbenchMessage(
-                kind="design_card",
-                text="Design loop: refine the spec before a closed trial.",
-                payload={
-                    "spec_draft": spec,
-                    "kb_hits": hits,
-                    "open_job": str(assumptions.get("open_job") or ""),
-                },
-            )
-        )
-        pending_write = assumptions.get("pending_kb_write")
-        if isinstance(pending_write, dict) and pending_write:
-            messages.append(
-                WorkbenchMessage(
-                    kind="kb_write",
-                    text="Confirm writing this note into user_kb/raw.",
-                    payload=dict(pending_write),
-                )
-            )
-
     execution = _execution_view(raw)
-    if execution["steps"]:
-        messages.append(
-            WorkbenchMessage(
-                kind="step_status",
-                text="Execution steps",
-                payload={"steps": execution["steps"]},
-            )
-        )
-
     confirmable = str(execution.get("status") or "") == "dry_run" and bool(card_steps)
     if isinstance(clarification, dict) and clarification:
-        # 澄清回合仍展示 steps（fallback），但确认执行应对齐「无完整高副作用合同」——
-        # 若唯一 skill 是 fallback，则不可当执行卡。
         skills = [step.skill_name for step in card_steps]
         if skills and all(name == "qt.ai.system.fallback" for name in skills):
             confirmable = False
-
-    if assumptions.get("kb_write_path"):
-        messages.append(
-            WorkbenchMessage(
-                kind="ask_text",
-                text=f"Wrote user-KB note: {assumptions.get('kb_write_path')}",
-                payload={"path": str(assumptions.get("kb_write_path") or "")},
-            )
-        )
-    if assumptions.get("open_job_cleared"):
-        messages.append(
-            WorkbenchMessage(
-                kind="ask_text",
-                text="Open job abandoned. This session is still here.",
-                payload={"open_job_cleared": True},
-            )
-        )
-    idle_reason = str(assumptions.get("open_idle_reason") or "")
-    if assumptions.get("open_idle"):
-        idle_text = {
-            "lock_spec": "No open design loop is active. Explore a factor first, then lock the spec.",
-            "propose_trial": "No open design loop is active. Explore a factor first, then try a closed IC trial.",
-            "abandon_trial": "No active trial to abandon.",
-            "abandon_open": "No open job to abandon. This session is still here.",
-        }.get(idle_reason, "No open design loop is active.")
-        messages.append(
-            WorkbenchMessage(kind="ask_text", text=idle_text, payload={"open_idle": idle_reason})
-        )
 
     plan_card = None
     skip_status_card = (
@@ -669,18 +641,10 @@ def map_assistant_payload(
         plan_card = WorkbenchPlanCard(
             plan_id=str(plan.get("plan_id") or ""),
             steps=card_steps,
-            plan_md=plan_md,
+            plan_md="",
             confirmable=confirmable,
             needs_confirm=needs,
         )
-        if confirmable:
-            messages.append(
-                WorkbenchMessage(
-                    kind="plan_card",
-                    text="Review plan before execute.",
-                    payload={"plan_id": plan_card.plan_id},
-                )
-            )
 
     err = _first_step_error(raw)
     blocked = (plan.get("assumptions") or {}).get("allow_gate_blocked")
@@ -695,10 +659,6 @@ def map_assistant_payload(
                 ),
             }
         )
-    if err:
-        messages.append(
-            WorkbenchMessage(kind="error", text=str(err.get("message") or ""), payload=dict(err))
-        )
 
     run_id = str(raw.get("run_id") or (raw.get("execution") or {}).get("run_id") or "")
     exec_steps = []
@@ -710,6 +670,9 @@ def map_assistant_payload(
         art = _artifact_from_dict(item)
         art.session_id = sid
         tagged.append(art)
+    plan_art = _plan_review_artifact(raw, run_id, sid)
+    if plan_art is not None:
+        tagged.insert(0, plan_art)
 
     sidebar = _sidebar_from_session(session, raw, env_facts)
     if missing_from_pending and not sidebar.missing:

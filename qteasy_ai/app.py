@@ -34,6 +34,7 @@ from .ask_engine import AskEngine, AskResponse
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .contracts import ToolPlan, new_plan_id
 from .executor import PlanExecutor
+from .human_card import infer_effective_kind, project_human_cards
 from .knowledge_base import KnowledgeBase
 from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
@@ -212,6 +213,7 @@ class QteasyAssistant:
         keep: bool = False,
         explanation_depth: str = "standard",
         session_id: str | None = None,
+        requested_mode: str | None = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Ask 目标态：LLMClient + KnowledgeBase 问答，不执行 skill。
 
@@ -254,6 +256,12 @@ class QteasyAssistant:
         payload = result.to_dict()
         if session is not None:
             payload["session"] = {"session_id": session.session_id, "slots_summary": session_context}
+        self._attach_human_cards(
+            payload,
+            query=query,
+            requested_mode=str(requested_mode or "ask"),
+            session=session,
+        )
         if response_style == "raw":
             return payload
         return AssistantOutput(
@@ -321,6 +329,7 @@ class QteasyAssistant:
                 keep=keep,
                 explanation_depth=explanation_depth,
                 session_id=session_id,
+                requested_mode="plan",
             )
         return self._execute_and_format(
             plan=plan,
@@ -330,6 +339,8 @@ class QteasyAssistant:
             keep=keep,
             explanation_depth=explanation_depth,
             session=session,
+            query=query,
+            requested_mode="plan",
         )
 
     def run(
@@ -356,6 +367,16 @@ class QteasyAssistant:
             session_id=session_id,
             agent_auto=agent_auto,
         )
+        if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
+            return self.ask(
+                query,
+                response_style=response_style,
+                persist=persist,
+                keep=keep,
+                explanation_depth=explanation_depth,
+                session_id=session_id,
+                requested_mode="run",
+            )
         confirm = True
         plan.execution_mode = "execute"
         if session is not None and session.agent_auto:
@@ -369,6 +390,8 @@ class QteasyAssistant:
             explanation_depth=explanation_depth,
             session=session,
             on_step=on_step,
+            query=query,
+            requested_mode="run",
         )
 
     def run_plan(
@@ -416,6 +439,8 @@ class QteasyAssistant:
             explanation_depth=explanation_depth,
             session=session,
             on_step=on_step,
+            query=str(getattr(plan, "user_query", "") or ""),
+            requested_mode="run",
         )
 
     def _execute_and_format(
@@ -429,6 +454,8 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session: Optional[ConversationState] = None,
         on_step: Optional[Any] = None,
+        query: str = "",
+        requested_mode: str = "plan",
     ) -> Dict[str, Any] | AssistantOutput:
         """执行并按策略处理落盘与渲染。"""
 
@@ -436,7 +463,10 @@ class QteasyAssistant:
         persist_run = persist_mode in {"bounded", "audit"}
         payload = self.executor.execute(plan, confirm=confirm, persist_run=False, on_step=on_step)
         plan_md = tool_plan_to_markdown(payload.get("plan") or plan)
-        payload["plan_md"] = plan_md
+        if confirm:
+            payload["plan_md"] = ""
+        else:
+            payload["plan_md"] = plan_md
 
         if confirm:
             self._merge_env_facts_from_execution(payload)
@@ -463,8 +493,11 @@ class QteasyAssistant:
             if run_id:
                 run_file = self.memory_store.save_run(run_id, payload)
                 payload["run_file"] = run_file
-                md_file = self.memory_store.save_plan_md(run_id, plan_md)
-                payload["plan_md_file"] = md_file
+                if confirm:
+                    payload["plan_md_file"] = ""
+                else:
+                    md_file = self.memory_store.save_plan_md(run_id, plan_md)
+                    payload["plan_md_file"] = md_file
                 self._last_run_id = run_id
                 if persist_mode == "bounded":
                     cleanup_report = self.memory_store.cleanup_runs(
@@ -482,6 +515,14 @@ class QteasyAssistant:
             payload["plan_md_file"] = ""
             payload["cleanup"] = {"deleted_count": 0, "deleted_files": [], "remaining_count": len(self.memory_store.list_runs())}
 
+        asked = str(query or getattr(plan, "user_query", "") or "")
+        self._attach_human_cards(
+            payload,
+            query=asked,
+            requested_mode=requested_mode,
+            session=session,
+        )
+
         if response_style == "raw":
             return payload
 
@@ -491,7 +532,7 @@ class QteasyAssistant:
             context={"persist_mode": persist_mode},
             explanation_depth=explanation_depth,
         )
-        if plan_md:
+        if (not confirm) and plan_md:
             first_lines = "\n".join(plan_md.strip().splitlines()[:6])
             rendered.narrative = rendered.narrative + f"\n\nPlan (markdown preview):\n{first_lines}"
         if self.run_policy.show_save_hint:
@@ -977,6 +1018,10 @@ class QteasyAssistant:
                     "restatement": f"You asked: {query}",
                     "pending": [{"name": "abandon", "hint": "Confirm abandon of the current incomplete task."}],
                     "confirm_prompt": "Reply abandon to drop the current task. Session id and turns stay.",
+                    "options": [
+                        {"id": "abandon", "label": "Abandon the current task"},
+                        {"id": "continue", "label": "Keep filling slots"},
+                    ],
                 }
             },
             execution_mode="dry_run",
@@ -994,6 +1039,29 @@ class QteasyAssistant:
             parts.append(f"{key}={slot.value}")
         text = "; ".join(parts)
         return text[:400]
+
+    def _attach_human_cards(
+        self,
+        payload: Dict[str, Any],
+        *,
+        query: str,
+        requested_mode: str,
+        session: Optional[ConversationState],
+    ) -> None:
+        """投影人读卡写入 payload 与 session messages[]。"""
+
+        payload["requested_mode"] = str(requested_mode or "")
+        payload["effective_kind"] = infer_effective_kind(payload)
+        cards = project_human_cards(
+            payload,
+            requested_mode=requested_mode,
+            query=query,
+            registry=self.registry,
+        )
+        payload["human_cards"] = cards
+        if session is not None:
+            session.append_messages(cards)
+            self.session_store.save(session)
 
     def _attach_session_payload(
         self,

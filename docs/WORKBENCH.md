@@ -17,11 +17,11 @@ qteasy-ai serve --host 127.0.0.1 --port 8765
 Open `http://127.0.0.1:8765`. Columns: **Session** (conversation, clarification, Plan confirm card, step checklist, composer) · **Artifacts** (tables, charts, code, reports) · **Workspace** (Now: job/slots/env; Files: `runs/` · `strategies/` · `user_kb/` tree). Workspace is collapsible. Enter inserts a newline; Ctrl/⌘+Enter sends.
 
 - Ask / Plan / Agent are explicit. Completing slots does **not** auto-execute.
-- Confirm runs `POST /v1/run-plan` with the reviewed `plan_id` (same as `qteasy-ai run --plan-id`).
+- Confirm runs `POST /v1/run-plan` with the reviewed `plan_id` (same as `qteasy-ai run --plan-id`). Editing `plan.md` does **not** change execution.
 - Runs are stored in the same `.qteasy/ai/runs/` directory as the CLI.
 - `GET /v1/sessions` lists saved sessions; `GET /v1/workspace` lists local files. Neither searches user KB.
 
-CLI and Notebook default to **`--human`**: the same chat-pane text (answer, clarification, or error) without launching the TUI. Plan dry-run prints a review brief (job, steps, API/parameters/expects). A successful **run** prints the result brief (doc / ids / metrics), not just skill ticks. `plan.md` is still written to disk, not used as the chat body. Files are `runs/{run_id}.json` and `runs/{run_id}.plan.md` under `QTEASY_AI_HOME` (default `.qteasy/ai/`); **`plan_id` is not the filename**. Use `--raw` or `--pretty` when you need the payload.
+CLI and Notebook default to **`--human`**: they print the same kernel human cards the chat pane uses (Ask, `plan_ready`, clarify, result, error, `mode_notice`). Do not treat that text or `plan.md` as executable. Plan dry-run also writes a **`plan` Artifact** (`runs/{run_id}.plan.md`) for review; JSON in `runs/{run_id}.json` is the only execute source (**json_wins**). **`run` / Agent does not create or show `plan.md`**. **`plan_id` is not the filename**. Use `--raw` or `--pretty` when you need the payload. `qteasy-ai` with no subcommand prints a usage card (`ask` / `plan` / `run --plan-id`) and does not execute.
 
 ## Minimal TUI
 
@@ -29,7 +29,9 @@ CLI and Notebook default to **`--human`**: the same chat-pane text (answer, clar
 qteasy-ai tui --session-id demo
 ```
 
-The TUI covers Ask, Plan confirmation, and `steps[]`. It does **not** show Artifact tabs.
+The TUI covers Ask, Plan confirmation, and `steps[]`. It does **not** show Artifact tabs; confirm still uses the DTO `plan_card`. Web reviews `plan.md` as a `plan` Artifact instead of dumping it into chat.
+
+Human-card review (G.8): [LIVE_FIRE_DRILL_QAI7_HUMAN.md](LIVE_FIRE_DRILL_QAI7_HUMAN.md).
 
 ## Safety
 

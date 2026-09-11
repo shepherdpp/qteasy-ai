@@ -266,7 +266,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" transcript kinds:", kinds)
             print(" transcript texts:", texts)
             self.assertIn("user_text", kinds)
-            self.assertTrue(any(k in {"ask_text", "clarification"} for k in kinds))
+            self.assertTrue(any(k in {"ask", "ask_text", "clarify", "clarification", "plan_ready"} for k in kinds))
             self.assertTrue(any("Plan ready" in str(t) or "Clarif" in str(t) or "qteasy" in str(t).lower() for t in texts))
 
     def test_run_plan_optional_sse_keeps_default_json(self) -> None:
@@ -321,7 +321,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" second plan:", plan_id)
             self.assertTrue(plan_id)
             loaded = asst.session_store.load(sid)
-            ready = [m for m in loaded.messages if str(m.get("text") or "").startswith("Plan ready:")]
+            ready = [m for m in loaded.messages if m.get("kind") == "plan_ready"]
             print(" plan ready count:", len(ready), ready)
             self.assertGreaterEqual(len(ready), 2)
             self.assertTrue(all("List built-in strategies" in str(m.get("text") or "") for m in ready))
@@ -337,13 +337,15 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual((body.get("execution") or {}).get("status"), "success")
             arts = body.get("artifacts") or []
             self.assertTrue(arts)
-            self.assertEqual(arts[0].get("type"), "data_table")
-            rows = ((arts[0].get("preview") or {}).get("preview_rows")) or []
+            table = next((item for item in arts if item.get("type") == "data_table"), None)
+            print(" table art:", table)
+            self.assertIsNotNone(table)
+            rows = ((table.get("preview") or {}).get("preview_rows")) or []
             print(" strategy rows head:", rows[:5])
             self.assertTrue(rows)
             self.assertIn("strategy", rows[0])
-            texts = [str(m.get("text") or "") for m in (body.get("transcript") or [])]
-            self.assertTrue(any(t.startswith("Finished:") for t in texts))
+            kinds = [str(m.get("kind") or "") for m in (body.get("transcript") or [])]
+            self.assertIn("result", kinds)
             again = asst.session_store.load(sid)
             print(" task_complete:", again.task_complete, "awaiting_abandon:", again.awaiting_abandon)
             self.assertTrue(again.task_complete)
@@ -470,15 +472,15 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             listed = [row.get("session_id") for row in client.get("/v1/sessions").json().get("sessions") or []]
             print(" listed sessions:", listed)
             self.assertIn("user_text", kinds)
-            self.assertIn("ask_text", kinds)
-            self.assertTrue(any("qteasy" in str(t).lower() and m == "ask_text" for m, t in zip(kinds, texts)))
+            self.assertIn("ask", kinds)
+            self.assertTrue(any("qteasy" in str(t).lower() and m == "ask" for m, t in zip(kinds, texts)))
             self.assertNotIn("s-chat.transcript", listed)
             disk = store.sessions_dir / "s-chat.json"
             print(" session file:", disk.is_file(), (disk.read_text(encoding="utf-8")[:200] if disk.is_file() else ""))
             self.assertTrue(disk.is_file())
             saved = json.loads(disk.read_text(encoding="utf-8"))
             print(" saved message kinds:", [m.get("kind") for m in saved.get("messages") or []])
-            self.assertTrue(any(m.get("kind") == "ask_text" for m in saved.get("messages") or []))
+            self.assertTrue(any(m.get("kind") == "ask" for m in saved.get("messages") or []))
             print(" restored mode:", sess.json().get("mode"))
             self.assertEqual(sess.json().get("mode"), "ask")
 
@@ -489,7 +491,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             back_texts = [m.get("text") for m in (back.json().get("transcript") or [])]
             print(" after switch kinds:", back_kinds)
             print(" after switch texts:", back_texts)
-            self.assertIn("ask_text", back_kinds)
+            self.assertIn("ask", back_kinds)
             self.assertTrue(any("qteasy" in str(t).lower() for t in back_texts))
             other_arts = client.get("/v1/workspace", params={"session_id": "s-other"}).json().get("artifacts") or []
             chat_arts = client.get("/v1/workspace", params={"session_id": "s-chat"}).json().get("artifacts") or []
@@ -559,7 +561,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             sessions = SessionStore(store)
             left = ConversationState.empty("sess-a")
             left.append_messages(
-                [{"kind": "ask_text", "text": "table ready", "payload": {"run_id": run_id, "executed": True}}]
+                [{"kind": "ask", "text": "table ready", "payload": {"run_id": run_id, "executed": True}}]
             )
             sessions.save(left)
             sessions.save(ConversationState.empty("sess-b"))

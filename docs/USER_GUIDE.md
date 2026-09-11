@@ -17,11 +17,11 @@ Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm
 
 | 档位 | CLI | Notebook | 内容 |
 |------|-----|----------|------|
-| **human（默认）** | `qteasy-ai plan "..."` | `%%qtai --mode plan` | 回答 / 澄清 / 英文错误 / Plan 解读卡 / **run 结果解读卡**。 |
+| **human（默认）** | `qteasy-ai plan "..."` | `%%qtai --mode plan` | 装配层人读卡：Ask 答案 / 澄清 / 英文错误 / `plan_ready` 短通知 / **run 结果卡**。数字只来自 JSON。 |
 | **pretty** | `--pretty` | `--pretty` | 结构化 `narrative` + `python_code` + `result_preview`（JSON 或三通道 Markdown） |
 | **raw** | `--raw` | `--raw` | 装配层 payload，供脚本与实弹 |
 
-槽齐不会自动执行。human 的 Plan 卡是**解读层**（Job / 步数 / 每步 API·参数·期望结果）；**run 成功后**再披露实际 Result（如策略 docstring、列表 id、metrics），不是只打 skill 名。``plan.md`` 仍落盘。磁盘文件名是 **``run_<id>.json`` / ``run_<id>.plan.md``**，不是 ``plan_<id>``。``plan_id`` 只写在 JSON 里，供 ``run --plan-id`` 使用。
+槽齐不会自动执行。`--human` **只打印内核已写好的卡**，三端禁止反解析卡或 `plan.md`。Plan dry-run 对话区是一句 `plan_ready`（Job / 步数 / skill / 风险 / 确认提示）；完整 `plan.md` 是工作台 Artifact（`type=plan`），JSON 才是执行金标准（**json_wins**：改磁盘 md 不会改变 `run --plan-id`）。**`run` / Agent 不创建、不展示 `plan.md`**；ToolPlan JSON 仍进 `runs/{run_id}.json`。磁盘文件名是 **`run_<id>.json`**（Plan 另有 **`run_<id>.plan.md`**），不是 `plan_<id>`。`plan_id` 只写在 JSON 里，供 `run --plan-id` 使用。无子命令时打印用法卡（`ask` / `plan` / `run --plan-id`），**不会**自动 `run`。概念题在 `plan`/`run` 里会降级为 Ask，并带 `mode_notice`。
 
 ## 2. Ask 目标态（Q-AI.3）
 
@@ -111,7 +111,7 @@ Notebook: `%%qtai --mode plan --session-id demo`.
 
 ## 6. Workbench Web / TUI（Q-AI.7）
 
-Desktop three-pane Web and a minimal TUI wrap the same `QteasyAssistant` as CLI/Notebook. They share `runs/`. Completing slots still only shows a Plan confirm card; nothing executes until you confirm.
+Desktop three-pane Web and a minimal TUI wrap the same `QteasyAssistant` as CLI/Notebook. They share `runs/`. Completing slots still only shows a Plan confirm card; nothing executes until you confirm. Chat panes **only render** kernel cards (`ask` / `plan_ready` / `clarify` / `result` / `error` / `mode_notice`). Web reviews `plan.md` as an Artifact (`type=plan`); the TUI still confirms from the DTO `plan_card` (no Artifact column). JSON wins over markdown.
 
 ```bash
 pip install "qteasy-ai[workbench]"
@@ -146,6 +146,6 @@ qteasy-ai plan "start live trade now" --raw
 - 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
 - 阶段 E 手测：[LIVE_FIRE_DRILL_QAI5.md](LIVE_FIRE_DRILL_QAI5.md)（Mode-R 全清单 + Mode-D 抽测；入口 `qteasy-ai plan "<q>" --raw`）
 - 阶段 F 手测：[LIVE_FIRE_DRILL_QAI6.md](LIVE_FIRE_DRILL_QAI6.md)（**已关单 2026-09-07**；session / Ask「什么是 qteasy」/ user_kb 骨架）
-- 阶段 G 工作台：[WORKBENCH.md](WORKBENCH.md)；手测 [LIVE_FIRE_DRILL_QAI7.md](LIVE_FIRE_DRILL_QAI7.md)（编码完成；1.0 标签待 Jackie）
+- 阶段 G 工作台：[WORKBENCH.md](WORKBENCH.md)；手测 [LIVE_FIRE_DRILL_QAI7.md](LIVE_FIRE_DRILL_QAI7.md)（编码完成；1.0 标签待 Jackie）；人读卡审阅 [LIVE_FIRE_DRILL_QAI7_HUMAN.md](LIVE_FIRE_DRILL_QAI7_HUMAN.md)
 - 官方 KB 目录：[KB_TIER1.md](KB_TIER1.md)
 - 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`、`examples/ai_shell_stage_g_workbench_demo.py`

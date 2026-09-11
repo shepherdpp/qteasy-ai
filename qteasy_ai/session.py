@@ -20,13 +20,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .human_card import HUMAN_CARD_KINDS, SKIP_MESSAGE_KINDS, normalize_card_kind
 from .memory_store import MemoryStore, _json_safe
 
 SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"})
-VISIBLE_MESSAGE_KINDS = frozenset(
-    {"user_text", "ask_text", "error", "clarification", "design_card", "kb_write"}
-)
-_SKIP_MESSAGE_KINDS = frozenset({"", "plan_card", "step_status"})
+VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
+_SKIP_MESSAGE_KINDS = SKIP_MESSAGE_KINDS
 _STATE_KEYS = frozenset(
     {
         "session_id",
@@ -66,8 +65,10 @@ def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
 
     if not isinstance(raw, dict):
         return None
-    kind = str(raw.get("kind") or "").strip()
+    kind = normalize_card_kind(raw.get("kind"))
     if kind in _SKIP_MESSAGE_KINDS or not kind:
+        return None
+    if kind not in HUMAN_CARD_KINDS:
         return None
     text = str(raw.get("text") or "")
     payload = dict(raw.get("payload") or {}) if isinstance(raw.get("payload"), dict) else {}

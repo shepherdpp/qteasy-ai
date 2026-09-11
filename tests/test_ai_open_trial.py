@@ -148,7 +148,7 @@ class TestAiOpenTrial(unittest.TestCase):
             texts = [item.text for item in dto.messages]
             print(" abandon-open kinds:", kinds)
             print(" abandon-open texts:", texts)
-            self.assertIn("ask_text", kinds)
+            self.assertIn("ask", kinds)
             self.assertTrue(any("abandoned" in str(text).lower() for text in texts))
             self.assertTrue(dto.plan_card is None or not dto.plan_card.confirmable)
 

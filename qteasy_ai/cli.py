@@ -22,6 +22,7 @@ from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter, provider_diagnostics
 from .memory_store import MemoryStore
 from .provider import OpenAICompatProvider
 from .workbench.human import format_human_error, format_human_from_payload
+from .human_card import format_human_cards, usage_notice_card
 
 
 def _build_provider_from_config() -> OpenAICompatProvider | None:
@@ -146,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="qteasy-ai",
         description="qteasy AI shell CLI (Ask / Plan / preview / run)",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=False)
 
     ask_parser = sub.add_parser("ask", help="Ask mode: Q&A via KnowledgeBase, no skill execution.")
     ask_parser.add_argument("query", type=str, help="Natural language query")
@@ -243,6 +244,10 @@ def main() -> int:
 
     parser = build_parser()
     args = parser.parse_args()
+
+    if not args.command:
+        print(format_human_cards([usage_notice_card()], payload={"mode": "notice"}), end="")
+        return 0
 
     memory_store = MemoryStore()
     provider = _build_provider_from_config()

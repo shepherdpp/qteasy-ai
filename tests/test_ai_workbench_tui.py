@@ -68,7 +68,7 @@ class TestAiWorkbenchTui(unittest.TestCase):
                     card = str(pilot.app.query_one("#plan-card").render())
                     print(" chat:", chat[:200])
                     print(" card:", card)
-                    self.assertIn("ask_text", chat)
+                    self.assertIn("ask:", chat)
                     self.assertEqual(card.strip(), "")
 
         self._run(_body())

@@ -130,7 +130,7 @@ class TestAiWorkbenchWeb(unittest.TestCase):
                 self.assertIsNone(state["plan_card"])
             if name == "clarification_form":
                 kinds = [m["kind"] for m in state["messages"]]
-                self.assertIn("clarification", kinds)
+                self.assertIn("clarify", kinds)
             if name == "plan_card_side_effects":
                 step = state["plan_card"]["steps"][0]
                 self.assertIn("side_effects", step)

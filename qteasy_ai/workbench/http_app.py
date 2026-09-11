@@ -30,7 +30,7 @@ from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
 from ..session import SessionStore
-from .mapper import classify_artifacts, map_assistant_payload, skill_step_title
+from .mapper import classify_artifacts, map_assistant_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -140,8 +140,9 @@ class WorkbenchHttp:
         session_id: str = "",
         persist_transcript: bool = False,
     ) -> Dict[str, Any]:
-        """raw payload → WorkbenchState JSON。"""
+        """raw payload → WorkbenchState JSON。transcript 只读装配层已写的卡，不再现场拼句。"""
 
+        del persist_transcript
         session = None
         sid = str(session_id or "").strip()
         if sid:
@@ -151,57 +152,21 @@ class WorkbenchHttp:
         dumped = state.to_dict()
         dumped["ok"] = dumped.get("error") is None
         extra = list(dumped.get("messages") or [])
-        card = dumped.get("plan_card") or {}
-        if card.get("confirmable") and not any(
-            isinstance(item, dict) and item.get("kind") == "ask_text" for item in extra
-        ):
-            titles = [
-                str(step.get("summary") or step.get("skill_name") or "").strip()
-                for step in (card.get("steps") or [])
-                if isinstance(step, dict)
-            ]
-            titles = [item for item in titles if item]
-            extra.append(
-                {
-                    "kind": "ask_text",
-                    "text": "Plan ready: " + ("; ".join(titles) or card.get("plan_id") or "review steps"),
-                    "payload": {"plan_id": card.get("plan_id") or ""},
-                }
-            )
         run_status = str((dumped.get("execution") or {}).get("status") or "")
         run_id = str(dumped.get("run_id") or "")
-        if run_status and run_status not in {"", "dry_run"}:
-            summary = self._execution_visible_summary(dumped)
-            if summary and not any(
-                isinstance(item, dict)
-                and item.get("kind") == "ask_text"
-                and str((item.get("payload") or {}).get("run_id") or "") == run_id
-                for item in extra
-            ):
-                extra.append(
-                    {
-                        "kind": "ask_text",
-                        "text": summary,
-                        "payload": {
-                            "run_id": run_id,
-                            "executed": True,
-                            "plan_id": str((card.get("plan_id") if isinstance(card, dict) else "") or ""),
-                        },
-                    }
-                )
         if run_id:
             for item in extra:
                 if not isinstance(item, dict):
                     continue
                 if str(item.get("kind") or "") == "user_text":
                     continue
-                payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
-                payload["run_id"] = run_id
+                payload_row = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+                payload_row["run_id"] = run_id
                 if run_status and run_status not in {"", "dry_run"}:
-                    payload["executed"] = True
+                    payload_row["executed"] = True
                 arts = dumped.get("artifacts") or []
                 if arts:
-                    payload["artifact_refs"] = [
+                    payload_row["artifact_refs"] = [
                         {
                             "type": str(art.get("type") or ""),
                             "run_id": str(art.get("run_id") or run_id),
@@ -210,60 +175,18 @@ class WorkbenchHttp:
                         for art in arts
                         if isinstance(art, dict)
                     ][:12]
-                item["payload"] = payload
-        if persist_transcript and sid:
-            conv = SessionStore(self.assistant.memory_store).load(sid)
-            conv.append_messages(extra)
-            SessionStore(self.assistant.memory_store).save(conv)
-            dumped["transcript"] = list(conv.messages)
-            dumped["artifacts"] = self._artifacts_for_session(conv)
-        elif sid:
+                item["payload"] = payload_row
+        include_plan = run_status == "dry_run"
+        if sid:
             conv = SessionStore(self.assistant.memory_store).load(sid)
             dumped["transcript"] = list(conv.messages)
-            dumped["artifacts"] = self._artifacts_for_session(conv)
+            dumped["artifacts"] = self._artifacts_for_session(conv, include_plan=include_plan)
         else:
             dumped["transcript"] = []
         return dumped
 
-    @staticmethod
-    def _execution_visible_summary(dumped: Dict[str, Any]) -> str:
-        """把执行结果收成一条可见助手摘要（写入 messages[]）。"""
-
-        execution = dumped.get("execution") if isinstance(dumped.get("execution"), dict) else {}
-        steps = list(execution.get("steps") or [])
-        labels: List[str] = []
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            skill = str(step.get("skill_name") or "").strip()
-            title = str(step.get("summary") or "").strip() or skill_step_title(skill)
-            status = str(step.get("status") or "").strip()
-            if not title:
-                continue
-            if status == "done":
-                labels.append(f"✓ {title}")
-            elif status == "error":
-                labels.append(f"✕ {title}")
-            else:
-                labels.append(title)
-        arts = dumped.get("artifacts") or []
-        if arts:
-            types = sorted(
-                {
-                    str(art.get("type") or "").strip()
-                    for art in arts
-                    if isinstance(art, dict) and art.get("type")
-                }
-            )
-            if types:
-                labels.append("Artifacts: " + ", ".join(types))
-        if labels:
-            return "Finished: " + "; ".join(labels)
-        status = str(execution.get("status") or "done").strip() or "done"
-        return f"Finished ({status})."
-
-    def _artifacts_for_session(self, conv: Any) -> List[Dict[str, Any]]:
-        """按 messages 中的 run_id 收集本 Session 产物。"""
+    def _artifacts_for_session(self, conv: Any, *, include_plan: bool = True) -> List[Dict[str, Any]]:
+        """按 messages 中的 run_id 收集本 Session 产物。execute 路径不展示 plan.md。"""
 
         sid = str(getattr(conv, "session_id", "") or "")
         ordered: List[str] = []
@@ -283,6 +206,25 @@ class WorkbenchHttp:
             for art in classify_artifacts(rid, steps):
                 art["session_id"] = sid
                 items.append(art)
+            status = str((run.get("execution") or {}).get("status") or "")
+            md_path = self.assistant.memory_store.runs_dir / f"{rid}.plan.md"
+            if include_plan and status == "dry_run" and md_path.is_file():
+                markdown = ""
+                try:
+                    markdown = md_path.read_text(encoding="utf-8")[:200000]
+                except OSError:
+                    markdown = ""
+                items.append(
+                    {
+                        "type": "plan",
+                        "run_id": rid,
+                        "title": "plan.md",
+                        "export_path": str(md_path),
+                        "preview": {"markdown": markdown, "path": str(md_path)},
+                        "warnings": [],
+                        "session_id": sid,
+                    }
+                )
         return items
 
     def _stream_execute(
@@ -582,7 +524,8 @@ class WorkbenchHttp:
                 conv.append_messages(hist)
                 SessionStore(self.assistant.memory_store).save(conv)
         dumped["transcript"] = list(conv.messages)
-        dumped["artifacts"] = self._artifacts_for_session(conv)
+        exec_status = str((dumped.get("execution") or {}).get("status") or "")
+        dumped["artifacts"] = self._artifacts_for_session(conv, include_plan=(exec_status == "dry_run"))
         if conv.turns:
             last = conv.turns[-1] if isinstance(conv.turns[-1], dict) else {}
             if str(last.get("kind") or "") == "ask":

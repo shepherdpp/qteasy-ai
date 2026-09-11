@@ -141,7 +141,7 @@ function composerHint() {
 function pendingDecision() {
   const card = state.plan_card;
   const missing = (state.sidebar && state.sidebar.missing) || [];
-  const clar = transcript.some((m) => m.kind === "clarification");
+  const clar = transcript.some((m) => m.kind === "clarification" || m.kind === "clarify");
   return Boolean((card && card.confirmable) || missing.length || clar);
 }
 
@@ -651,7 +651,7 @@ async function confirmKbWrite() {
 async function cancelPlan() {
   if (busy) return;
   transcript.push({
-    kind: "ask_text",
+    kind: "ask",
     text: "Plan cancelled. Type abandon if the session still holds an unfinished job.",
   });
   persistTranscript();
@@ -1008,14 +1008,30 @@ function renderChat() {
   }
   for (let i = 0; i < transcript.length; i += 1) {
     const msg = transcript[i];
-    if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") continue;
+    if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "clarify" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") continue;
     if (
-      msg.kind === "ask_text" &&
+      (msg.kind === "ask_text" || msg.kind === "ask") &&
       String(msg.text || "").startsWith("Plan ready:") &&
       state.plan_card &&
       state.plan_card.confirmable &&
       mode !== "ask"
     ) {
+      continue;
+    }
+    if (msg.kind === "mode_notice") {
+      parts.push(`<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}</div></div>`);
+      continue;
+    }
+    if (msg.kind === "executing") {
+      parts.push(`<div class="msg"><div class="msg-role">Running</div><div class="bubble">${escapeHtml(msg.text || "Running steps.")}</div></div>`);
+      continue;
+    }
+    if (msg.kind === "result") {
+      parts.push(`<div class="msg"><div class="msg-role">Result</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`);
+      continue;
+    }
+    if (msg.kind === "plan_ready") {
+      parts.push(`<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`);
       continue;
     }
     if (msg.kind === "user_text") {
@@ -1106,7 +1122,7 @@ function renderKbWriteCard() {
 
 function renderClarification() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
-  const clar = transcript.concat(state.messages || []).find((m) => m.kind === "clarification");
+  const clar = transcript.concat(state.messages || []).find((m) => m.kind === "clarification" || m.kind === "clarify");
   if (!clar && !missing.length) return "";
   const pending = ((clar && clar.payload && clar.payload.pending) || []).map((item) => item.name || item).filter(Boolean);
   const fields = missing.length ? missing : pending;
@@ -1293,6 +1309,13 @@ function renderArtifacts() {
   } else if (current.type === "backtest_report") {
     const metrics = (current.preview && current.preview.metrics) || {};
     body += `${metricsCards(metrics)}`;
+  } else if (current.type === "plan") {
+    const markdown = (current.preview && current.preview.markdown) || "";
+    const path = (current.preview && current.preview.path) || current.export_path || "";
+    body += `<h3>${escapeHtml(current.title || "plan.md")}</h3>
+      ${path ? `<p class="warn">${escapeHtml(path)}</p>` : ""}
+      <pre class="plan-md">${escapeHtml(markdown || "(empty plan.md)")}</pre>
+      <p class="hint">JSON in runs/ is the executable source. Editing this markdown does not change what Run executes.</p>`;
   }
   host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${body}</div>`;
   const ta = $("code-editor");

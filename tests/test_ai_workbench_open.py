@@ -160,7 +160,7 @@ class TestAiWorkbenchOpen(unittest.TestCase):
             state = map_assistant_payload(payload, query="什么是 qteasy")
             kinds = [item.kind for item in state.messages]
             print(" kinds:", kinds)
-            self.assertIn("ask_text", kinds)
+            self.assertIn("ask", kinds)
             self.assertNotIn("design_card", kinds)
             self.assertTrue(state.plan_card is None or not state.plan_card.confirmable)
 

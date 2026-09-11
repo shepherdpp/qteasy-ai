@@ -2,8 +2,14 @@ export type WorkbenchMode = "ask" | "plan" | "agent" | "run";
 
 export type MessageKind =
   | "user_text"
+  | "ask"
   | "ask_text"
+  | "clarify"
   | "clarification"
+  | "plan_ready"
+  | "executing"
+  | "result"
+  | "mode_notice"
   | "plan_card"
   | "step_status"
   | "error"
@@ -58,7 +64,7 @@ export interface WorkbenchSidebar {
 }
 
 export interface WorkbenchArtifact {
-  type: "data_table" | "chart" | "strategy_code" | "backtest_report";
+  type: "data_table" | "chart" | "strategy_code" | "backtest_report" | "plan";
   run_id: string;
   title: string;
   export_path: string;

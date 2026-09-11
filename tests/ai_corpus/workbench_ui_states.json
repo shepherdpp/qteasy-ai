@@ -31,7 +31,7 @@
       "session_id": "s-ask",
       "messages": [
         {"kind": "user_text", "text": "what is qteasy", "payload": {}},
-        {"kind": "ask_text", "text": "qteasy is a quantitative research toolkit.", "payload": {"sources": ["what_is_qteasy"]}}
+        {"kind": "ask", "text": "qteasy is a quantitative research toolkit.", "payload": {"sources": ["what_is_qteasy"]}}
       ],
       "plan_card": null,
       "sidebar": {
@@ -54,7 +54,7 @@
       "messages": [
         {"kind": "user_text", "text": "download daily bars", "payload": {}},
         {
-          "kind": "clarification",
+          "kind": "clarify",
           "text": "Reply with the missing fields.",
           "payload": {
             "restatement": "You asked: download daily bars",
@@ -96,7 +96,7 @@
       "session_id": "s-plan",
       "messages": [
         {"kind": "user_text", "text": "list built-in strategies", "payload": {}},
-        {"kind": "plan_card", "text": "Review plan before execute.", "payload": {"plan_id": "plan_list"}}
+        {"kind": "plan_ready", "text": "Plan ready.\nJob: strategy.meta", "payload": {"plan_id": "plan_list"}}
       ],
       "plan_card": {
         "plan_id": "plan_list",
@@ -131,7 +131,7 @@
       "mode": "plan",
       "session_id": "s-run",
       "messages": [
-        {"kind": "step_status", "text": "Execution steps", "payload": {"steps": [{"step_id": "step_1", "skill_name": "qt.ai.strategy_meta.list", "status": "done", "ok": true}]}}
+        {"kind": "result", "text": "Status: success", "payload": {"executed": true, "run_id": "run_ok"}}
       ],
       "plan_card": {
         "plan_id": "plan_run",
