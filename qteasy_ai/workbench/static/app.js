@@ -110,28 +110,6 @@ function stepTitle(step) {
   return String(step.summary || SKILL_TITLES[step.skill_name] || skillLabel(step.skill_name));
 }
 
-function riskLines(effects) {
-  const e = effects || {};
-  if (e.description) return [String(e.description)];
-  const lines = [];
-  if (e.network) lines.push("Will access the network.");
-  if (e.filesystem_write) lines.push("Will write files on disk.");
-  if (e.local_state_change) lines.push("Will change local data or config.");
-  if (e.heavy_compute) lines.push("May run a heavy compute job.");
-  return lines.length ? lines : ["Read-only / low side-effect."];
-}
-
-function riskBadges(effects) {
-  const e = effects || {};
-  const tags = [];
-  if (e.network) tags.push(["network", "warn"]);
-  if (e.filesystem_write) tags.push(["write", "warn"]);
-  if (e.local_state_change) tags.push(["state", "warn"]);
-  if (e.heavy_compute) tags.push(["heavy", "warn"]);
-  if (!tags.length) tags.push(["read-only", "ok"]);
-  return tags.map(([label, kind]) => `<span class="badge ${kind}">${escapeHtml(label)}</span>`).join("");
-}
-
 function composerHint() {
   if (mode === "ask") return "Ask: handbook Q&A. Does not execute.";
   if (mode === "agent") return "Agent: same confirm gate; live never auto.";
@@ -142,14 +120,6 @@ function pendingDecision() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
   const clar = transcript.some((m) => m.kind === "clarification" || m.kind === "clarify");
   return Boolean(missing.length || clar);
-}
-
-function formatInputs(inputs) {
-  const raw = inputs && typeof inputs === "object" ? inputs : {};
-  const bits = Object.entries(raw)
-    .filter(([key, val]) => val != null && val !== "" && !String(key).startsWith("upstream_"))
-    .map(([key, val]) => `${slotLabel(key)}=${typeof val === "string" ? val : JSON.stringify(val)}`);
-  return bits.slice(0, 8).join(" · ");
 }
 
 const JOB_STAGE = {
@@ -173,12 +143,6 @@ function pipelineHtml(job) {
   return ["data", "analysis", "strategy", "backtest"]
     .map((name) => `<span class="pipe ${name === current ? "active" : ""}">${name}</span>`)
     .join("<span class=\"pipe-sep\">→</span>");
-}
-
-function isCompactPlan(card) {
-  const steps = (card && card.steps) || [];
-  if (!steps.length || steps.length > 2) return false;
-  return steps.every((s) => !s.needs_confirm);
 }
 
 function focusComposer() {
@@ -381,7 +345,7 @@ function setBusy(next) {
   document.querySelectorAll("button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
-  ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-retry"].forEach((id) => {
+  ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-clarify-skip", "btn-retry"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy;
   });
@@ -693,6 +657,7 @@ function onChatClick(ev) {
   }
   if (t.id === "btn-edit-submit") submitParamEdits();
   if (t.id === "btn-clarify") submitClarification();
+  if (t.id === "btn-clarify-skip") followUp("skip");
   if (t.classList.contains("btn-retry") || t.id === "btn-retry") retryLast();
   if (t.dataset.editUser != null) {
     editingUserIndex = Number(t.dataset.editUser);
@@ -1124,8 +1089,10 @@ function renderClarification() {
   if (!clar && !missing.length) return "";
   const pending = ((clar && clar.payload && clar.payload.pending) || []).map((item) => item.name || item).filter(Boolean);
   const fields = missing.length ? missing : pending;
+  const lock = busy ? "disabled" : "";
+  const skipBtn = `<button type="button" class="ghost" id="btn-clarify-skip" ${lock}>Skip</button>`;
   if (!fields.length && clar) {
-    return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3><p>${escapeHtml(clar.text || "")}</p></div>`;
+    return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3><p>${escapeHtml(clar.text || "")}</p><div class="actions">${skipBtn}</div></div>`;
   }
   const inputs = fields
     .map((name) => {
@@ -1134,9 +1101,8 @@ function renderClarification() {
       return `<div class="slot-row"><label>${escapeHtml(slotLabel(name))}<input data-slot="${escapeHtml(name)}" value="${escapeHtml(value)}" /></label></div>`;
     })
     .join("");
-  const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit.</p>";
-  const lock = busy ? "disabled" : "";
-  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${lock}>Submit slots</button></div></div>`;
+  const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit. Skip ends this request.</p>";
+  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${lock}>Submit slots</button>${skipBtn}</div></div>`;
 }
 
 function renderDecisionActions(extra = "") {
@@ -1153,21 +1119,7 @@ function renderPlanCard() {
   const card = state.plan_card;
   const missing = (state.sidebar && state.sidebar.missing) || [];
   if (!card || !card.confirmable || mode === "ask" || missing.length) return "";
-  const compact = isCompactPlan(card);
   const job = (state.sidebar && state.sidebar.active_intent && state.sidebar.active_intent.job) || "";
-  const steps = (card.steps || [])
-    .map((s) => {
-      const risks = riskLines(s.side_effects)
-        .map((line) => `<div class="risk">${escapeHtml(line)}</div>`)
-        .join("");
-      const badges = riskBadges(s.side_effects);
-      const params = formatInputs(s.inputs);
-      if (compact) {
-        return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}${params ? `<div class="skill-id">${escapeHtml(params)}</div>` : ""}</li>`;
-      }
-      return `<li><strong>${escapeHtml(stepTitle(s))}</strong> ${badges}<div class="skill-id">${escapeHtml(skillLabel(s.skill_name))}</div>${params ? `<div class="skill-id">${escapeHtml(params)}</div>` : ""}${risks}</li>`;
-    })
-    .join("");
   let editor = "";
   if (editingParams) {
     const slots = (state.sidebar && state.sidebar.slots) || [];
@@ -1181,12 +1133,11 @@ function renderPlanCard() {
       : `<div class="slot-row"><label>Follow-up<input data-edit-slot="note" placeholder="Describe the change" /></label></div>`;
     editor = `${rows}<div class="actions"><button type="button" class="primary" id="btn-edit-submit">Apply changes</button><button type="button" id="btn-edit-cancel">Back</button></div>`;
   }
-  const heading = compact ? "Plan ready" : "Review plan";
   const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
-  return `<div class="card ${compact ? "compact" : ""}" data-testid="plan-card"><h3>${heading}</h3>
+  return `<div class="card compact" data-testid="plan-card"><h3>Plan ready</h3>
     ${jobLine}
     <p class="warn">Plan ${escapeHtml(card.plan_id)}</p>
-    <ol>${steps}</ol>
+    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>
     ${editor}
     ${renderDecisionActions()}</div>`;
 }
@@ -1372,12 +1323,18 @@ function renderNow() {
     .join("");
   const missingLine = missing.length
     ? `<p class="missing">Missing: ${escapeHtml(missing.map(slotLabel).join(", "))}</p>`
-    : `<p class="ok-line">Slots complete</p>`;
+    : "";
+  const pipe = job !== "—" ? `<div class="pipeline">${pipelineHtml(job)}</div>` : "";
+  const slotBlock = slots.length
+    ? `<div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows}</ul></div>`
+    : "";
+  const env = envLine(bar.env_summary);
+  const envBlock = env === "No env_facts yet." ? "" : `<div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(env)}</p></div>`;
   host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
-    <div class="pipeline">${pipelineHtml(job === "—" ? "" : job)}</div></div>
+    ${pipe}</div>
     ${missingLine}
-    <div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows || "<li>No slots yet. Click a slot name here to edit after a plan fills them.</li>"}</ul></div>
-    <div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(envLine(bar.env_summary))}</p></div>
+    ${slotBlock}
+    ${envBlock}
     <div class="now-provider" id="now-provider">${renderProviderBlock()}</div>
     <div class="now-audit"><p class="now-k">Audit</p>
       <p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
@@ -1435,10 +1392,10 @@ function renderWorkspace() {
   if (!host) return;
   const arts = workspace.artifacts || state.artifacts || [];
   if (!arts.length) {
-    host.innerHTML = `<p class="files-k">Artifacts</p><p class="empty-hint">No artifacts in this session yet.</p>`;
+    host.innerHTML = `<p class="files-k">This session</p><p class="empty-hint">No artifacts in this session yet.</p>`;
     return;
   }
-  host.innerHTML = `<p class="files-k">Artifacts</p><ul class="file-tree">${arts
+  host.innerHTML = `<p class="files-k">This session</p><ul class="file-tree">${arts
     .map(
       (art, i) =>
         `<li><button type="button" class="file" data-art-index="${i}">${escapeHtml(art.type || "artifact")} · ${escapeHtml(art.title || art.run_id || "")}</button></li>`

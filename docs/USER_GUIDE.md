@@ -87,6 +87,9 @@ Use the same `session_id` on CLI and Notebook so a follow-up **revises** the las
 ```bash
 qteasy-ai plan "帮我下载日线" --session-id demo
 qteasy-ai plan "20240101 到 20241231" --session-id demo
+qteasy-ai plan "请列出所有内置交易策略" --session-id demo
+qteasy-ai plan "请执行上面的计划" --session-id demo
+qteasy-ai run --plan-id plan_xxxxxxxxxxxx
 qteasy-ai ask "what is qteasy"
 qteasy-ai ask "explain PT vs PS" --session-id demo
 ```
@@ -102,10 +105,10 @@ assert filled["plan"]["planner_trace"]["source"] == "session"
 
 Rules (user-facing):
 
-- Without `--session-id` / `session_id`, each sentence is independent (same as today).
+- Always pass **`--session-id`** (full flag name) on every follow-up. Without it, each sentence is independent. Prefer `--session-id` over a shortened `--session`.
 - Fill or change a slot: same Job, no new classify. Switching topic skips the previous closed job (`Previous topic skipped.`) without an abandon card. Session id and history stay. Open-loop abandon (trial / whole open job) is unchanged.
 - Clarification pauses the turn. Reply with the missing field (next sentence fills the slot). `skip` / `跳过` ends this request as a failure. After 3 rounds on the same intent the response stays `clarify`.
-- A successful Plan dry-run is complete; the current `plan_id` remains the artifact. Say so in Plan mode to run it, or use Confirm.
+- A successful Plan dry-run is complete; the current `plan_id` remains the artifact. To execute it, stay on the same `--session-id` and say so in **Plan** mode (`请执行上面的计划` / `run this plan`), or `qteasy-ai run --plan-id <id>`. A one-shot `run "<new query>"` still builds a **new** plan (mode B). `--human` prints the slim kernel card (`N items`), not the full id dump.
 - Optional `profile.defaults` (shares / start / end / freq) may fill **optional** slots only. They show as defaults and stay unconfirmed until you say yes.
 - `allow_refill` / `allow_backtest` / `allow_optimize` apply only to unattended `agent_auto`. A one-shot `run "<query>"` is still one human confirmation. Live trade is never auto.
 - First init creates `user_kb/` (rules / raw / compiled + English README). Ask does **not** search it.

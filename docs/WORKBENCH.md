@@ -14,7 +14,7 @@ pip install "qteasy-ai[workbench]"
 qteasy-ai serve --host 127.0.0.1 --port 8765
 ```
 
-Open `http://127.0.0.1:8765`. Columns: **Session** (conversation, clarification, Plan confirm card, step checklist, composer) · **Artifacts** (tables, charts, code, reports) · **Workspace** (Now: job/slots/env; Files: `runs/` · `strategies/` · `user_kb/` tree). Workspace is collapsible. Enter inserts a newline; Ctrl/⌘+Enter sends.
+Open `http://127.0.0.1:8765`. Columns: **Session** (conversation, clarification, optional Confirm shortcut, composer) · **Artifacts** (tables, charts, code, reports, `plan.md`) · **Workspace** (Now: job/slots/env/provider; **This session**: artifact index that focuses the middle pane). Workspace is collapsible. Enter inserts a newline; Ctrl/⌘+Enter sends. The default Files pane is **not** a global `runs/` disk tree.
 
 - Ask / Plan / Agent are explicit. Completing slots does **not** auto-execute.
 - Plan success completes the utterance (keeps `plan_id`). Confirm is an optional shortcut for `run_plan` and does **not** block the composer. Cancel dismisses the card; it does not abandon a closed job.
@@ -22,7 +22,7 @@ Open `http://127.0.0.1:8765`. Columns: **Session** (conversation, clarification,
 - Runs are stored in the same `.qteasy/ai/runs/` directory as the CLI.
 - `GET /v1/sessions` lists saved sessions; `GET /v1/workspace` lists local files. Neither searches user KB.
 
-CLI and Notebook default to **`--human`**: they print the same kernel human cards the chat pane uses (Ask, `plan_ready`, clarify, result, error, `mode_notice`). Do not treat that text or `plan.md` as executable. Plan dry-run also writes a **`plan` Artifact** (`runs/{run_id}.plan.md`) for review: English narrative plus a mermaid flowchart from the JSON DAG (optional Why paragraph when a Provider is configured). JSON in `runs/{run_id}.json` is the only execute source (**json_wins**). **`run` / Agent does not create or show `plan.md`**. **`plan_id` is not the filename**. Use `--raw` or `--pretty` when you need the payload. `qteasy-ai` with no subcommand prints a usage card (`ask` / `plan` / `run --plan-id`) and does not execute.
+CLI and Notebook default to **`--human`**: they print the same kernel human cards the chat pane uses (Ask, `plan_ready`, clarify, result, error, `mode_notice`). Do not treat that text or `plan.md` as executable. Plan dry-run also writes a **`plan` Artifact** (`runs/{run_id}.plan.md`) for review: English narrative plus a mermaid flowchart from the JSON DAG (optional Why paragraph when a Provider is configured). JSON in `runs/{run_id}.json` is the only execute source (**json_wins**). **`run` / Agent does not create or show `plan.md`**. **`plan_id` is not the filename**. Same-session execute: `qteasy-ai plan "请执行上面的计划" --session-id …` or `qteasy-ai run --plan-id`. Use `--raw` or `--pretty` when you need the payload. `qteasy-ai` with no subcommand prints a usage card (`ask` / `plan` / `run --plan-id`) and does not execute.
 
 ## Minimal TUI
 
