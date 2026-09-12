@@ -1,6 +1,6 @@
-# Q-AI.7 G.8/G.9 人读卡与闭合 Job 实弹（Jackie 审阅）
+# Q-AI.7 G.8/G.9/G.10 人读卡、闭合 Job 与 plan.md 叙事实弹（Jackie 审阅）
 
-**状态：G.9 编码已落地（2026-09-12）；等人读观感与生命周期手测。不关 G.6。不关 G.7。不升版。**
+**状态：G.10 编码已落地（2026-09-12）；等人读观感、生命周期与 Artifact 叙事手测。不关 G.6。不关 G.7。不升版。**
 
 基线：qteasy-ai 工作台 extra · qteasy **>=2.6** · Python **py39** · **Mode-R**（可不配 Provider）
 
@@ -88,7 +88,7 @@ qteasy-ai serve --host 127.0.0.1 --port 8765
 
 | # | 操作 | 原始信息 | 人读卡（当前实现） | CLI | Web | 观感 |
 |---|------|----------|-------------------|-----|-----|------|
-| H4 | `plan "list built-in strategies"` | `execution.status=dry_run`；`plan.steps[0].skill_name=qt.ai.strategy_meta.list`；磁盘 `{run_id}.json` **和** `{run_id}.plan.md`；`plan_id` ≠ `run_id`；有 session 时 `task_complete=true` 且保留 `current_plan_id` | `[MODE: PLAN]  dry_run — not executed` + `plan_ready` 以 `Plan ready.` 开头，含 `plan_id`、风险一句、Artifact 路径、两条缺口（execute / just discuss）。对话**不含** `# ToolPlan`、不含 Job/Calls 整表。Web Artifact 有 `type=plan`，正文才是 md。Confirm 可选，不阻塞输入 | ☐ | ☐ Plan；打开 Artifact `plan` 页 |  |
+| H4 | `plan "list built-in strategies"` | `execution.status=dry_run`；`plan.steps[0].skill_name=qt.ai.strategy_meta.list`；磁盘 `{run_id}.json` **和** `{run_id}.plan.md`；`plan_id` ≠ `run_id`；有 session 时 `task_complete=true` 且保留 `current_plan_id` | `[MODE: PLAN]  dry_run — not executed` + `plan_ready` 以 `Plan ready.` 开头，含 `plan_id`、风险一句、Artifact 路径、两条缺口（execute / just discuss）。对话**不含** `# ToolPlan`、不含 Job/Calls 整表。Web Artifact 有 `type=plan`：md 以 `# Plan` 开头，含 You asked / 人话步骤 / ` ```mermaid ` 源码，**不是** `# ToolPlan` dump、无 `gold_lock`。Confirm 可选，不阻塞输入 | ☐ | ☐ Plan；打开 Artifact `plan` 页 |  |
 | H5 | 同句 `run "list built-in strategies"`（一次性确认） | `execution.status=success`；steps 含 list skill；**无**新的 `{run_id}.plan.md`；JSON 仍在 | `[MODE: RUN]  executed` + 短卡 `executing`：`Running steps.` + `result`：`Status: success`、`count=N` / `N items`。**无** 73 个 id 全文、**无** `type=plan` Artifact。数字须能在 `--raw` 的 `metrics` / `payload` 对上 | ☐ | ☐ Agent 发同一句 |  |
 | H6 | H4 之后 `run --plan-id <H4 的 plan_id>` | 只执行 JSON steps；与改磁盘 md 无关 | 同 H5 结果卡；`plan_id` 仍是 H4 那个 | ☐ | ☐ Artifact / 确认卡点 Run |  |
 

@@ -509,13 +509,17 @@ class QteasyAssistant:
         if clarify_plan:
             confirm = False
         payload = self.executor.execute(plan, confirm=confirm, persist_run=False, on_step=on_step)
-        plan_md = tool_plan_to_markdown(payload.get("plan") or plan)
-        if confirm:
-            payload["plan_md"] = ""
-        elif execute_requested:
-            payload["plan_md"] = ""
-        else:
+        write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
+        if write_plan_md:
+            plan_md = tool_plan_to_markdown(
+                payload.get("plan") or plan,
+                provider=getattr(self.planner, "provider", None),
+                registry=self.registry,
+            )
             payload["plan_md"] = plan_md
+        else:
+            plan_md = ""
+            payload["plan_md"] = ""
         if hatch:
             payload["hatch"] = hatch
             payload["hatch_plan_id"] = str(hatch_plan_id or "")

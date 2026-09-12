@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..human_card import normalize_card_kind, project_human_cards
+from ..plan_markdown import skill_step_title
 from ..session import ConversationState
 from .dto import (
     WorkbenchArtifact,
@@ -28,32 +29,6 @@ from .dto import (
 )
 
 _PREVIEW_ROW_CAP = 50
-
-_SKILL_TITLES = {
-    "qt.ai.strategy_meta.list": "List built-in strategies",
-    "qt.ai.strategy_meta.get": "Show strategy parameters",
-    "qt.ai.data.refill_basic_equity_and_index": "Download daily bars (bounded window)",
-    "qt.ai.data.read": "Read market data (history / reference / static)",
-    "qt.ai.data.summary_kline": "Summarize k-line statistics",
-    "qt.ai.visual.export_kline": "Export a k-line chart",
-    "qt.ai.backtest.run_builtin": "Run a built-in backtest",
-    "qt.ai.optimize.run_builtin": "Run built-in parameter optimization",
-    "qt.ai.strategy.codegen_hybrid": "Generate strategy source from spec",
-    "qt.ai.pipeline.live_trade_plan_only": "Live-trade checklist (never auto-executes)",
-    "qt.ai.system.fallback": "Need a more specific request",
-}
-
-
-def skill_step_title(skill: str, raw: Optional[Dict[str, Any]] = None) -> str:
-    """人话步骤标题：summary 优先，否则内置对照表。"""
-
-    if isinstance(raw, dict):
-        explicit = str(raw.get("summary") or "").strip()
-        if explicit:
-            return explicit
-    name = str(skill or "").strip()
-    return str(_SKILL_TITLES.get(name) or name)
-
 
 _DEFAULT_NEXT_ACTION = (
     "Fix the issue above, then retry this step. You do not need to start over."

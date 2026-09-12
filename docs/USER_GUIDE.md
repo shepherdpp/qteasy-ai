@@ -21,7 +21,7 @@ Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm
 | **pretty** | `--pretty` | `--pretty` | 结构化 `narrative` + `python_code` + `result_preview`（JSON 或三通道 Markdown） |
 | **raw** | `--raw` | `--raw` | 装配层 payload，供脚本与实弹 |
 
-槽齐不会自动执行。`--human` **只打印内核已写好的卡**，三端禁止反解析卡或 `plan.md`。Plan dry-run 对话区是一句 `plan_ready` 短通知（已创建、`plan_id`、风险一句、Artifact 路径、两条模式缺口）；完整 `plan.md` 是工作台 Artifact（`type=plan`），JSON 才是执行金标准（**json_wins**：改磁盘 md 不会改变 `run --plan-id`）。**`run` / Agent 不创建、不展示 `plan.md`**；ToolPlan JSON 仍进 `runs/{run_id}.json`。磁盘文件名是 **`run_<id>.json`**（Plan 另有 **`run_<id>.plan.md`**），不是 `plan_<id>`。`plan_id` 只写在 JSON 里。无子命令时打印用法卡（`ask` / `plan` / `run --plan-id`），**不会**自动 `run`。概念题在 `plan`/`run` 里会降级为 Ask，并带 `mode_notice`。
+槽齐不会自动执行。`--human` **只打印内核已写好的卡**，三端禁止反解析卡或 `plan.md`。Plan dry-run 对话区是一句 `plan_ready` 短通知（已创建、`plan_id`、风险一句、Artifact 路径、两条模式缺口）；完整 `plan.md` 是工作台 Artifact（`type=plan`）：英文叙事 + 由 JSON DAG 生成的 mermaid 框图（有 Provider 时可能多一段 Why；失败则只有 Mode-R）。JSON 才是执行金标准（**json_wins**：改磁盘 md 不会改变 `run --plan-id`）。**`run` / Agent 不创建、不展示 `plan.md`**；ToolPlan JSON 仍进 `runs/{run_id}.json`。磁盘文件名是 **`run_<id>.json`**（Plan 另有 **`run_<id>.plan.md`**），不是 `plan_<id>`。`plan_id` 只写在 JSON 里。无子命令时打印用法卡（`ask` / `plan` / `run --plan-id`），**不会**自动 `run`。概念题在 `plan`/`run` 里会降级为 Ask，并带 `mode_notice`。
 
 Plan 成功即本句完成（保留当前 `plan_id`）。Workbench Confirm 是可选快捷，不阻塞输入。两条须先写在卡上的缺口：说「本次只讨论 / just discuss」→ Ask；在 Plan 里说「执行上面的计划 / 请运行计划 plan_xxx」→ 执行该计划。澄清中 `skip` / `跳过` 结束本句（失败），不会猜缺省槽。
 

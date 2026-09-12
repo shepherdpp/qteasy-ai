@@ -111,7 +111,9 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             disk_md = md_path.read_text(encoding="utf-8")
             print(" disk_md head:", disk_md.splitlines()[:6])
             self.assertIn(plan_id, disk_md)
-            self.assertIn("# ToolPlan", disk_md)
+            self.assertIn("# Plan", disk_md)
+            self.assertNotIn("# ToolPlan", disk_md)
+            self.assertIn("```mermaid", disk_md)
 
     def test_plan_brief_picks_history_entrypoint(self) -> None:
         """qt.ai.data.read：human 只显示 channel 对应的一个入口。"""
