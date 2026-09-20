@@ -116,10 +116,23 @@ function composerHint() {
   return "Plan: review the artifact. Confirm is optional; you can type freely.";
 }
 
+function latestNonUserMessage() {
+  const rows = transcript.concat(state.messages || []);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (rows[i] && rows[i].kind !== "user_text") return rows[i];
+  }
+  return null;
+}
+
+function liveClarifyMessage() {
+  const last = latestNonUserMessage();
+  if (last && (last.kind === "clarify" || last.kind === "clarification")) return last;
+  return null;
+}
+
 function pendingDecision() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
-  const clar = transcript.some((m) => m.kind === "clarification" || m.kind === "clarify");
-  return Boolean(missing.length || clar);
+  return Boolean(missing.length || liveClarifyMessage());
 }
 
 const JOB_STAGE = {
@@ -349,7 +362,7 @@ function setBusy(next) {
     const el = $(id);
     if (el) el.disabled = busy;
   });
-  document.querySelectorAll(".btn-abandon-trial, .btn-abandon-open, .btn-kb-write").forEach((el) => {
+  document.querySelectorAll(".btn-abandon-trial, .btn-abandon-open, .btn-kb-write, .clarify-chip").forEach((el) => {
     el.disabled = busy;
   });
   renderChat();
@@ -658,6 +671,10 @@ function onChatClick(ev) {
   if (t.id === "btn-edit-submit") submitParamEdits();
   if (t.id === "btn-clarify") submitClarification();
   if (t.id === "btn-clarify-skip") followUp("skip");
+  if (t.dataset.clarifyOption != null) {
+    followUp(t.dataset.clarifyOption);
+    return;
+  }
   if (t.classList.contains("btn-retry") || t.id === "btn-retry") retryLast();
   if (t.dataset.editUser != null) {
     editingUserIndex = Number(t.dataset.editUser);
@@ -971,7 +988,22 @@ function renderChat() {
   }
   for (let i = 0; i < transcript.length; i += 1) {
     const msg = transcript[i];
-    if (msg.kind === "plan_card" || msg.kind === "clarification" || msg.kind === "clarify" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") continue;
+    if (msg.kind === "plan_card" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") continue;
+    if (msg.kind === "clarification" || msg.kind === "clarify") {
+      let lastClarifyIdx = -1;
+      for (let j = transcript.length - 1; j >= 0; j -= 1) {
+        const row = transcript[j];
+        if (row && (row.kind === "clarify" || row.kind === "clarification")) {
+          lastClarifyIdx = j;
+          break;
+        }
+      }
+      if (liveClarifyMessage() && i === lastClarifyIdx) continue;
+      parts.push(
+        `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`
+      );
+      continue;
+    }
     if (
       (msg.kind === "ask_text" || msg.kind === "ask") &&
       String(msg.text || "").startsWith("Plan ready:") &&
@@ -1043,6 +1075,15 @@ function latestMessage(kind) {
   return null;
 }
 
+function latestClarify() {
+  const rows = transcript.concat(state.messages || []);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const kind = rows[i] && rows[i].kind;
+    if (kind === "clarify" || kind === "clarification") return rows[i];
+  }
+  return null;
+}
+
 function renderDesignCard() {
   const msg = latestMessage("design_card");
   const design = (state.sidebar && state.sidebar.design) || (msg && msg.payload) || null;
@@ -1083,16 +1124,34 @@ function renderKbWriteCard() {
   </div>`;
 }
 
+function renderClarifyOptions(clar, lock) {
+  const raw = (clar && clar.payload && clar.payload.options) || [];
+  const chips = raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const id = String(item.id || item.label || "").trim();
+      const label = String(item.label || item.id || "").trim();
+      if (!id) return "";
+      return `<button type="button" class="chip clarify-chip" data-clarify-option="${escapeHtml(id)}" ${lock}>${escapeHtml(label)}</button>`;
+    })
+    .filter(Boolean)
+    .join("");
+  if (!chips) return "";
+  return `<div class="clarify-options" data-testid="clarify-options">${chips}</div>`;
+}
+
 function renderClarification() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
-  const clar = transcript.concat(state.messages || []).find((m) => m.kind === "clarification" || m.kind === "clarify");
+  const live = liveClarifyMessage();
+  const clar = live || (missing.length ? latestClarify() : null);
   if (!clar && !missing.length) return "";
   const pending = ((clar && clar.payload && clar.payload.pending) || []).map((item) => item.name || item).filter(Boolean);
   const fields = missing.length ? missing : pending;
   const lock = busy ? "disabled" : "";
   const skipBtn = `<button type="button" class="ghost" id="btn-clarify-skip" ${lock}>Skip</button>`;
+  const optionChips = renderClarifyOptions(clar, lock);
   if (!fields.length && clar) {
-    return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3><p>${escapeHtml(clar.text || "")}</p><div class="actions">${skipBtn}</div></div>`;
+    return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3><p>${escapeHtml(clar.text || "")}</p>${optionChips}<div class="actions">${skipBtn}</div></div>`;
   }
   const inputs = fields
     .map((name) => {
@@ -1102,7 +1161,7 @@ function renderClarification() {
     })
     .join("");
   const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit. Skip ends this request.</p>";
-  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${lock}>Submit slots</button>${skipBtn}</div></div>`;
+  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${optionChips}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${lock}>Submit slots</button>${skipBtn}</div></div>`;
 }
 
 function renderDecisionActions(extra = "") {

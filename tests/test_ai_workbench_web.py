@@ -80,8 +80,32 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("No artifacts in this session", js.text)
             self.assertIn("This session", js.text)
             self.assertIn("btn-clarify-skip", js.text)
+            print(" js has clarify-options:", "clarify-options" in js.text)
+            print(" js has data-clarify-option:", "data-clarify-option" in js.text)
+            print(" js followUp chip:", "followUp(t.dataset.clarifyOption)" in js.text)
+            self.assertIn("data-clarify-option", js.text)
+            self.assertIn("clarify-options", js.text)
+            self.assertIn("clarify-chip", js.text)
+            self.assertIn("payload.options", js.text)
             self.assertIn("Full steps are in the plan Artifact", js.text)
             self.assertIn('followUp("skip")', js.text)
+            self.assertIn("followUp(t.dataset.clarifyOption)", js.text)
+            print(" js has liveClarifyMessage:", "liveClarifyMessage" in js.text)
+            print(" js has latestNonUserMessage:", "latestNonUserMessage" in js.text)
+            self.assertIn("liveClarifyMessage", js.text)
+            self.assertIn("latestNonUserMessage", js.text)
+            self.assertIn("latestClarify", js.text)
+            print(" js has clarify-history:", "clarify-history" in js.text)
+            self.assertIn("clarify-history", js.text)
+            self.assertIn("Clarify", js.text)
+            self.assertNotIn(
+                'transcript.concat(state.messages || []).find((m) => m.kind === "clarification" || m.kind === "clarify")',
+                js.text,
+            )
+            self.assertNotIn(
+                'transcript.some((m) => m.kind === "clarification" || m.kind === "clarify")',
+                js.text,
+            )
             self.assertIn("state.artifacts = workspace.artifacts", js.text)
             self.assertIn("chart-img", js.text)
             self.assertIn("/v1/artifacts/", js.text)
@@ -104,7 +128,9 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertEqual(css.status_code, 200)
             self.assertIn("grid-template-columns", css.text)
             print(" css has slot-tag:", "slot-tag" in css.text)
+            print(" css has clarify-options:", "clarify-options" in css.text)
             self.assertIn("slot-tag", css.text)
+            self.assertIn("clarify-options", css.text)
             self.assertIn("artifact-toolbar", css.text)
             self.assertIn("workspace-col.collapsed", css.text)
             self.assertNotIn("display: none", css.text.split(".workspace-col")[1].split(".col-head")[0] if ".workspace-col" in css.text else "")

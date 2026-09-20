@@ -150,6 +150,16 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
 .layout.workspace-collapsed .now-chips { display: flex; cursor: pointer; }
 .chip { background: #2d2d2d; border-radius: 10px; padding: 2px 8px; }
 .chip.warn { color: var(--warn); }
+.clarify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+button.chip.clarify-chip {
+  padding: 3px 10px;
+  border-radius: 10px;
+}
 .mode-notice {
   margin: 0;
   padding: 6px 10px;
