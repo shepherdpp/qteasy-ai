@@ -130,6 +130,15 @@ function liveClarifyMessage() {
   return null;
 }
 
+function shouldShowLiveClarify() {
+  const missing = (state.sidebar && state.sidebar.missing) || [];
+  if (missing.length) return true;
+  const last = liveClarifyMessage();
+  if (!last) return false;
+  const status = String((last.payload && last.payload.status) || "");
+  return status !== "answered" && status !== "skipped";
+}
+
 function pendingDecision() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
   return Boolean(missing.length || liveClarifyMessage());
@@ -213,11 +222,13 @@ function mountShell() {
         <div class="chat-log" id="chat-log"></div>
         <div class="composer">
           <div class="composer-meta">
-            <span class="mode-badge" data-testid="mode-badge" id="composer-mode">Mode: PLAN</span>
-            <div class="mode-group">
-              <button type="button" data-mode="ask">Ask</button>
-              <button type="button" data-mode="plan">Plan</button>
-              <button type="button" data-mode="agent">Agent</button>
+            <div class="mode-dropdown">
+              <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="composer-mode" aria-haspopup="listbox" aria-expanded="false">Mode: PLAN ▾</button>
+              <div class="mode-menu" id="mode-menu" hidden>
+                <button type="button" data-mode="ask">Ask</button>
+                <button type="button" data-mode="plan">Plan</button>
+                <button type="button" data-mode="agent">Agent</button>
+              </div>
             </div>
             <span id="composer-mode-hint"></span>
           </div>
@@ -250,9 +261,36 @@ function mountShell() {
   $("composer-mode-hint").textContent = composerHint();
 }
 
+function closeModeMenu() {
+  const menu = $("mode-menu");
+  const badge = $("composer-mode");
+  if (menu) menu.hidden = true;
+  if (badge) badge.setAttribute("aria-expanded", "false");
+}
+
+function toggleModeMenu() {
+  if (busy) return;
+  const menu = $("mode-menu");
+  const badge = $("composer-mode");
+  if (!menu) return;
+  menu.hidden = !menu.hidden;
+  if (badge) badge.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+}
+
 function bindShell() {
-  document.querySelectorAll("button[data-mode]").forEach((btn) => {
+  const modeBadge = $("composer-mode");
+  if (modeBadge) {
+    modeBadge.onclick = (ev) => {
+      ev.stopPropagation();
+      toggleModeMenu();
+    };
+  }
+  document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.onclick = () => setMode(btn.getAttribute("data-mode"));
+  });
+  document.addEventListener("click", (ev) => {
+    const dropdown = ev.target && ev.target.closest && ev.target.closest(".mode-dropdown");
+    if (!dropdown) closeModeMenu();
   });
   const input = $("query-input");
   $("btn-send").onclick = () => sendQuery(input.value);
@@ -324,19 +362,22 @@ function setMode(next) {
       : "";
     modeNotice = `Switched to ${mode.toUpperCase()}. ${composerHint()}${gate}`;
   }
+  closeModeMenu();
   renderMode();
   renderChat();
 }
 
 function renderMode() {
-  const label = `Mode: ${mode.toUpperCase()}`;
+  const label = `Mode: ${mode.toUpperCase()} ▾`;
   document.querySelectorAll("[data-testid='mode-badge'], #composer-mode").forEach((el) => {
     el.textContent = label;
   });
-  document.querySelectorAll("button[data-mode]").forEach((btn) => {
+  document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
     btn.disabled = busy;
   });
+  const badge = $("composer-mode");
+  if (badge) badge.disabled = busy;
   $("composer-mode-hint").textContent = composerHint();
   const notice = $("mode-notice");
   if (notice) {
@@ -355,9 +396,11 @@ function setBusy(next) {
   const send = $("btn-send");
   if (input) input.disabled = busy;
   if (send) send.disabled = busy;
-  document.querySelectorAll("button[data-mode]").forEach((btn) => {
+  document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
+  const modeBadge = $("composer-mode");
+  if (modeBadge) modeBadge.disabled = busy;
   ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-clarify-skip", "btn-retry"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy;
@@ -998,9 +1041,11 @@ function renderChat() {
           break;
         }
       }
-      if (liveClarifyMessage() && i === lastClarifyIdx) continue;
+      if (shouldShowLiveClarify() && i === lastClarifyIdx) continue;
+      const answer = msg.payload && msg.payload.answer ? String(msg.payload.answer) : "";
+      const answered = answer ? `<div class="answered">Answered: ${escapeHtml(answer)}</div>` : "";
       parts.push(
-        `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`
+        `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`
       );
       continue;
     }
@@ -1091,29 +1136,31 @@ function renderDesignCard() {
   const spec = (design && design.spec_draft) || (msg && msg.payload && msg.payload.spec_draft) || {};
   const hits = (design && design.kb_hits) || (msg && msg.payload && msg.payload.kb_hits) || [];
   const lock = busy ? "disabled" : "";
+  const live = Boolean(design);
   const hitLines = hits.length
     ? `<ul class="kb-hits">${hits
         .map((hit) => `<li>${escapeHtml(hit.path || hit.title || "")}</li>`)
         .join("")}</ul>`
     : `<p class="hint">No user-KB notes matched this draft.</p>`;
+  const actions = live
+    ? `<div class="actions">
+      <button type="button" class="ghost btn-abandon-trial" ${lock}>Abandon trial</button>
+      <button type="button" class="danger btn-abandon-open" ${lock}>Abandon open job</button>
+    </div>`
+    : "";
   return `<div class="card" data-testid="design-card"><h3>Design loop</h3>
     <p>${escapeHtml((msg && msg.text) || "Refine the FactorSpec before a closed trial.")}</p>
     <p><strong>${escapeHtml(spec.name || "unnamed")}</strong> · ${escapeHtml(spec.universe || "universe TBD")}</p>
     <p>${escapeHtml(spec.hypothesis || "")}</p>
     <p class="hint">Suggested trial: ${escapeHtml(spec.suggested_job || "research.factor_ic")}</p>
     <p class="files-k">User KB sources</p>${hitLines}
-    <div class="actions">
-      <button type="button" class="ghost btn-abandon-trial" ${lock}>Abandon trial</button>
-      <button type="button" class="danger btn-abandon-open" ${lock}>Abandon open job</button>
-    </div>
+    ${actions}
   </div>`;
 }
 
 function renderKbWriteCard() {
   const msg = latestMessage("kb_write");
-  const pending =
-    (msg && msg.payload) ||
-    ((state.sidebar && state.sidebar.design && state.sidebar.design.pending_kb_write) || null);
+  const pending = (state.sidebar && state.sidebar.design && state.sidebar.design.pending_kb_write) || null;
   if (!pending || typeof pending !== "object") return "";
   const lock = busy ? "disabled" : "";
   return `<div class="card" data-testid="kb-write-card"><h3>Write user-KB note</h3>
@@ -1144,6 +1191,7 @@ function renderClarification() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
   const live = liveClarifyMessage();
   const clar = live || (missing.length ? latestClarify() : null);
+  if (!shouldShowLiveClarify()) return "";
   if (!clar && !missing.length) return "";
   const pending = ((clar && clar.payload && clar.payload.pending) || []).map((item) => item.name || item).filter(Boolean);
   const fields = missing.length ? missing : pending;

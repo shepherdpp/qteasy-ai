@@ -586,11 +586,17 @@ class QteasyAssistant:
             payload["cleanup"] = {"deleted_count": 0, "deleted_files": [], "remaining_count": len(self.memory_store.list_runs())}
 
         asked = str(query or getattr(plan, "user_query", "") or "")
+        include_user = True
+        if confirm or hatch:
+            include_user = False
+        if session is not None and str(getattr(session, "receipt_kind", "") or ""):
+            include_user = False
         self._attach_human_cards(
             payload,
             query=asked,
             requested_mode=requested_mode,
             session=session,
+            include_user_text=include_user,
         )
 
         if response_style == "raw":
@@ -727,10 +733,12 @@ class QteasyAssistant:
     ) -> Dict[str, Any] | AssistantOutput:
         """skip 澄清：本句失败结束。"""
 
+        session.close_open_card(query, status="skipped")
         session.pending_clarification = None
         session.missing = []
         session.task_complete = True
         session.awaiting_abandon = False
+        session.receipt_kind = "skip_clarify"
         session.turns.append({"query": query, "kind": "skip_clarify"})
         self.session_store.save(session)
         return self._closed_error_result(
@@ -777,11 +785,13 @@ class QteasyAssistant:
             mode="plan",
         )
         self._attach_session_payload(payload, dummy, session)
+        include_user = not bool(session is not None and str(getattr(session, "receipt_kind", "") or ""))
         self._attach_human_cards(
             payload,
             query=query,
             requested_mode=requested_mode,
             session=session,
+            include_user_text=include_user,
         )
         if response_style == "raw":
             return payload
@@ -819,6 +829,8 @@ class QteasyAssistant:
         if agent_auto is not None:
             state.agent_auto = bool(agent_auto)
         gate = self.session_gate.classify(state, query)
+        had_open = bool(state.pending_clarification or state.missing)
+        state.receipt_kind = ""
 
         if (
             gate.kind == "new_intent"
@@ -845,17 +857,20 @@ class QteasyAssistant:
         if gate.kind == "open_idle":
             return self._open_idle_plan(query, str(gate.rationale or "")), state
         if gate.kind == "abandon_trial":
+            state.receipt_kind = "abandon_trial"
             return self._abandon_trial_state(state, query), state
         if gate.kind == "lock_spec":
             return self._lock_spec_plan(state, query), state
         if gate.abandon_confirmed and str(gate.rationale or "") == "abandon_open":
             self._reset_task(state, keep_turns=True)
+            state.receipt_kind = "abandon_open"
             state.turns.append({"query": query, "kind": "abandon_open"})
             self.session_store.save(state)
             return self._open_cleared_plan(query), state
         if gate.abandon_confirmed:
             self._reset_task(state, keep_turns=True)
             state.original_query = query
+            state.receipt_kind = "abandon"
         elif gate.kind == "propose_trial":
             if state.current_trial_plan_id:
                 self._queue_trial(state, query)
@@ -871,12 +886,18 @@ class QteasyAssistant:
                     state.active_design["spec_draft"] = apply_spec_patches(spec, gate.patches)
                     skip_classify = True
                     state.open_action = ""
+                    state.receipt_kind = "change_slot"
                 else:
                     skip_classify = bool(state.active_intent)
                     state.task_complete = False
-            elif state.pending_clarification or state.missing:
+                    if skip_classify:
+                        state.close_open_card(query, status="answered")
+                        state.receipt_kind = "change_slot"
+            elif had_open:
                 merge_facts(state, gate.patches, source="user", confirmed=True)
                 skip_classify = bool(state.active_intent)
+                state.close_open_card(query, status="answered")
+                state.receipt_kind = "fill_slot"
             else:
                 topic_skipped = bool(state.current_plan_id or state.active_intent)
                 self._reset_task(state, keep_turns=True)
@@ -887,6 +908,8 @@ class QteasyAssistant:
             for slot in state.slots.values():
                 slot.confirmed = True
             skip_classify = bool(state.active_intent)
+            state.close_open_card(query, status="answered")
+            state.receipt_kind = "confirm"
         elif gate.kind == "clarify":
             skip_classify = bool(state.active_intent)
         elif gate.kind == "new_intent" and not state.active_design:
@@ -1097,6 +1120,7 @@ class QteasyAssistant:
         """放弃当前试错（CLI/HTTP 一等操作）。"""
 
         state = self.session_store.load(str(session_id or "").strip() or "default")
+        state.receipt_kind = "abandon_trial"
         plan = self._abandon_trial_state(state, "abandon trial")
         return self._execute_and_format(
             plan=plan,
@@ -1117,6 +1141,7 @@ class QteasyAssistant:
 
         state = self.session_store.load(str(session_id or "").strip() or "default")
         self._reset_task(state, keep_turns=True)
+        state.receipt_kind = "abandon_open"
         state.turns.append({"query": "abandon open", "kind": "abandon_open"})
         self.session_store.save(state)
         plan = self._open_cleared_plan("abandon open")
@@ -1151,6 +1176,7 @@ class QteasyAssistant:
         design["last_kb_write"] = path
         design["kb_hits"] = search_user_kb(self.memory_store, str((design.get("spec_draft") or {}).get("name") or ""))
         state.active_design = design
+        state.receipt_kind = "kb_write"
         self.session_store.save(state)
         plan = self._design_status_plan(state, "confirm kb write", locked=True)
         plan.assumptions["kb_write_path"] = path
@@ -1296,6 +1322,7 @@ class QteasyAssistant:
         query: str,
         requested_mode: str,
         session: Optional[ConversationState],
+        include_user_text: bool = True,
     ) -> None:
         """投影人读卡写入 payload 与 session messages[]。"""
 
@@ -1306,6 +1333,7 @@ class QteasyAssistant:
             requested_mode=requested_mode,
             query=query,
             registry=self.registry,
+            include_user_text=include_user_text,
         )
         payload["human_cards"] = cards
         if session is not None:

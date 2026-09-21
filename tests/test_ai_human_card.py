@@ -414,6 +414,41 @@ class TestAiHumanCardClarify(unittest.TestCase):
             print(" follow missing:", again.missing)
             print(" follow kinds:", [item["kind"] for item in (follow.get("human_cards") or [])])
             self.assertEqual((again.active_intent or {}).get("job"), "data.refill")
+            users = [m for m in again.messages if m.get("kind") == "user_text"]
+            clar = [m for m in again.messages if m.get("kind") == "clarify"]
+            print(" user_text count:", len(users), [m.get("text") for m in users])
+            print(" clarify payloads:", [m.get("payload") for m in clar])
+            self.assertEqual(len(users), 1)
+            self.assertEqual(users[0]["text"], "帮我下载日线")
+            self.assertTrue(clar)
+            self.assertEqual((clar[0].get("payload") or {}).get("answer"), "start 20240101 end 20241231")
+            self.assertEqual((clar[0].get("payload") or {}).get("status"), "answered")
+
+    def test_run_plan_does_not_replay_user_query(self) -> None:
+        """run_plan 不把 plan.user_query 再写成 user_text。"""
+
+        print("\n[TestAiHumanCardClarify] run_plan no replay user_text")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-run-receipt"
+            planned = asst.plan("list built-in strategies", response_style="raw", session_id=sid)
+            plan_id = str((planned.get("plan") or {}).get("plan_id") or "")
+            before = asst.session_store.load(sid)
+            users_before = [m for m in before.messages if m.get("kind") == "user_text"]
+            print(" plan_id:", plan_id, "users before:", [m.get("text") for m in users_before])
+            self.assertEqual(len(users_before), 1)
+            asst.run_plan(plan_id, response_style="raw", session_id=sid)
+            after = asst.session_store.load(sid)
+            users_after = [m for m in after.messages if m.get("kind") == "user_text"]
+            kinds = [m.get("kind") for m in after.messages]
+            print(" users after:", [m.get("text") for m in users_after])
+            print(" kinds:", kinds)
+            self.assertEqual(len(users_after), 1)
+            self.assertEqual(users_after[0]["text"], "list built-in strategies")
+            self.assertIn("result", kinds)
 
     def test_topic_change_skips_without_abandon_options(self) -> None:
         """PlanReady 后换题：skip 提示，无 abandon 选项卡。"""
@@ -442,6 +477,21 @@ class TestAiHumanCardClarify(unittest.TestCase):
             self.assertIn("Previous topic skipped.", str((notice or {}).get("text") or ""))
             options = ((clarify or {}).get("payload") or {}).get("options") or []
             self.assertFalse(any(str(item.get("id") or "") == "abandon" for item in options if isinstance(item, dict)))
+
+
+    def test_format_human_includes_clarify_answer(self) -> None:
+        """clarify.payload.answer 出现在 --human 正文。"""
+
+        print("\n[TestAiHumanCardClarify] human Answered line")
+        from qteasy_ai.human_card import format_human_cards
+
+        cards = [
+            {"kind": "clarify", "text": "Need start.", "payload": {"answer": "start 20240101", "status": "answered"}},
+        ]
+        text = format_human_cards(cards, payload={"mode": "plan"})
+        print(" human:", text)
+        self.assertIn("Need start.", text)
+        self.assertIn("Answered: start 20240101", text)
 
 
 class TestAiHumanCardHumanCli(unittest.TestCase):

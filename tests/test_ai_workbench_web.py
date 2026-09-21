@@ -135,6 +135,52 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("workspace-col.collapsed", css.text)
             self.assertNotIn("display: none", css.text.split(".workspace-col")[1].split(".col-head")[0] if ".workspace-col" in css.text else "")
 
+    def test_session_mode_dropdown_without_origin_stickers(self) -> None:
+        """composer 模式下拉保留；壳层不再用 origin/clarifyUi 贴纸。"""
+
+        print("\n[TestAiWorkbenchWeb] mode dropdown without origin stickers")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            js = client.get("/static/app.js")
+            css = client.get("/static/app.css")
+            self.assertEqual(js.status_code, 200)
+            self.assertEqual(css.status_code, 200)
+            src = js.text
+            print(" js has clarify_ui:", "clarify_ui" in src)
+            print(" js has followUpFromCard:", "followUpFromCard" in src)
+            print(" js has mode-menu:", "mode-menu" in src)
+            self.assertNotIn("clarify_ui", src)
+            self.assertNotIn("followUpFromCard", src)
+            self.assertNotIn("clarifyUi", src)
+            self.assertNotIn("originMap", src)
+            self.assertIn('followUp("skip")', src)
+            self.assertIn("followUp(t.dataset.clarifyOption)", src)
+            self.assertIn("mode-menu", src)
+            self.assertIn("mode-dropdown", src)
+            self.assertIn("btn-mode-menu", src)
+            composer_meta = src.split("composer-meta")[1].split("query-input")[0] if "composer-meta" in src else ""
+            print(" composer-meta has mode-group:", "mode-group" in composer_meta)
+            print(" composer-meta has mode-menu:", "mode-menu" in composer_meta)
+            self.assertIn("mode-menu", composer_meta)
+            self.assertNotIn('<div class="mode-group">', composer_meta)
+            self.assertIn("payload.answer", src)
+            self.assertIn("Answered:", src)
+            self.assertIn("shouldShowLiveClarify", src)
+            self.assertIn("clarification-form", src)
+            self.assertIn("plan-card", src)
+            self.assertIn("liveClarifyMessage", src)
+            self.assertIn("Confirm is optional", src)
+            self.assertIn("design-card", src)
+            self.assertIn("btn-kb-write", src)
+            print(" css has mode-dropdown:", "mode-dropdown" in css.text)
+            print(" css has mode-menu:", "mode-menu" in css.text)
+            self.assertIn("mode-dropdown", css.text)
+            self.assertIn("mode-menu", css.text)
+
     def test_fixture_keys_match_types_ts(self) -> None:
         """fixture 四态 + types.ts WORKBENCH_STATE_KEYS 对齐。"""
 

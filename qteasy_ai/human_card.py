@@ -426,6 +426,11 @@ def format_human_cards(
         text = str(item.get("text") or "").rstrip()
         if text:
             lines.append(text)
+        if kind == "clarify":
+            blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            answer = str(blob.get("answer") or "").strip()
+            if answer:
+                lines.append(f"Answered: {answer}")
         if kind == "ask":
             sources = []
             blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}

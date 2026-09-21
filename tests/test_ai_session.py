@@ -215,6 +215,34 @@ class TestAiSession(unittest.TestCase):
             self.assertIsNone(loaded.active_intent)
             self.assertTrue(backup.exists())
 
+    def test_close_open_card_patches_latest_unanswered_clarify(self) -> None:
+        """就地关闭最近未答 clarify，不追加消息。"""
+
+        print("\n[TestAiSession] close_open_card latest clarify")
+        state = ConversationState.empty("close-1")
+        state.append_messages(
+            [
+                {"kind": "user_text", "text": "download daily", "payload": {}},
+                {
+                    "kind": "clarify",
+                    "text": "Need start and end.",
+                    "payload": {"pending": [{"name": "start"}]},
+                },
+            ]
+        )
+        before = len(state.messages)
+        closed = state.close_open_card("start 20240101", status="answered")
+        print(" closed:", closed, "n:", len(state.messages), "payload:", state.messages[-1]["payload"])
+        self.assertTrue(closed)
+        self.assertEqual(len(state.messages), before)
+        self.assertEqual(state.messages[-1]["kind"], "clarify")
+        self.assertEqual(state.messages[-1]["payload"]["status"], "answered")
+        self.assertEqual(state.messages[-1]["payload"]["answer"], "start 20240101")
+        again = state.close_open_card("end 20241231", status="answered")
+        print(" second close on already answered:", again, state.messages[-1]["payload"])
+        self.assertFalse(again)
+        self.assertEqual(state.messages[-1]["payload"]["answer"], "start 20240101")
+
 
 if __name__ == "__main__":
     unittest.main()

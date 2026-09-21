@@ -78,6 +78,29 @@ textarea:focus, input:focus { outline: 1px solid var(--accent); border-color: va
   letter-spacing: 0.04em;
   color: #9cdcfe;
 }
+.mode-dropdown { position: relative; display: inline-block; }
+button.mode-badge {
+  border: 1px solid #1177bb;
+  cursor: pointer;
+}
+button.mode-badge:disabled { cursor: not-allowed; }
+.mode-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 8;
+  min-width: 112px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.mode-menu[hidden] { display: none; }
+.mode-menu button { text-align: left; width: 100%; }
+.mode-menu button.active { background: var(--bg-active); border-color: #1177bb; color: #fff; }
 .topbar .spacer { flex: 1; }
 .session-title { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 
@@ -309,6 +332,7 @@ button.chip.clarify-chip {
 }
 .warn { color: var(--warn); font-size: 12px; }
 .err-text { color: var(--err); }
+.answered { margin-top: 6px; color: var(--text-muted); font-size: 12px; }
 
 .composer {
   border-top: 1px solid var(--border);

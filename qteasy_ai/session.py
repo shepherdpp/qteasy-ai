@@ -139,6 +139,7 @@ class ConversationState:
     current_trial_plan_id: str = ""
     trial_queue: List[Dict[str, Any]] = field(default_factory=list)
     open_action: str = ""
+    receipt_kind: str = ""
 
     @classmethod
     def empty(cls, session_id: str) -> "ConversationState":
@@ -290,6 +291,38 @@ class ConversationState:
             self.messages.append(item)
         self.messages = self.messages[-120:]
         return list(self.messages)
+
+    def close_open_card(self, answer: str, *, status: str = "answered") -> bool:
+        """就地关闭最近一张未答开卡（优先 clarify，其次 plan_ready）。
+
+        Parameters
+        ----------
+        answer : str
+            本轮回执原文，写入 ``payload.answer``。
+        status : str, optional
+            ``answered`` 或 ``skipped``。
+
+        Returns
+        -------
+        bool
+            是否改写了一张卡。
+        """
+
+        text = str(answer or "").strip()
+        mark = str(status or "answered").strip() or "answered"
+        for kind in ("clarify", "plan_ready"):
+            for row in reversed(self.messages):
+                if str(row.get("kind") or "") != kind:
+                    continue
+                payload = dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {}
+                if str(payload.get("status") or "") in {"answered", "skipped"}:
+                    continue
+                if text:
+                    payload["answer"] = text
+                payload["status"] = mark
+                row["payload"] = payload
+                return True
+        return False
 
     def rewind_from_user_index(self, message_index: int, *, discard: bool = False) -> Dict[str, Any]:
         """裁掉指定用户句之后的对话与 turns；不替换该句文本。
