@@ -63,6 +63,7 @@ class PlanExecutor:
         confirm: bool = False,
         persist_run: bool = True,
         on_step: Optional[Callable[[PlanStepRecord], None]] = None,
+        run_id: str = "",
     ) -> Dict[str, Any]:
         """执行计划，支持 dry_run 与 execute。
 
@@ -76,6 +77,8 @@ class PlanExecutor:
             是否立刻写入 ``runs/``。
         on_step : callable, optional
             每步完成后的回调（``PlanStepRecord``）。dry_run 不触发真实执行回调。
+        run_id : str, optional
+            若提供则复用该 run_id（改槽覆盖未执行 dry-run）。
 
         Returns
         -------
@@ -83,7 +86,7 @@ class PlanExecutor:
             包含 `plan`、`execution`、`run_id`、`run_file` 的统一结果。
         """
 
-        run_id = new_run_id()
+        run_id = str(run_id or "").strip() or new_run_id()
         created_at = _utc_now_iso()
         if plan.execution_mode == "dry_run" or not confirm:
             # 统一 dry_run 语义：只产出计划与占位执行记录，不真正触发技能调用。

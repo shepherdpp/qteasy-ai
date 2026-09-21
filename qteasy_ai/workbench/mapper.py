@@ -455,7 +455,7 @@ def _sidebar_from_session(
             current_plan_id=str(session_blob.get("current_plan_id") or ""),
             clarify_round=int(session_blob.get("clarify_round") or 0),
             design=dict(session_blob["active_design"])
-            if isinstance(session_blob.get("active_design"), dict)
+            if ConversationState.is_live_design(session_blob.get("active_design"))
             else None,
             trial_queue=list(session_blob.get("trial_queue") or []),
         )
@@ -475,7 +475,7 @@ def _sidebar_from_session(
         env_summary=dict(env_facts or {}),
         current_plan_id=str(session.current_plan_id or ""),
         clarify_round=int(session.clarify_round),
-        design=dict(session.active_design) if session.active_design else None,
+        design=dict(session.live_design()) if session.live_design() else None,
         trial_queue=list(session.trial_queue or []),
     )
 

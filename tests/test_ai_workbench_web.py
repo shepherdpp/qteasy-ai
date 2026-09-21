@@ -176,6 +176,12 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("Confirm is optional", src)
             self.assertIn("design-card", src)
             self.assertIn("btn-kb-write", src)
+            design_fn = src.split("function renderDesignCard")[1].split("function renderKbWriteCard")[0]
+            print(" renderDesignCard has latestMessage:", "latestMessage" in design_fn)
+            print(" renderDesignCard has parked:", "parked" in design_fn)
+            self.assertNotIn("latestMessage", design_fn)
+            self.assertIn("sidebar.design", design_fn)
+            self.assertIn("parked", design_fn)
             print(" css has mode-dropdown:", "mode-dropdown" in css.text)
             print(" css has mode-menu:", "mode-menu" in css.text)
             self.assertIn("mode-dropdown", css.text)

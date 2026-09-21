@@ -121,6 +121,21 @@ class TestAiOpenTrial(unittest.TestCase):
             self.assertEqual(state.current_trial_plan_id, "")
             self.assertEqual(spec.get("name"), "momentum")
             self.assertIsNotNone(state.active_design)
+            print(" design status:", (state.active_design or {}).get("status"))
+            print(" incomplete:", state.task_incomplete())
+            self.assertEqual((state.active_design or {}).get("status"), "parked")
+            self.assertFalse(state.task_incomplete())
+            follow = asst.plan("list built-in strategies", response_style="raw", session_id=sid)
+            kinds = [str(item.get("kind") or "") for item in (follow.get("human_cards") or [])]
+            job = str(((follow.get("plan") or {}).get("planner_trace") or {}).get("intent_job") or "")
+            again = asst.session_store.load(sid)
+            print(" follow kinds:", kinds)
+            print(" follow job:", job)
+            print(" parked still:", (again.active_design or {}).get("status"))
+            self.assertNotIn("design_card", kinds)
+            self.assertEqual(job, "strategy.meta")
+            self.assertEqual((again.active_design or {}).get("status"), "parked")
+            self.assertEqual(((again.active_design or {}).get("spec_draft") or {}).get("name"), "momentum")
 
     def test_abandon_open_keeps_session_id(self) -> None:
         """abandon_open 清设计态，session_id 仍在。"""

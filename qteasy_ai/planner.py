@@ -249,17 +249,15 @@ class Planner:
         mark_query = query if skip else user_query.strip()
         decision = maybe_mark_builder_open_loop(decision, mark_query)
         catalog = self.intent_engine.catalog
-        design = is_design_loop(catalog, decision) or (
-            session is not None and isinstance(getattr(session, "active_design", None), dict)
-            and skip
-        )
+        live_design = session.live_design() if session is not None else None
+        design = is_design_loop(catalog, decision) or (live_design is not None and skip)
         if design and open_action != "propose_trial" and decision.job != "open":
             steps = []
             downgrade_reason = ""
         elif design and open_action == "propose_trial":
             spec = {}
-            if session is not None and isinstance(getattr(session, "active_design", None), dict):
-                spec = dict((session.active_design or {}).get("spec_draft") or {})
+            if live_design is not None:
+                spec = dict(live_design.get("spec_draft") or {})
             if decision.job.startswith("strategy."):
                 spec = spec or draft_strategy_spec(user_query, session)
             else:
@@ -307,12 +305,10 @@ class Planner:
         if design and decision.job != "open":
             if decision.job.startswith("strategy.") and bool((decision.flags or {}).get("open_loop")):
                 spec = draft_strategy_spec(user_query, session)
-            elif catalog.job_workflow(decision.job) == "open" or (
-                session is not None and getattr(session, "active_design", None)
-            ):
+            elif catalog.job_workflow(decision.job) == "open" or live_design is not None:
                 spec = draft_factor_spec(user_query, session)
-                if session is not None and isinstance(getattr(session, "active_design", None), dict):
-                    spec = dict((session.active_design or {}).get("spec_draft") or spec)
+                if live_design is not None:
+                    spec = dict(live_design.get("spec_draft") or spec)
             else:
                 spec = draft_factor_spec(user_query, session)
             kb_hits = []

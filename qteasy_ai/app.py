@@ -508,7 +508,23 @@ class QteasyAssistant:
         clarify_plan = self._plan_is_clarify(plan)
         if clarify_plan:
             confirm = False
-        payload = self.executor.execute(plan, confirm=confirm, persist_run=False, on_step=on_step)
+        reuse_run_id = ""
+        if (
+            not confirm
+            and session is not None
+            and str(getattr(session, "receipt_kind", "") or "") == "change_slot"
+        ):
+            existing = self.memory_store.find_run_by_plan_id(str(getattr(plan, "plan_id", "") or ""))
+            status = str(((existing.get("execution") or {}) if isinstance(existing, dict) else {}).get("status") or "")
+            if status == "dry_run":
+                reuse_run_id = str(existing.get("run_id") or "")
+        payload = self.executor.execute(
+            plan,
+            confirm=confirm,
+            persist_run=False,
+            on_step=on_step,
+            run_id=reuse_run_id,
+        )
         write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
         if write_plan_md:
             plan_md = tool_plan_to_markdown(
@@ -531,7 +547,7 @@ class QteasyAssistant:
             self._merge_env_facts_from_execution(payload)
             if session is not None:
                 status = str((payload.get("execution") or {}).get("status") or "")
-                if session.active_design:
+                if session.live_design():
                     if status == "success":
                         session.current_trial_plan_id = ""
                         updated = []
@@ -548,7 +564,7 @@ class QteasyAssistant:
                         session.pending_clarification = None
                         session.missing = []
                 self.session_store.save(session)
-        elif session is not None and not session.active_design:
+        elif session is not None and not session.live_design():
             if clarify_plan or session.pending_clarification or session.missing:
                 session.task_complete = False
             else:
@@ -836,7 +852,7 @@ class QteasyAssistant:
             gate.kind == "new_intent"
             and gate.needs_abandon
             and not gate.abandon_confirmed
-            and state.active_design
+            and state.live_design()
         ):
             peek = self.planner.intent_engine.classify(query)
             peek = maybe_mark_builder_open_loop(peek, query)
@@ -854,6 +870,7 @@ class QteasyAssistant:
 
         skip_classify = False
         topic_skipped = False
+        keep_plan_id = str(state.current_plan_id or "") if gate.kind == "change_slot" else ""
         if gate.kind == "open_idle":
             return self._open_idle_plan(query, str(gate.rationale or "")), state
         if gate.kind == "abandon_trial":
@@ -863,6 +880,7 @@ class QteasyAssistant:
             return self._lock_spec_plan(state, query), state
         if gate.abandon_confirmed and str(gate.rationale or "") == "abandon_open":
             self._reset_task(state, keep_turns=True)
+            state.active_design = None
             state.receipt_kind = "abandon_open"
             state.turns.append({"query": query, "kind": "abandon_open"})
             self.session_store.save(state)
@@ -881,7 +899,7 @@ class QteasyAssistant:
         elif gate.kind in {"fill_slot", "change_slot"}:
             if gate.kind == "change_slot":
                 merge_facts(state, gate.patches, source="user", confirmed=True)
-                if state.active_design:
+                if state.live_design():
                     spec = dict((state.active_design or {}).get("spec_draft") or {})
                     state.active_design["spec_draft"] = apply_spec_patches(spec, gate.patches)
                     skip_classify = True
@@ -912,7 +930,7 @@ class QteasyAssistant:
             state.receipt_kind = "confirm"
         elif gate.kind == "clarify":
             skip_classify = bool(state.active_intent)
-        elif gate.kind == "new_intent" and not state.active_design:
+        elif gate.kind == "new_intent" and not state.live_design():
             topic_skipped = bool(
                 state.pending_clarification
                 or state.missing
@@ -923,7 +941,7 @@ class QteasyAssistant:
             state.original_query = query
             merge_facts(state, extract_patches(query), source="extracted", confirmed=True)
         else:
-            if state.active_intent and state.task_complete and not state.active_design:
+            if state.active_intent and state.task_complete and not state.live_design():
                 topic_skipped = bool(state.current_plan_id or state.active_intent)
                 self._reset_task(state, keep_turns=True)
             if not state.original_query:
@@ -937,6 +955,8 @@ class QteasyAssistant:
             skip_classify=skip_classify,
             profile=profile,
         )
+        if keep_plan_id and str(getattr(state, "receipt_kind", "") or "") == "change_slot":
+            plan.plan_id = keep_plan_id
         if topic_skipped:
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["topic_skipped"] = True
@@ -957,6 +977,9 @@ class QteasyAssistant:
     def _reset_task(state: ConversationState, *, keep_turns: bool) -> None:
         """放弃当前闭合或开放任务，保留 session_id / turns。"""
 
+        parked = None
+        if ConversationState.is_live_design(state.active_design) is False and isinstance(state.active_design, dict):
+            parked = dict(state.active_design)
         state.active_intent = None
         state.slots = {}
         state.missing = []
@@ -966,7 +989,7 @@ class QteasyAssistant:
         state.awaiting_abandon = False
         state.original_query = ""
         state.task_complete = False
-        state.active_design = None
+        state.active_design = parked
         state.current_trial_plan_id = ""
         state.trial_queue = []
         state.open_action = ""
@@ -1032,6 +1055,10 @@ class QteasyAssistant:
             item for item in state.trial_queue if str(item.get("status") or "") != "active"
         ]
         state.open_action = ""
+        design = dict(state.active_design or {})
+        if design:
+            design["status"] = "parked"
+            state.active_design = design
         state.turns.append({"query": query, "kind": "abandon_trial"})
         self.session_store.save(state)
         return self._design_status_plan(state, query)
@@ -1141,6 +1168,7 @@ class QteasyAssistant:
 
         state = self.session_store.load(str(session_id or "").strip() or "default")
         self._reset_task(state, keep_turns=True)
+        state.active_design = None
         state.receipt_kind = "abandon_open"
         state.turns.append({"query": "abandon open", "kind": "abandon_open"})
         self.session_store.save(state)
@@ -1218,6 +1246,8 @@ class QteasyAssistant:
                 design_blob["pending_kb_write"] = dict(prev.get("pending_kb_write") or {})
             if prev.get("last_kb_write"):
                 design_blob["last_kb_write"] = prev.get("last_kb_write")
+            if str(prev.get("status") or "") == "parked":
+                design_blob["status"] = "parked"
             state.active_design = design_blob
             if hasattr(plan, "assumptions"):
                 plan.assumptions = dict(plan.assumptions or {})

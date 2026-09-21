@@ -132,6 +132,19 @@ class TestAiSessionGate(unittest.TestCase):
         self.assertEqual(decision.kind, "new_intent")
         self.assertFalse(decision.needs_abandon)
 
+    def test_completed_start_patch_is_change_slot_without_hint(self) -> None:
+        """完成态「start 20200101」无「改」字仍是 change_slot。"""
+
+        print("\n[TestAiSessionGate] completed start patch change_slot")
+        gate = SessionGate(provider=None)
+        session = _backtest_session(complete=True)
+        session.missing = []
+        session.set_slot("start", "20100101", source="user", confirmed=True)
+        decision = gate.classify(session, "start 20200101")
+        print(" kind:", decision.kind, "patches:", decision.patches, "rationale:", decision.rationale)
+        self.assertEqual(decision.kind, "change_slot")
+        self.assertEqual(decision.patches.get("start"), "20200101")
+
     def test_completed_task_blocks_llm_fill_slot(self) -> None:
         """task_complete 后即使 LLM 说 fill_slot，也强制 new_intent。"""
 

@@ -126,7 +126,7 @@ class SessionGate:
         # 开放环放弃确认仍优先于 LLM（G.7）。闭合 Job 不再进入 awaiting_abandon。
         if session.awaiting_abandon:
             return self._classify_rule(session, text)
-        if session.active_design:
+        if session.live_design():
             from .open_workflow import classify_open_utterance
 
             action = classify_open_utterance(text)
@@ -153,17 +153,15 @@ class SessionGate:
         if hinted_job and hinted_job != active_job:
             return GateDecision(
                 kind="new_intent",
-                needs_abandon=bool(session.active_design),
+                needs_abandon=bool(session.live_design()),
                 rationale="new_intent_job_verb",
             )
         if session.task_complete and session.active_intent:
             if self._is_affirm(text, text.lower()):
                 return GateDecision(kind="confirm", rationale="affirm_after_plan")
             patches = extract_patches(text)
-            if patches and self._is_change(text, text.lower()):
+            if patches:
                 return GateDecision(kind="change_slot", patches=patches, rationale="change_after_complete")
-            if (session.pending_clarification or session.missing) and patches:
-                return GateDecision(kind="fill_slot", patches=patches, rationale="fill_after_complete")
             return GateDecision(kind="new_intent", rationale="new_after_complete")
         if self.provider is not None and session.active_intent:
             return self._classify_llm(session, text)
@@ -193,13 +191,17 @@ class SessionGate:
         if hinted_job and hinted_job != active_job:
             return GateDecision(
                 kind="new_intent",
-                needs_abandon=bool(session.active_design),
+                needs_abandon=bool(session.live_design()),
                 rationale="new_intent_job_verb",
             )
 
         patches = extract_patches(text)
         if patches:
-            kind = "change_slot" if self._is_change(text, lower) else "fill_slot"
+            overwriting = any(
+                str(name) in session.slots and session.slots[str(name)].value not in (None, "")
+                for name in patches
+            )
+            kind = "change_slot" if (overwriting or self._is_change(text, lower)) else "fill_slot"
             return GateDecision(kind=kind, patches=patches, rationale=kind)
         if self._is_affirm(text, lower):
             return GateDecision(kind="confirm", rationale="affirm")
@@ -229,7 +231,7 @@ class SessionGate:
         patches = parsed.get("patches") if isinstance(parsed.get("patches"), dict) else {}
         if kind == "fill_slot" and not (session.pending_clarification or session.missing):
             return GateDecision(kind="new_intent", source="llm", rationale="fill_without_pending")
-        needs_abandon = bool(kind == "new_intent" and session.active_design)
+        needs_abandon = bool(kind == "new_intent" and session.live_design())
         return GateDecision(
             kind=kind,
             patches=dict(patches),

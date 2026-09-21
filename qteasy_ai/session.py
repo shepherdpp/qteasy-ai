@@ -228,15 +228,30 @@ class ConversationState:
             trial_queue=queue,
         )
 
+    @staticmethod
+    def is_live_design(design: Optional[Dict[str, Any]]) -> bool:
+        """未停靠的设计环才算活设计。缺 status 视为 live。"""
+
+        if not isinstance(design, dict) or not design:
+            return False
+        return str(design.get("status") or "").strip().lower() != "parked"
+
+    def live_design(self) -> Optional[Dict[str, Any]]:
+        """返回活设计草稿；parked 则 None。"""
+
+        if self.is_live_design(self.active_design):
+            return dict(self.active_design or {})
+        return None
+
     def task_incomplete(self) -> bool:
         """当前闭合任务或开放设计尚未完成。
 
         仅澄清暂停（``pending_clarification`` / ``missing``）或开放
-        ``active_design`` 为未完成。已有 ``current_plan_id`` 的 PlanReady
-        **不是** incomplete。
+        未停靠的 ``active_design`` 为未完成。已有 ``current_plan_id`` 的
+        PlanReady **不是** incomplete。parked 设计不算未完成。
         """
 
-        if self.active_design:
+        if self.live_design():
             return True
         if self.task_complete:
             return False
@@ -282,7 +297,21 @@ class ConversationState:
                 continue
             if not str(item.get("text") or "") and item.get("kind") != "error":
                 continue
-            # 用户句允许重复正文（再次发送同一请求）；助手句仍按 plan/run 区分。
+            if str(item.get("kind") or "") == "plan_ready":
+                pid = str((item.get("payload") or {}).get("plan_id") or "")
+                replaced = False
+                if pid:
+                    for idx in range(len(self.messages) - 1, -1, -1):
+                        row = self.messages[idx]
+                        if str(row.get("kind") or "") != "plan_ready":
+                            continue
+                        old_pid = str((row.get("payload") or {}).get("plan_id") or "")
+                        if old_pid == pid:
+                            self.messages[idx] = item
+                            replaced = True
+                            break
+                if replaced:
+                    continue
             if item.get("kind") != "user_text":
                 key = self._message_dedupe_key(item)
                 if key in seen:

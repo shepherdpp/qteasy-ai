@@ -1130,31 +1130,26 @@ function latestClarify() {
 }
 
 function renderDesignCard() {
-  const msg = latestMessage("design_card");
-  const design = (state.sidebar && state.sidebar.design) || (msg && msg.payload) || null;
-  if (!design && !msg) return "";
-  const spec = (design && design.spec_draft) || (msg && msg.payload && msg.payload.spec_draft) || {};
-  const hits = (design && design.kb_hits) || (msg && msg.payload && msg.payload.kb_hits) || [];
+  const design = (state.sidebar && state.sidebar.design) || null;
+  if (!design || String(design.status || "") === "parked") return "";
+  const spec = design.spec_draft || {};
+  const hits = design.kb_hits || [];
   const lock = busy ? "disabled" : "";
-  const live = Boolean(design);
   const hitLines = hits.length
     ? `<ul class="kb-hits">${hits
         .map((hit) => `<li>${escapeHtml(hit.path || hit.title || "")}</li>`)
         .join("")}</ul>`
     : `<p class="hint">No user-KB notes matched this draft.</p>`;
-  const actions = live
-    ? `<div class="actions">
-      <button type="button" class="ghost btn-abandon-trial" ${lock}>Abandon trial</button>
-      <button type="button" class="danger btn-abandon-open" ${lock}>Abandon open job</button>
-    </div>`
-    : "";
   return `<div class="card" data-testid="design-card"><h3>Design loop</h3>
-    <p>${escapeHtml((msg && msg.text) || "Refine the FactorSpec before a closed trial.")}</p>
+    <p>Refine the FactorSpec before a closed trial.</p>
     <p><strong>${escapeHtml(spec.name || "unnamed")}</strong> · ${escapeHtml(spec.universe || "universe TBD")}</p>
     <p>${escapeHtml(spec.hypothesis || "")}</p>
     <p class="hint">Suggested trial: ${escapeHtml(spec.suggested_job || "research.factor_ic")}</p>
     <p class="files-k">User KB sources</p>${hitLines}
-    ${actions}
+    <div class="actions">
+      <button type="button" class="ghost btn-abandon-trial" ${lock}>Abandon trial</button>
+      <button type="button" class="danger btn-abandon-open" ${lock}>Abandon open job</button>
+    </div>
   </div>`;
 }
 

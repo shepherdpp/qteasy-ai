@@ -357,10 +357,10 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertEqual(skills, ["qt.ai.strategy_meta.list"])
             self.assertNotIn("qt.ai.backtest.run_builtin", skills)
 
-    def test_change_slot_new_plan_id_and_md(self) -> None:
-        """改槽后新 plan_id 与另一份 md。"""
+    def test_change_slot_keeps_plan_id_and_overwrites_md(self) -> None:
+        """改槽保留 plan_id，覆盖同一 dry-run md，不追加 user_text。"""
 
-        print("\n[TestAiHumanCardPlanArtifact] change slot new plan_id")
+        print("\n[TestAiHumanCardPlanArtifact] change slot keeps plan_id")
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
             asst = QteasyAssistant(registry=build_default_registry(), memory_store=store)
@@ -372,17 +372,43 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             )
             first_id = str((first.get("plan") or {}).get("plan_id") or "")
             first_run = str(first.get("run_id") or "")
+            session = asst.session_store.load(sid)
+            users_before = [row for row in session.messages if row.get("kind") == "user_text"]
+            print(" first:", first_id, first_run, "users:", len(users_before))
+            self.assertTrue(first_id)
+            self.assertTrue(first_run)
+
             second = asst.plan("把慢线改成 50", response_style="raw", session_id=sid)
             second_id = str((second.get("plan") or {}).get("plan_id") or "")
             second_run = str(second.get("run_id") or "")
-            print(" first:", first_id, first_run)
-            print(" second:", second_id, second_run)
-            self.assertTrue(first_id)
-            self.assertTrue(second_id)
-            self.assertNotEqual(first_id, second_id)
+            session = asst.session_store.load(sid)
+            print(" second:", second_id, second_run, "slow:", (session.slots.get("slow").value if "slow" in session.slots else None))
+            self.assertEqual(second_id, first_id)
+            self.assertEqual(second_run, first_run)
+            self.assertEqual(int(session.slots["slow"].value), 50)
+
+            third = asst.plan("start 20150101", response_style="raw", session_id=sid)
+            third_id = str((third.get("plan") or {}).get("plan_id") or "")
+            third_run = str(third.get("run_id") or "")
+            session = asst.session_store.load(sid)
+            users = [row for row in session.messages if row.get("kind") == "user_text"]
+            readies = [row for row in session.messages if row.get("kind") == "plan_ready"]
+            md_text = (store.runs_dir / f"{first_run}.plan.md").read_text(encoding="utf-8")
+            run_blob = store.load_run(first_run)
+            print(" third:", third_id, third_run)
+            print(" users:", [row.get("text") for row in users])
+            print(" plan_ready count:", len(readies))
+            print(" md has 50:", "50" in md_text)
+            print(" start slot:", (session.slots["start"].value if "start" in session.slots else None))
+            self.assertEqual(third_id, first_id)
+            self.assertEqual(third_run, first_run)
+            self.assertEqual(len(users), len(users_before))
+            self.assertEqual(len(readies), 1)
             self.assertTrue((store.runs_dir / f"{first_run}.plan.md").is_file())
-            self.assertTrue((store.runs_dir / f"{second_run}.plan.md").is_file())
-            self.assertNotEqual(first_run, second_run)
+            self.assertFalse((store.runs_dir / f"{second_run}.plan.md").is_file() and second_run != first_run)
+            self.assertIn("50", md_text)
+            self.assertEqual(str(session.slots["start"].value), "20150101")
+            self.assertEqual(str((run_blob.get("plan") or {}).get("plan_id") or ""), first_id)
 
 
 class TestAiHumanCardClarify(unittest.TestCase):
