@@ -46,6 +46,7 @@ from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
 from .session import ConversationState, SessionStore
 from .session_gate import (
+    GateDecision,
     SessionGate,
     extract_patches,
     extract_plan_id,
@@ -86,6 +87,37 @@ from .skills import (
     build_universe_filter_skill,
     build_visual_export_skill,
 )
+
+
+def _normalize_patches(patches: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """去掉空键空值的结构化槽补丁。
+
+    Parameters
+    ----------
+    patches : dict, optional
+        槽名到值。
+
+    Returns
+    -------
+    dict
+        仅含非空键值的补丁。
+    """
+
+    out: Dict[str, Any] = {}
+    for key, value in (patches or {}).items():
+        name = str(key or "").strip()
+        if not name or value in (None, ""):
+            continue
+        out[name] = value
+    return out
+
+    out: Dict[str, Any] = {}
+    for key, value in (patches or {}).items():
+        name = str(key or "").strip()
+        if not name or value in (None, ""):
+            continue
+        out[name] = value
+    return out
 
 
 def build_default_registry() -> SkillRegistry:
@@ -316,30 +348,36 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session_id: str | None = None,
         agent_auto: Optional[bool] = None,
+        patches: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 模式：生成 dry_run 计划。
 
         与 `ask()` 的区别在于：
         - ask：KnowledgeBase 问答，无 skill / 无 Executor；
         - plan / preview：生成可审阅 ToolPlan steps，不执行。
+
+        非空 ``patches`` 为同一 Job 改槽回执：``query`` 可空，不跑跟进句分类。
         """
 
-        hatched = self._maybe_hatch_mode_gap(
-            query,
-            session_id=session_id,
-            requested_mode="plan",
-            response_style=response_style,
-            persist=persist,
-            keep=keep,
-            explanation_depth=explanation_depth,
-            agent_auto=agent_auto,
-        )
-        if hatched is not None:
-            return hatched
+        structured = _normalize_patches(patches)
+        if not structured:
+            hatched = self._maybe_hatch_mode_gap(
+                query,
+                session_id=session_id,
+                requested_mode="plan",
+                response_style=response_style,
+                persist=persist,
+                keep=keep,
+                explanation_depth=explanation_depth,
+                agent_auto=agent_auto,
+            )
+            if hatched is not None:
+                return hatched
         plan, session = self._assemble_plan(
             query,
             session_id=session_id,
             agent_auto=agent_auto,
+            patches=structured or None,
         )
         if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
             return self.ask(
@@ -832,6 +870,7 @@ class QteasyAssistant:
         *,
         session_id: str | None,
         agent_auto: Optional[bool],
+        patches: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Any, Optional[ConversationState]]:
         """load → gate →（跳过或调用）classify → persist。"""
 
@@ -844,7 +883,15 @@ class QteasyAssistant:
         state = self.session_store.load(sid)
         if agent_auto is not None:
             state.agent_auto = bool(agent_auto)
-        gate = self.session_gate.classify(state, query)
+        structured = _normalize_patches(patches)
+        if structured:
+            gate = GateDecision(
+                kind="change_slot",
+                patches=structured,
+                rationale="structured_patches",
+            )
+        else:
+            gate = self.session_gate.classify(state, query)
         had_open = bool(state.pending_clarification or state.missing)
         state.receipt_kind = ""
 

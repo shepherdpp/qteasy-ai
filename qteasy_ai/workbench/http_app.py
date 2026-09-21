@@ -364,13 +364,22 @@ class WorkbenchHttp:
 
         body = await self._read_json(request)
         query = str(body.get("query") or "").strip()
-        if not query:
+        raw_patches = body.get("patches") if isinstance(body.get("patches"), dict) else {}
+        patches = {
+            str(key).strip(): value
+            for key, value in raw_patches.items()
+            if str(key).strip() and value not in (None, "")
+        }
+        if not query and not patches:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
         session_id = str(body.get("session_id") or "").strip()
+        if patches and not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id with patches.", 400)
         payload = self.assistant.plan(
             query,
             response_style="raw",
             session_id=session_id or None,
+            patches=patches or None,
         )
         return JSONResponse(
             self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)

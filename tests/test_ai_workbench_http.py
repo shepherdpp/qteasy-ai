@@ -574,6 +574,77 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertTrue(all(item.get("session_id") == "sess-a" for item in arts_a))
             self.assertFalse(any(item.get("run_id") == run_id for item in arts_b))
 
+    def test_plan_patches_change_slot_without_user_text(self) -> None:
+        """POST /v1/plan 带 patches、无 query：回执改槽，不追加 user_text，plan_id 不变。"""
+
+        print("\n[TestAiWorkbenchHttp] plan patches control plane")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, asst = self._client(temp_dir)
+            sid = "s-patches"
+            first = client.post(
+                "/v1/plan",
+                json={
+                    "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+                    "session_id": sid,
+                },
+            )
+            body1 = first.json()
+            plan_id = (body1.get("plan_card") or {}).get("plan_id")
+            session = asst.session_store.load(sid)
+            users_before = [row for row in session.messages if row.get("kind") == "user_text"]
+            print(" first status:", first.status_code)
+            print(" first plan_id:", plan_id)
+            print(" users before:", [row.get("text") for row in users_before])
+            self.assertEqual(first.status_code, 200)
+            self.assertTrue(plan_id)
+
+            patched = client.post(
+                "/v1/plan",
+                json={"session_id": sid, "patches": {"start": "20200101"}},
+            )
+            body2 = patched.json()
+            session = asst.session_store.load(sid)
+            users_after = [row for row in session.messages if row.get("kind") == "user_text"]
+            readies = [row for row in session.messages if row.get("kind") == "plan_ready"]
+            start = session.slots["start"].value if "start" in session.slots else None
+            print(" patches status:", patched.status_code)
+            print(" second plan_id:", (body2.get("plan_card") or {}).get("plan_id"))
+            print(" users after:", [row.get("text") for row in users_after])
+            print(" plan_ready count:", len(readies))
+            print(" start slot:", start)
+            self.assertEqual(patched.status_code, 200)
+            self.assertEqual((body2.get("plan_card") or {}).get("plan_id"), plan_id)
+            self.assertEqual(len(users_after), len(users_before))
+            self.assertEqual(len(readies), 1)
+            self.assertEqual(str(start), "20200101")
+
+            via_asst = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
+            session = asst.session_store.load(sid)
+            print(" asst patches plan_id:", (via_asst.get("plan") or {}).get("plan_id"))
+            print(" slow slot:", session.slots["slow"].value if "slow" in session.slots else None)
+            self.assertEqual(str((via_asst.get("plan") or {}).get("plan_id") or ""), plan_id)
+            self.assertEqual(int(session.slots["slow"].value), 50)
+
+            spoken = client.post(
+                "/v1/plan",
+                json={"session_id": sid, "query": "帮我下载日线"},
+            )
+            spoken_id = (spoken.json().get("plan_card") or {}).get("plan_id")
+            session = asst.session_store.load(sid)
+            users_spoken = [row for row in session.messages if row.get("kind") == "user_text"]
+            print(" spoken status:", spoken.status_code)
+            print(" spoken plan_id:", spoken_id)
+            print(" spoken job:", (session.active_intent or {}).get("job"))
+            print(" users spoken:", [row.get("text") for row in users_spoken])
+            self.assertEqual(spoken.status_code, 200)
+            self.assertNotEqual(spoken_id, plan_id)
+            self.assertGreater(len(users_spoken), len(users_after))
+
+            empty = client.post("/v1/plan", json={"session_id": sid})
+            print(" empty query status:", empty.status_code, empty.json())
+            self.assertEqual(empty.status_code, 400)
+            self.assertEqual((empty.json().get("error") or {}).get("code"), "QUERY_REQUIRED")
+
 
 if __name__ == "__main__":
     unittest.main()

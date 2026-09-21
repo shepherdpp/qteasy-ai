@@ -776,24 +776,49 @@ function submitClarification() {
   followUp(bits.join(" "));
 }
 
-function submitParamEdits() {
-  const bits = Array.from(document.querySelectorAll("#chat-log input[data-edit-slot], #workspace-now input[data-now-slot]"))
-    .map((el) => {
-      const name = el.getAttribute("data-edit-slot") || el.getAttribute("data-now-slot");
-      const value = String(el.value || "").trim();
-      if (!value) return "";
-      if (name === "slow" || name === "fast") return `把${name === "slow" ? "慢线" : "快线"}改成 ${value}`;
-      return `${name} ${value}`;
-    })
-    .filter(Boolean);
+async function submitParamEdits() {
+  const patches = {};
+  Array.from(document.querySelectorAll("#chat-log input[data-edit-slot], #workspace-now input[data-now-slot]")).forEach((el) => {
+    const name = el.getAttribute("data-edit-slot") || el.getAttribute("data-now-slot");
+    const value = String(el.value || "").trim();
+    if (!name || !value) return;
+    patches[name] = value;
+  });
   editingParams = false;
   editingNowSlot = "";
-  if (!bits.length) {
+  if (!Object.keys(patches).length) {
     renderChat();
     renderNow();
     return;
   }
-  followUp(bits.join("；"));
+  if (busy) return;
+  dismissModeNotice();
+  setBusy(true);
+  try {
+    const dto = await api("/v1/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, patches }),
+    });
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    artifactTab = 0;
+    pendingCodeRun = false;
+    filePreview = null;
+    renderPanes();
+    await refreshSessions();
+    await refreshWorkspace();
+  } catch (exc) {
+    transcript.push({
+      kind: "error",
+      text: "Network error. Parameter update did not complete. Retry when the server is reachable.",
+      payload: { next_action: "Press Apply again. You do not need to start over." },
+    });
+    persistTranscript();
+    renderChat();
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function submitProviderChange() {

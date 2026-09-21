@@ -187,6 +187,28 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("mode-dropdown", css.text)
             self.assertIn("mode-menu", css.text)
 
+    def test_submit_param_edits_posts_patches_not_followup(self) -> None:
+        """submitParamEdits 提交结构化 patches，函数体内不得 followUp / sendQuery。"""
+
+        print("\n[TestAiWorkbenchWeb] submitParamEdits patches control plane")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            fn = src.split("function submitParamEdits")[1].split("async function submitProviderChange")[0]
+            print(" fn has followUp:", "followUp" in fn)
+            print(" fn has sendQuery:", "sendQuery" in fn)
+            print(" fn has patches:", "patches" in fn)
+            print(" fn has /v1/plan:", "/v1/plan" in fn)
+            self.assertNotIn("followUp", fn)
+            self.assertNotIn("sendQuery", fn)
+            self.assertIn("patches", fn)
+            self.assertIn("/v1/plan", fn)
+            self.assertIn("session_id", fn)
+
     def test_fixture_keys_match_types_ts(self) -> None:
         """fixture 四态 + types.ts WORKBENCH_STATE_KEYS 对齐。"""
 
