@@ -57,7 +57,11 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("Workspace", js.text)
             self.assertNotIn("btn-toggle-workspace", js.text)
             self.assertIn("btn-collapse-workspace", js.text)
-            self.assertIn("composer-meta", js.text)
+            self.assertNotIn("composer-meta", js.text)
+            self.assertIn("composer-provider", js.text)
+            self.assertIn("btn-settings", js.text)
+            self.assertIn("Ctrl/⌘+Enter to send", js.text)
+            self.assertNotIn("Enter new line", js.text)
             print(" topbar has mode-group:", js.text.split("topbar")[1].split("layout")[0].count("mode-group"))
             self.assertIn("btn-code-confirm", js.text)
             self.assertIn("text/event-stream", js.text)
@@ -110,7 +114,7 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("chart-img", js.text)
             self.assertIn("/v1/artifacts/", js.text)
             self.assertIn("busy-msg", js.text)
-            self.assertIn("bubble editing", js.text)
+            self.assertIn("edit-composer", js.text)
             self.assertIn("Working…", js.text)
             self.assertNotIn("busy-label", js.text)
             self.assertIn("data-now-edit", js.text)
@@ -156,11 +160,14 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("mode-menu", src)
             self.assertIn("mode-dropdown", src)
             self.assertIn("btn-mode-menu", src)
-            composer_meta = src.split("composer-meta")[1].split("query-input")[0] if "composer-meta" in src else ""
-            print(" composer-meta has mode-group:", "mode-group" in composer_meta)
-            print(" composer-meta has mode-menu:", "mode-menu" in composer_meta)
-            self.assertIn("mode-menu", composer_meta)
-            self.assertNotIn('<div class="mode-group">', composer_meta)
+            after_input = src.split('id="query-input"', 1)[1] if 'id="query-input"' in src else ""
+            composer_row = after_input.split("btn-send")[0] if after_input else ""
+            print(" composer-row has mode-menu:", "mode-menu" in composer_row)
+            print(" composer-row has composer-provider:", "composer-provider" in composer_row)
+            self.assertIn("mode-menu", composer_row)
+            self.assertIn("composer-provider", composer_row)
+            self.assertNotIn('<div class="mode-group">', composer_row)
+            self.assertNotIn("composer-meta", src)
             self.assertIn("payload.answer", src)
             self.assertIn("Answered:", src)
             self.assertIn("shouldShowLiveClarify", src)
@@ -301,6 +308,46 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" ingest calls openArtifactTab:", "openArtifactTab" in ingest)
             self.assertNotIn("openArtifactTab", ingest)
             self.assertIn("data-tab-close", src)
+            print(" js has bindTabsWheel:", "function bindTabsWheel" in src)
+            self.assertIn("function bindTabsWheel", src)
+            self.assertIn("function onTabsWheel", src)
+
+    def test_shell_composer_edit_settings_placeholders(self) -> None:
+        """Composer 底栏、用户编辑铅笔、rewind Send、设置 tab 不被 prune。"""
+
+        print("\n[TestAiWorkbenchWeb] shell composer edit settings")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            print(" placeholder ctrl:", "Ctrl/⌘+Enter to send" in src)
+            print(" has composer-provider:", "composer-provider" in src)
+            print(" has btn-settings:", "btn-settings" in src)
+            print(" has statusbar:", "statusbar" in src)
+            self.assertIn("Ctrl/⌘+Enter to send", src)
+            self.assertNotIn("Enter new line", src)
+            self.assertIn("composer-provider", src)
+            self.assertIn("btn-settings", src)
+            self.assertIn("statusbar", src)
+            self.assertIn('title="Edit">✎</button>', src)
+            self.assertIn('id="${sendId}">Send</button>', src)
+            self.assertIn('id="btn-rewind-cancel">Cancel</button>', src)
+            self.assertNotIn("Resend from here", src)
+            self.assertNotIn("Confirm discard and resend", src)
+            prune = src.split("function pruneMissingTabs")[1].split("function openPlanFromRunId")[0]
+            print(" prune keeps settings:", 'type === "settings"' in prune)
+            self.assertIn('type === "settings"', prune)
+            self.assertIn('{ type: "settings", run_id: "local" }', src)
+            print(" css nowrap:", "flex-wrap: nowrap" in css)
+            print(" css statusbar:", ".statusbar" in css)
+            self.assertIn("flex-wrap: nowrap", css)
+            self.assertIn("overflow-x: auto", css)
+            self.assertIn(".statusbar", css)
+            self.assertIn(".msg-actions", css)
 
     def test_plan_artifact_renders_markdown_with_sanitize(self) -> None:
         """plan Artifact 只读渲染 md/mermaid，保留 json_wins，库缺失可降级 pre。"""

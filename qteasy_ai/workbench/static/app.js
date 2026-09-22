@@ -202,6 +202,7 @@ function mountShell() {
       <span class="brand">qteasy-ai Workbench</span>
       <span class="spacer"></span>
       <span class="session-title" id="session-title"></span>
+      <button type="button" class="icon-btn ghost" id="btn-settings" title="Settings">⚙</button>
     </div>
     <div class="layout" id="layout">
       <aside class="rail" id="session-rail">
@@ -220,7 +221,8 @@ function mountShell() {
         <div class="mode-notice" id="mode-notice" hidden></div>
         <div class="chat-log" id="chat-log"></div>
         <div class="composer">
-          <div class="composer-meta">
+          <textarea id="query-input" placeholder="Ask in natural language · Ctrl/⌘+Enter to send" rows="3"></textarea>
+          <div class="composer-row">
             <div class="mode-dropdown">
               <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="composer-mode" aria-haspopup="listbox" aria-expanded="false">Mode: PLAN ▾</button>
               <div class="mode-menu" id="mode-menu" hidden>
@@ -229,11 +231,14 @@ function mountShell() {
                 <button type="button" data-mode="agent">Agent</button>
               </div>
             </div>
-            <span id="composer-mode-hint"></span>
-          </div>
-          <textarea id="query-input" placeholder="Ask in natural language" rows="3"></textarea>
-          <div class="composer-row">
-            <span class="hint" id="composer-hint">Enter new line · Ctrl/⌘+Enter send</span>
+            <div class="provider-dropdown" id="composer-provider">
+              <button type="button" class="mode-badge provider-badge" id="composer-provider-btn" aria-haspopup="listbox" aria-expanded="false">Not configured ▾</button>
+              <div class="mode-menu provider-menu" id="provider-menu" hidden>
+                <button type="button" class="active" id="provider-current" disabled>Not configured</button>
+                <button type="button" id="btn-open-settings">Open settings</button>
+              </div>
+            </div>
+            <span class="composer-row-spacer"></span>
             <button type="button" class="primary" id="btn-send">Send</button>
           </div>
         </div>
@@ -252,27 +257,99 @@ function mountShell() {
           <div id="workspace-files"></div>
         </div>
       </aside>
+    </div>
+    <div class="statusbar" id="statusbar">
+      <span id="status-provider">Provider —</span>
+      <span class="status-sep">·</span>
+      <span id="status-env">Environment —</span>
     </div>`;
   bindShell();
   shellReady = true;
   applyLayoutFlags();
-  $("composer-mode-hint").textContent = composerHint();
+  renderProviderBadge();
+  renderStatusbar();
 }
 
 function closeModeMenu() {
-  const menu = $("mode-menu");
-  const badge = $("composer-mode");
+  ["mode-menu", "edit-mode-menu"].forEach((id) => {
+    const menu = $(id);
+    if (menu) menu.hidden = true;
+  });
+  ["composer-mode", "edit-mode"].forEach((id) => {
+    const badge = $(id);
+    if (badge) badge.setAttribute("aria-expanded", "false");
+  });
+}
+
+function toggleNamedMenu(menuId, badgeId) {
+  if (busy) return;
+  const menu = $(menuId);
+  const badge = $(badgeId);
+  if (!menu) return;
+  const nextHidden = !menu.hidden;
+  closeModeMenu();
+  closeProviderMenu();
+  menu.hidden = nextHidden;
+  if (badge) badge.setAttribute("aria-expanded", nextHidden ? "false" : "true");
+}
+
+function toggleModeMenu() {
+  toggleNamedMenu("mode-menu", "composer-mode");
+}
+
+function toggleEditModeMenu() {
+  toggleNamedMenu("edit-mode-menu", "edit-mode");
+}
+
+function closeProviderMenu() {
+  const menu = $("provider-menu");
+  const badge = $("composer-provider-btn");
   if (menu) menu.hidden = true;
   if (badge) badge.setAttribute("aria-expanded", "false");
 }
 
-function toggleModeMenu() {
+function toggleProviderMenu() {
   if (busy) return;
-  const menu = $("mode-menu");
-  const badge = $("composer-mode");
+  const menu = $("provider-menu");
+  const badge = $("composer-provider-btn");
   if (!menu) return;
-  menu.hidden = !menu.hidden;
-  if (badge) badge.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+  const nextHidden = !menu.hidden;
+  closeModeMenu();
+  menu.hidden = nextHidden;
+  if (badge) badge.setAttribute("aria-expanded", nextHidden ? "false" : "true");
+}
+
+function providerLabel() {
+  const p = providerInfo || {};
+  const model = String(p.model || "").trim();
+  if (!model) return "Not configured";
+  return `${p.mode || "rule"} · ${model}`;
+}
+
+function renderProviderBadge() {
+  const label = providerLabel();
+  const btn = $("composer-provider-btn");
+  if (btn) btn.textContent = `${label} ▾`;
+  const current = $("provider-current");
+  if (current) current.textContent = label;
+}
+
+function renderStatusbar() {
+  const providerEl = $("status-provider");
+  const envEl = $("status-env");
+  if (!providerEl || !envEl) return;
+  const p = providerInfo || {};
+  const modeLabel = p.mode || "—";
+  const model = String(p.model || "").trim() || "—";
+  providerEl.textContent = `Provider ${modeLabel} · ${model}`;
+  const env = envLine((state.sidebar && state.sidebar.env_summary) || {});
+  envEl.textContent = env === "No env_facts yet." ? "Environment —" : `Environment ${env}`;
+}
+
+function openSettingsTab() {
+  closeProviderMenu();
+  closeModeMenu();
+  openArtifactTab({ type: "settings", run_id: "local" });
 }
 
 function bindShell() {
@@ -286,9 +363,22 @@ function bindShell() {
   document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.onclick = () => setMode(btn.getAttribute("data-mode"));
   });
+  const providerBtn = $("composer-provider-btn");
+  if (providerBtn) {
+    providerBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      toggleProviderMenu();
+    };
+  }
+  const openSettings = $("btn-open-settings");
+  if (openSettings) openSettings.onclick = () => openSettingsTab();
+  const settingsBtn = $("btn-settings");
+  if (settingsBtn) settingsBtn.onclick = () => openSettingsTab();
   document.addEventListener("click", (ev) => {
     const dropdown = ev.target && ev.target.closest && ev.target.closest(".mode-dropdown");
     if (!dropdown) closeModeMenu();
+    const provider = ev.target && ev.target.closest && ev.target.closest(".provider-dropdown");
+    if (!provider) closeProviderMenu();
   });
   const input = $("query-input");
   $("btn-send").onclick = () => sendQuery(input.value);
@@ -367,16 +457,17 @@ function setMode(next) {
 
 function renderMode() {
   const label = `Mode: ${mode.toUpperCase()} ▾`;
-  document.querySelectorAll("[data-testid='mode-badge'], #composer-mode").forEach((el) => {
+  document.querySelectorAll("[data-testid='mode-badge'], #composer-mode, #edit-mode").forEach((el) => {
     el.textContent = label;
   });
-  document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
+  document.querySelectorAll("#mode-menu button[data-mode], #edit-mode-menu button[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
     btn.disabled = busy;
   });
-  const badge = $("composer-mode");
-  if (badge) badge.disabled = busy;
-  $("composer-mode-hint").textContent = composerHint();
+  ["composer-mode", "edit-mode", "composer-provider-btn"].forEach((id) => {
+    const badge = $(id);
+    if (badge) badge.disabled = busy;
+  });
   const notice = $("mode-notice");
   if (notice) {
     notice.hidden = !modeNotice;
@@ -397,8 +488,10 @@ function setBusy(next) {
   document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
-  const modeBadge = $("composer-mode");
-  if (modeBadge) modeBadge.disabled = busy;
+  ["composer-mode", "edit-mode", "composer-provider-btn"].forEach((id) => {
+    const badge = $(id);
+    if (badge) badge.disabled = busy;
+  });
   ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-clarify-skip", "btn-retry"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy;
@@ -658,8 +751,18 @@ function onChatClick(ev) {
     return;
   }
   if (t.classList.contains("btn-retry") || t.id === "btn-retry") retryLast();
-  if (t.dataset.editUser != null) {
-    editingUserIndex = Number(t.dataset.editUser);
+  if (t.id === "edit-mode") {
+    ev.stopPropagation();
+    toggleEditModeMenu();
+    return;
+  }
+  if (t.closest("#edit-mode-menu") && t.dataset.mode) {
+    setMode(t.dataset.mode);
+    return;
+  }
+  const editUser = t.closest("[data-edit-user]");
+  if (editUser) {
+    editingUserIndex = Number(editUser.getAttribute("data-edit-user"));
     pendingRewind = null;
     renderChat();
     return;
@@ -767,6 +870,8 @@ async function submitProviderChange() {
   providerInfo = dto;
   editingNowSlot = "";
   renderNow();
+  renderProviderBadge();
+  renderStatusbar();
 }
 
 function onNowClick(ev) {
@@ -1018,7 +1123,9 @@ function clearOpenTabs() {
 
 function pruneMissingTabs() {
   const catalog = catalogArtifacts();
-  openTabs = openTabs.filter((tab) => catalog.some((row) => artifactKey(row) === artifactKey(tab)));
+  openTabs = openTabs.filter(
+    (tab) => tab.type === "settings" || catalog.some((row) => artifactKey(row) === artifactKey(tab))
+  );
   if (activeKey && !openTabs.some((row) => artifactKey(row) === activeKey)) {
     const last = openTabs[openTabs.length - 1];
     activeKey = last ? artifactKey(last) : "";
@@ -1128,6 +1235,8 @@ async function refreshProvider() {
   const data = await api("/v1/provider");
   if (data && !data.error) providerInfo = data;
   renderNow();
+  renderProviderBadge();
+  renderStatusbar();
 }
 
 function renderSessionList() {
@@ -1240,15 +1349,28 @@ function renderChat() {
         const warn = pendingRewind
           ? `<p class="warn">Later executed runs will be discarded: ${(pendingRewind.executed || []).join(", ") || "yes"}. Confirm to continue.</p>`
           : "";
-        const discardBtn = pendingRewind
-          ? `<button type="button" class="primary" id="btn-rewind-discard">Confirm discard and resend</button>`
-          : `<button type="button" class="primary" id="btn-rewind-submit">Resend from here</button>`;
-        parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble editing">
-          ${warn}<textarea id="rewind-text" rows="3">${escapeHtml((pendingRewind && pendingRewind.query) || msg.text || "")}</textarea>
-          <div class="actions">${discardBtn}<button type="button" class="ghost" id="btn-rewind-cancel">Cancel</button></div>
-        </div></div>`);
+        const sendId = pendingRewind ? "btn-rewind-discard" : "btn-rewind-submit";
+        parts.push(`<div class="msg user editing">
+          ${warn}
+          <div class="composer edit-composer">
+            <textarea id="rewind-text" rows="3" placeholder="Ask in natural language · Ctrl/⌘+Enter to send">${escapeHtml((pendingRewind && pendingRewind.query) || msg.text || "")}</textarea>
+            <div class="composer-row">
+              <div class="mode-dropdown">
+                <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="edit-mode" aria-haspopup="listbox" aria-expanded="false">Mode: ${mode.toUpperCase()} ▾</button>
+                <div class="mode-menu" id="edit-mode-menu" hidden>
+                  <button type="button" data-mode="ask">Ask</button>
+                  <button type="button" data-mode="plan">Plan</button>
+                  <button type="button" data-mode="agent">Agent</button>
+                </div>
+              </div>
+              <span class="composer-row-spacer"></span>
+              <button type="button" class="ghost" id="btn-rewind-cancel">Cancel</button>
+              <button type="button" class="primary" id="${sendId}">Send</button>
+            </div>
+          </div>
+        </div>`);
       } else {
-        parts.push(`<div class="msg user"><div class="msg-role">You <button type="button" class="ghost" data-edit-user="${i}">Edit</button></div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
+        parts.push(`<div class="msg user"><div class="msg-role">You <span class="msg-actions"><button type="button" class="icon-btn ghost" data-edit-user="${i}" title="Edit">✎</button></span></div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
       }
     } else if (msg.kind === "error") {
       const next = (msg.payload && msg.payload.next_action) || "";
@@ -1268,6 +1390,20 @@ function renderChat() {
   parts.push(renderPlanCard());
   parts.push(renderSteps());
   host.innerHTML = parts.join("");
+  const rewind = $("rewind-text");
+  if (rewind) {
+    rewind.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      if (ev.isComposing || ev.keyCode === 229) return;
+      if (ev.ctrlKey || ev.metaKey) {
+        ev.preventDefault();
+        rewindUserMessage(editingUserIndex, rewind.value, Boolean(pendingRewind));
+      }
+    });
+    rewind.focus();
+    rewind.setSelectionRange(rewind.value.length, rewind.value.length);
+  }
+  renderMode();
   if (stick || busy) host.scrollTop = host.scrollHeight;
 }
 
@@ -1449,6 +1585,31 @@ function exportLink(art, label) {
   return `<a class="export-link" href="${href}">${escapeHtml(label || "Export")}</a>`;
 }
 
+function renderSettingsBody() {
+  const p = providerInfo || {};
+  const model = p.model || "—";
+  const modeLabel = p.mode || "rule";
+  return `<div class="settings-placeholder">
+    <h3>Settings</h3>
+    <p class="empty-hint">Provider and environment configuration will live here.</p>
+    <p>Provider ${escapeHtml(modeLabel)} · ${escapeHtml(model)}</p>
+  </div>`;
+}
+
+function onTabsWheel(ev) {
+  const tabs = ev.currentTarget;
+  if (!tabs || tabs.scrollWidth <= tabs.clientWidth) return;
+  if (Math.abs(ev.deltaY) < Math.abs(ev.deltaX)) return;
+  ev.preventDefault();
+  tabs.scrollLeft += ev.deltaY;
+}
+
+function bindTabsWheel(host) {
+  const tabs = host && host.querySelector(".tabs");
+  if (!tabs) return;
+  tabs.addEventListener("wheel", onTabsWheel, { passive: false });
+}
+
 function artifactToolbar(art) {
   const bits = [`<span class="art-type">${escapeHtml(art.type)}</span>`];
   if (art.run_id) bits.push(`<span class="art-id">run ${escapeHtml(art.run_id)}</span>`);
@@ -1480,13 +1641,21 @@ function renderArtifacts() {
     .map((tab) => {
       const art = catalog.find((row) => artifactKey(row) === artifactKey(tab));
       const key = artifactKey(tab);
-      const label = (art && (art.title || art.type)) || tab.type || "artifact";
+      const label =
+        tab.type === "settings" ? "Settings" : (art && (art.title || art.type)) || tab.type || "artifact";
       return `<div class="tab ${key === activeKey ? "active" : ""}" data-tab="${escapeHtml(key)}">${escapeHtml(label)}
         <button type="button" class="tab-close" data-tab-close="${escapeHtml(key)}" title="Close">×</button></div>`;
     })
     .join("");
+  const currentTab = openTabs.find((tab) => artifactKey(tab) === activeKey) || openTabs[0];
   if (filePreview) {
     host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${fileCard}</div>`;
+    bindTabsWheel(host);
+    return;
+  }
+  if (currentTab && currentTab.type === "settings") {
+    host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${renderSettingsBody()}</div>`;
+    bindTabsWheel(host);
     return;
   }
   const current =
@@ -1494,6 +1663,7 @@ function renderArtifacts() {
     catalog.find((row) => openTabs.some((tab) => artifactKey(tab) === artifactKey(row)));
   if (!current) {
     host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel"><p class="empty-hint">This artifact is no longer in the session index.</p></div>`;
+    bindTabsWheel(host);
     return;
   }
   let body = artifactToolbar(current);
@@ -1532,6 +1702,7 @@ function renderArtifacts() {
       <p class="hint">JSON in runs/ is the executable source. Editing this markdown does not change what Run executes.</p>`;
   }
   host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${body}</div>`;
+  bindTabsWheel(host);
   runMermaid(host);
   const ta = $("code-editor");
   if (ta) {
@@ -1674,6 +1845,8 @@ function renderPanes() {
   renderChat();
   renderArtifacts();
   renderWorkspace();
+  renderProviderBadge();
+  renderStatusbar();
 }
 
 function render() {
