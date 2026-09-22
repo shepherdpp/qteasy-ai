@@ -30,10 +30,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .intent_engine import IntentEngine, IntentDecision
 from .intents.recipes import compose_recipe
-from .open_workflow import (
-    is_design_loop,
-    maybe_mark_builder_open_loop,
-)
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
@@ -241,10 +237,6 @@ class Planner:
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
-        mark_query = query if skip else user_query.strip()
-        decision = maybe_mark_builder_open_loop(decision, mark_query)
-        if is_design_loop(self.intent_engine.catalog, decision):
-            pass
         if decision.job == "open" and not skip:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:

@@ -568,12 +568,7 @@ def map_assistant_payload(
             confirmable = False
 
     plan_card = None
-    skip_status_card = (
-        (bool(assumptions.get("design_loop")) and not card_steps)
-        or bool(assumptions.get("open_job_cleared"))
-        or bool(assumptions.get("open_idle"))
-    )
-    if (card_steps or plan.get("plan_id")) and not skip_status_card:
+    if card_steps or plan.get("plan_id"):
         plan_card = WorkbenchPlanCard(
             plan_id=str(plan.get("plan_id") or ""),
             steps=card_steps,

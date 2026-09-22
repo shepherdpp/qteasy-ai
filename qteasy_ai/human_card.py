@@ -278,38 +278,6 @@ def project_human_cards(
         cards.append(make_card("clarify", text, blob))
         return cards
 
-    if assumptions.get("design_loop"):
-        pass
-
-    if assumptions.get("kb_write_path"):
-        cards.append(
-            make_card(
-                "ask",
-                f"Wrote user-KB note: {assumptions.get('kb_write_path')}",
-                {"path": str(assumptions.get("kb_write_path") or "")},
-            )
-        )
-        return cards
-    if assumptions.get("open_job_cleared"):
-        cards.append(
-            make_card(
-                "ask",
-                "Open job abandoned. This session is still here.",
-                {"open_job_cleared": True},
-            )
-        )
-        return cards
-    idle_reason = str(assumptions.get("open_idle_reason") or "")
-    if assumptions.get("open_idle"):
-        idle_text = {
-            "lock_spec": "No open design loop is active. Explore a factor first, then lock the spec.",
-            "propose_trial": "No open design loop is active. Explore a factor first, then try a closed IC trial.",
-            "abandon_trial": "No active trial to abandon.",
-            "abandon_open": "No open job to abandon. This session is still here.",
-        }.get(idle_reason, "No open design loop is active.")
-        cards.append(make_card("ask", idle_text, {"open_idle": idle_reason}))
-        return cards
-
     execution = raw.get("execution") if isinstance(raw.get("execution"), dict) else {}
     exec_steps = [item for item in (execution.get("steps") or []) if isinstance(item, dict)]
     status = str(execution.get("status") or "")
@@ -355,8 +323,7 @@ def project_human_cards(
         return cards
 
     card_steps = _plan_step_rows(plan)
-    skip_plan = bool(assumptions.get("design_loop")) and not card_steps
-    if (card_steps or plan_id) and not skip_plan:
+    if card_steps or plan_id:
         confirmable = status == "dry_run" and bool(card_steps)
         skills = [row["skill_name"] for row in card_steps]
         if skills and all(name == "qt.ai.system.fallback" for name in skills):

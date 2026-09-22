@@ -498,7 +498,7 @@ class QteasyAssistant:
         plan_id : str
             已落盘计划的 ``plan_id``。
         session_id : str, optional
-            若提供则回写 ``task_complete`` / 清除 ``awaiting_abandon``。
+            若提供则回写当前 ``task.status`` / ``task.plan_id``。
         requested_mode : str, default 'run'
             用户入口；Plan 模式口头执行时为 ``plan``。
         hatch : str, optional
