@@ -18,7 +18,7 @@ import json
 from typing import Any, Dict
 
 from .app import QteasyAssistant
-from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter, provider_diagnostics
+from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter, ensure_mplbackend_agg, provider_diagnostics
 from .memory_store import MemoryStore
 from .provider import OpenAICompatProvider
 from .workbench.human import format_human_error, format_human_from_payload
@@ -224,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     """CLI 主入口。"""
 
+    ensure_mplbackend_agg()
     parser = build_parser()
     args = parser.parse_args()
 

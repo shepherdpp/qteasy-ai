@@ -13,7 +13,16 @@ import tempfile
 import unittest
 
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.session import STATE_KEYS, ConversationState, SessionStore, Slot
+from qteasy_ai.session import (
+    STATE_KEYS,
+    STALE_RUNNING_NOTICE,
+    ConversationState,
+    SessionStore,
+    Slot,
+    clear_live_running,
+    register_live_running,
+)
+from qteasy_ai.session_gate import SessionGate
 
 
 class TestAiSession(unittest.TestCase):
@@ -204,6 +213,63 @@ class TestAiSession(unittest.TestCase):
             self.assertEqual(loaded.session_id, "bad")
             self.assertIsNone(loaded.task)
             self.assertTrue(backup.exists())
+
+    def test_load_heals_stale_running(self) -> None:
+        """落盘 running 且无活执行时降为 ready，并写一次 notice。"""
+
+        print("\n[TestAiSession] heal stale running on load")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("stale-run")
+            state.start_task(query="export kline", job="data.export")
+            state.task.plan_id = "plan_export"
+            state.task.high_side_effect = True
+            state.task.mark_running()
+            path = sessions.save(state)
+            print(" saved status:", state.task.status, "path:", path)
+            loaded = sessions.load("stale-run")
+            print(" loaded status:", loaded.task_status())
+            print(" last message:", loaded.messages[-1] if loaded.messages else None)
+            on_disk = json.loads(sessions.path_for("stale-run").read_text(encoding="utf-8"))
+            print(" on_disk status:", (on_disk.get("task") or {}).get("status"))
+            self.assertEqual(loaded.task_status(), "ready")
+            self.assertEqual(loaded.task.plan_id, "plan_export")
+            self.assertTrue(loaded.task.high_side_effect)
+            self.assertEqual(loaded.messages[-1]["kind"], "mode_notice")
+            self.assertEqual(loaded.messages[-1]["text"], STALE_RUNNING_NOTICE)
+            self.assertEqual(loaded.messages[-1]["payload"]["reason"], "stale_running")
+            self.assertEqual((on_disk.get("task") or {}).get("status"), "ready")
+            again = sessions.load("stale-run")
+            notices = [row for row in again.messages if row.get("kind") == "mode_notice"]
+            print(" second load notices:", len(notices), "status:", again.task_status())
+            self.assertEqual(len(notices), 1)
+            self.assertEqual(again.task_status(), "ready")
+            decision = SessionGate(provider=None).classify(again, "请列出所有内置交易策略")
+            print(" gate after heal:", decision.kind)
+            self.assertEqual(decision.kind, "new_intent")
+
+    def test_load_keeps_live_running(self) -> None:
+        """进程内活执行时 load 不得把 running 降为 ready。"""
+
+        print("\n[TestAiSession] load keeps live running")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("live-run")
+            state.start_task(query="export kline", job="data.export")
+            state.task.plan_id = "plan_live"
+            state.task.high_side_effect = True
+            state.task.mark_running()
+            sessions.save(state)
+            register_live_running("live-run")
+            try:
+                loaded = sessions.load("live-run")
+                print(" live loaded status:", loaded.task_status(), "messages:", loaded.messages)
+                self.assertEqual(loaded.task_status(), "running")
+                self.assertEqual(loaded.messages, [])
+            finally:
+                clear_live_running("live-run")
 
     def test_close_open_card_patches_latest_unanswered_clarify(self) -> None:
         """就地关闭最近未答 clarify，不追加消息。"""

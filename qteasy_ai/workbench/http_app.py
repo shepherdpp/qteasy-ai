@@ -25,7 +25,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from ..config import build_provider_from_overlay, provider_diagnostics
+from ..config import build_provider_from_overlay, ensure_mplbackend_agg, provider_diagnostics
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
@@ -774,6 +774,7 @@ def create_app(
         工作台 HTTP 应用。
     """
 
+    ensure_mplbackend_agg()
     helper = assistant or QteasyAssistant(memory_store=memory_store or MemoryStore())
     overlay = helper.memory_store.load_provider_overlay()
     if overlay.get("model"):

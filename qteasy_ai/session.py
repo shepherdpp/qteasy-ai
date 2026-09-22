@@ -29,6 +29,28 @@ VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
 _SKIP_MESSAGE_KINDS = SKIP_MESSAGE_KINDS
 TASK_STATUSES = frozenset({"clarifying", "ready", "running", "done", "cancelled"})
 STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto"})
+STALE_RUNNING_NOTICE = "Execution interrupted. Confirm again to retry, or start a new topic."
+_LIVE_RUNNING: set[str] = set()
+
+
+def register_live_running(session_id: str) -> None:
+    """登记本进程正在执行的 session，避免 load 误伤。"""
+
+    sid = str(session_id or "").strip()
+    if sid:
+        _LIVE_RUNNING.add(sid)
+
+
+def clear_live_running(session_id: str) -> None:
+    """清除本进程活执行登记。"""
+
+    _LIVE_RUNNING.discard(str(session_id or "").strip())
+
+
+def is_live_running(session_id: str) -> bool:
+    """该 session 是否有进程内未结束的执行。"""
+
+    return str(session_id or "").strip() in _LIVE_RUNNING
 
 
 def _new_task_id() -> str:
@@ -366,6 +388,23 @@ class ConversationState:
             return
         self.task.cancel()
 
+    def heal_stale_running(self, *, live: bool = False) -> bool:
+        """孤儿 ``running`` 降为 ``ready`` 并追加 notice；不续跑。"""
+
+        if live or self.task is None or self.task.status != "running":
+            return False
+        self.task.status = "ready"
+        self.append_messages(
+            [
+                {
+                    "kind": "mode_notice",
+                    "text": STALE_RUNNING_NOTICE,
+                    "payload": {"reason": "stale_running"},
+                }
+            ]
+        )
+        return True
+
     def append_user_text(self, query: str) -> None:
         """Composer 原文写入 messages（控件路径不要调用）。"""
 
@@ -533,7 +572,10 @@ class SessionStore:
                 f"using empty session and moved corrupt file to {backup}."
             )
             return ConversationState.empty(session_id)
-        return ConversationState.from_dict(raw, session_id=session_id)
+        state = ConversationState.from_dict(raw, session_id=session_id)
+        if state.heal_stale_running(live=is_live_running(session_id)):
+            self.save(state)
+        return state
 
     def save(self, state: ConversationState) -> str:
         """落盘会话并返回路径。"""

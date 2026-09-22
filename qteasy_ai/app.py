@@ -44,7 +44,7 @@ from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
-from .session import ConversationState, SessionStore
+from .session import ConversationState, SessionStore, clear_live_running, register_live_running
 from .session_gate import (
     SessionGate,
     extract_patches,
@@ -559,10 +559,13 @@ class QteasyAssistant:
         clarify_plan = self._plan_is_clarify(plan)
         if clarify_plan:
             confirm = False
+        live_sid = ""
         if confirm and session is not None and session.task is not None:
             session.task.status = "running"
             session.task.high_side_effect = plan_has_high_side_effect(plan)
             self.session_store.save(session)
+            live_sid = str(session.session_id or "")
+            register_live_running(live_sid)
         reuse_run_id = ""
         assumptions = getattr(plan, "assumptions", None) or {}
         if (
@@ -575,13 +578,17 @@ class QteasyAssistant:
             status = str(((existing.get("execution") or {}) if isinstance(existing, dict) else {}).get("status") or "")
             if status == "dry_run":
                 reuse_run_id = str(existing.get("run_id") or "")
-        payload = self.executor.execute(
-            plan,
-            confirm=confirm,
-            persist_run=False,
-            on_step=on_step,
-            run_id=reuse_run_id,
-        )
+        try:
+            payload = self.executor.execute(
+                plan,
+                confirm=confirm,
+                persist_run=False,
+                on_step=on_step,
+                run_id=reuse_run_id,
+            )
+        finally:
+            if live_sid:
+                clear_live_running(live_sid)
         write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
         if write_plan_md:
             plan_md = tool_plan_to_markdown(

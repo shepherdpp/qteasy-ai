@@ -16,7 +16,6 @@ import os
 from datetime import datetime
 from typing import Callable, Optional
 
-import matplotlib.pyplot as plt
 import pandas as pd
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
@@ -93,6 +92,11 @@ def build_visual_export_skill(
             if data is None or data.empty:
                 raise ValueError("No data returned.")
             close_col = "close" if "close" in data.columns else data.columns[0]
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
             fig, ax = plt.subplots(figsize=(10, 4))
             ax.plot(data.index, data[close_col], color="#1f77b4", linewidth=1.2)
             ax.set_title(f"{shares} {freq.upper()} close")

@@ -251,3 +251,10 @@ def build_provider_from_overlay(
         config_center=config_center,
     )
 
+
+def ensure_mplbackend_agg() -> None:
+    """进程未指定 ``MPLBACKEND`` 时默认 Agg，避免 GUI 后端。"""
+
+    if not str(os.environ.get("MPLBACKEND") or "").strip():
+        os.environ["MPLBACKEND"] = "Agg"
+

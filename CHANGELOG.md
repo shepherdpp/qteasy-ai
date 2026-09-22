@@ -5,6 +5,11 @@ SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy)
 
 ## Unreleased
 
+### Fixed
+
+- `qt.ai.visual.export_kline` uses the Agg backend so Workbench SSE threads no longer crash on macOS (`NSWindow` / Abort trap 6).
+- Loading a session after a process abort heals a stale `running` task back to `ready` (same `plan_id`; Confirm again). No step resume.
+
 ### Changed
 
 - Default LLM Provider timeout is **120 seconds** (was 30). Override with `QTEASY_AI_TIMEOUT` or `ai_timeout`.
