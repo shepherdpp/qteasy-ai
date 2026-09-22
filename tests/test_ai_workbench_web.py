@@ -239,6 +239,93 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             for art in state.get("artifacts") or []:
                 self.assertNotEqual(art.get("type"), "factor_analysis")
 
+    def test_session_list_uses_name_and_last_user_not_job(self) -> None:
+        """Sessions 栏主行 name、副行 last_user；含改名/删除确认契约。"""
+
+        print("\n[TestAiWorkbenchWeb] session list name last_user")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            js = client.get("/static/app.js")
+            css = client.get("/static/app.css")
+            src = js.text
+            print(" has last_user:", "last_user" in src)
+            print(" has job meta template:", 'row.job' in src and "meta" in src)
+            print(" has PATCH:", 'method: "PATCH"' in src)
+            print(" has DELETE:", 'method: "DELETE"' in src)
+            print(" has confirm:", "window.confirm" in src)
+            print(" has New session:", "New session" in src)
+            self.assertIn("last_user", src)
+            self.assertIn("row.name", src)
+            self.assertNotIn('meta">${escapeHtml(row.job', src)
+            self.assertIn("data-session-delete", src)
+            self.assertIn("window.confirm", src)
+            self.assertIn('method: "PATCH"', src)
+            self.assertIn('method: "DELETE"', src)
+            self.assertIn("stopPropagation", src)
+            self.assertIn("New session", src)
+            print(" css session-actions:", "session-actions" in css.text)
+            self.assertIn("session-actions", css.text)
+            self.assertIn(":focus-within", css.text)
+
+    def test_artifact_tabs_open_on_demand_not_auto(self) -> None:
+        """中栏 openTabs；Workspace / Open plan 共用 openArtifactTab；ingest 不自动打开。"""
+
+        print("\n[TestAiWorkbenchWeb] artifact open tabs")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            print(" has openArtifactTab:", "function openArtifactTab" in src)
+            print(" has openTabs:", "openTabs" in src)
+            print(" has data-open-plan:", "data-open-plan" in src)
+            print(" has closePlanTabsForRun:", "function closePlanTabsForRun" in src)
+            self.assertIn("function openArtifactTab", src)
+            self.assertIn("openTabs", src)
+            self.assertIn("data-open-plan", src)
+            self.assertIn("Open a plan or artifact", src)
+            self.assertIn("function closePlanTabsForRun", src)
+            self.assertIn('type === "plan"', src)
+            ws_fn = src.split("async function onWorkspaceArtifactClick")[1].split("async function createSession")[0]
+            print(" workspace calls openArtifactTab:", "openArtifactTab" in ws_fn)
+            print(" workspace sets artifactTab idx:", "artifactTab = idx" in ws_fn)
+            self.assertIn("openArtifactTab", ws_fn)
+            self.assertNotIn("artifactTab = idx", ws_fn)
+            ingest = src.split("function ingestDto")[1].split("async function sendQuery")[0]
+            print(" ingest calls openArtifactTab:", "openArtifactTab" in ingest)
+            self.assertNotIn("openArtifactTab", ingest)
+            self.assertIn("data-tab-close", src)
+
+    def test_plan_artifact_renders_markdown_with_sanitize(self) -> None:
+        """plan Artifact 只读渲染 md/mermaid，保留 json_wins，库缺失可降级 pre。"""
+
+        print("\n[TestAiWorkbenchWeb] plan markdown mermaid")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            index = client.get("/").text
+            src = client.get("/static/app.js").text
+            print(" index mermaid:", "mermaid" in index.lower())
+            print(" index purify:", "purify" in index.lower() or "DOMPurify" in index)
+            print(" js renderPlanMarkdown:", "function renderPlanMarkdown" in src)
+            print(" js securityLevel:", "securityLevel" in src)
+            self.assertTrue("mermaid" in index.lower() or "mermaid" in src)
+            self.assertTrue("DOMPurify" in src or "purify" in index.lower())
+            self.assertIn("function renderPlanMarkdown", src)
+            self.assertIn("securityLevel", src)
+            self.assertIn("JSON in runs/ is the executable source", src)
+            self.assertIn("renderPlanMarkdown", src.split('current.type === "plan"')[1].split("host.innerHTML")[0])
+            self.assertNotIn('<pre class="plan-md">${escapeHtml(markdown', src.split("function renderPlanMarkdown")[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -213,6 +213,12 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(scoped.status_code, 200)
             self.assertEqual(scoped.json().get("session_id"), "web-demo")
             self.assertIn("artifacts", scoped.json())
+            plan_arts = [item for item in scoped.json().get("artifacts") or [] if item.get("type") == "plan"]
+            print(" workspace plan titles:", [item.get("title") for item in plan_arts])
+            self.assertTrue(plan_arts)
+            title = str(plan_arts[0].get("title") or "")
+            self.assertNotEqual(title, "plan.md")
+            self.assertTrue("List" in title or "strateg" in title.lower())
             demo = store.strategies_dir / "demo.py"
             demo.write_text("class Demo:\n    pass\n", encoding="utf-8")
             preview = client.get("/v1/workspace/file", params={"path": "strategies/demo.py"})
@@ -644,6 +650,75 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" empty query status:", empty.status_code, empty.json())
             self.assertEqual(empty.status_code, 400)
             self.assertEqual((empty.json().get("error") or {}).get("code"), "QUERY_REQUIRED")
+
+    def test_patch_session_name_and_clear(self) -> None:
+        """PATCH 写入自定义 name；空白则回退首条用户句。"""
+
+        print("\n[TestAiWorkbenchHttp] patch session name")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": "s-ren"},
+            )
+            print(" plan status:", planned.status_code)
+            self.assertEqual(planned.status_code, 200)
+            renamed = client.patch("/v1/session/s-ren", json={"name": "My research"})
+            print(" patch status:", renamed.status_code, renamed.json())
+            self.assertEqual(renamed.status_code, 200)
+            self.assertEqual(renamed.json().get("session_id"), "s-ren")
+            self.assertEqual(renamed.json().get("name"), "My research")
+            listed = client.get("/v1/sessions").json().get("sessions") or []
+            row = next(item for item in listed if item.get("session_id") == "s-ren")
+            print(" listed row:", row)
+            self.assertEqual(row.get("name"), "My research")
+            on_disk = json.loads((store.sessions_dir / "s-ren.json").read_text(encoding="utf-8"))
+            print(" on_disk name:", on_disk.get("name"))
+            self.assertEqual(on_disk.get("name"), "My research")
+            cleared = client.patch("/v1/session/s-ren", json={"name": "   "})
+            print(" clear status:", cleared.status_code, cleared.json())
+            self.assertEqual(cleared.status_code, 200)
+            listed2 = client.get("/v1/sessions").json().get("sessions") or []
+            row2 = next(item for item in listed2 if item.get("session_id") == "s-ren")
+            print(" after clear:", row2)
+            self.assertTrue(str(row2.get("name") or "").startswith("list"))
+            missing = client.patch("/v1/session/no-such-session", json={"name": "x"})
+            print(" missing patch:", missing.status_code, missing.json())
+            self.assertEqual(missing.status_code, 404)
+
+    def test_delete_session_keeps_runs(self) -> None:
+        """DELETE session 后列表无该 id，runs/ 原文件仍在。"""
+
+        print("\n[TestAiWorkbenchHttp] delete session keeps runs")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": "s-del"},
+            )
+            body = planned.json()
+            run_id = str(body.get("run_id") or "")
+            print(" plan status:", planned.status_code, "run_id:", run_id)
+            self.assertTrue(run_id)
+            run_path = store.runs_dir / f"{run_id}.json"
+            print(" run path exists before:", run_path.exists(), run_path)
+            self.assertTrue(run_path.exists())
+            deleted = client.delete("/v1/session/s-del")
+            print(" delete status:", deleted.status_code, deleted.json())
+            self.assertEqual(deleted.status_code, 200)
+            self.assertTrue(deleted.json().get("ok"))
+            ids = [row.get("session_id") for row in client.get("/v1/sessions").json().get("sessions") or []]
+            print(" ids after delete:", ids)
+            self.assertNotIn("s-del", ids)
+            print(" run path exists after:", run_path.exists())
+            self.assertTrue(run_path.exists())
+            unknown = client.delete("/v1/session/no-such-session")
+            print(" unknown delete:", unknown.status_code, unknown.json())
+            self.assertEqual(unknown.status_code, 404)
+            message = str((unknown.json().get("error") or {}).get("message") or "")
+            print(" unknown message:", message)
+            self.assertTrue(message)
+            self.assertNotIn("Traceback", message)
 
 
 if __name__ == "__main__":

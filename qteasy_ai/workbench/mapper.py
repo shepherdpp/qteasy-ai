@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..human_card import normalize_card_kind, project_human_cards
-from ..plan_markdown import skill_step_title
+from ..plan_markdown import plan_artifact_title, skill_step_title
 from ..session import ConversationState
 from ..side_effects import step_needs_confirm
 from .dto import (
@@ -480,10 +480,11 @@ def _plan_review_artifact(raw: Dict[str, Any], run_id: str, session_id: str) -> 
         return None
     cap = 200000
     preview_md = md[:cap] if md else ""
+    plan = raw.get("plan") if isinstance(raw.get("plan"), dict) else {}
     return WorkbenchArtifact(
         type="plan",
         run_id=str(run_id or ""),
-        title="plan.md",
+        title=plan_artifact_title(str(plan.get("plan_id") or ""), plan.get("steps") or []),
         export_path=path,
         preview={"markdown": preview_md, "path": path},
         session_id=session_id,

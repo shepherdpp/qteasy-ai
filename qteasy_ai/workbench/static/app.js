@@ -40,7 +40,8 @@ let mode = "plan";
 let sessionId = localStorage.getItem(STORAGE_SESSION) || newSessionId();
 let state = emptyState();
 let transcript = [];
-let artifactTab = 0;
+let openTabs = [];
+let activeKey = "";
 let pendingCodeRun = false;
 let editingParams = false;
 let editingNowSlot = "";
@@ -56,6 +57,7 @@ let modeNotice = "";
 let editingUserIndex = -1;
 let providerInfo = null;
 let pendingRewind = null;
+let renamingSessionId = "";
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -311,6 +313,7 @@ function bindShell() {
   $("chat-log").addEventListener("click", onChatClick);
   $("artifact-panel").addEventListener("click", onArtifactClick);
   $("session-list").addEventListener("click", onSessionListClick);
+  $("session-list").addEventListener("dblclick", onSessionListDblClick);
   $("workspace-files").addEventListener("click", onWorkspaceArtifactClick);
   $("workspace-now").addEventListener("click", onNowClick);
 }
@@ -519,7 +522,6 @@ async function sendQuery(query, { keepDraft } = {}) {
     const dto = await api(path, { method: "POST", headers, body });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
-    artifactTab = 0;
     pendingCodeRun = false;
     filePreview = null;
     renderPanes();
@@ -587,6 +589,7 @@ async function confirmPlan() {
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
     pendingCodeRun = false;
+    closePlanTabsForRun(state.run_id);
     renderPanes();
     await refreshWorkspace();
   } catch (exc) {
@@ -678,6 +681,10 @@ function onChatClick(ev) {
     rewindUserMessage(editingUserIndex, text, true);
     return;
   }
+    if (t.dataset.openPlan != null) {
+    openPlanFromRunId(t.dataset.openPlan);
+    return;
+  }
   if (t.dataset.example) {
     const ex = EXAMPLES[Number(t.dataset.example)];
     if (ex) {
@@ -725,7 +732,6 @@ async function submitParamEdits() {
     });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
-    artifactTab = 0;
     pendingCodeRun = false;
     filePreview = null;
     renderPanes();
@@ -792,10 +798,17 @@ function onNowClick(ev) {
 function onArtifactClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
-  if (t.dataset.tab != null) {
+  const closer = t.closest("[data-tab-close]");
+  if (closer) {
+    ev.stopPropagation();
+    closeArtifactTab(closer.getAttribute("data-tab-close"));
+    return;
+  }
+  const tabEl = t.closest("[data-tab]");
+  if (tabEl) {
     const editor = $("code-editor");
     if (editor) codeCache._draft = editor.value;
-    artifactTab = Number(t.dataset.tab || 0);
+    activeKey = String(tabEl.getAttribute("data-tab") || "");
     pendingCodeRun = false;
     filePreview = null;
     renderArtifacts();
@@ -814,10 +827,95 @@ function onArtifactClick(ev) {
   }
 }
 
+function sessionDisplayName(row) {
+  return String((row && (row.name || row.title)) || (row && row.session_id) || "").trim();
+}
+
+function onSessionListDblClick(ev) {
+  const item = ev.target.closest("[data-session-id]");
+  if (!item || ev.target.closest("[data-session-delete], [data-session-rename], .session-rename")) return;
+  beginRenameSession(item.getAttribute("data-session-id"));
+}
+
 function onSessionListClick(ev) {
-  const btn = ev.target.closest("[data-session-id]");
-  if (!btn) return;
-  switchSession(btn.getAttribute("data-session-id"));
+  const t = ev.target;
+  if (!(t instanceof HTMLElement)) return;
+  const item = t.closest("[data-session-id]");
+  if (!item) return;
+  const id = item.getAttribute("data-session-id");
+  if (t.closest("[data-session-delete]")) {
+    ev.stopPropagation();
+    deleteSession(id);
+    return;
+  }
+  if (t.closest("[data-session-rename]")) {
+    ev.stopPropagation();
+    beginRenameSession(id);
+    return;
+  }
+  if (t.closest(".session-rename")) {
+    ev.stopPropagation();
+    return;
+  }
+  switchSession(id);
+}
+
+function beginRenameSession(id) {
+  if (!id || busy) return;
+  renamingSessionId = id;
+  renderSessionList();
+  const box = document.querySelector(".session-rename");
+  if (box) {
+    box.focus();
+    box.select();
+  }
+}
+
+async function commitRenameSession(id, raw) {
+  const name = String(raw || "").trim();
+  renamingSessionId = "";
+  const local = sessions.find((row) => row.session_id === id);
+  const persisted = Boolean(local && !local.local_only);
+  if (!persisted) {
+    if (local) {
+      local.name = name || "New session";
+      local.title = local.name;
+    }
+    renderSessionList();
+    return;
+  }
+  const dto = await api(`/v1/session/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (dto && dto.error) {
+    renderSessionList();
+    return;
+  }
+  await refreshSessions();
+}
+
+async function deleteSession(id) {
+  if (!id || busy) return;
+  const row = sessions.find((item) => item.session_id === id);
+  const label = sessionDisplayName(row) || id;
+  if (!window.confirm(`Delete session "${label}"? This cannot be undone.`)) return;
+  if (row && row.local_only) {
+    if (id === sessionId) createSession();
+    else {
+      sessions = sessions.filter((item) => item.session_id !== id);
+      renderSessionList();
+    }
+    return;
+  }
+  const dto = await api(`/v1/session/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (dto && dto.error) return;
+  if (id === sessionId) {
+    await createSession();
+    return;
+  }
+  await refreshSessions();
 }
 
 async function rewindUserMessage(index, text, confirmDiscard) {
@@ -853,7 +951,6 @@ async function rewindUserMessage(index, text, confirmDiscard) {
     pendingRewind = null;
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
-    artifactTab = 0;
     filePreview = null;
     renderPanes();
     await refreshSessions();
@@ -870,15 +967,91 @@ function applyServerTranscript(dto) {
   persistTranscript();
 }
 
+function catalogArtifacts() {
+  return workspace.artifacts || state.artifacts || [];
+}
+
+function artifactKey(art) {
+  if (!art) return "";
+  return `${String(art.type || "")}::${String(art.run_id || "")}`;
+}
+
+function openArtifactTab(art) {
+  if (!art || !art.type || !art.run_id) return;
+  const key = artifactKey(art);
+  if (!openTabs.some((row) => artifactKey(row) === key)) {
+    openTabs = openTabs.concat([{ type: art.type, run_id: art.run_id }]);
+  }
+  activeKey = key;
+  filePreview = null;
+  renderArtifacts();
+}
+
+function closeArtifactTab(key) {
+  const idx = openTabs.findIndex((row) => artifactKey(row) === key);
+  if (idx < 0) return;
+  openTabs = openTabs.filter((row) => artifactKey(row) !== key);
+  if (activeKey === key) {
+    const neighbor = openTabs[idx] || openTabs[idx - 1] || null;
+    activeKey = neighbor ? artifactKey(neighbor) : "";
+  }
+  renderArtifacts();
+}
+
+function closePlanTabsForRun(runId) {
+  const rid = String(runId || "");
+  if (!rid) return;
+  const next = openTabs.filter((row) => !(row.type === "plan" && String(row.run_id) === rid));
+  if (next.length === openTabs.length) return;
+  const lost = activeKey === `plan::${rid}`;
+  openTabs = next;
+  if (lost) {
+    const last = openTabs[openTabs.length - 1];
+    activeKey = last ? artifactKey(last) : "";
+  }
+}
+
+function clearOpenTabs() {
+  openTabs = [];
+  activeKey = "";
+}
+
+function pruneMissingTabs() {
+  const catalog = catalogArtifacts();
+  openTabs = openTabs.filter((tab) => catalog.some((row) => artifactKey(row) === artifactKey(tab)));
+  if (activeKey && !openTabs.some((row) => artifactKey(row) === activeKey)) {
+    const last = openTabs[openTabs.length - 1];
+    activeKey = last ? artifactKey(last) : "";
+  }
+}
+
+function openPlanFromRunId(runId) {
+  const rid = String(runId || "").trim();
+  const art = catalogArtifacts().find((row) => row.type === "plan" && String(row.run_id) === rid);
+  if (!art) {
+    modeNotice = "Plan artifact is not in Workspace yet. Open it from the right-hand index.";
+    renderMode();
+    return;
+  }
+  openArtifactTab(art);
+}
+
+function currentPlanRunId() {
+  const ready = latestMessage("plan_ready");
+  const fromCard = ready && ready.payload && ready.payload.run_id;
+  if (fromCard) return String(fromCard);
+  const art = catalogArtifacts().find((row) => row.type === "plan");
+  return art ? String(art.run_id || "") : "";
+}
+
 async function onWorkspaceArtifactClick(ev) {
   const btn = ev.target.closest("[data-art-index]");
   if (!btn) return;
   const idx = Number(btn.getAttribute("data-art-index") || 0);
-  artifactTab = idx;
-  filePreview = null;
-  const listed = workspace.artifacts || [];
+  const listed = workspace.artifacts || state.artifacts || [];
   if (listed.length) state.artifacts = listed;
-  renderArtifacts();
+  const art = listed[idx];
+  if (art) openArtifactTab(art);
 }
 
 async function createSession() {
@@ -888,7 +1061,7 @@ async function createSession() {
   state = emptyState();
   transcript = [];
   persistTranscript();
-  artifactTab = 0;
+  clearOpenTabs();
   pendingCodeRun = false;
   editingParams = false;
   editingNowSlot = "";
@@ -914,7 +1087,7 @@ async function switchSession(id) {
   ingestDto(dto);
   applySessionMode(dto);
   applyServerTranscript(dto);
-  artifactTab = 0;
+  clearOpenTabs();
   filePreview = null;
   editingNowSlot = "";
   editingUserIndex = -1;
@@ -929,7 +1102,10 @@ async function refreshSessions() {
   const data = await api("/v1/sessions");
   sessions = data.sessions || [];
   if (sessionId && !sessions.some((row) => row.session_id === sessionId)) {
-    sessions = [{ session_id: sessionId, title: sessionId, job: "" }, ...sessions];
+    sessions = [
+      { session_id: sessionId, name: "New session", title: "New session", last_user: "", job: "", local_only: true },
+      ...sessions,
+    ];
   }
   renderSessionList();
 }
@@ -938,6 +1114,12 @@ async function refreshWorkspace() {
   const data = await api(`/v1/workspace?session_id=${encodeURIComponent(sessionId)}`);
   workspace = data && Array.isArray(data.artifacts) ? data : { artifacts: [] };
   state.artifacts = workspace.artifacts || [];
+  for (const tab of openTabs.filter((row) => row.type === "plan")) {
+    if (!catalogArtifacts().some((row) => row.type === "plan" && String(row.run_id) === String(tab.run_id))) {
+      closePlanTabsForRun(tab.run_id);
+    }
+  }
+  pruneMissingTabs();
   renderWorkspace();
   renderArtifacts();
 }
@@ -954,14 +1136,41 @@ function renderSessionList() {
   host.innerHTML = sessions
     .map((row) => {
       const active = row.session_id === sessionId ? "active" : "";
-      return `<button type="button" class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
-        <span class="sid">${escapeHtml(row.title || row.session_id)}</span>
-        <span class="meta">${escapeHtml(row.job || row.session_id)}</span>
-      </button>`;
+      const name = sessionDisplayName(row);
+      const last = String(row.last_user || "").trim();
+      const editing = renamingSessionId === row.session_id;
+      const nameBlock = editing
+        ? `<input class="session-rename" value="${escapeHtml(name)}" aria-label="Rename session" />`
+        : `<span class="sid">${escapeHtml(name)}</span>`;
+      const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
+      return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
+        <div class="session-main">${nameBlock}${meta}</div>
+        <div class="session-actions">
+          <button type="button" class="icon-btn ghost" data-session-rename title="Rename">✎</button>
+          <button type="button" class="icon-btn ghost" data-session-delete title="Delete">🗑</button>
+        </div>
+      </div>`;
     })
     .join("");
   const current = sessions.find((row) => row.session_id === sessionId);
-  $("session-title").textContent = (current && (current.title || current.job)) || sessionId;
+  $("session-title").textContent = sessionDisplayName(current) || sessionId;
+  const box = host.querySelector(".session-rename");
+  if (box) {
+    box.addEventListener("click", (ev) => ev.stopPropagation());
+    box.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commitRenameSession(renamingSessionId, box.value);
+      }
+      if (ev.key === "Escape") {
+        renamingSessionId = "";
+        renderSessionList();
+      }
+    });
+    box.addEventListener("blur", () => {
+      if (renamingSessionId) commitRenameSession(renamingSessionId, box.value);
+    });
+  }
 }
 
 function renderChat() {
@@ -1019,7 +1228,11 @@ function renderChat() {
       continue;
     }
     if (msg.kind === "plan_ready") {
-      parts.push(`<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`);
+      const rid = (msg.payload && msg.payload.run_id) || "";
+      const openBtn = rid
+        ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">Open plan</button></div>`
+        : "";
+      parts.push(`<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}</div></div>`);
       continue;
     }
     if (msg.kind === "user_text") {
@@ -1145,12 +1358,16 @@ function renderPlanCard() {
     editor = `${rows}<div class="actions"><button type="button" class="primary" id="btn-edit-submit">Apply changes</button><button type="button" id="btn-edit-cancel">Back</button></div>`;
   }
   const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
+  const rid = currentPlanRunId();
+  const openBtn = rid
+    ? `<button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">Open plan</button>`
+    : "";
   return `<div class="card compact" data-testid="plan-card"><h3>Plan ready</h3>
     ${jobLine}
     <p class="warn">Plan ${escapeHtml(card.plan_id)}</p>
     <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>
     ${editor}
-    ${renderDecisionActions()}</div>`;
+    ${renderDecisionActions(openBtn)}</div>`;
 }
 
 function renderSteps() {
@@ -1196,6 +1413,36 @@ function metricsCards(metrics) {
     .join("")}</div>`;
 }
 
+function renderPlanMarkdown(md) {
+  const raw = String(md || "");
+  const markedLib = typeof window !== "undefined" ? window.marked : undefined;
+  const purify = typeof window !== "undefined" ? window.DOMPurify : undefined;
+  if (!raw) return `<pre class="plan-md">(empty plan.md)</pre>`;
+  if (!markedLib || !purify || typeof markedLib.parse !== "function") {
+    return `<pre class="plan-md">${escapeHtml(raw)}</pre>`;
+  }
+  const html = markedLib.parse(raw);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = purify.sanitize(html);
+  wrap.querySelectorAll("pre code.language-mermaid").forEach((code) => {
+    const pre = code.parentElement;
+    const div = document.createElement("div");
+    div.className = "mermaid";
+    div.textContent = code.textContent || "";
+    if (pre) pre.replaceWith(div);
+  });
+  return `<div class="plan-md-html">${wrap.innerHTML}</div>`;
+}
+
+function runMermaid(root) {
+  const mermaidLib = typeof window !== "undefined" ? window.mermaid : undefined;
+  if (!mermaidLib || !root) return;
+  mermaidLib.initialize({ startOnLoad: false, securityLevel: "strict", theme: "dark" });
+  const nodes = root.querySelectorAll(".mermaid");
+  if (!nodes.length) return;
+  mermaidLib.run({ nodes: Array.from(nodes) });
+}
+
 function exportLink(art, label) {
   if (!art || !art.export_path || !art.run_id) return "";
   const href = `/v1/artifacts/${encodeURIComponent(art.run_id)}?path=${encodeURIComponent(art.export_path)}`;
@@ -1215,33 +1462,40 @@ function renderArtifacts() {
   if (!host) return;
   const editor = $("code-editor");
   if (editor) codeCache._draft = editor.value;
-  const arts = state.artifacts || [];
+  const catalog = catalogArtifacts();
   const fileCard = filePreview
     ? `<div class="card"><div class="artifact-toolbar"><span class="art-type">file</span>
         <button type="button" id="btn-file-back">Back to artifacts</button></div>
         <h3>${escapeHtml(filePreview.name)}</h3><p class="warn">${escapeHtml(filePreview.path)}</p>
         <textarea rows="16" readonly>${escapeHtml(filePreview.content)}</textarea></div>`
     : "";
-  if (!arts.length) {
-    host.innerHTML = fileCard || `<p class="empty-hint">No artifacts yet. Confirm a plan to see tables, charts, or code here.</p>`;
+  if (openTabs.length === 0 && !filePreview) {
+    host.innerHTML = `<div class="artifact-empty" data-testid="artifact-panel">
+      <div class="artifact-empty-mark">◇</div>
+      <p class="empty-hint">Open a plan or artifact from Workspace, or click Open plan on a Plan ready card.</p>
+    </div>`;
     return;
   }
-  const tabs = arts
-    .map(
-      (a, i) =>
-        `<div class="tab ${i === artifactTab ? "active" : ""}" data-tab="${i}">${escapeHtml(a.type)} <small>${escapeHtml(a.run_id)}</small></div>`
-    )
+  const tabs = openTabs
+    .map((tab) => {
+      const art = catalog.find((row) => artifactKey(row) === artifactKey(tab));
+      const key = artifactKey(tab);
+      const label = (art && (art.title || art.type)) || tab.type || "artifact";
+      return `<div class="tab ${key === activeKey ? "active" : ""}" data-tab="${escapeHtml(key)}">${escapeHtml(label)}
+        <button type="button" class="tab-close" data-tab-close="${escapeHtml(key)}" title="Close">×</button></div>`;
+    })
     .join("");
   if (filePreview) {
-    host.innerHTML = `<div class="tabs">${arts
-      .map(
-        (a, i) =>
-          `<div class="tab ${i === artifactTab ? "active" : ""}" data-tab="${i}">${escapeHtml(a.type)} <small>${escapeHtml(a.run_id)}</small></div>`
-      )
-      .join("")}</div><div data-testid="artifact-panel">${fileCard}</div>`;
+    host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${fileCard}</div>`;
     return;
   }
-  const current = arts[artifactTab] || arts[0];
+  const current =
+    catalog.find((row) => artifactKey(row) === activeKey) ||
+    catalog.find((row) => openTabs.some((tab) => artifactKey(tab) === artifactKey(row)));
+  if (!current) {
+    host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel"><p class="empty-hint">This artifact is no longer in the session index.</p></div>`;
+    return;
+  }
   let body = artifactToolbar(current);
   if (current.type === "data_table") {
     const rows = (current.preview && current.preview.preview_rows) || [];
@@ -1274,10 +1528,11 @@ function renderArtifacts() {
     const path = (current.preview && current.preview.path) || current.export_path || "";
     body += `<h3>${escapeHtml(current.title || "plan.md")}</h3>
       ${path ? `<p class="warn">${escapeHtml(path)}</p>` : ""}
-      <pre class="plan-md">${escapeHtml(markdown || "(empty plan.md)")}</pre>
+      ${renderPlanMarkdown(markdown)}
       <p class="hint">JSON in runs/ is the executable source. Editing this markdown does not change what Run executes.</p>`;
   }
   host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${body}</div>`;
+  runMermaid(host);
   const ta = $("code-editor");
   if (ta) {
     ta.addEventListener("input", () => {

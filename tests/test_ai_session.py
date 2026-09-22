@@ -29,15 +29,18 @@ class TestAiSession(unittest.TestCase):
     """测试会话状态字段、往返与损坏降级。"""
 
     def test_empty_session_fields(self) -> None:
-        """空 session 只有五字段，task 为 None。"""
+        """空 session 六字段含 name=''，task 为 None。"""
 
         print("\n[TestAiSession] empty session fields")
         state = ConversationState.empty("sess-1")
         payload = state.to_dict()
         print(" payload keys:", sorted(payload.keys()))
         print(" task:", payload["task"])
+        print(" name:", payload.get("name"))
         self.assertEqual(set(payload.keys()), STATE_KEYS)
+        self.assertIn("name", STATE_KEYS)
         self.assertEqual(payload["session_id"], "sess-1")
+        self.assertEqual(payload.get("name"), "")
         self.assertIsNone(payload["task"])
         self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["attachments"], [])
@@ -298,6 +301,56 @@ class TestAiSession(unittest.TestCase):
         print(" second close on already answered:", again, state.messages[-1]["payload"])
         self.assertFalse(again)
         self.assertEqual(state.messages[-1]["payload"]["answer"], "start 20240101")
+
+    def test_list_summaries_name_first_user_last_user_second(self) -> None:
+        """未改名时 name 取首条 user_text，last_user 取最后一条。"""
+
+        print("\n[TestAiSession] list_summaries first vs last user")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("s-name")
+            state.start_task(query="first", job="data.refill")
+            state.append_user_text("first")
+            state.append_user_text("second")
+            sessions.save(state)
+            rows = sessions.list_summaries()
+            print(" rows:", rows)
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            print(" name:", row.get("name"), "last_user:", row.get("last_user"), "job:", row.get("job"))
+            print(" title:", row.get("title"))
+            self.assertTrue(str(row.get("name") or "").startswith("first"))
+            self.assertTrue(str(row.get("last_user") or "").startswith("second"))
+            self.assertEqual(row.get("title"), row.get("name"))
+            self.assertNotEqual(row.get("job"), row.get("last_user"))
+            self.assertEqual(row.get("job"), "data.refill")
+
+    def test_custom_name_survives_later_user_text(self) -> None:
+        """用户写入 name 后钉死；再追加用户句只改 last_user。"""
+
+        print("\n[TestAiSession] custom name pinned after later user_text")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("s-pin")
+            state.start_task(query="first", job="data.export")
+            state.append_user_text("first")
+            state.append_user_text("second")
+            state.name = "HS300 kline"
+            sessions.save(state)
+            loaded = sessions.load("s-pin")
+            print(" loaded name:", loaded.name, "keys:", sorted(loaded.to_dict().keys()))
+            self.assertEqual(loaded.name, "HS300 kline")
+            self.assertEqual(set(loaded.to_dict().keys()), STATE_KEYS)
+            loaded.append_user_text("third")
+            sessions.save(loaded)
+            row = sessions.list_summaries()[0]
+            print(" after third:", row)
+            self.assertEqual(row.get("name"), "HS300 kline")
+            self.assertTrue(str(row.get("last_user") or "").startswith("third"))
+            self.assertEqual(row.get("title"), "HS300 kline")
+            self.assertNotEqual(row.get("job"), row.get("last_user"))
 
 
 if __name__ == "__main__":

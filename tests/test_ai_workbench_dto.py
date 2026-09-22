@@ -290,6 +290,27 @@ class TestAiWorkbenchDto(unittest.TestCase):
         print(" summary:", dumped["plan_card"]["steps"][0].get("summary"))
         self.assertIn("Download", dumped["plan_card"]["steps"][0].get("summary") or "")
 
+    def test_plan_artifact_title_is_human_not_plan_md(self) -> None:
+        """list 策略 dry-run 的 plan artifact title 为人话 + hex。"""
+
+        print("\n[TestAiWorkbenchDto] plan artifact display title")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self._assistant(temp_dir)
+            payload = assistant.plan("list built-in strategies", response_style="raw")
+            state = map_assistant_payload(payload, query="list built-in strategies")
+            dumped = state.to_dict()
+            plan_id = (dumped.get("plan_card") or {}).get("plan_id") or ""
+            arts = [item for item in dumped.get("artifacts") or [] if item.get("type") == "plan"]
+            print(" plan_id:", plan_id)
+            print(" plan artifacts:", arts)
+            self.assertRegex(str(plan_id), r"^plan_[0-9a-f]{12}$")
+            self.assertTrue(arts)
+            title = str(arts[0].get("title") or "")
+            print(" title:", title)
+            self.assertNotEqual(title, "plan.md")
+            self.assertTrue("List" in title or "strateg" in title.lower())
+            self.assertIn(str(plan_id).replace("plan_", "")[:8], title)
+
 
 if __name__ == "__main__":
     unittest.main()

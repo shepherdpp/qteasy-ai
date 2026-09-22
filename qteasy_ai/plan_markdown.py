@@ -98,6 +98,43 @@ def skill_step_title(skill: str, raw: Optional[Dict[str, Any]] = None) -> str:
     return str(SKILL_TITLES.get(name) or name)
 
 
+def plan_artifact_title(plan_id: str, steps: Optional[Sequence[Any]] = None) -> str:
+    """Plan Artifact 显示名：第一步人话标题 + plan_id 短 hex。
+
+    Parameters
+    ----------
+    plan_id : str
+        JSON 内 ``plan_id``（``plan_`` + hex），不是文件名。
+    steps : sequence, optional
+        ``ToolStep`` 或含 ``skill_name`` 的 dict。
+
+    Returns
+    -------
+    str
+        如 ``List built-in strategies · af7f4f6a``；无 skill 时 ``Plan · <hex>``。
+    """
+
+    raw_id = str(plan_id or "").strip()
+    hex_part = raw_id[5:] if raw_id.lower().startswith("plan_") else raw_id
+    short = (hex_part or "plan")[:8]
+    first_skill = ""
+    first_raw: Optional[Dict[str, Any]] = None
+    for step in steps or []:
+        if isinstance(step, dict):
+            first_skill = str(step.get("skill_name") or "").strip()
+            first_raw = step
+            break
+        first_skill = str(getattr(step, "skill_name", "") or "").strip()
+        summary = str(getattr(step, "summary", "") or "").strip()
+        first_raw = {"summary": summary} if summary else None
+        if first_skill:
+            break
+    label = skill_step_title(first_skill, first_raw) if first_skill else "Plan"
+    if not str(label or "").strip():
+        label = "Plan"
+    return f"{label} · {short}"
+
+
 def _side_effects_label(side_effects: Any) -> str:
     """将副作用结构压缩为一行标签。"""
 

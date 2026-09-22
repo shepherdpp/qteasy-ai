@@ -30,6 +30,7 @@ from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
 from ..session import SessionStore
+from ..plan_markdown import plan_artifact_title
 from .mapper import classify_artifacts, map_assistant_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -39,6 +40,7 @@ _NEXT_ACTION = {
     "PLAN_ID_REQUIRED": "Confirm a plan from this session, or send a new Plan request.",
     "PLAN_ID_NOT_FOUND": "Create a plan first, then press Confirm. The plan_id lives in runs/, not as a filename.",
     "SESSION_ID_REQUIRED": "Select a session from the left rail, or click New.",
+    "SESSION_NOT_FOUND": "That session is gone. Pick another from the left rail, or click New.",
     "PATH_REQUIRED": "Pick an artifact in Workspace, or a strategy file to preview.",
     "FILE_NOT_FOUND": "Choose a file inside the memory root, or an artifact from this session.",
     "FILE_NOT_TEXT": "Only text workspace files can be previewed. Export binaries from Artifacts.",
@@ -214,11 +216,15 @@ class WorkbenchHttp:
                     markdown = md_path.read_text(encoding="utf-8")[:200000]
                 except OSError:
                     markdown = ""
+                plan_blob = run.get("plan") if isinstance(run.get("plan"), dict) else {}
                 items.append(
                     {
                         "type": "plan",
                         "run_id": rid,
-                        "title": "plan.md",
+                        "title": plan_artifact_title(
+                            str(plan_blob.get("plan_id") or ""),
+                            plan_blob.get("steps") or [],
+                        ),
                         "export_path": str(md_path),
                         "preview": {"markdown": markdown, "path": str(md_path)},
                         "warnings": [],
@@ -534,6 +540,34 @@ class WorkbenchHttp:
                 break
         return JSONResponse(dumped)
 
+    async def patch_session(self, request: Request) -> JSONResponse:
+        """PATCH /v1/session/{session_id}：改用户标签 ``name``。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.exists(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        body = await self._read_json(request)
+        conv = store.load(session_id)
+        conv.name = str(body.get("name") or "")
+        store.save(conv)
+        row = store.summarize_one(conv)
+        row["ok"] = True
+        return JSONResponse(row)
+
+    async def delete_session(self, request: Request) -> JSONResponse:
+        """DELETE /v1/session/{session_id}：只删 session 文件。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.delete(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        return JSONResponse({"ok": True, "session_id": session_id})
+
     async def list_sessions(self, request: Request) -> JSONResponse:
         """GET /v1/sessions：只读列举已落盘会话。"""
 
@@ -790,6 +824,8 @@ def create_app(
         Route("/v1/sessions", api.list_sessions, methods=["GET"]),
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
+        Route("/v1/session/{session_id}", api.patch_session, methods=["PATCH"]),
+        Route("/v1/session/{session_id}", api.delete_session, methods=["DELETE"]),
         Route("/v1/provider", api.get_provider, methods=["GET"]),
         Route("/v1/provider", api.post_provider, methods=["POST"]),
         Route("/v1/workspace/file", api.get_workspace_file, methods=["GET"]),

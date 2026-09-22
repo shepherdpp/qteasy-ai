@@ -10,7 +10,8 @@
 
 """闭合 Job 的多轮会话状态。
 
-权威五字段：``session_id`` / ``task`` / ``messages`` / ``attachments`` / ``agent_auto``。
+权威字段：``session_id`` / ``task`` / ``messages`` / ``attachments`` / ``agent_auto``
+加可选用户标签 ``name``（不是 DTO 投影）。
 """
 
 from __future__ import annotations
@@ -28,7 +29,8 @@ SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"
 VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
 _SKIP_MESSAGE_KINDS = SKIP_MESSAGE_KINDS
 TASK_STATUSES = frozenset({"clarifying", "ready", "running", "done", "cancelled"})
-STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto"})
+STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto", "name"})
+_NAME_MAX = 80
 STALE_RUNNING_NOTICE = "Execution interrupted. Confirm again to retry, or start a new topic."
 _LIVE_RUNNING: set[str] = set()
 
@@ -291,6 +293,25 @@ def _migrate_task_from_flat(data: Dict[str, Any]) -> Optional[Task]:
     )
 
 
+def _user_texts(messages: List[Dict[str, Any]]) -> List[str]:
+    """抽出 ``user_text`` 正文，保持时间顺序。"""
+
+    out: List[str] = []
+    for row in messages or []:
+        if str(row.get("kind") or "") != "user_text":
+            continue
+        text = str(row.get("text") or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def clip_session_name(raw: Any) -> str:
+    """规范化用户标签：去空白，最长 80。空串表示回退默认。"""
+
+    return str(raw or "").strip()[:_NAME_MAX]
+
+
 @dataclass
 class ConversationState:
     """一次会话：日志 + 至多一个 Task。"""
@@ -300,6 +321,7 @@ class ConversationState:
     messages: List[Dict[str, Any]] = field(default_factory=list)
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     agent_auto: bool = False
+    name: str = ""
 
     @classmethod
     def empty(cls, session_id: str) -> "ConversationState":
@@ -308,7 +330,7 @@ class ConversationState:
         return cls(session_id=str(session_id or "").strip() or "default")
 
     def to_dict(self) -> Dict[str, Any]:
-        """只写五字段 + task。"""
+        """只写权威字段 + 可选 ``name``。"""
 
         return {
             "session_id": self.session_id,
@@ -316,6 +338,7 @@ class ConversationState:
             "messages": list(self.messages),
             "attachments": list(self.attachments),
             "agent_auto": bool(self.agent_auto),
+            "name": clip_session_name(self.name),
         }
 
     @classmethod
@@ -348,6 +371,7 @@ class ConversationState:
             messages=_coerce_messages(data.get("messages")),
             attachments=attachments,
             agent_auto=bool(data.get("agent_auto", False)),
+            name=clip_session_name(data.get("name")),
         )
 
     def task_status(self) -> str:
@@ -551,6 +575,53 @@ class SessionStore:
         safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(session_id or "default"))
         return self.sessions_dir / f"{safe}.json"
 
+    def exists(self, session_id: str) -> bool:
+        """落盘文件是否存在。"""
+
+        return self.path_for(session_id).is_file()
+
+    def delete(self, session_id: str) -> bool:
+        """删除 session JSON 与旁路 transcript；不碰 ``runs/``。"""
+
+        path = self.path_for(session_id)
+        if not path.is_file():
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            return False
+        transcript = path.with_name(f"{path.stem}.transcript.json")
+        if transcript.is_file():
+            try:
+                transcript.unlink()
+            except OSError:
+                pass
+        return True
+
+    def summarize_one(self, state: ConversationState) -> Dict[str, Any]:
+        """单条列表摘要（与 ``list_summaries`` 同行形状）。"""
+
+        texts = _user_texts(state.messages)
+        last_user = texts[-1][:_NAME_MAX] if texts else ""
+        custom = clip_session_name(state.name)
+        if custom:
+            name = custom
+        elif texts:
+            name = texts[0][:_NAME_MAX]
+        else:
+            name = str(state.session_id or "")
+        job = str(state.task.job or "") if state.task is not None else ""
+        path = self.path_for(state.session_id)
+        mtime = path.stat().st_mtime if path.is_file() else 0.0
+        return {
+            "session_id": str(state.session_id or ""),
+            "name": name,
+            "last_user": last_user,
+            "title": name,
+            "job": job,
+            "mtime": mtime,
+        }
+
     def load(self, session_id: str) -> ConversationState:
         """读取会话；缺文件或损坏则空状态。"""
 
@@ -599,7 +670,7 @@ class SessionStore:
         Returns
         -------
         list of dict
-            每项含 ``session_id`` / ``title`` / ``job`` / ``mtime``。
+            每项含 ``session_id`` / ``name`` / ``last_user`` / ``title`` / ``job`` / ``mtime``。
         """
 
         rows: List[Dict[str, Any]] = []
@@ -610,24 +681,5 @@ class SessionStore:
         ]
         paths.sort(key=lambda item: item.stat().st_mtime, reverse=True)
         for path in paths:
-            sid = path.stem
-            state = self.load(sid)
-            title = str(state.task.user_query or "").strip() if state.task is not None else ""
-            if not title:
-                for row in reversed(state.messages):
-                    if str(row.get("kind") or "") == "user_text":
-                        title = str(row.get("text") or "").strip()
-                        if title:
-                            break
-            if not title:
-                title = sid
-            job = str(state.task.job or "") if state.task is not None else ""
-            rows.append(
-                {
-                    "session_id": sid,
-                    "title": title[:80],
-                    "job": job,
-                    "mtime": path.stat().st_mtime,
-                }
-            )
+            rows.append(self.summarize_one(self.load(path.stem)))
         return rows

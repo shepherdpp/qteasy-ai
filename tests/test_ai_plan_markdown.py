@@ -14,7 +14,7 @@ import unittest
 from qteasy_ai.app import QteasyAssistant
 from qteasy_ai.contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.plan_markdown import tool_plan_to_markdown
+from qteasy_ai.plan_markdown import plan_artifact_title, tool_plan_to_markdown
 from qteasy_ai.provider import FakeLLMProvider
 
 
@@ -187,6 +187,26 @@ class TestAiPlanMarkdown(unittest.TestCase):
             self.assertEqual(before, after)
             self.assertFalse(str(payload.get("plan_md_file") or "").strip())
             self.assertFalse(str(payload.get("plan_md") or "").strip())
+
+    def test_plan_artifact_title_uses_first_skill_and_hex(self) -> None:
+        """显示名用人话第一步 + hex；不改 plan_id 格式。"""
+
+        print("\n[TestAiPlanMarkdown] plan artifact display title")
+        pid = new_plan_id()
+        print(" plan_id:", pid)
+        self.assertRegex(pid, r"^plan_[0-9a-f]{12}$")
+        titled = plan_artifact_title(
+            pid,
+            steps=[{"skill_name": "qt.ai.strategy_meta.list"}],
+        )
+        print(" titled:", titled)
+        self.assertNotEqual(titled, "plan.md")
+        self.assertIn("List", titled)
+        self.assertIn(pid.replace("plan_", "")[:8], titled)
+        empty = plan_artifact_title("plan_ab12cd34ef56", steps=[])
+        print(" empty steps:", empty)
+        self.assertTrue(empty.startswith("Plan ·"))
+        self.assertIn("ab12cd34", empty)
 
 
 if __name__ == "__main__":
