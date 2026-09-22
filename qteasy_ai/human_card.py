@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from .side_effects import step_needs_confirm as _step_needs_confirm
+
 HUMAN_CARD_KINDS = frozenset(
     {
         "user_text",
@@ -44,16 +46,7 @@ _LIST_NAME_CAP = 80
 _DOC_LINE_CAP = 80
 _DOC_CHAR_CAP = 4000
 _GENERIC_LIST_CAP = 40
-_HIGH_SIDE_EFFECT_SKILLS = frozenset(
-    {
-        "qt.ai.data.refill_basic_equity_and_index",
-        "qt.ai.backtest.run_builtin",
-        "qt.ai.optimize.run_builtin",
-        "qt.ai.strategy.codegen_hybrid",
-        "qt.ai.pipeline.live_trade_plan_only",
-        "qt.ai.visual.export_kline",
-    }
-)
+from .side_effects import HIGH_SIDE_EFFECT_SKILLS, step_needs_confirm as _step_needs_confirm
 _DEFAULT_NEXT_ACTION = (
     "Fix the issue above, then retry this step. You do not need to start over."
 )
@@ -196,9 +189,31 @@ def project_human_cards(
     plan = raw.get("plan") if isinstance(raw.get("plan"), dict) else {}
     if not asked:
         asked = str(plan.get("user_query") or "").strip()
+    assumptions_early = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
 
     if include_user_text and asked:
         cards.append(make_card("user_text", asked, {}))
+
+    if raw.get("block_running") or assumptions_early.get("block_running"):
+        cards.append(
+            make_card(
+                "mode_notice",
+                "A high side-effect plan is still running. Wait for it to finish, or press Cancel.",
+                {"requested_mode": requested, "effective_kind": "block_running"},
+            )
+        )
+        return cards
+
+    revision = raw.get("slot_revision")
+    if isinstance(revision, dict) and revision:
+        rev_n = int(raw.get("revision") or 0)
+        cards.append(
+            make_card(
+                "mode_notice",
+                f"Plan revised (revision {rev_n}).",
+                {"patches": dict(revision), "revision": rev_n},
+            )
+        )
 
     if raw.get("topic_skipped"):
         cards.append(
@@ -264,28 +279,7 @@ def project_human_cards(
         return cards
 
     if assumptions.get("design_loop"):
-        spec = dict(assumptions.get("spec_draft") or {})
-        hits = list(assumptions.get("kb_hits") or raw.get("kb_hits") or [])
-        cards.append(
-            make_card(
-                "design_card",
-                "Design loop: refine the spec before a closed trial.",
-                {
-                    "spec_draft": spec,
-                    "kb_hits": hits,
-                    "open_job": str(assumptions.get("open_job") or ""),
-                },
-            )
-        )
-        pending_write = assumptions.get("pending_kb_write")
-        if isinstance(pending_write, dict) and pending_write:
-            cards.append(
-                make_card(
-                    "kb_write",
-                    "Confirm writing this note into user_kb/raw.",
-                    dict(pending_write),
-                )
-            )
+        pass
 
     if assumptions.get("kb_write_path"):
         cards.append(
@@ -421,8 +415,6 @@ def format_human_cards(
         if not isinstance(item, dict):
             continue
         kind = normalize_card_kind(item.get("kind"))
-        if kind in {"user_text"}:
-            continue
         text = str(item.get("text") or "").rstrip()
         if text:
             lines.append(text)
@@ -584,21 +576,6 @@ def _plan_step_rows(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
         )
     return rows
-
-
-def _step_needs_confirm(skill_name: str, side_effects: Optional[Dict[str, Any]] = None) -> bool:
-    """高副作用须确认。"""
-
-    name = str(skill_name or "")
-    if name in _HIGH_SIDE_EFFECT_SKILLS:
-        return True
-    effects = side_effects if isinstance(side_effects, dict) else {}
-    return bool(
-        effects.get("network")
-        or effects.get("filesystem_write")
-        or effects.get("local_state_change")
-        or effects.get("heavy_compute")
-    )
 
 
 def _job_name(plan: Dict[str, Any]) -> str:

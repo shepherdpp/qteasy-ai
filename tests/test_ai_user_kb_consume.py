@@ -21,10 +21,10 @@ from qteasy_ai.memory_store import MemoryStore
 class TestAiUserKbConsume(unittest.TestCase):
     """compile 索引真消费；确认后写 raw；Ask 零用户库。"""
 
-    def test_compile_index_hits_design_loop(self) -> None:
-        """raw 一篇因子笔记 → compile 非空 → 设计环 kb_hits 含路径。"""
+    def test_compile_index_without_design_loop(self) -> None:
+        """raw 一篇因子笔记 → compile 非空；探索句不再挂设计环 kb_hits。"""
 
-        print("\n[TestAiUserKbConsume] compile hits design loop")
+        print("\n[TestAiUserKbConsume] compile without design loop")
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
             note = store.user_kb_dir / "raw" / "factors" / "momentum.md"
@@ -39,54 +39,49 @@ class TestAiUserKbConsume(unittest.TestCase):
                 response_style="raw",
                 session_id="g7-kb",
             )
-            hits = ((payload.get("plan") or {}).get("assumptions") or {}).get("kb_hits") or payload.get(
-                "kb_hits"
-            ) or []
-            paths = [item.get("path") for item in hits if isinstance(item, dict)]
+            assumptions = (payload.get("plan") or {}).get("assumptions") or {}
+            hits = assumptions.get("kb_hits") or payload.get("kb_hits") or []
             print(" kb_hits:", hits)
-            self.assertIn("raw/factors/momentum.md", paths)
+            print(" design_loop:", assumptions.get("design_loop"))
+            print(" dumped keys:", sorted(asst.session_store.load("g7-kb").to_dict().keys()))
+            self.assertFalse(hits)
+            self.assertFalse(assumptions.get("design_loop"))
+            self.assertNotIn("active_design", asst.session_store.load("g7-kb").to_dict())
 
     def test_unconfirmed_write_does_not_touch_disk(self) -> None:
-        """未确认不写盘；确认后文件在 raw/factors/ 且 catalog 刷新。"""
+        """无待确认草案：confirm_kb_write 失败且不写盘；显式 write_confirmed_note 才落 raw。"""
 
         print("\n[TestAiUserKbConsume] confirm write")
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
             asst = QteasyAssistant(memory_store=store, registry=build_default_registry())
             sid = "g7-write"
-            asst.plan(
-                "explore a useful momentum factor for hs300",
-                response_style="raw",
-                session_id=sid,
-            )
-            locked = asst.plan("lock this spec", response_style="raw", session_id=sid)
-            from qteasy_ai.workbench.human import format_human_from_payload
-
-            lock_human = format_human_from_payload(
-                locked,
-                query="lock this spec",
-                session=asst.session_store.load(sid),
-            )
-            print(" lock human:", lock_human)
-            self.assertIn("raw/factors/momentum.md", lock_human)
-            self.assertIn("Confirm writing", lock_human)
             target = store.user_kb_dir / "raw" / "factors" / "momentum.md"
-            print(" exists before confirm:", target.exists())
+            print(" exists before:", target.exists())
             self.assertFalse(target.exists())
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as denied:
                 asst.confirm_kb_write(sid, confirm=False, response_style="raw")
+            print(" deny:", denied.exception)
+            self.assertIn("confirmation", str(denied.exception).lower())
             print(" exists after reject:", target.exists())
             self.assertFalse(target.exists())
-            wrote = asst.confirm_kb_write(sid, confirm=True, response_style="raw")
-            write_human = format_human_from_payload(
-                wrote,
-                query="confirm kb write",
-                session=asst.session_store.load(sid),
+            with self.assertRaises(ValueError) as pending:
+                asst.confirm_kb_write(sid, confirm=True, response_style="raw")
+            print(" pending:", pending.exception)
+            self.assertIn("No pending", str(pending.exception))
+            self.assertFalse(target.exists())
+            from qteasy_ai.open_workflow import write_confirmed_note
+
+            wrote = write_confirmed_note(
+                store,
+                {
+                    "relpath": "raw/factors/momentum.md",
+                    "body": "# momentum\n\nA user note about momentum on hs300.\n",
+                },
             )
-            print(" write human:", write_human)
-            print(" exists after confirm:", target.exists())
+            print(" wrote path:", wrote)
+            print(" exists after write:", target.exists())
             print(" text head:", target.read_text(encoding="utf-8")[:80] if target.exists() else "")
-            self.assertIn("Wrote user-KB note", write_human)
             self.assertTrue(target.is_file())
             catalog = json.loads((store.user_kb_dir / "compiled" / "catalog.json").read_text(encoding="utf-8"))
             paths = [item.get("path") for item in catalog.get("entries") or []]

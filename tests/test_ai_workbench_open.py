@@ -5,7 +5,7 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-10
 # Desc:
-# Unittest for G.7 workbench DTO / HTTP open loop
+# Unittest：G.7 工作台无设计环操作面
 # ======================================
 
 import tempfile
@@ -18,7 +18,7 @@ from qteasy_ai.workbench.mapper import map_assistant_payload
 
 
 class TestAiWorkbenchOpen(unittest.TestCase):
-    """设计环消息、Ask 无确认卡、试错 run-plan、回退路由、KB write 确认。"""
+    """无 active_design、无设计环活卡。"""
 
     def _client(self, temp_dir: str):
         """同一 MemoryStore 的 TestClient。"""
@@ -29,12 +29,12 @@ class TestAiWorkbenchOpen(unittest.TestCase):
         assistant = QteasyAssistant(memory_store=store, registry=build_default_registry())
         return TestClient(create_app(assistant=assistant)), store, assistant
 
-    def test_design_message_is_not_ask_text(self) -> None:
-        """设计环消息 kind ≠ ask_text。"""
+    def test_explore_has_no_design_card(self) -> None:
+        """探索句不再投影 design_card。"""
 
-        print("\n[TestAiWorkbenchOpen] design_card kind")
+        print("\n[TestAiWorkbenchOpen] no design_card")
         with tempfile.TemporaryDirectory() as temp_dir:
-            client, _store, _asst = self._client(temp_dir)
+            client, _store, asst = self._client(temp_dir)
             res = client.post(
                 "/v1/plan",
                 json={
@@ -44,15 +44,15 @@ class TestAiWorkbenchOpen(unittest.TestCase):
             )
             body = res.json()
             kinds = [item.get("kind") for item in (body.get("messages") or [])]
+            state = asst.session_store.load("g7-web")
             print(" status:", res.status_code)
             print(" kinds:", kinds)
-            print(" plan_card:", body.get("plan_card"))
             print(" sidebar design:", (body.get("sidebar") or {}).get("design"))
+            print(" dumped:", sorted(state.to_dict().keys()))
             self.assertEqual(res.status_code, 200)
-            self.assertIn("design_card", kinds)
-            self.assertNotEqual(kinds, ["user_text", "ask_text"])
-            card = body.get("plan_card")
-            self.assertTrue(card is None or not card.get("confirmable") or not card.get("steps"))
+            self.assertNotIn("design_card", kinds)
+            self.assertIsNone((body.get("sidebar") or {}).get("design"))
+            self.assertNotIn("active_design", state.to_dict())
 
     def test_ask_has_no_confirmable_plan_card(self) -> None:
         """Ask 路径仍不得 plan_card.confirmable。"""
@@ -68,67 +68,26 @@ class TestAiWorkbenchOpen(unittest.TestCase):
             card = body.get("plan_card")
             self.assertTrue(card is None or card.get("confirmable") is False)
 
-    def test_trial_card_can_run_plan(self) -> None:
-        """试错卡可 run-plan。"""
+    def test_abandon_routes_do_not_create_design(self) -> None:
+        """回退路由不再写设计态。"""
 
-        print("\n[TestAiWorkbenchOpen] trial run-plan")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            client, store, _asst = self._client(temp_dir)
-            client.post(
-                "/v1/plan",
-                json={
-                    "query": "explore a useful momentum factor for hs300",
-                    "session_id": "g7-run",
-                },
-            )
-            trial = client.post(
-                "/v1/plan",
-                json={"query": "try IC on this factor", "session_id": "g7-run"},
-            ).json()
-            plan_id = (trial.get("plan_card") or {}).get("plan_id")
-            print(" trial plan_id:", plan_id)
-            print(" confirmable:", (trial.get("plan_card") or {}).get("confirmable"))
-            self.assertTrue(plan_id)
-            self.assertTrue((trial.get("plan_card") or {}).get("confirmable"))
-            executed = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": "g7-run"})
-            body = executed.json()
-            skills = [item.get("skill_name") for item in ((body.get("execution") or {}).get("steps") or [])]
-            print(" execute status:", (body.get("execution") or {}).get("status"))
-            print(" execute skills:", skills)
-            self.assertEqual(executed.status_code, 200)
-            self.assertIn("qt.ai.research.factor_ic_summary", skills)
-            self.assertTrue(store.find_run_by_plan_id(plan_id))
-
-    def test_abandon_routes_change_session(self) -> None:
-        """回退路由改 session。"""
-
-        print("\n[TestAiWorkbenchOpen] abandon routes")
+        print("\n[TestAiWorkbenchOpen] abandon routes retired")
         with tempfile.TemporaryDirectory() as temp_dir:
             client, _store, asst = self._client(temp_dir)
             sid = "g7-http-ab"
             client.post(
                 "/v1/plan",
-                json={"query": "explore a useful momentum factor for hs300", "session_id": sid},
+                json={"query": "list built-in strategies", "session_id": sid},
             )
-            client.post("/v1/plan", json={"query": "try IC on this factor", "session_id": sid})
             trial = client.post("/v1/open/abandon-trial", json={"session_id": sid})
             state = asst.session_store.load(sid)
-            sidebar = (trial.json().get("sidebar") or {})
-            print(" after trial:", trial.status_code, state.current_trial_plan_id, bool(state.active_design))
-            print(" sidebar design:", sidebar.get("design"))
-            print(" parked:", (state.active_design or {}).get("status"))
-            self.assertEqual(trial.status_code, 200)
-            self.assertEqual(state.current_trial_plan_id, "")
-            self.assertIsNotNone(state.active_design)
-            self.assertEqual((state.active_design or {}).get("status"), "parked")
-            self.assertIsNone(sidebar.get("design"))
-            self.assertFalse(state.task_incomplete())
+            print(" after trial:", trial.status_code)
+            self.assertEqual(trial.status_code, 404)
             opened = client.post("/v1/open/abandon-job", json={"session_id": sid})
-            state = asst.session_store.load(sid)
-            print(" after open:", opened.status_code, state.active_design, state.session_id)
-            self.assertEqual(opened.status_code, 200)
-            self.assertIsNone(state.active_design)
+            print(" after open:", opened.status_code, state.session_id)
+            self.assertEqual(opened.status_code, 404)
             self.assertEqual(state.session_id, sid)
+            self.assertNotIn("active_design", state.to_dict())
 
     def test_kb_write_without_confirm_is_4xx(self) -> None:
         """KB write 无确认 4xx。"""
@@ -137,21 +96,12 @@ class TestAiWorkbenchOpen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             client, store, _asst = self._client(temp_dir)
             sid = "g7-kb-http"
-            client.post(
-                "/v1/plan",
-                json={"query": "explore a useful momentum factor for hs300", "session_id": sid},
-            )
-            client.post("/v1/plan", json={"query": "lock this spec", "session_id": sid})
             denied = client.post("/v1/kb/write", json={"session_id": sid})
             print(" denied:", denied.status_code, denied.json())
             self.assertEqual(denied.status_code, 400)
             target = store.user_kb_dir / "raw" / "factors" / "momentum.md"
             print(" exists after deny:", target.exists())
             self.assertFalse(target.exists())
-            ok = client.post("/v1/kb/write", json={"session_id": sid, "confirm": True})
-            print(" ok:", ok.status_code, target.exists())
-            self.assertEqual(ok.status_code, 200)
-            self.assertTrue(target.is_file())
 
     def test_mapper_ask_payload_has_no_design_card(self) -> None:
         """Ask mapper 不把设计卡混进问答。"""

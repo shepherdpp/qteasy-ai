@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from ..human_card import normalize_card_kind, project_human_cards
 from ..plan_markdown import skill_step_title
 from ..session import ConversationState
+from ..side_effects import step_needs_confirm
 from .dto import (
     WorkbenchArtifact,
     WorkbenchMessage,
@@ -33,45 +34,6 @@ _PREVIEW_ROW_CAP = 50
 _DEFAULT_NEXT_ACTION = (
     "Fix the issue above, then retry this step. You do not need to start over."
 )
-
-_HIGH_SIDE_EFFECT_SKILLS = frozenset(
-    {
-        "qt.ai.data.refill_basic_equity_and_index",
-        "qt.ai.backtest.run_builtin",
-        "qt.ai.optimize.run_builtin",
-        "qt.ai.strategy.codegen_hybrid",
-        "qt.ai.pipeline.live_trade_plan_only",
-        "qt.ai.visual.export_kline",
-    }
-)
-
-
-def step_needs_confirm(skill_name: str, side_effects: Optional[Dict[str, Any]] = None) -> bool:
-    """高副作用 skill 或任一侧效应开关为真时须确认。
-
-    Parameters
-    ----------
-    skill_name : str
-        注册名。
-    side_effects : dict, optional
-        ToolPlan 步的 side_effects。
-
-    Returns
-    -------
-    bool
-        是否须用户确认后才能 execute。
-    """
-
-    name = str(skill_name or "")
-    if name in _HIGH_SIDE_EFFECT_SKILLS:
-        return True
-    effects = side_effects if isinstance(side_effects, dict) else {}
-    return bool(
-        effects.get("network")
-        or effects.get("filesystem_write")
-        or effects.get("local_state_change")
-        or effects.get("heavy_compute")
-    )
 
 
 def _slice_preview_rows(payload: Any) -> List[Any]:
@@ -454,11 +416,8 @@ def _sidebar_from_session(
             env_summary=dict(env_facts or {}),
             current_plan_id=str(session_blob.get("current_plan_id") or ""),
             clarify_round=int(session_blob.get("clarify_round") or 0),
-            design=dict(session_blob["active_design"])
-            if ConversationState.is_live_design(session_blob.get("active_design"))
-            else None,
-            trial_queue=list(session_blob.get("trial_queue") or []),
         )
+    task = session.task
     slots = [
         WorkbenchSidebarSlot(
             name=name,
@@ -466,17 +425,18 @@ def _sidebar_from_session(
             source=slot.source,
             confirmed=slot.confirmed,
         )
-        for name, slot in (session.slots or {}).items()
+        for name, slot in ((task.slots if task is not None else {}) or {}).items()
     ]
+    intent = None
+    if task is not None and task.job:
+        intent = {"job": str(task.job), "flags": dict(task.flags or {})}
     return WorkbenchSidebar(
-        active_intent=dict(session.active_intent) if session.active_intent else None,
+        active_intent=intent,
         slots=slots,
-        missing=list(session.missing),
+        missing=list(task.missing) if task is not None else [],
         env_summary=dict(env_facts or {}),
-        current_plan_id=str(session.current_plan_id or ""),
-        clarify_round=int(session.clarify_round),
-        design=dict(session.live_design()) if session.live_design() else None,
-        trial_queue=list(session.trial_queue or []),
+        current_plan_id=str(task.plan_id or "") if task is not None else "",
+        clarify_round=int(task.clarify_round) if task is not None else 0,
     )
 
 

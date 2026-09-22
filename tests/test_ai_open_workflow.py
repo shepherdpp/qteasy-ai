@@ -36,26 +36,18 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertEqual(self.catalog.job_workflow("strategy.builder"), "closed")
         self.assertEqual(self.catalog.job_workflow("open"), "closed")
 
-    def test_gold_explore_enters_design_not_ic(self) -> None:
-        """Mode-R 金句进设计态：intent_job=factor_explore，无 IC/codegen skill。"""
+    def test_gold_explore_does_not_enter_empty_design_loop(self) -> None:
+        """Mode-R 金句不再把 steps 掏空成设计环。"""
 
-        print("\n[TestAiOpenWorkflow] explore gold design")
+        print("\n[TestAiOpenWorkflow] explore gold not empty design")
         query = "explore a useful momentum factor for hs300"
         plan = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
         names = [step.skill_name for step in plan.steps]
         print(" intent:", plan.planner_trace.get("intent_job"))
         print(" skills:", names)
         print(" design_loop:", (plan.assumptions or {}).get("design_loop"))
-        print(" spec:", (plan.assumptions or {}).get("spec_draft"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.factor_explore")
-        self.assertTrue((plan.assumptions or {}).get("design_loop"))
-        self.assertNotIn("qt.ai.research.factor_ic_summary", names)
-        self.assertNotIn("qt.ai.strategy.codegen_hybrid", names)
-        spec = (plan.assumptions or {}).get("spec_draft") or {}
-        print(" spec name/universe:", spec.get("name"), spec.get("universe"))
-        self.assertEqual(spec.get("name"), "momentum")
-        self.assertEqual(spec.get("universe"), "000300.SH")
-        self.assertEqual(spec.get("suggested_job"), "research.factor_ic")
+        self.assertFalse(bool((plan.assumptions or {}).get("design_loop")))
 
     def test_named_ic_gold_stays_closed(self) -> None:
         """点名 IC 金句仍闭合菜谱。"""
@@ -98,10 +90,10 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertEqual(names, ["qt.ai.strategy_meta.list"])
         self.assertFalse((plan.assumptions or {}).get("design_loop"))
 
-    def test_design_followup_patches_hypothesis_no_ic(self) -> None:
-        """设计跟进改 hypothesis，不走出 IC skill。"""
+    def test_followup_does_not_persist_design(self) -> None:
+        """Composer 跟进是新 Task，不写 active_design。"""
 
-        print("\n[TestAiOpenWorkflow] follow-up hypothesis stays in design")
+        print("\n[TestAiOpenWorkflow] follow-up no design persist")
         import tempfile
 
         from qteasy_ai.app import QteasyAssistant
@@ -113,27 +105,25 @@ class TestAiOpenWorkflow(unittest.TestCase):
                 registry=self.registry,
             )
             sid = "g7-hyp"
-            first = asst.plan(
+            asst.plan(
                 "explore a useful momentum factor for hs300",
                 response_style="raw",
                 session_id=sid,
             )
-            print(" first job:", (first.get("plan") or {}).get("planner_trace"))
             second = asst.plan(
                 "hypothesis: short-term reversal on hs300",
                 response_style="raw",
                 session_id=sid,
             )
-            steps = (second.get("plan") or {}).get("steps") or []
-            names = [item.get("skill_name") for item in steps]
-            spec = ((second.get("plan") or {}).get("assumptions") or {}).get("spec_draft") or {}
-            print(" skills:", names)
-            print(" hypothesis:", spec.get("hypothesis"))
-            self.assertNotIn("qt.ai.research.factor_ic_summary", names)
-            self.assertIn("short-term reversal", str(spec.get("hypothesis") or ""))
             state = asst.session_store.load(sid)
-            print(" active_design job:", (state.active_design or {}).get("job"))
-            self.assertEqual((state.active_design or {}).get("job"), "research.factor_explore")
+            users = [row.get("text") for row in state.messages if row.get("kind") == "user_text"]
+            print(" users:", users)
+            print(" job:", state.task.job if state.task else None)
+            print(" dumped:", sorted(state.to_dict().keys()))
+            print(" second skills:", [item.get("skill_name") for item in ((second.get("plan") or {}).get("steps") or [])])
+            self.assertIn("hypothesis: short-term reversal on hs300", users)
+            self.assertFalse(hasattr(state, "active_design"))
+            self.assertNotIn("active_design", state.to_dict())
 
 
 if __name__ == "__main__":

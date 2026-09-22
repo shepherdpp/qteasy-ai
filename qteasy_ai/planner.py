@@ -31,12 +31,8 @@ from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .intent_engine import IntentEngine, IntentDecision
 from .intents.recipes import compose_recipe
 from .open_workflow import (
-    build_design_assumptions,
-    draft_factor_spec,
-    draft_strategy_spec,
     is_design_loop,
     maybe_mark_builder_open_loop,
-    trial_query_from_spec,
 )
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
@@ -166,7 +162,7 @@ class Planner:
         session : ConversationState, optional
             多轮状态；补槽时 ``skip_classify=True``。
         skip_classify : bool, default False
-            为 True 时用 session.active_intent 重出同一 Job 的 R。
+            为 True 时用 session.task.job 重出同一 Job 的 R。
         profile : dict, optional
             用户 profile，用于选填默认值。
 
@@ -226,13 +222,12 @@ class Planner:
         query = user_query.strip()
         q_lower = query.lower()
         self.intent_engine.provider = self.provider
-        skip = bool(skip_classify and session is not None and getattr(session, "active_intent", None))
-        open_action = str(getattr(session, "open_action", "") or "") if session is not None else ""
+        task = getattr(session, "task", None) if session is not None else None
+        skip = bool(skip_classify and task is not None and str(getattr(task, "job", "") or ""))
         if skip:
-            intent = session.active_intent or {}
             decision = IntentDecision(
-                job=str(intent.get("job") or "clarify"),
-                flags=dict(intent.get("flags") or {}),
+                job=str(task.job or "clarify"),
+                flags=dict(task.flags or {}),
                 source="session",
                 rationale="session_followup",
             )
@@ -248,35 +243,9 @@ class Planner:
             steps = compose_recipe(self, decision, query)
         mark_query = query if skip else user_query.strip()
         decision = maybe_mark_builder_open_loop(decision, mark_query)
-        catalog = self.intent_engine.catalog
-        live_design = session.live_design() if session is not None else None
-        design = is_design_loop(catalog, decision) or (live_design is not None and skip)
-        if design and open_action != "propose_trial" and decision.job != "open":
-            steps = []
-            downgrade_reason = ""
-        elif design and open_action == "propose_trial":
-            spec = {}
-            if live_design is not None:
-                spec = dict(live_design.get("spec_draft") or {})
-            if decision.job.startswith("strategy."):
-                spec = spec or draft_strategy_spec(user_query, session)
-            else:
-                spec = spec or draft_factor_spec(user_query, session)
-            trial_job = str(spec.get("suggested_job") or "research.factor_ic")
-            trial_decision = IntentDecision(
-                job=trial_job,
-                flags={},
-                source="session",
-                rationale="open_trial",
-            )
-            trial_q = trial_query_from_spec(spec)
-            steps = compose_recipe(self, trial_decision, trial_q)
-            factor_name = str(spec.get("name") or "").strip()
-            if factor_name and factor_name not in {"unnamed_factor"}:
-                for step in steps:
-                    if step.skill_name == "qt.ai.research.factor_ic_summary":
-                        step.inputs["factor_htype"] = factor_name
-        elif decision.job == "open" and not skip:
+        if is_design_loop(self.intent_engine.catalog, decision):
+            pass
+        if decision.job == "open" and not skip:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:
                 downgrade_reason = open_reason
@@ -302,27 +271,6 @@ class Planner:
             "intent_source": decision.source,
             "intent_rationale": decision.rationale,
         }
-        if design and decision.job != "open":
-            if decision.job.startswith("strategy.") and bool((decision.flags or {}).get("open_loop")):
-                spec = draft_strategy_spec(user_query, session)
-            elif catalog.job_workflow(decision.job) == "open" or live_design is not None:
-                spec = draft_factor_spec(user_query, session)
-                if live_design is not None:
-                    spec = dict(live_design.get("spec_draft") or spec)
-            else:
-                spec = draft_factor_spec(user_query, session)
-            kb_hits = []
-            extra = {}
-            if open_action == "propose_trial":
-                extra["trial_job"] = str(spec.get("suggested_job") or "research.factor_ic")
-            assumptions.update(
-                build_design_assumptions(
-                    decision=decision,
-                    spec=spec,
-                    kb_hits=kb_hits,
-                    extra=extra,
-                )
-            )
         assumptions.update(gate_extras)
         for step in steps:
             if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):
@@ -375,8 +323,9 @@ class Planner:
     def _session_query_text(user_query: str, session: Any) -> str:
         """把已确认槽拼进查询，供抽槽复用。"""
 
-        parts = [str(getattr(session, "original_query", "") or ""), str(user_query or "")]
-        slots = getattr(session, "slots", {}) or {}
+        task = getattr(session, "task", None)
+        parts = [str(getattr(task, "user_query", "") or "") if task is not None else "", str(user_query or "")]
+        slots = getattr(task, "slots", {}) or {} if task is not None else {}
         for key, slot in slots.items():
             value = getattr(slot, "value", None)
             if value not in (None, ""):
@@ -388,7 +337,8 @@ class Planner:
 
         if session is None:
             return steps
-        slots = getattr(session, "slots", {}) or {}
+        task = getattr(session, "task", None)
+        slots = getattr(task, "slots", {}) or {} if task is not None else {}
 
         def _val(name: str) -> Any:
             slot = slots.get(name)
@@ -444,7 +394,7 @@ class Planner:
                 if _val("strategy_id"):
                     step.inputs["strategy_id"] = _val("strategy_id")
         if self._is_clarify_fallback(steps):
-            job = str(((getattr(session, "active_intent", None) or {}).get("job") or ""))
+            job = str(getattr(getattr(session, "task", None), "job", "") or "")
             if job == "data.refill" and _val("start") and _val("end"):
                 rebuilt = self._infer_refill_steps(
                     query=self._session_query_text("", session),
@@ -489,7 +439,8 @@ class Planner:
             "data.export": ("shares", "start", "end", "freq"),
         }.get(job, ())
         notes: Dict[str, str] = {}
-        slots = getattr(session, "slots", {}) if session is not None else {}
+        task = getattr(session, "task", None) if session is not None else None
+        slots = getattr(task, "slots", {}) or {} if task is not None else {}
         for key in optional:
             if key in slots and getattr(slots[key], "value", None) not in (None, ""):
                 continue
@@ -534,7 +485,8 @@ class Planner:
             "backtest.builtin": ("strategy_id",),
             "optimize.builtin": ("strategy_id",),
         }.get(job, ())
-        slots = getattr(session, "slots", {}) if session is not None else {}
+        task = getattr(session, "task", None) if session is not None else None
+        slots = getattr(task, "slots", {}) or {} if task is not None else {}
         missing: List[str] = []
         for key in required:
             slot = slots.get(key)

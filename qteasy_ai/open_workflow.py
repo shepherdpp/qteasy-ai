@@ -33,38 +33,6 @@ DESIGN_FORBIDDEN_SKILLS = frozenset(
     }
 )
 
-_TRIAL_HINTS = (
-    "try ic",
-    "run ic",
-    "factor ic",
-    "试错",
-    "跑一次 ic",
-    "跑一下 ic",
-    "试试这个",
-    "propose trial",
-    "try this factor",
-)
-_ABANDON_TRIAL_HINTS = (
-    "abandon trial",
-    "放弃这次试错",
-    "放弃当前试错",
-    "drop the trial",
-)
-_ABANDON_OPEN_HINTS = (
-    "abandon open",
-    "放弃整个开放",
-    "放弃这个探索",
-    "abandon this research",
-    "drop the open job",
-)
-_LOCK_HINTS = (
-    "就按这个来",
-    "lock this spec",
-    "save this note",
-    "写入笔记",
-    "write to user kb",
-    "confirm kb write",
-)
 _BUILDER_TEMPLATE_HINTS = (
     "金叉",
     "死叉",
@@ -122,31 +90,10 @@ def maybe_mark_builder_open_loop(decision: IntentDecision, query: str) -> Intent
     return decision
 
 
-def classify_open_utterance(text: str) -> str:
-    """开放态跟进：试错 / 两种回退 / 锁规格 / 补草稿。"""
-
-    raw = str(text or "").strip()
-    lower = raw.lower()
-    compact = raw.replace(" ", "").lower()
-    if any(hint in lower or hint in raw for hint in _ABANDON_TRIAL_HINTS):
-        return "abandon_trial"
-    if any(hint in lower or hint in raw for hint in _ABANDON_OPEN_HINTS):
-        return "abandon_open"
-    if compact in {"abandontest", "abandontrial"}:
-        return "abandon_trial"
-    if any(hint in lower or hint in raw for hint in _LOCK_HINTS):
-        return "lock_spec"
-    if any(hint in lower or hint in raw for hint in _TRIAL_HINTS):
-        return "propose_trial"
-    return "fill_slot"
-
-
 def draft_factor_spec(query: str, session: Any = None) -> Dict[str, Any]:
     """从问句抽出最小 FactorSpec 草稿。"""
 
-    existing = {}
-    if session is not None and isinstance(getattr(session, "active_design", None), dict):
-        existing = dict((session.active_design or {}).get("spec_draft") or {})
+    existing: Dict[str, Any] = {}
     text = str(query or "")
     lower = text.lower()
     name = str(existing.get("name") or "")
@@ -170,9 +117,7 @@ def draft_factor_spec(query: str, session: Any = None) -> Dict[str, Any]:
 def draft_strategy_spec(query: str, session: Any = None) -> Dict[str, Any]:
     """无模板策略的最小 StrategySpec 草稿。"""
 
-    existing = {}
-    if session is not None and isinstance(getattr(session, "active_design", None), dict):
-        existing = dict((session.active_design or {}).get("spec_draft") or {})
+    existing: Dict[str, Any] = {}
     text = str(query or "")
     hypothesis = str(existing.get("hypothesis") or "").strip() or f"Strategy idea (rules TBD): {text[:180]}"
     return {

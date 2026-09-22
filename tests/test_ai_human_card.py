@@ -358,7 +358,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertNotIn("qt.ai.backtest.run_builtin", skills)
 
     def test_change_slot_keeps_plan_id_and_overwrites_md(self) -> None:
-        """改槽保留 plan_id，覆盖同一 dry-run md，不追加 user_text。"""
+        """控件 patches 保留 plan_id 并追加修订 notice；Composer 改槽句是新 Task 且必有 user_text。"""
 
         print("\n[TestAiHumanCardPlanArtifact] change slot keeps plan_id")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -378,37 +378,28 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertTrue(first_id)
             self.assertTrue(first_run)
 
-            second = asst.plan("把慢线改成 50", response_style="raw", session_id=sid)
+            second = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
             second_id = str((second.get("plan") or {}).get("plan_id") or "")
             second_run = str(second.get("run_id") or "")
             session = asst.session_store.load(sid)
-            print(" second:", second_id, second_run, "slow:", (session.slots.get("slow").value if "slow" in session.slots else None))
+            notices = [row for row in session.messages if row.get("kind") == "mode_notice"]
+            print(" second:", second_id, second_run, "slow:", (session.task.slots.get("slow").value if session.task and "slow" in session.task.slots else None))
+            print(" notices:", [row.get("text") for row in notices])
             self.assertEqual(second_id, first_id)
             self.assertEqual(second_run, first_run)
-            self.assertEqual(int(session.slots["slow"].value), 50)
+            self.assertEqual(int(session.task.slots["slow"].value), 50)
+            self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
+            self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
-            third = asst.plan("start 20150101", response_style="raw", session_id=sid)
-            third_id = str((third.get("plan") or {}).get("plan_id") or "")
-            third_run = str(third.get("run_id") or "")
+            spoken = asst.plan("把慢线改成 50", response_style="raw", session_id=sid)
+            spoken_id = str((spoken.get("plan") or {}).get("plan_id") or "")
             session = asst.session_store.load(sid)
             users = [row for row in session.messages if row.get("kind") == "user_text"]
-            readies = [row for row in session.messages if row.get("kind") == "plan_ready"]
-            md_text = (store.runs_dir / f"{first_run}.plan.md").read_text(encoding="utf-8")
-            run_blob = store.load_run(first_run)
-            print(" third:", third_id, third_run)
+            print(" spoken:", spoken_id)
             print(" users:", [row.get("text") for row in users])
-            print(" plan_ready count:", len(readies))
-            print(" md has 50:", "50" in md_text)
-            print(" start slot:", (session.slots["start"].value if "start" in session.slots else None))
-            self.assertEqual(third_id, first_id)
-            self.assertEqual(third_run, first_run)
-            self.assertEqual(len(users), len(users_before))
-            self.assertEqual(len(readies), 1)
-            self.assertTrue((store.runs_dir / f"{first_run}.plan.md").is_file())
-            self.assertFalse((store.runs_dir / f"{second_run}.plan.md").is_file() and second_run != first_run)
-            self.assertIn("50", md_text)
-            self.assertEqual(str(session.slots["start"].value), "20150101")
-            self.assertEqual(str((run_blob.get("plan") or {}).get("plan_id") or ""), first_id)
+            self.assertNotEqual(spoken_id, first_id)
+            self.assertIn("把慢线改成 50", [row.get("text") for row in users])
+            self.assertGreater(len(users), len(users_before))
 
 
 class TestAiHumanCardClarify(unittest.TestCase):
@@ -427,25 +418,26 @@ class TestAiHumanCardClarify(unittest.TestCase):
             session = asst.session_store.load("s-refill")
             kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
             print(" kinds:", kinds)
-            print(" pending:", session.pending_clarification)
-            print(" missing:", session.missing)
+            print(" pending:", session.task.pending_clarification if session.task else None)
+            print(" missing:", session.task.missing if session.task else None)
             print(" exec:", (payload.get("execution") or {}).get("status"))
             self.assertIn("clarify", kinds)
-            self.assertIsInstance(session.pending_clarification, dict)
-            self.assertTrue(session.missing or session.pending_clarification.get("pending"))
+            self.assertIsInstance(session.task.pending_clarification, dict)
+            self.assertTrue(session.task.missing or session.task.pending_clarification.get("pending"))
             self.assertEqual((payload.get("execution") or {}).get("status"), "dry_run")
             follow = asst.plan("start 20240101 end 20241231", response_style="raw", session_id="s-refill")
             again = asst.session_store.load("s-refill")
-            print(" follow job:", (again.active_intent or {}).get("job"))
-            print(" follow missing:", again.missing)
+            print(" follow job:", again.task.job if again.task else None)
+            print(" follow missing:", again.task.missing if again.task else None)
             print(" follow kinds:", [item["kind"] for item in (follow.get("human_cards") or [])])
-            self.assertEqual((again.active_intent or {}).get("job"), "data.refill")
+            self.assertEqual(again.task.job, "data.refill")
             users = [m for m in again.messages if m.get("kind") == "user_text"]
             clar = [m for m in again.messages if m.get("kind") == "clarify"]
             print(" user_text count:", len(users), [m.get("text") for m in users])
             print(" clarify payloads:", [m.get("payload") for m in clar])
-            self.assertEqual(len(users), 1)
+            self.assertEqual(len(users), 2)
             self.assertEqual(users[0]["text"], "帮我下载日线")
+            self.assertEqual(users[1]["text"], "start 20240101 end 20241231")
             self.assertTrue(clar)
             self.assertEqual((clar[0].get("payload") or {}).get("answer"), "start 20240101 end 20241231")
             self.assertEqual((clar[0].get("payload") or {}).get("status"), "answered")
@@ -492,12 +484,11 @@ class TestAiHumanCardClarify(unittest.TestCase):
             cards = payload.get("human_cards") or []
             clarify = next((item for item in cards if item["kind"] == "clarify"), None)
             notice = next((item for item in cards if item["kind"] == "mode_notice"), None)
-            print(" awaiting:", session.awaiting_abandon)
-            print(" complete:", session.task_complete)
+            print(" status:", session.task.status if session.task else None)
             print(" kinds:", [item["kind"] for item in cards])
             print(" notice:", None if notice is None else notice.get("text"))
             print(" clarify:", None if clarify is None else clarify.get("text"))
-            self.assertFalse(session.awaiting_abandon)
+            self.assertFalse(hasattr(session, "awaiting_abandon"))
             self.assertIsNone(clarify)
             self.assertIsNotNone(notice)
             self.assertIn("Previous topic skipped.", str((notice or {}).get("text") or ""))
@@ -603,14 +594,13 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             session = asst.session_store.load("test01")
             plan_id = str((payload.get("plan") or {}).get("plan_id") or "")
             print(" plan_id:", plan_id)
-            print(" complete:", session.task_complete, "incomplete:", session.task_incomplete())
-            print(" awaiting:", session.awaiting_abandon)
-            print(" current:", session.current_plan_id)
+            print(" complete:", session.task.status if session.task else None, "incomplete:", session.task_incomplete(), "status:", session.task_status())
+            print(" current:", session.task.plan_id if session.task else None)
             self.assertTrue(plan_id.startswith("plan_"))
-            self.assertTrue(session.task_complete)
+            self.assertEqual(session.task_status(), "ready")
+            self.assertNotEqual(session.task.status, "done")
             self.assertFalse(session.task_incomplete())
-            self.assertFalse(session.awaiting_abandon)
-            self.assertEqual(session.current_plan_id, plan_id)
+            self.assertEqual(session.task.plan_id, plan_id)
 
     def test_plan_execute_utterance_runs_same_plan_id(self) -> None:
         """同 session「请执行上面的计划」走 run_plan 原 id，不新 plan_id。"""
@@ -695,13 +685,13 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             kinds = [item["kind"] for item in (first.get("human_cards") or [])]
             status = str((first.get("execution") or {}).get("status") or "")
             print(" first status:", status, "kinds:", kinds)
-            print(" pending:", session.pending_clarification)
-            print(" complete:", session.task_complete, "missing:", session.missing)
+            print(" pending:", session.task.pending_clarification if session.task else None)
+            print(" complete:", session.task.status if session.task else None, "missing:", session.task.missing if session.task else None)
             self.assertIn("clarify", kinds)
             self.assertNotEqual(status, "partial_failed")
-            self.assertIsInstance(session.pending_clarification, dict)
-            self.assertFalse(session.task_complete)
-            prompt = str((session.pending_clarification or {}).get("confirm_prompt") or "")
+            self.assertIsInstance(session.task.pending_clarification, dict)
+            self.assertNotEqual(session.task.status, "done")
+            prompt = str((session.task.pending_clarification or {}).get("confirm_prompt") or "")
             print(" prompt:", prompt)
             self.assertIn("strategy", prompt.lower())
             filled = asst.run("macd", response_style="raw", session_id="s-clar")
@@ -710,7 +700,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             fill_names = [str(item.get("skill_name") or "") for item in fill_steps]
             fill_status = str((filled.get("execution") or {}).get("status") or "")
             print(" fill status:", fill_status, "skills:", fill_names)
-            print(" fill complete:", filled_session.task_complete)
+            print(" fill complete:", filled_session.task.status if filled_session.task else None)
             self.assertIn("qt.ai.strategy_meta.get", fill_names)
             self.assertEqual(fill_status, "success")
 
@@ -724,10 +714,10 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             skip_kinds = [item["kind"] for item in (skipped.get("human_cards") or [])]
             print(" skip kinds:", skip_kinds)
             print(" skip error:", skipped.get("error"))
-            print(" skip complete:", skip_session.task_complete)
+            print(" skip complete:", skip_session.task.status if skip_session.task else None)
             self.assertIn("error", skip_kinds)
             self.assertIn("Clarification skipped", str((skipped.get("error") or {}).get("message") or ""))
-            self.assertTrue(skip_session.task_complete)
+            self.assertEqual(skip_session.task.status, "done")
             self.assertFalse(skip_session.task_incomplete())
 
     def test_slim_cards_omit_id_dump_and_toolplan(self) -> None:

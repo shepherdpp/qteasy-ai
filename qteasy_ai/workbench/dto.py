@@ -120,8 +120,6 @@ class WorkbenchSidebar:
     env_summary: Dict[str, Any] = field(default_factory=dict)
     current_plan_id: str = ""
     clarify_round: int = 0
-    design: Optional[Dict[str, Any]] = None
-    trial_queue: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """序列化。"""
@@ -133,8 +131,6 @@ class WorkbenchSidebar:
             "env_summary": dict(self.env_summary),
             "current_plan_id": self.current_plan_id,
             "clarify_round": int(self.clarify_round),
-            "design": dict(self.design) if self.design else None,
-            "trial_queue": list(self.trial_queue),
         }
 
 

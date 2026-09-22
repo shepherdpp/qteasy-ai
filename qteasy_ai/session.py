@@ -5,17 +5,18 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# 多轮 ConversationState 与 sessions/ 落盘。
+# 多轮 ConversationState：messages[] + 单 Task 落盘。
 # ======================================
 
 """闭合 Job 的多轮会话状态。
 
-加载忽略未知键。开放环字段仅在设计态写出。
+权威五字段：``session_id`` / ``task`` / ``messages`` / ``attachments`` / ``agent_auto``。
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -26,27 +27,14 @@ from .memory_store import MemoryStore, _json_safe
 SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"})
 VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
 _SKIP_MESSAGE_KINDS = SKIP_MESSAGE_KINDS
-_STATE_KEYS = frozenset(
-    {
-        "session_id",
-        "active_intent",
-        "slots",
-        "missing",
-        "pending_clarification",
-        "current_plan_id",
-        "clarify_round",
-        "turns",
-        "messages",
-        "attachments",
-        "agent_auto",
-        "awaiting_abandon",
-        "original_query",
-        "task_complete",
-        "active_design",
-        "current_trial_plan_id",
-        "trial_queue",
-    }
-)
+TASK_STATUSES = frozenset({"clarifying", "ready", "running", "done", "cancelled"})
+STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto"})
+
+
+def _new_task_id() -> str:
+    """生成短 task id。"""
+
+    return "task_" + uuid.uuid4().hex[:12]
 
 
 def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
@@ -118,28 +106,178 @@ class Slot:
 
 
 @dataclass
-class ConversationState:
-    """一次会话的最小结构化状态。"""
+class Task:
+    """当前闭合办事（1.0 同时最多一个）。"""
 
-    session_id: str
-    active_intent: Optional[Dict[str, Any]] = None
+    id: str = ""
+    user_query: str = ""
+    job: str = ""
+    flags: Dict[str, Any] = field(default_factory=dict)
+    status: str = ""
     slots: Dict[str, Slot] = field(default_factory=dict)
     missing: List[str] = field(default_factory=list)
     pending_clarification: Optional[Dict[str, Any]] = None
-    current_plan_id: str = ""
     clarify_round: int = 0
-    turns: List[Dict[str, Any]] = field(default_factory=list)
+    plan_id: str = ""
+    revision: int = 0
+    run_id: str = ""
+    high_side_effect: bool = False
+
+    def apply_slots(self, slots: Dict[str, Slot]) -> None:
+        """覆盖全部槽。"""
+
+        self.slots = dict(slots or {})
+
+    def set_missing(self, names: List[str]) -> None:
+        """写入 missing 并按副作用改 status。"""
+
+        self.missing = [str(item) for item in (names or [])]
+        if self.missing:
+            if self.status not in {"running", "done", "cancelled"}:
+                self.status = "clarifying"
+        elif self.status == "clarifying" and not self.pending_clarification:
+            if self.plan_id or self.job:
+                self.status = "ready"
+
+    def set_pending(self, value: Optional[Dict[str, Any]]) -> None:
+        """写入待答澄清。"""
+
+        self.pending_clarification = dict(value) if isinstance(value, dict) else None
+        if self.pending_clarification or self.missing:
+            if self.status not in {"running", "done", "cancelled"}:
+                self.status = "clarifying"
+
+    def cancel(self) -> None:
+        """标为 cancelled 并清澄清。"""
+
+        if self.status not in {"done", "cancelled"}:
+            self.status = "cancelled"
+        self.pending_clarification = None
+        self.missing = []
+
+    def mark_ready(self) -> None:
+        """未终态则标 ready。"""
+
+        if self.status not in {"running", "done", "cancelled"}:
+            self.status = "ready"
+
+    def mark_running(self) -> None:
+        """标 running。"""
+
+        self.status = "running"
+
+    def mark_done(self) -> None:
+        """未取消则标 done。"""
+
+        if self.status != "cancelled":
+            self.status = "done"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化 Task。"""
+
+        status = str(self.status or "")
+        if status not in TASK_STATUSES:
+            status = ""
+        return {
+            "id": str(self.id or ""),
+            "user_query": str(self.user_query or ""),
+            "job": str(self.job or ""),
+            "flags": dict(self.flags or {}),
+            "status": status,
+            "slots": {key: slot.to_dict() for key, slot in self.slots.items()},
+            "missing": list(self.missing),
+            "pending_clarification": dict(self.pending_clarification)
+            if isinstance(self.pending_clarification, dict)
+            else None,
+            "clarify_round": int(self.clarify_round or 0),
+            "plan_id": str(self.plan_id or ""),
+            "revision": int(self.revision or 0),
+            "run_id": str(self.run_id or ""),
+            "high_side_effect": bool(self.high_side_effect),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> Optional["Task"]:
+        """从字典恢复；非法则 None。"""
+
+        if not isinstance(raw, dict) or not raw:
+            return None
+        slots_raw = raw.get("slots") if isinstance(raw.get("slots"), dict) else {}
+        slots = {str(key): Slot.from_dict(value) for key, value in slots_raw.items()}
+        pending = raw.get("pending_clarification")
+        if not isinstance(pending, dict):
+            pending = None
+        status = str(raw.get("status") or "")
+        if status not in TASK_STATUSES:
+            status = ""
+        flags = raw.get("flags") if isinstance(raw.get("flags"), dict) else {}
+        return cls(
+            id=str(raw.get("id") or "") or _new_task_id(),
+            user_query=str(raw.get("user_query") or ""),
+            job=str(raw.get("job") or ""),
+            flags=dict(flags),
+            status=status,
+            slots=slots,
+            missing=[str(item) for item in (raw.get("missing") or [])],
+            pending_clarification=pending,
+            clarify_round=int(raw.get("clarify_round") or 0),
+            plan_id=str(raw.get("plan_id") or ""),
+            revision=int(raw.get("revision") or 0),
+            run_id=str(raw.get("run_id") or ""),
+            high_side_effect=bool(raw.get("high_side_effect", False)),
+        )
+
+
+def _migrate_task_from_flat(data: Dict[str, Any]) -> Optional[Task]:
+    """把旧扁平字段收成一个 Task。"""
+
+    intent = data.get("active_intent") if isinstance(data.get("active_intent"), dict) else None
+    job = str((intent or {}).get("job") or "")
+    flags = dict((intent or {}).get("flags") or {}) if intent else {}
+    slots_raw = data.get("slots") if isinstance(data.get("slots"), dict) else {}
+    slots = {str(key): Slot.from_dict(value) for key, value in slots_raw.items()}
+    pending = data.get("pending_clarification")
+    if not isinstance(pending, dict):
+        pending = None
+    missing = [str(item) for item in (data.get("missing") or [])]
+    plan_id = str(data.get("current_plan_id") or "")
+    query = str(data.get("original_query") or "")
+    complete = bool(data.get("task_complete", False))
+    if not job and not plan_id and not pending and not slots and not query:
+        return None
+    if pending or missing:
+        status = "clarifying"
+    elif complete:
+        status = "done"
+    elif plan_id:
+        status = "ready"
+    elif job:
+        status = "ready"
+    else:
+        status = ""
+    return Task(
+        id=_new_task_id(),
+        user_query=query,
+        job=job,
+        flags=flags,
+        status=status,
+        slots=slots,
+        missing=missing,
+        pending_clarification=pending,
+        clarify_round=int(data.get("clarify_round") or 0),
+        plan_id=plan_id,
+    )
+
+
+@dataclass
+class ConversationState:
+    """一次会话：日志 + 至多一个 Task。"""
+
+    session_id: str
+    task: Optional[Task] = None
     messages: List[Dict[str, Any]] = field(default_factory=list)
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     agent_auto: bool = False
-    awaiting_abandon: bool = False
-    original_query: str = ""
-    task_complete: bool = False
-    active_design: Optional[Dict[str, Any]] = None
-    current_trial_plan_id: str = ""
-    trial_queue: List[Dict[str, Any]] = field(default_factory=list)
-    open_action: str = ""
-    receipt_kind: str = ""
 
     @classmethod
     def empty(cls, session_id: str) -> "ConversationState":
@@ -148,40 +286,22 @@ class ConversationState:
         return cls(session_id=str(session_id or "").strip() or "default")
 
     def to_dict(self) -> Dict[str, Any]:
-        """闭合态不写开放环键；设计态写出 active_design / 队列。"""
+        """只写五字段 + task。"""
 
-        payload = {
+        return {
             "session_id": self.session_id,
-            "active_intent": dict(self.active_intent) if self.active_intent else None,
-            "slots": {key: slot.to_dict() for key, slot in self.slots.items()},
-            "missing": list(self.missing),
-            "pending_clarification": dict(self.pending_clarification)
-            if isinstance(self.pending_clarification, dict)
-            else None,
-            "current_plan_id": self.current_plan_id,
-            "clarify_round": int(self.clarify_round),
-            "turns": list(self.turns),
+            "task": self.task.to_dict() if self.task is not None else None,
             "messages": list(self.messages),
             "attachments": list(self.attachments),
             "agent_auto": bool(self.agent_auto),
-            "awaiting_abandon": bool(self.awaiting_abandon),
-            "original_query": self.original_query,
-            "task_complete": bool(self.task_complete),
         }
-        if self.active_design:
-            payload["active_design"] = dict(self.active_design)
-            payload["current_trial_plan_id"] = str(self.current_trial_plan_id or "")
-            payload["trial_queue"] = list(self.trial_queue or [])
-        return payload
 
     @classmethod
     def from_dict(cls, raw: Any, *, session_id: str = "") -> "ConversationState":
-        """从 JSON 恢复；忽略未知键。"""
+        """从 JSON 恢复；忽略未知键；扁平旧字段降级为 task。"""
 
         data = raw if isinstance(raw, dict) else {}
         sid = str(data.get("session_id") or session_id or "").strip() or "default"
-        slots_raw = data.get("slots") if isinstance(data.get("slots"), dict) else {}
-        slots = {str(key): Slot.from_dict(value) for key, value in slots_raw.items()}
         attachments: List[Dict[str, Any]] = []
         for item in data.get("attachments") or []:
             if not isinstance(item, dict):
@@ -193,76 +313,66 @@ class ConversationState:
             if item.get("summary"):
                 att["summary"] = str(item.get("summary"))
             attachments.append(att)
-        intent = data.get("active_intent")
-        if not isinstance(intent, dict):
-            intent = None
-        pending = data.get("pending_clarification")
-        if not isinstance(pending, dict):
-            pending = None
-        design = data.get("active_design")
-        if not isinstance(design, dict):
-            design = None
-        queue_raw = data.get("trial_queue")
-        queue: List[Dict[str, Any]] = []
-        if isinstance(queue_raw, list):
-            for item in queue_raw:
-                if isinstance(item, dict):
-                    queue.append(dict(item))
+        task = Task.from_dict(data.get("task"))
+        if task is None:
+            task = _migrate_task_from_flat(data)
+        elif task.clarify_round == 0:
+            top = int(data.get("clarify_round") or 0)
+            if top:
+                task.clarify_round = top
         return cls(
             session_id=sid,
-            active_intent=intent,
-            slots=slots,
-            missing=[str(item) for item in (data.get("missing") or [])],
-            pending_clarification=pending,
-            current_plan_id=str(data.get("current_plan_id") or ""),
-            clarify_round=int(data.get("clarify_round") or 0),
-            turns=list(data.get("turns") or []) if isinstance(data.get("turns"), list) else [],
+            task=task,
             messages=_coerce_messages(data.get("messages")),
             attachments=attachments,
             agent_auto=bool(data.get("agent_auto", False)),
-            awaiting_abandon=bool(data.get("awaiting_abandon", False)),
-            original_query=str(data.get("original_query") or ""),
-            task_complete=bool(data.get("task_complete", False)),
-            active_design=design,
-            current_trial_plan_id=str(data.get("current_trial_plan_id") or ""),
-            trial_queue=queue,
         )
 
-    @staticmethod
-    def is_live_design(design: Optional[Dict[str, Any]]) -> bool:
-        """未停靠的设计环才算活设计。缺 status 视为 live。"""
+    def task_status(self) -> str:
+        """当前 Task 状态；无 Task 为空串。"""
 
-        if not isinstance(design, dict) or not design:
-            return False
-        return str(design.get("status") or "").strip().lower() != "parked"
-
-    def live_design(self) -> Optional[Dict[str, Any]]:
-        """返回活设计草稿；parked 则 None。"""
-
-        if self.is_live_design(self.active_design):
-            return dict(self.active_design or {})
-        return None
+        if self.task is None:
+            return ""
+        return str(self.task.status or "")
 
     def task_incomplete(self) -> bool:
-        """当前闭合任务或开放设计尚未完成。
+        """仅 clarifying 为未完成（PlanReady 不是 incomplete）。"""
 
-        仅澄清暂停（``pending_clarification`` / ``missing``）或开放
-        未停靠的 ``active_design`` 为未完成。已有 ``current_plan_id`` 的
-        PlanReady **不是** incomplete。parked 设计不算未完成。
-        """
-
-        if self.live_design():
-            return True
-        if self.task_complete:
-            return False
-        if self.pending_clarification or self.missing:
-            return True
-        return False
+        return self.task_status() == "clarifying"
 
     def set_slot(self, name: str, value: Any, *, source: str, confirmed: bool) -> None:
-        """写入或覆盖一个槽。"""
+        """写入或覆盖一个槽；无 Task 则忽略。"""
 
-        self.slots[str(name)] = Slot(value=value, source=source, confirmed=confirmed)
+        if self.task is None:
+            return
+        self.task.slots[str(name)] = Slot(value=value, source=source, confirmed=confirmed)
+
+    def start_task(self, *, query: str, job: str = "", flags: Optional[Dict[str, Any]] = None) -> Task:
+        """开一个新 Task。"""
+
+        self.task = Task(
+            id=_new_task_id(),
+            user_query=str(query or ""),
+            job=str(job or ""),
+            flags=dict(flags or {}),
+            status="ready",
+        )
+        return self.task
+
+    def cancel_task(self) -> None:
+        """将当前 Task 标为 cancelled。"""
+
+        if self.task is None:
+            return
+        self.task.cancel()
+
+    def append_user_text(self, query: str) -> None:
+        """Composer 原文写入 messages（控件路径不要调用）。"""
+
+        text = str(query or "").strip()
+        if not text:
+            return
+        self.append_messages([{"kind": "user_text", "text": text, "payload": {}}])
 
     @staticmethod
     def _message_dedupe_key(row: Dict[str, Any]) -> tuple:
@@ -354,7 +464,7 @@ class ConversationState:
         return False
 
     def rewind_from_user_index(self, message_index: int, *, discard: bool = False) -> Dict[str, Any]:
-        """裁掉指定用户句之后的对话与 turns；不替换该句文本。
+        """裁掉指定用户句之后的对话；不替换该句文本。
 
         Parameters
         ----------
@@ -383,18 +493,8 @@ class ConversationState:
                 executed.append(rid)
         if executed and not discard:
             return {"ok": False, "needs_confirm": True, "executed_run_ids": executed}
-        user_before = sum(1 for row in self.messages[:idx] if row.get("kind") == "user_text")
         self.messages = list(self.messages[:idx])
-        self.turns = list(self.turns[:user_before])
-        self.current_plan_id = ""
-        self.pending_clarification = None
-        self.missing = []
-        self.task_complete = False
-        self.awaiting_abandon = False
-        self.active_design = None
-        self.current_trial_plan_id = ""
-        self.trial_queue = []
-        self.open_action = ""
+        self.task = None
         return {"ok": True, "needs_confirm": False, "executed_run_ids": executed}
 
 
@@ -448,7 +548,7 @@ class SessionStore:
         return str(path)
 
     def list_summaries(self) -> List[Dict[str, Any]]:
-        """列举已落盘会话的摘要（不含完整 turns）。
+        """列举已落盘会话的摘要。
 
         Parameters
         ----------
@@ -470,15 +570,16 @@ class SessionStore:
         for path in paths:
             sid = path.stem
             state = self.load(sid)
-            title = str(state.original_query or "").strip()
-            if not title and state.turns:
-                last = state.turns[-1] if isinstance(state.turns[-1], dict) else {}
-                title = str(last.get("query") or "").strip()
+            title = str(state.task.user_query or "").strip() if state.task is not None else ""
+            if not title:
+                for row in reversed(state.messages):
+                    if str(row.get("kind") or "") == "user_text":
+                        title = str(row.get("text") or "").strip()
+                        if title:
+                            break
             if not title:
                 title = sid
-            job = ""
-            if isinstance(state.active_intent, dict):
-                job = str(state.active_intent.get("job") or "")
+            job = str(state.task.job or "") if state.task is not None else ""
             rows.append(
                 {
                     "session_id": sid,

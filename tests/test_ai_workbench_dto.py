@@ -96,11 +96,11 @@ class TestAiWorkbenchDto(unittest.TestCase):
 
         print("\n[TestAiWorkbenchDto] sidebar slots")
         session = ConversationState.empty("s-slots")
-        session.active_intent = {"job": "data.refill", "flags": {}}
+        session.start_task(query="download", job="data.refill")
         session.set_slot("start", "20240101", source="user", confirmed=True)
         session.set_slot("shares", "000300.SH", source="default", confirmed=False)
-        session.missing = ["end"]
-        session.current_plan_id = "plan_demo"
+        session.task.set_missing(["end"])
+        session.task.plan_id = "plan_demo"
         payload = {
             "mode": "plan",
             "plan": {"plan_id": "plan_demo", "steps": [], "mode": "plan"},

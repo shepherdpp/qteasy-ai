@@ -89,13 +89,7 @@ class WorkbenchTui(App):
         bar = state.sidebar
         job = (bar.active_intent or {}).get("job") if bar and bar.active_intent else "-"
         missing = ", ".join(bar.missing) if bar else ""
-        extra = ""
-        if bar and bar.design:
-            extra += f"\nDesign: {(bar.design or {}).get('job') or 'open'}"
-        queue = list(bar.trial_queue or []) if bar else []
-        if queue:
-            extra += f"\nQueue: {len(queue)}"
-        self.query_one("#sidebar", Static).update(f"Job: {job}\nMissing: {missing}{extra}")
+        self.query_one("#sidebar", Static).update(f"Job: {job}\nMissing: {missing}")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """回车发送。"""

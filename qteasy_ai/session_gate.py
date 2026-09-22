@@ -5,61 +5,21 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# 跟进句分类：补槽 / 改槽 / 新意图 / 执行计划 / 只讨论 / 跳过澄清。
+# 跟进句分类：填槽 / 新 Task / 执行 / 只讨论 / 跳过澄清。
 # ======================================
 
-"""会话门叠在 H′ 之上。补槽/改槽不调用 classify。"""
+"""会话门叠在 H′ 之上。填槽不调用 classify；Composer 换题开新 Task。"""
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .planner import Planner
 from .provider import BaseLLMProvider
 from .session import ConversationState
 
-_AFFIRM = (
-    "对",
-    "好的",
-    "确认",
-    "理解正确",
-    "yes",
-    "ok",
-    "okay",
-    "confirm",
-    "correct",
-)
-_ABANDON_AFFIRM = ("放弃", "是的放弃", "abandon", "yes abandon", "丢弃")
-_CHANGE_HINTS = ("改用", "改成", "换成", "改为", "change to", "use instead")
-_JOB_VERBS = (
-    ("optimize.builtin", ("优化", "optimize", "参数优化")),
-    ("backtest.builtin", ("回测", "backtest")),
-    ("data.refill", ("下载", "download", "refill", "灌数据")),
-    ("research.screen", ("筛股", "筛选", "screen")),
-    ("research.factor_explore", ("因子探索", "explore a useful momentum", "找有用因子")),
-    ("strategy.meta", ("list built-in", "list strategies", "内置交易策略", "内置策略", "列出所有内置")),
-    ("strategy.builder", ("生成策略", "写策略", "创建策略", "strategybuilder", "帮我写", "写一个", "设计一个策略")),
-    ("data.summary", ("波动率", "摘要", "summary")),
-)
-
-_FOLLOWUP_KINDS = frozenset(
-    {
-        "fill_slot",
-        "change_slot",
-        "new_intent",
-        "confirm",
-        "clarify",
-        "propose_trial",
-        "abandon_trial",
-        "lock_spec",
-        "execute_plan",
-        "discuss_only",
-        "skip_clarify",
-    }
-)
 _PLAN_ID_RE = re.compile(r"plan_[0-9a-f]+", flags=re.IGNORECASE)
 _DISCUSS_ONLY = (
     "本次只讨论",
@@ -83,6 +43,7 @@ _EXECUTE_PLAN_HINTS = (
     "run the plan",
     "execute plan",
 )
+_STRATEGY_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,31}$")
 
 
 @dataclass
@@ -91,8 +52,6 @@ class GateDecision:
 
     kind: str
     patches: Dict[str, Any] = field(default_factory=dict)
-    needs_abandon: bool = False
-    abandon_confirmed: bool = False
     source: str = "rule"
     rationale: str = ""
 
@@ -104,7 +63,7 @@ class SessionGate:
         self.provider = provider
 
     def classify(self, session: ConversationState, query: str) -> GateDecision:
-        """对跟进句分类。
+        """对 Composer 跟进句分类。
 
         Parameters
         ----------
@@ -116,160 +75,60 @@ class SessionGate:
         Returns
         -------
         GateDecision
-            kind / patches / 放弃标志。
+            kind / patches。
         """
 
         text = (query or "").strip()
         hatch = _hatch_decision(session, text)
         if hatch is not None:
             return hatch
-        # 开放环放弃确认仍优先于 LLM（G.7）。闭合 Job 不再进入 awaiting_abandon。
-        if session.awaiting_abandon:
-            return self._classify_rule(session, text)
-        if session.live_design():
-            from .open_workflow import classify_open_utterance
-
-            action = classify_open_utterance(text)
-            if action == "abandon_trial":
-                return GateDecision(kind="abandon_trial", rationale="abandon_trial")
-            if action == "abandon_open":
-                return GateDecision(
-                    kind="new_intent",
-                    abandon_confirmed=True,
-                    rationale="abandon_open",
-                )
-            if action == "propose_trial":
-                return GateDecision(kind="propose_trial", rationale="propose_trial")
-            if action == "lock_spec":
-                return GateDecision(kind="lock_spec", rationale="lock_spec")
-        else:
-            from .open_workflow import classify_open_utterance
-
-            idle_action = classify_open_utterance(text)
-            if idle_action in {"lock_spec", "propose_trial", "abandon_trial", "abandon_open"}:
-                return GateDecision(kind="open_idle", rationale=idle_action)
-        hinted_job = self._hinted_job(text, text.lower())
-        active_job = str((session.active_intent or {}).get("job") or "")
-        if hinted_job and hinted_job != active_job:
-            return GateDecision(
-                kind="new_intent",
-                needs_abandon=bool(session.live_design()),
-                rationale="new_intent_job_verb",
-            )
-        if session.task_complete and session.active_intent:
-            if self._is_affirm(text, text.lower()):
-                return GateDecision(kind="confirm", rationale="affirm_after_plan")
+        if answers_pending_slot(session, text):
             patches = extract_patches(text)
-            if patches:
-                return GateDecision(kind="change_slot", patches=patches, rationale="change_after_complete")
-            return GateDecision(kind="new_intent", rationale="new_after_complete")
-        if self.provider is not None and session.active_intent:
-            return self._classify_llm(session, text)
-        return self._classify_rule(session, text)
+            missing = list(session.task.missing) if session.task is not None else []
+            if "strategy_id" in missing and _STRATEGY_TOKEN_RE.match(text) and "strategy_id" not in patches:
+                patches["strategy_id"] = text
+            return GateDecision(kind="fill_slot", patches=patches, rationale="answers_slot")
+        status = session.task_status()
+        if status == "running" and bool(getattr(session.task, "high_side_effect", False)):
+            return GateDecision(kind="block_running", rationale="high_side_effect_running")
+        return GateDecision(kind="new_intent", rationale="composer_new_task")
 
-    def _classify_rule(self, session: ConversationState, text: str) -> GateDecision:
-        """Mode-R 规则路径。"""
 
-        if not session.active_intent:
-            return GateDecision(kind="new_intent", rationale="first_turn")
+def answers_pending_slot(session: ConversationState, text: str) -> bool:
+    """clarifying 且本句是在回答当前问槽。"""
 
-        lower = text.lower()
-        if session.awaiting_abandon:
-            if self._is_abandon_affirm(text, lower):
-                return GateDecision(
-                    kind="new_intent",
-                    abandon_confirmed=True,
-                    rationale="abandon_confirmed",
-                )
-            return GateDecision(kind="clarify", rationale="abandon_not_confirmed")
-
-        if self._is_affirm(text, lower) and session.pending_clarification:
-            return GateDecision(kind="confirm", rationale="affirm_pending")
-
-        hinted_job = self._hinted_job(text, lower)
-        active_job = str((session.active_intent or {}).get("job") or "")
-        if hinted_job and hinted_job != active_job:
-            return GateDecision(
-                kind="new_intent",
-                needs_abandon=bool(session.live_design()),
-                rationale="new_intent_job_verb",
-            )
-
-        patches = extract_patches(text)
-        if patches:
-            overwriting = any(
-                str(name) in session.slots and session.slots[str(name)].value not in (None, "")
-                for name in patches
-            )
-            kind = "change_slot" if (overwriting or self._is_change(text, lower)) else "fill_slot"
-            return GateDecision(kind=kind, patches=patches, rationale=kind)
-        if self._is_affirm(text, lower):
-            return GateDecision(kind="confirm", rationale="affirm")
-        if not (session.pending_clarification or session.missing):
-            return GateDecision(kind="new_intent", rationale="followup_no_pending")
-        return GateDecision(kind="fill_slot", patches={}, rationale="followup_no_patch")
-
-    def _classify_llm(self, session: ConversationState, text: str) -> GateDecision:
-        """Mode-D：只接受 followup JSON。"""
-
-        prompt = (
-            "Classify a follow-up. Reply JSON only: "
-            '{"followup":"fill_slot|change_slot|new_intent|confirm|execute_plan|discuss_only","patches":{}} . '
-            f"Active job: {(session.active_intent or {}).get('job')}. "
-            f"Slots: { {k: v.to_dict() for k, v in session.slots.items()} }. "
-            f"Missing: {session.missing}. Utterance: {text}"
-        )
-        raw = self.provider.chat(prompt, system_prompt="Session follow-up classifier. JSON only.")
-        parsed = _parse_followup_json(raw)
-        if parsed is None:
-            return GateDecision(kind="clarify", source="llm", rationale="invalid_followup_json")
-        kind = str(parsed.get("followup") or "")
-        if kind not in _FOLLOWUP_KINDS:
-            return GateDecision(kind="clarify", source="llm", rationale="unknown_followup_kind")
-        if "steps" in parsed:
-            return GateDecision(kind="clarify", source="llm", rationale="steps_not_allowed")
-        patches = parsed.get("patches") if isinstance(parsed.get("patches"), dict) else {}
-        if kind == "fill_slot" and not (session.pending_clarification or session.missing):
-            return GateDecision(kind="new_intent", source="llm", rationale="fill_without_pending")
-        needs_abandon = bool(kind == "new_intent" and session.live_design())
-        return GateDecision(
-            kind=kind,
-            patches=dict(patches),
-            needs_abandon=needs_abandon,
-            source="llm",
-            rationale="llm_followup",
-        )
-
-    @staticmethod
-    def _is_affirm(text: str, lower: str) -> bool:
-        """是否整句肯定确认（避免「对，改用…」被误判）。"""
-
-        compact = re.sub(r"[\s,，。.!！]", "", text).lower()
-        needles = {re.sub(r"[\s,，。.!！]", "", token).lower() for token in _AFFIRM}
-        needles.update({"对理解正确", "理解正确"})
-        return compact in needles or compact in {"yes", "ok", "okay", "y", "confirm", "correct"}
-
-    @staticmethod
-    def _is_abandon_affirm(text: str, lower: str) -> bool:
-        """是否确认放弃当前任务。"""
-
-        compact = text.replace(" ", "").lower()
-        return any(token in compact or token in lower for token in _ABANDON_AFFIRM)
-
-    @staticmethod
-    def _is_change(text: str, lower: str) -> bool:
-        """是否改槽措辞。"""
-
-        return any(hint in text or hint in lower for hint in _CHANGE_HINTS)
-
-    @staticmethod
-    def _hinted_job(text: str, lower: str) -> str:
-        """从办事动词猜测另一 Job。"""
-
-        for job, verbs in _JOB_VERBS:
-            if any(verb in text or verb in lower for verb in verbs):
-                return job
-        return ""
+    if session.task_status() != "clarifying":
+        return False
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    task = session.task
+    pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
+    missing = [str(item) for item in ((task.missing if task is not None else []) or [])]
+    options = pending.get("options") if isinstance(pending.get("options"), list) else []
+    compact = raw.lower()
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        oid = str(opt.get("id") or "").strip()
+        label = str(opt.get("label") or "").strip()
+        if oid and compact == oid.lower():
+            return True
+        if label and compact == label.lower():
+            return True
+    if _STRATEGY_TOKEN_RE.match(raw) and ("strategy_id" in missing or not missing):
+        if "strategy_id" in missing:
+            return True
+        pending_names = []
+        for item in pending.get("pending") or []:
+            if isinstance(item, dict) and item.get("name"):
+                pending_names.append(str(item.get("name")))
+        if "strategy_id" in pending_names:
+            return True
+    patches = extract_patches(raw)
+    if patches and missing and set(str(k) for k in patches.keys()).issubset(set(missing)):
+        return True
+    return False
 
 
 def extract_plan_id(text: str) -> str:
@@ -308,11 +167,12 @@ def is_skip_clarify(text: str) -> bool:
 
 
 def _hatch_decision(session: ConversationState, text: str) -> Optional[GateDecision]:
-    """模式缺口与 skip：优先于 LLM / 完成态一律 new_intent。"""
+    """模式缺口与 skip。"""
 
     if is_discuss_only(text):
         return GateDecision(kind="discuss_only", rationale="discuss_only")
-    if is_skip_clarify(text) and (session.pending_clarification or session.missing):
+    task = session.task
+    if is_skip_clarify(text) and task is not None and (task.pending_clarification or task.missing):
         return GateDecision(kind="skip_clarify", rationale="skip_clarify")
     if is_execute_plan_utterance(text):
         patches: Dict[str, Any] = {}
@@ -381,28 +241,9 @@ def merge_facts(
 ) -> None:
     """把补丁写入结构化槽。"""
 
+    if session.task is None:
+        return
     for key, value in (patches or {}).items():
         session.set_slot(str(key), value, source=source, confirmed=confirmed)
-        if key in session.missing:
-            session.missing = [item for item in session.missing if item != key]
-
-
-def _parse_followup_json(raw: str) -> Optional[Dict[str, Any]]:
-    """解析 Mode-D followup JSON。"""
-
-    text = (raw or "").strip()
-    if not text:
-        return None
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.S)
-        if not match:
-            return None
-        try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    if not isinstance(data, dict):
-        return None
-    return data
+        if key in session.task.missing:
+            session.task.set_missing([item for item in session.task.missing if item != key])

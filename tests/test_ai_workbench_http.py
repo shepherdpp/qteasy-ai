@@ -158,7 +158,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             ).json()
             second = client.post(
                 "/v1/plan",
-                json={"query": "把慢线改成 50", "session_id": "s-web"},
+                json={"session_id": "s-web", "patches": {"slow": 50}},
             ).json()
             sess = client.get("/v1/session/s-web").json()
             job1 = (first.get("sidebar") or {}).get("active_intent") or {}
@@ -168,8 +168,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(job1.get("job"), "strategy.builder")
             self.assertEqual(job2.get("job"), "strategy.builder")
             loaded = asst.session_store.load("s-web")
-            print(" loaded job:", loaded.active_intent)
-            self.assertEqual((loaded.active_intent or {}).get("job"), "strategy.builder")
+            print(" loaded job:", loaded.task.job if loaded.task else None)
+            self.assertEqual(loaded.task.job, "strategy.builder")
 
     def test_sse_has_step_or_fallback_list(self) -> None:
         """execute 后 SSE 至少一条 step_status，或同步 steps 非空。"""
@@ -243,9 +243,9 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" plan status:", planned.status_code)
             print(" plan_id:", plan_id)
             loaded = asst.session_store.load("s-restore")
-            print(" current_plan_id:", loaded.current_plan_id)
+            print(" current_plan_id:", loaded.task.plan_id if loaded.task else None)
             self.assertTrue(plan_id)
-            self.assertEqual(loaded.current_plan_id, plan_id)
+            self.assertEqual(loaded.task.plan_id, plan_id)
             sess = client.get("/v1/session/s-restore")
             restored = sess.json()
             card = restored.get("plan_card") or {}
@@ -255,12 +255,12 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" execution:", restored.get("execution"))
             print(" turns:", restored.get("turns"))
             self.assertEqual(sess.status_code, 200)
+            self.assertNotIn("turns", restored)
             self.assertEqual(card.get("plan_id"), plan_id)
             self.assertTrue(card.get("steps"))
             self.assertEqual(card["steps"][0].get("skill_name"), "qt.ai.strategy_meta.list")
             self.assertEqual((restored.get("execution") or {}).get("status"), "dry_run")
             self.assertTrue(card.get("confirmable"))
-            self.assertTrue(restored.get("turns"))
             kinds = [m.get("kind") for m in (restored.get("transcript") or [])]
             texts = [m.get("text") for m in (restored.get("transcript") or [])]
             print(" transcript kinds:", kinds)
@@ -348,9 +348,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             kinds = [str(m.get("kind") or "") for m in (body.get("transcript") or [])]
             self.assertIn("result", kinds)
             again = asst.session_store.load(sid)
-            print(" task_complete:", again.task_complete, "awaiting_abandon:", again.awaiting_abandon)
-            self.assertTrue(again.task_complete)
-            self.assertFalse(again.awaiting_abandon)
+            print(" task status:", again.task.status if again.task else None)
+            self.assertEqual(again.task.status, "done")
             ws = client.get("/v1/workspace", params={"session_id": sid}).json()
             print(" workspace arts:", ws.get("artifacts"))
             self.assertTrue(ws.get("artifacts"))
@@ -371,8 +370,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" list exec:", ran.status_code, (ran.json().get("execution") or {}).get("status"))
             self.assertEqual((ran.json().get("execution") or {}).get("status"), "success")
             done = asst.session_store.load(sid)
-            print(" after list:", done.active_intent, "complete:", done.task_complete)
-            self.assertTrue(done.task_complete)
+            print(" after list:", done.task.job if done.task else None, "complete:", done.task.status if done.task else None)
+            self.assertEqual(done.task.status, "done")
             nxt = client.post(
                 "/v1/plan",
                 json={
@@ -383,15 +382,12 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             body = nxt.json()
             loaded = asst.session_store.load(sid)
             print(" next status:", nxt.status_code)
-            print(" next job:", (loaded.active_intent or {}).get("job"))
-            print(" next turn:", loaded.turns[-1] if loaded.turns else None)
+            print(" next job:", loaded.task.job if loaded.task else None)
             print(" next card:", body.get("plan_card"))
             print(" next messages:", body.get("transcript") or body.get("messages"))
             self.assertEqual(nxt.status_code, 200)
-            self.assertEqual(loaded.turns[-1].get("kind"), "new_intent")
-            self.assertFalse(loaded.turns[-1].get("skip_classify"))
-            job = str((loaded.active_intent or {}).get("job") or "")
-            self.assertNotEqual(job, "strategy.meta")
+            self.assertNotEqual(job := str(loaded.task.job or ""), "strategy.meta")
+            self.assertNotEqual(loaded.task.status, "done")
             steps = (body.get("plan_card") or {}).get("steps") or []
             skills = [str(s.get("skill_name") or "") for s in steps]
             print(" skills:", skills)
@@ -606,24 +602,28 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             session = asst.session_store.load(sid)
             users_after = [row for row in session.messages if row.get("kind") == "user_text"]
             readies = [row for row in session.messages if row.get("kind") == "plan_ready"]
-            start = session.slots["start"].value if "start" in session.slots else None
+            start = session.task.slots["start"].value if session.task and "start" in session.task.slots else None
             print(" patches status:", patched.status_code)
             print(" second plan_id:", (body2.get("plan_card") or {}).get("plan_id"))
             print(" users after:", [row.get("text") for row in users_after])
             print(" plan_ready count:", len(readies))
             print(" start slot:", start)
+            notices = [row for row in session.messages if row.get("kind") == "mode_notice"]
+            print(" notices:", [row.get("text") for row in notices], [row.get("payload") for row in notices])
             self.assertEqual(patched.status_code, 200)
             self.assertEqual((body2.get("plan_card") or {}).get("plan_id"), plan_id)
             self.assertEqual(len(users_after), len(users_before))
             self.assertEqual(len(readies), 1)
             self.assertEqual(str(start), "20200101")
+            self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
+            self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
             via_asst = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
             session = asst.session_store.load(sid)
             print(" asst patches plan_id:", (via_asst.get("plan") or {}).get("plan_id"))
-            print(" slow slot:", session.slots["slow"].value if "slow" in session.slots else None)
+            print(" slow slot:", session.task.slots["slow"].value if session.task and "slow" in session.task.slots else None)
             self.assertEqual(str((via_asst.get("plan") or {}).get("plan_id") or ""), plan_id)
-            self.assertEqual(int(session.slots["slow"].value), 50)
+            self.assertEqual(int(session.task.slots["slow"].value), 50)
 
             spoken = client.post(
                 "/v1/plan",
@@ -634,7 +634,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             users_spoken = [row for row in session.messages if row.get("kind") == "user_text"]
             print(" spoken status:", spoken.status_code)
             print(" spoken plan_id:", spoken_id)
-            print(" spoken job:", (session.active_intent or {}).get("job"))
+            print(" spoken job:", session.task.job if session.task else None)
             print(" users spoken:", [row.get("text") for row in users_spoken])
             self.assertEqual(spoken.status_code, 200)
             self.assertNotEqual(spoken_id, plan_id)

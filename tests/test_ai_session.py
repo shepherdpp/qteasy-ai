@@ -13,33 +13,29 @@ import tempfile
 import unittest
 
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.session import ConversationState, SessionStore, Slot
+from qteasy_ai.session import STATE_KEYS, ConversationState, SessionStore, Slot
 
 
 class TestAiSession(unittest.TestCase):
     """测试会话状态字段、往返与损坏降级。"""
 
     def test_empty_session_fields(self) -> None:
-        """空 session 含 F 最小字段，无 confidence / 开放环键。"""
+        """空 session 只有五字段，task 为 None。"""
 
         print("\n[TestAiSession] empty session fields")
         state = ConversationState.empty("sess-1")
         payload = state.to_dict()
         print(" payload keys:", sorted(payload.keys()))
-        print(" slots:", payload["slots"])
+        print(" task:", payload["task"])
+        self.assertEqual(set(payload.keys()), STATE_KEYS)
         self.assertEqual(payload["session_id"], "sess-1")
-        self.assertIsNone(payload["active_intent"])
-        self.assertEqual(payload["slots"], {})
-        self.assertEqual(payload["missing"], [])
-        self.assertIsNone(payload["pending_clarification"])
-        self.assertEqual(payload["current_plan_id"], "")
-        self.assertEqual(payload["clarify_round"], 0)
-        self.assertEqual(payload["turns"], [])
+        self.assertIsNone(payload["task"])
         self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["attachments"], [])
-        self.assertNotIn("confidence", payload)
-        self.assertNotIn("active_design", payload)
-        self.assertNotIn("current_trial_plan", payload)
+        self.assertFalse(payload["agent_auto"])
+        self.assertFalse(hasattr(ConversationState, "active_intent"))
+        self.assertFalse(hasattr(ConversationState, "live_design"))
+        self.assertFalse(hasattr(ConversationState, "turns"))
         slot = Slot(value="000300.SH", source="profile", confirmed=False)
         slot_dict = slot.to_dict()
         print(" slot:", slot_dict)
@@ -47,7 +43,7 @@ class TestAiSession(unittest.TestCase):
         self.assertNotIn("confidence", slot_dict)
 
     def test_save_load_roundtrip(self) -> None:
-        """save/load 往返保留 F 字段。"""
+        """save/load 往返保留 task 与 messages。"""
 
         print("\n[TestAiSession] save/load roundtrip")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -57,24 +53,28 @@ class TestAiSession(unittest.TestCase):
             self.assertEqual(store.sessions_dir, store.base_dir / "sessions")
             sessions = SessionStore(store)
             state = ConversationState.empty("abc")
-            state.active_intent = {"job": "data.refill", "flags": {}}
+            state.start_task(query="refill", job="data.refill")
             state.set_slot("start", "20240101", source="user", confirmed=True)
-            state.missing = ["end"]
-            state.current_plan_id = "plan-1"
-            state.turns = [{"query": "download daily"}]
+            state.task.set_missing(["end"])
+            state.task.plan_id = "plan-1"
             path = sessions.save(state)
             print(" saved path:", path)
             loaded = sessions.load("abc")
             print(" loaded:", loaded.to_dict())
             self.assertEqual(loaded.session_id, "abc")
-            self.assertEqual(loaded.active_intent["job"], "data.refill")
-            self.assertEqual(loaded.slots["start"].value, "20240101")
-            self.assertEqual(loaded.slots["start"].source, "user")
-            self.assertTrue(loaded.slots["start"].confirmed)
-            self.assertEqual(loaded.missing, ["end"])
-            self.assertEqual(loaded.current_plan_id, "plan-1")
-            self.assertEqual(loaded.turns[0]["query"], "download daily")
+            self.assertIsNotNone(loaded.task)
+            self.assertEqual(loaded.task.job, "data.refill")
+            self.assertEqual(loaded.task.slots["start"].value, "20240101")
+            self.assertEqual(loaded.task.slots["start"].source, "user")
+            self.assertTrue(loaded.task.slots["start"].confirmed)
+            self.assertEqual(loaded.task.missing, ["end"])
+            self.assertEqual(loaded.task.plan_id, "plan-1")
             self.assertEqual(loaded.messages, [])
+            dumped = loaded.to_dict()
+            print(" dumped keys:", sorted(dumped.keys()))
+            self.assertEqual(set(dumped.keys()), STATE_KEYS)
+            self.assertNotIn("turns", dumped)
+            self.assertNotIn("active_intent", dumped)
 
             state.messages = [{"kind": "user_text", "text": "hi", "payload": {}}]
             sessions.save(state)
@@ -82,11 +82,10 @@ class TestAiSession(unittest.TestCase):
             print(" messages roundtrip:", again.messages)
             self.assertEqual(again.messages[0]["text"], "hi")
             cut = again.rewind_from_user_index(0, discard=True)
-            print(" rewind:", cut, again.messages, again.turns)
+            print(" rewind:", cut, again.messages)
             self.assertTrue(cut["ok"])
             self.assertEqual(again.messages, [])
-            self.assertEqual(again.turns, [])
-            again.awaiting_abandon = True
+            self.assertIsNone(again.task)
             again.messages = [
                 {"kind": "user_text", "text": "a", "payload": {}},
                 {
@@ -107,12 +106,9 @@ class TestAiSession(unittest.TestCase):
             )
             print(" dedupe keep second plan:", again.messages)
             self.assertEqual(len([m for m in again.messages if m["kind"] == "plan_ready"]), 2)
-            again.rewind_from_user_index(0, discard=True)
-            print(" rewind clears awaiting_abandon:", again.awaiting_abandon)
-            self.assertFalse(again.awaiting_abandon)
 
     def test_load_ignores_unknown_keys(self) -> None:
-        """未知键不崩；闭合 session 再保存仍不写出开放环字段。"""
+        """未知键不崩；旧扁平 JSON 降级成 task。"""
 
         print("\n[TestAiSession] unknown keys forward-compat")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -141,60 +137,54 @@ class TestAiSession(unittest.TestCase):
             )
             loaded = sessions.load("fwd")
             print(" loaded keys:", sorted(loaded.to_dict().keys()))
-            print(" shares slot:", loaded.slots["shares"].to_dict())
-            self.assertEqual(loaded.active_intent["job"], "backtest.builtin")
-            self.assertEqual(loaded.slots["shares"].value, "000300.SH")
-            self.assertNotIn("confidence", loaded.slots["shares"].to_dict())
+            print(" shares slot:", loaded.task.slots["shares"].to_dict())
+            self.assertEqual(loaded.task.job, "backtest.builtin")
+            self.assertEqual(loaded.task.slots["shares"].value, "000300.SH")
+            self.assertNotIn("confidence", loaded.task.slots["shares"].to_dict())
             dumped = loaded.to_dict()
             print(" dumped:", dumped)
+            self.assertEqual(set(dumped.keys()), STATE_KEYS)
             self.assertNotIn("future_field", dumped)
             self.assertNotIn("active_design", dumped)
-            self.assertNotIn("current_trial_plan", dumped)
             sessions.save(loaded)
             on_disk = json.loads(path.read_text(encoding="utf-8"))
             print(" on_disk keys:", sorted(on_disk.keys()))
+            self.assertEqual(set(on_disk.keys()), set(STATE_KEYS))
             self.assertNotIn("active_design", on_disk)
             self.assertNotIn("future_field", on_disk)
 
     def test_open_design_roundtrip(self) -> None:
-        """设计态写出 active_design / 队列并往返。"""
+        """设计环字段不再落盘；无 live_design 方法。"""
 
-        print("\n[TestAiSession] open design roundtrip")
+        print("\n[TestAiSession] open design roundtrip ignored")
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
             sessions = SessionStore(store)
             state = ConversationState.empty("open1")
-            state.active_intent = {"job": "research.factor_explore", "flags": {}}
-            state.active_design = {
-                "job": "research.factor_explore",
-                "spec_draft": {"name": "momentum", "hypothesis": "hs300 momentum"},
-                "kb_hits": [],
-                "assumptions": [],
-            }
-            state.current_trial_plan_id = "plan-trial"
-            state.trial_queue = [{"job": "research.factor_ic", "reason": "ic", "status": "queued"}]
+            state.start_task(query="explore", job="research.factor_explore")
             sessions.save(state)
             loaded = sessions.load("open1")
             dumped = loaded.to_dict()
             print(" dumped keys:", sorted(dumped.keys()))
-            print(" spec:", (dumped.get("active_design") or {}).get("spec_draft"))
-            self.assertEqual(dumped["active_design"]["job"], "research.factor_explore")
-            self.assertEqual(dumped["current_trial_plan_id"], "plan-trial")
-            self.assertEqual(dumped["trial_queue"][0]["status"], "queued")
-            self.assertTrue(loaded.task_incomplete())
+            self.assertEqual(set(dumped.keys()), STATE_KEYS)
+            self.assertNotIn("active_design", dumped)
+            self.assertNotIn("current_trial_plan_id", dumped)
+            self.assertNotIn("trial_queue", dumped)
+            self.assertFalse(hasattr(loaded, "live_design"))
+            self.assertFalse(hasattr(ConversationState, "active_design"))
 
     def test_plan_ready_is_not_incomplete(self) -> None:
-        """有 current_plan_id 且 task_complete 时不是 incomplete。"""
+        """done 不是 incomplete；clarifying 才是。"""
 
         print("\n[TestAiSession] plan ready not incomplete")
         state = ConversationState.empty("plan-ready")
-        state.active_intent = {"job": "strategy.meta", "flags": {}}
-        state.current_plan_id = "plan_abc"
-        state.task_complete = True
-        print(" incomplete:", state.task_incomplete(), "plan_id:", state.current_plan_id)
+        state.start_task(query="list", job="strategy.meta")
+        state.task.plan_id = "plan_abc"
+        state.task.mark_done()
+        print(" incomplete:", state.task_incomplete(), "plan_id:", state.task.plan_id)
         self.assertFalse(state.task_incomplete())
-        state.task_complete = False
-        state.pending_clarification = {"confirm_prompt": "Which id?"}
+        state.task.status = "clarifying"
+        state.task.set_pending({"confirm_prompt": "Which id?"})
         print(" clarifying incomplete:", state.task_incomplete())
         self.assertTrue(state.task_incomplete())
 
@@ -212,7 +202,7 @@ class TestAiSession(unittest.TestCase):
             print(" loaded:", loaded.to_dict())
             print(" backup exists:", backup.exists())
             self.assertEqual(loaded.session_id, "bad")
-            self.assertIsNone(loaded.active_intent)
+            self.assertIsNone(loaded.task)
             self.assertTrue(backup.exists())
 
     def test_close_open_card_patches_latest_unanswered_clarify(self) -> None:

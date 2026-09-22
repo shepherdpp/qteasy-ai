@@ -66,62 +66,70 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(refill[0]["inputs"].get("start"), "20240101")
             self.assertEqual(refill[0]["inputs"].get("end"), "20241231")
 
+            store = SessionStore(assistant.memory_store)
+            filled = store.load("s-refill")
+            print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
+            print(" filled status:", filled.task.status)
+            self.assertTrue(filled.task.slots["start"].confirmed)
+            self.assertTrue(filled.task.slots["end"].confirmed)
+            self.assertEqual(filled.task.status, "ready")
+
             confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
             cnames = [s["skill_name"] for s in confirm["plan"]["steps"]]
             print(" confirm skills:", cnames)
             print(" confirm trace:", confirm["plan"].get("planner_trace"))
-            self.assertIn("qt.ai.data.refill_basic_equity_and_index", cnames)
-            self.assertEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
-            self.assertEqual(confirm["plan"]["planner_trace"].get("source"), "session")
-            store = SessionStore(assistant.memory_store)
-            state = store.load("s-refill")
-            print(" confirmed slots:", {k: v.to_dict() for k, v in state.slots.items()})
-            self.assertTrue(state.slots["start"].confirmed)
-            self.assertTrue(state.slots["end"].confirmed)
+            print(" confirm source:", confirm["plan"]["planner_trace"].get("source"))
+            self.assertNotEqual(confirm["plan"]["planner_trace"].get("source"), "session")
+            self.assertNotEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
     def test_clarify_round_caps_at_three(self) -> None:
-        """第 4 次仍缺槽 → 整单 clarify，round 停在 3。"""
+        """同一 Task 上控件补槽仍缺必填：第 4 次 round 停在 3。"""
 
         print("\n[TestAiPlannerF] clarify round cap")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = self._assistant(temp_dir)
             sid = "s-cap"
-            assistant.plan("帮我下载日线", response_style="raw", session_id=sid)
-            for extra in ("然后呢", "继续", "还缺什么"):
-                assistant.plan(extra, response_style="raw", session_id=sid)
-            fourth = assistant.plan("再想想", response_style="raw", session_id=sid)
+            first = assistant.plan("帮我下载日线", response_style="raw", session_id=sid)
+            print(" first round:", (first.get("session") or {}).get("clarify_round"))
+            self.assertEqual((first.get("session") or {}).get("clarify_round"), 1)
+            second = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240101"})
+            print(" second round:", (second.get("session") or {}).get("clarify_round"), (second.get("session") or {}).get("missing"))
+            third = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240201"})
+            print(" third round:", (third.get("session") or {}).get("clarify_round"), (third.get("session") or {}).get("missing"))
+            fourth = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240301"})
             print(" fourth session:", fourth.get("session"))
             print(" fourth skill:", fourth["plan"]["steps"][0]["skill_name"])
             print(" fourth action:", fourth["plan"]["steps"][0]["inputs"].get("fallback_action"))
             self.assertEqual(fourth["session"]["clarify_round"], 3)
+            self.assertIn("end", fourth["session"]["missing"])
             self.assertEqual(fourth["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
             self.assertEqual(fourth["plan"]["steps"][0]["inputs"].get("fallback_action"), "clarify_required")
 
     def test_builder_followup_changes_slow_with_session(self) -> None:
-        """有 session 时改慢线修订上一份 Spec，不是全新单句。"""
+        """ready 后 Composer「改慢线」是新 Task，不是 session 修订。"""
 
         print("\n[TestAiPlannerF] builder change slow")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = self._assistant(temp_dir)
             first = assistant.plan(GOLDEN_D1, response_style="raw", session_id="s-d")
+            first_id = str((first.get("plan") or {}).get("plan_id") or "")
             print(" first job:", first["plan"]["planner_trace"].get("intent_job"))
             print(" first skills:", [s["skill_name"] for s in first["plan"]["steps"]])
+            print(" first plan_id:", first_id)
             self.assertEqual(first["plan"]["planner_trace"].get("intent_job"), "strategy.builder")
             second = assistant.plan("把慢线改成 60", response_style="raw", session_id="s-d")
+            second_id = str((second.get("plan") or {}).get("plan_id") or "")
             print(" second job:", second["plan"]["planner_trace"].get("intent_job"))
             print(" second source:", second["plan"]["planner_trace"].get("source"))
             print(" second skills:", [s["skill_name"] for s in second["plan"]["steps"]])
-            self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "strategy.builder")
-            self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
+            print(" second plan_id:", second_id)
+            self.assertNotEqual(second["plan"]["planner_trace"].get("source"), "session")
+            self.assertNotEqual(second_id, first_id)
             store = SessionStore(assistant.memory_store)
             state = store.load("s-d")
-            print(" slow slot:", state.slots.get("slow").to_dict() if "slow" in state.slots else None)
-            self.assertEqual(state.slots["slow"].value, 60)
-            self.assertEqual(state.slots["slow"].source, "user")
-            self.assertTrue(state.slots["slow"].confirmed)
-            spec = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.strategy.spec_from_nl"]
-            self.assertTrue(spec)
-            self.assertEqual(spec[0]["inputs"].get("slow"), 60)
+            print(" task job:", state.task.job if state.task else None)
+            print(" slow slot:", state.task.slots.get("slow").to_dict() if state.task and "slow" in state.task.slots else None)
+            self.assertNotEqual(state.task.job, "strategy.builder")
 
     def test_no_session_followup_stays_single_turn(self) -> None:
         """无 session_id 保持今日单句（D G7）。"""
@@ -164,10 +172,10 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertIn("profile", pretty.narrative.lower())
             store = SessionStore(assistant.memory_store)
             state = store.load("s-def")
-            print(" shares slot:", state.slots["shares"].to_dict())
-            self.assertEqual(state.slots["shares"].value, "000300.SH")
-            self.assertEqual(state.slots["shares"].source, "default")
-            self.assertFalse(state.slots["shares"].confirmed)
+            print(" shares slot:", state.task.slots["shares"].to_dict())
+            self.assertEqual(state.task.slots["shares"].value, "000300.SH")
+            self.assertEqual(state.task.slots["shares"].source, "default")
+            self.assertFalse(state.task.slots["shares"].confirmed)
 
     def test_no_defaults_does_not_invent_shares(self) -> None:
         """无 defaults 且句中无标的 → 不发明 shares。"""
@@ -186,8 +194,8 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertFalse(bt[0]["inputs"].get("asset_pool"))
             store = SessionStore(assistant.memory_store)
             state = store.load("s-none")
-            print(" slots:", {k: v.to_dict() for k, v in state.slots.items()})
-            self.assertNotIn("shares", state.slots)
+            print(" slots:", {k: v.to_dict() for k, v in state.task.slots.items()})
+            self.assertNotIn("shares", state.task.slots)
 
     def test_env_facts_gate_not_bypassed_by_session(self) -> None:
         """缺 token 仍前置 check_tushare，session 不绕过。"""

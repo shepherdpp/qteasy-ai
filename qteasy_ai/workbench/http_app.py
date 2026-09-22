@@ -370,9 +370,22 @@ class WorkbenchHttp:
             for key, value in raw_patches.items()
             if str(key).strip() and value not in (None, "")
         }
+        skip = bool(body.get("skip"))
+        session_id = str(body.get("session_id") or "").strip()
+        if skip:
+            if not session_id:
+                return _error("SESSION_ID_REQUIRED", "Provide a session_id with skip.", 400)
+            payload = self.assistant.plan(
+                query,
+                response_style="raw",
+                session_id=session_id,
+                skip=True,
+            )
+            return JSONResponse(
+                self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
+            )
         if not query and not patches:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
-        session_id = str(body.get("session_id") or "").strip()
         if patches and not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id with patches.", 400)
         payload = self.assistant.plan(
@@ -460,30 +473,6 @@ class WorkbenchHttp:
             self.events[run_id] = list(bucket)
         return JSONResponse(dto)
 
-    async def abandon_trial(self, request: Request) -> JSONResponse:
-        """POST /v1/open/abandon-trial。"""
-
-        body = await self._read_json(request)
-        session_id = str(body.get("session_id") or "").strip()
-        if not session_id:
-            return _error("SESSION_ID_REQUIRED", "Provide session_id.", 400)
-        payload = self.assistant.abandon_trial(session_id, response_style="raw")
-        return JSONResponse(
-            self._to_dto(payload, query="abandon trial", session_id=session_id, persist_transcript=True)
-        )
-
-    async def abandon_open(self, request: Request) -> JSONResponse:
-        """POST /v1/open/abandon-job。"""
-
-        body = await self._read_json(request)
-        session_id = str(body.get("session_id") or "").strip()
-        if not session_id:
-            return _error("SESSION_ID_REQUIRED", "Provide session_id.", 400)
-        payload = self.assistant.abandon_open(session_id, response_style="raw")
-        return JSONResponse(
-            self._to_dto(payload, query="abandon open", session_id=session_id, persist_transcript=True)
-        )
-
     async def kb_write(self, request: Request) -> JSONResponse:
         """POST /v1/kb/write：须 confirm=true。"""
 
@@ -511,22 +500,23 @@ class WorkbenchHttp:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
         conv = SessionStore(self.assistant.memory_store).load(session_id)
         env = self.assistant.memory_store.load_env_facts()
+        plan_id = str(conv.task.plan_id or "") if conv.task is not None else ""
+        pending = conv.task.pending_clarification if conv.task is not None else None
         payload: Dict[str, Any] = {
             "mode": "plan",
-            "plan": {"plan_id": conv.current_plan_id, "steps": []},
+            "plan": {"plan_id": plan_id, "steps": []},
             "execution": {"status": "", "steps": []},
         }
-        if conv.current_plan_id:
-            found = self.assistant.memory_store.find_run_by_plan_id(conv.current_plan_id)
+        if plan_id:
+            found = self.assistant.memory_store.find_run_by_plan_id(plan_id)
             if found:
                 payload = dict(found)
-        if conv.pending_clarification and not payload.get("clarification"):
+        if pending and not payload.get("clarification"):
             payload = dict(payload)
-            payload["clarification"] = dict(conv.pending_clarification)
+            payload["clarification"] = dict(pending)
         mapped = map_assistant_payload(payload, session=conv, env_facts=env)
         dumped = mapped.to_dict()
         dumped["ok"] = True
-        dumped["turns"] = list(conv.turns)
         if not conv.messages:
             hist = self.assistant.memory_store.load_ui_transcript(session_id)
             if hist:
@@ -535,10 +525,13 @@ class WorkbenchHttp:
         dumped["transcript"] = list(conv.messages)
         exec_status = str((dumped.get("execution") or {}).get("status") or "")
         dumped["artifacts"] = self._artifacts_for_session(conv, include_plan=(exec_status == "dry_run"))
-        if conv.turns:
-            last = conv.turns[-1] if isinstance(conv.turns[-1], dict) else {}
-            if str(last.get("kind") or "") == "ask":
+        for row in reversed(conv.messages):
+            kind = str(row.get("kind") or "")
+            if kind == "ask":
                 dumped["mode"] = "ask"
+                break
+            if kind in {"plan_ready", "result", "clarify", "executing", "error"}:
+                break
         return JSONResponse(dumped)
 
     async def list_sessions(self, request: Request) -> JSONResponse:
@@ -792,8 +785,6 @@ def create_app(
         Route("/v1/plan", api.plan, methods=["POST"]),
         Route("/v1/run", api.run, methods=["POST"]),
         Route("/v1/run-plan", api.run_plan, methods=["POST"]),
-        Route("/v1/open/abandon-trial", api.abandon_trial, methods=["POST"]),
-        Route("/v1/open/abandon-job", api.abandon_open, methods=["POST"]),
         Route("/v1/kb/write", api.kb_write, methods=["POST"]),
         Route("/v1/sessions", api.list_sessions, methods=["GET"]),
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),

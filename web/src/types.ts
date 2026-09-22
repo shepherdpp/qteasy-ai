@@ -59,8 +59,6 @@ export interface WorkbenchSidebar {
   env_summary: Record<string, unknown>;
   current_plan_id: string;
   clarify_round: number;
-  design?: Record<string, unknown> | null;
-  trial_queue?: Array<Record<string, unknown>>;
 }
 
 export interface WorkbenchArtifact {

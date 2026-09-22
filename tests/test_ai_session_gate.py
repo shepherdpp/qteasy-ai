@@ -5,31 +5,35 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# Unittest for SessionGate 三分类
+# Unittest for SessionGate：填槽 / 新 Task 转移表
 # ======================================
 
-import json
 import unittest
 
-from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
-from qteasy_ai.session_gate import SessionGate, merge_facts
+from qteasy_ai.session_gate import SessionGate, answers_pending_slot, merge_facts
 
 
-def _backtest_session(*, complete: bool = False) -> ConversationState:
+def _backtest_session(*, complete: bool = False, clarifying: bool = True) -> ConversationState:
     """构造活跃 backtest 会话。"""
 
     state = ConversationState.empty("g1")
-    state.active_intent = {"job": "backtest.builtin", "flags": {}}
+    state.start_task(query="backtest", job="backtest.builtin")
     state.set_slot("strategy_id", "macd", source="user", confirmed=True)
-    state.missing = ["end"]
-    state.current_plan_id = "plan-bt"
-    state.task_complete = complete
+    state.task.plan_id = "plan-bt"
+    if complete:
+        state.task.set_missing([])
+        state.task.mark_done()
+    elif clarifying:
+        state.task.set_missing(["end"])
+    else:
+        state.task.set_missing([])
+        state.task.mark_ready()
     return state
 
 
 class TestAiSessionGate(unittest.TestCase):
-    """测试 Mode-R 金句与 Mode-D followup 协议。"""
+    """Composer 转移表：clarifying 填槽，ready/done 一律新 Task。"""
 
     def test_fill_slot_end_year_no_classify(self) -> None:
         """缺 end 时「到 2023 年」为 fill_slot。"""
@@ -37,42 +41,87 @@ class TestAiSessionGate(unittest.TestCase):
         print("\n[TestAiSessionGate] fill_slot end year")
         gate = SessionGate(provider=None)
         session = _backtest_session()
+        print(" status:", session.task_status(), "missing:", session.task.missing)
         decision = gate.classify(session, "到 2023 年")
         print(" kind:", decision.kind, "patches:", decision.patches, "source:", decision.source)
+        self.assertEqual(session.task_status(), "clarifying")
         self.assertEqual(decision.kind, "fill_slot")
         self.assertEqual(decision.patches.get("end"), "20231231")
         self.assertEqual(decision.source, "rule")
 
-    def test_change_slot_shares(self) -> None:
-        """「改用沪深300」覆盖 shares，source=user confirmed。"""
+    def test_bband_fills_strategy_id_when_clarifying(self) -> None:
+        """pending strategy_id 时「bband」填槽。"""
 
-        print("\n[TestAiSessionGate] change_slot shares")
+        print("\n[TestAiSessionGate] bband fills strategy_id")
         gate = SessionGate(provider=None)
-        session = _backtest_session()
-        session.missing = []
-        decision = gate.classify(session, "改用沪深300")
+        session = ConversationState.empty("g-bband")
+        session.start_task(query="params", job="strategy.meta")
+        session.task.set_missing(["strategy_id"])
+        session.task.set_pending(
+            {
+                "confirm_prompt": "Which strategy?",
+                "options": [{"id": "bband", "label": "Bollinger Band"}],
+                "pending": [{"name": "strategy_id"}],
+            }
+        )
+        print(" status:", session.task_status(), "answers:", answers_pending_slot(session, "bband"))
+        decision = gate.classify(session, "bband")
         print(" kind:", decision.kind, "patches:", decision.patches)
-        self.assertEqual(decision.kind, "change_slot")
-        self.assertEqual(decision.patches.get("shares"), "000300.SH")
-        merge_facts(session, decision.patches, source="user", confirmed=True)
-        print(" slot:", session.slots["shares"].to_dict())
-        self.assertEqual(session.slots["shares"].value, "000300.SH")
-        self.assertEqual(session.slots["shares"].source, "user")
-        self.assertTrue(session.slots["shares"].confirmed)
+        self.assertEqual(decision.kind, "fill_slot")
+        self.assertEqual(decision.patches.get("strategy_id"), "bband")
+
+    def test_ready_composer_is_new_task_not_change_slot(self) -> None:
+        """ready 时「改用沪深300」是新 Task，不是 change_slot。"""
+
+        print("\n[TestAiSessionGate] ready composer new_intent")
+        gate = SessionGate(provider=None)
+        session = _backtest_session(clarifying=False)
+        decision = gate.classify(session, "改用沪深300")
+        print(" kind:", decision.kind, "status:", session.task_status(), "patches:", decision.patches)
+        self.assertEqual(session.task_status(), "ready")
+        self.assertEqual(decision.kind, "new_intent")
+        merge_facts(session, {"shares": "000300.SH"}, source="user", confirmed=True)
+        print(" slot after control merge:", session.task.slots["shares"].to_dict())
+        self.assertEqual(session.task.slots["shares"].value, "000300.SH")
+
+    def test_kline_after_complete_is_new_intent(self) -> None:
+        """完成态 +「读取沪深300 K线」→ 新 Task，不是填槽。"""
+
+        print("\n[TestAiSessionGate] completed kline new_intent")
+        gate = SessionGate(provider=None)
+        session = ConversationState.empty("meta-done")
+        session.start_task(query="meta", job="strategy.meta")
+        session.task.plan_id = "plan-old"
+        session.task.mark_done()
+        query = "请帮我读取最近一年沪深300指数的K线数据"
+        decision = gate.classify(session, query)
+        print(" kind:", decision.kind, "rationale:", decision.rationale, "status:", session.task.status)
+        self.assertEqual(decision.kind, "new_intent")
+        self.assertEqual(decision.patches, {})
+        self.assertEqual(session.task.status, "done")
+
+    def test_strategy_id_token_after_ready_is_new_intent(self) -> None:
+        """已 ready 后「strategy_id swma」是新 Task。"""
+
+        print("\n[TestAiSessionGate] ready strategy_id token new_intent")
+        gate = SessionGate(provider=None)
+        session = _backtest_session(clarifying=False)
+        decision = gate.classify(session, "strategy_id swma")
+        print(" kind:", decision.kind, "status:", session.task_status())
+        self.assertEqual(decision.kind, "new_intent")
 
     def test_new_intent_skips_without_abandon_card(self) -> None:
         """未执行的回测上换题：new_intent，不要闭合 abandon 卡。"""
 
         print("\n[TestAiSessionGate] new_intent skip no abandon")
         gate = SessionGate(provider=None)
-        session = _backtest_session()
-        session.missing = []
+        session = _backtest_session(clarifying=False)
         decision = gate.classify(session, "再帮我优化参数")
-        print(" kind:", decision.kind, "needs_abandon:", decision.needs_abandon)
-        print(" active still:", session.active_intent)
+        print(" kind:", decision.kind)
+        print(" job still:", session.task.job)
         self.assertEqual(decision.kind, "new_intent")
-        self.assertFalse(decision.needs_abandon)
-        self.assertEqual(session.active_intent["job"], "backtest.builtin")
+        self.assertFalse(hasattr(decision, "needs_abandon"))
+        self.assertEqual(session.task.job, "backtest.builtin")
         self.assertEqual(session.session_id, "g1")
 
     def test_execute_plan_and_discuss_only(self) -> None:
@@ -81,7 +130,6 @@ class TestAiSessionGate(unittest.TestCase):
         print("\n[TestAiSessionGate] execute_plan discuss_only")
         gate = SessionGate(provider=None)
         session = _backtest_session(complete=True)
-        session.missing = []
         run_it = gate.classify(session, "请执行上面的计划")
         print(" execute:", run_it.kind, run_it.patches)
         self.assertEqual(run_it.kind, "execute_plan")
@@ -99,26 +147,22 @@ class TestAiSessionGate(unittest.TestCase):
         print("\n[TestAiSessionGate] skip clarify")
         gate = SessionGate(provider=None)
         session = _backtest_session()
-        session.pending_clarification = {"confirm_prompt": "Which strategy?"}
+        session.task.set_pending({"confirm_prompt": "Which strategy?"})
         decision = gate.classify(session, "跳过")
         print(" kind:", decision.kind)
         self.assertEqual(decision.kind, "skip_clarify")
 
-    def test_awaiting_abandon_blocks_llm_followup(self) -> None:
-        """awaiting_abandon 时优先规则门，不被 LLM confirm 绕过。"""
+    def test_block_running_high_side_effect(self) -> None:
+        """高副作用 running 时 Composer 不得静默取消。"""
 
-        print("\n[TestAiSessionGate] awaiting_abandon ignores llm")
-        provider = FakeLLMProvider(
-            replies=[json.dumps({"followup": "confirm", "patches": {}})]
-        )
-        gate = SessionGate(provider=provider)
-        session = _backtest_session()
-        session.missing = []
-        session.awaiting_abandon = True
-        decision = gate.classify(session, "list built-in strategies")
-        print(" kind:", decision.kind, "abandon_confirmed:", decision.abandon_confirmed)
-        self.assertEqual(decision.kind, "clarify")
-        self.assertFalse(decision.abandon_confirmed)
+        print("\n[TestAiSessionGate] block running")
+        gate = SessionGate(provider=None)
+        session = _backtest_session(clarifying=False)
+        session.task.mark_running()
+        session.task.high_side_effect = True
+        decision = gate.classify(session, "请列出所有内置交易策略")
+        print(" kind:", decision.kind, "status:", session.task_status())
+        self.assertEqual(decision.kind, "block_running")
 
     def test_completed_task_allows_new_job(self) -> None:
         """任务完成后同句可走新 Job。"""
@@ -126,87 +170,9 @@ class TestAiSessionGate(unittest.TestCase):
         print("\n[TestAiSessionGate] completed allows new job")
         gate = SessionGate(provider=None)
         session = _backtest_session(complete=True)
-        session.missing = []
         decision = gate.classify(session, "再帮我优化参数")
-        print(" kind:", decision.kind, "needs_abandon:", decision.needs_abandon)
+        print(" kind:", decision.kind)
         self.assertEqual(decision.kind, "new_intent")
-        self.assertFalse(decision.needs_abandon)
-
-    def test_completed_start_patch_is_change_slot_without_hint(self) -> None:
-        """完成态「start 20200101」无「改」字仍是 change_slot。"""
-
-        print("\n[TestAiSessionGate] completed start patch change_slot")
-        gate = SessionGate(provider=None)
-        session = _backtest_session(complete=True)
-        session.missing = []
-        session.set_slot("start", "20100101", source="user", confirmed=True)
-        decision = gate.classify(session, "start 20200101")
-        print(" kind:", decision.kind, "patches:", decision.patches, "rationale:", decision.rationale)
-        self.assertEqual(decision.kind, "change_slot")
-        self.assertEqual(decision.patches.get("start"), "20200101")
-
-    def test_completed_task_blocks_llm_fill_slot(self) -> None:
-        """task_complete 后即使 LLM 说 fill_slot，也强制 new_intent。"""
-
-        print("\n[TestAiSessionGate] completed blocks llm fill_slot")
-        provider = FakeLLMProvider(
-            replies=[
-                json.dumps(
-                    {
-                        "followup": "fill_slot",
-                        "patches": {
-                            "strategy_type": "择时策略",
-                            "short_ma": 20,
-                            "long_ma": 60,
-                        },
-                    }
-                )
-            ]
-        )
-        gate = SessionGate(provider=provider)
-        session = ConversationState.empty("meta-done")
-        session.active_intent = {"job": "strategy.meta", "flags": {}}
-        session.task_complete = True
-        session.current_plan_id = "plan-old"
-        query = "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测"
-        decision = gate.classify(session, query)
-        print(" kind:", decision.kind, "rationale:", decision.rationale, "patches:", decision.patches)
-        self.assertEqual(decision.kind, "new_intent")
-        self.assertEqual(decision.patches, {})
-
-    def test_mode_d_valid_followup(self) -> None:
-        """FakeLLM 合法 followup JSON 才接受。"""
-
-        print("\n[TestAiSessionGate] mode-d valid json")
-        fake = FakeLLMProvider(
-            replies=[json.dumps({"followup": "fill_slot", "patches": {"end": "20231231"}})]
-        )
-        gate = SessionGate(provider=fake)
-        session = _backtest_session()
-        decision = gate.classify(session, "到年底")
-        print(" kind:", decision.kind, "patches:", decision.patches, "source:", decision.source)
-        self.assertEqual(decision.kind, "fill_slot")
-        self.assertEqual(decision.patches["end"], "20231231")
-        self.assertEqual(decision.source, "llm")
-
-    def test_mode_d_steps_or_unknown_kind_clarify(self) -> None:
-        """含 steps 或未知 kind → clarify。"""
-
-        print("\n[TestAiSessionGate] mode-d illegal")
-        fake = FakeLLMProvider(
-            replies=[
-                json.dumps({"followup": "fill_slot", "patches": {}, "steps": [{"skill": "x"}]}),
-                json.dumps({"followup": "invented", "patches": {}}),
-            ]
-        )
-        gate = SessionGate(provider=fake)
-        session = _backtest_session()
-        first = gate.classify(session, "补一下")
-        second = gate.classify(session, "再补")
-        print(" first:", first.kind, first.rationale)
-        print(" second:", second.kind, second.rationale)
-        self.assertEqual(first.kind, "clarify")
-        self.assertEqual(second.kind, "clarify")
 
 
 if __name__ == "__main__":

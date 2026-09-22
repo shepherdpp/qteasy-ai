@@ -29,10 +29,10 @@ _BUILDER_SKILLS = [
 class TestAiOpenBuilder(unittest.TestCase):
     """无模板策略进设计环；双均线金句仍五步闭合。"""
 
-    def test_vague_builder_open_loop_no_codegen(self) -> None:
-        """还没想好规则 → strategy.builder + open_loop，无 codegen_hybrid。"""
+    def test_vague_builder_is_not_empty_design_loop(self) -> None:
+        """无模板策略不再掏空 steps 进设计环。"""
 
-        print("\n[TestAiOpenBuilder] vague builder open_loop")
+        print("\n[TestAiOpenBuilder] vague builder closed-or-clarify")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 memory_store=MemoryStore(base_dir=temp_dir),
@@ -46,17 +46,14 @@ class TestAiOpenBuilder(unittest.TestCase):
             plan = payload.get("plan") or {}
             names = [item.get("skill_name") for item in (plan.get("steps") or [])]
             assumptions = plan.get("assumptions") or {}
-            flags = ((payload.get("session") or {}).get("active_intent") or {}).get("flags") or {}
             state = asst.session_store.load("g7-builder")
             print(" intent:", (plan.get("planner_trace") or {}).get("intent_job"))
             print(" skills:", names)
             print(" design_loop:", assumptions.get("design_loop"))
-            print(" flags:", (state.active_intent or {}).get("flags"))
+            print(" dumped:", sorted(state.to_dict().keys()))
             self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "strategy.builder")
-            self.assertTrue(assumptions.get("design_loop"))
-            self.assertNotIn("qt.ai.strategy.codegen_hybrid", names)
-            self.assertTrue((state.active_intent or {}).get("flags", {}).get("open_loop") or flags.get("open_loop"))
-            print(" spec:", assumptions.get("spec_draft"))
+            self.assertFalse(bool(assumptions.get("design_loop")))
+            self.assertNotIn("active_design", state.to_dict())
 
     def test_dma_gold_stays_closed_five_steps(self) -> None:
         """20/60 日均线金叉仍走现有五步闭合菜谱。"""
