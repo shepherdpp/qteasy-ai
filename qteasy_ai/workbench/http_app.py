@@ -30,7 +30,7 @@ from ..config import build_provider_from_overlay, ensure_mplbackend_agg, provide
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
-from ..session import SessionStore, is_live_running
+from ..session import SessionStore, is_live_running, live_elapsed_s, live_snapshot
 from ..plan_markdown import plan_artifact_title
 from .mapper import classify_artifacts, map_assistant_payload
 
@@ -189,13 +189,22 @@ class WorkbenchHttp:
         return self._overlay_live_running(dumped, sid)
 
     def _overlay_live_running(self, dumped: Dict[str, Any], session_id: str) -> Dict[str, Any]:
-        """进程内仍在执行时投影 running，并关掉 Confirm。"""
+        """进程内仍在执行时投影 running / elapsed / 步态，并关掉 Confirm。"""
 
         sid = str(session_id or "").strip()
-        if not sid or not is_live_running(sid):
+        snap = live_snapshot(sid) if sid else None
+        if snap is None:
             return dumped
         execution = dict(dumped.get("execution") or {})
         execution["status"] = "running"
+        execution["elapsed_s"] = snap["elapsed_s"]
+        if snap.get("step_index"):
+            execution["step_index"] = snap["step_index"]
+            execution["step_total"] = snap["step_total"]
+        if snap.get("steps"):
+            execution["steps"] = snap["steps"]
+        if snap.get("progress"):
+            execution["progress"] = snap["progress"]
         dumped["execution"] = execution
         card = dumped.get("plan_card")
         if isinstance(card, dict):
@@ -288,9 +297,42 @@ class WorkbenchHttp:
             self._record_step(bucket, record)
             q.put(("step", dict(bucket[-1])))
 
+        def on_step_start(step_id: str, skill_name: str, index: int, total: int) -> None:
+            q.put(
+                (
+                    "step",
+                    {
+                        "step_id": step_id,
+                        "skill_name": skill_name,
+                        "status": "running",
+                        "index": int(index),
+                        "total": int(total),
+                    },
+                )
+            )
+
+        def on_progress(done: int, total: int, label: str = "") -> None:
+            q.put(
+                (
+                    "progress",
+                    {
+                        "done": int(done),
+                        "total": int(total),
+                        "label": str(label or ""),
+                    },
+                )
+            )
+
         def worker() -> None:
             try:
-                box["payload"] = runner(on_step)
+                try:
+                    box["payload"] = runner(
+                        on_step,
+                        on_step_start=on_step_start,
+                        on_progress=on_progress,
+                    )
+                except TypeError:
+                    box["payload"] = runner(on_step)
             except Exception as exc:
                 box["exc"] = exc
             q.put(("end", None))
@@ -300,11 +342,15 @@ class WorkbenchHttp:
             try:
                 kind, data = q.get(timeout=2.0)
             except queue.Empty:
-                elapsed_s = int(time.monotonic() - started)
-                yield _sse_line("heartbeat", {"elapsed_s": elapsed_s})
+                elapsed = live_elapsed_s(session_id)
+                if elapsed is None:
+                    elapsed = int(time.monotonic() - started)
+                yield _sse_line("heartbeat", {"elapsed_s": elapsed})
                 continue
             if kind == "step":
                 yield _sse_line("step_status", data)
+            elif kind == "progress":
+                yield _sse_line("progress", data)
             else:
                 break
         exc = box.get("exc")
@@ -442,13 +488,15 @@ class WorkbenchHttp:
         session_id = str(body.get("session_id") or "").strip()
         agent_auto = body.get("agent_auto")
 
-        def runner(on_step: Any) -> Dict[str, Any]:
+        def runner(on_step: Any, on_step_start: Any = None, on_progress: Any = None) -> Dict[str, Any]:
             return self.assistant.run(
                 query,
                 response_style="raw",
                 session_id=session_id or None,
                 agent_auto=bool(agent_auto) if agent_auto is not None else None,
                 on_step=on_step,
+                on_step_start=on_step_start,
+                on_progress=on_progress,
             )
 
         if _wants_stream(request):
@@ -486,12 +534,14 @@ class WorkbenchHttp:
                 409,
             )
 
-        def runner(on_step: Any) -> Dict[str, Any]:
+        def runner(on_step: Any, on_step_start: Any = None, on_progress: Any = None) -> Dict[str, Any]:
             return self.assistant.run_plan(
                 plan_id,
                 response_style="raw",
                 session_id=session_id or None,
                 on_step=on_step,
+                on_step_start=on_step_start,
+                on_progress=on_progress,
             )
 
         if _wants_stream(request):

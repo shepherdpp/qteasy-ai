@@ -44,7 +44,16 @@ from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
 from .run_policy import RunStorePolicy
-from .session import ConversationState, SessionStore, clear_live_running, register_live_running
+from .progress_bridge import bind_progress_callback, install_qteasy_tqdm_bridge, reset_progress_callback
+from .session import (
+    ConversationState,
+    SessionStore,
+    clear_live_running,
+    mark_live_progress,
+    mark_live_step_end,
+    mark_live_step_start,
+    register_live_running,
+)
 from .session_gate import (
     SessionGate,
     extract_patches,
@@ -425,6 +434,8 @@ class QteasyAssistant:
         session_id: str | None = None,
         agent_auto: Optional[bool] = None,
         on_step: Any = None,
+        on_step_start: Any = None,
+        on_progress: Any = None,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan + 确认执行。
 
@@ -443,6 +454,8 @@ class QteasyAssistant:
             explanation_depth=explanation_depth,
             agent_auto=agent_auto,
             on_step=on_step,
+            on_step_start=on_step_start,
+            on_progress=on_progress,
         )
         if hatched is not None:
             return hatched
@@ -474,6 +487,8 @@ class QteasyAssistant:
             explanation_depth=explanation_depth,
             session=session,
             on_step=on_step,
+            on_step_start=on_step_start,
+            on_progress=on_progress,
             query=query,
             requested_mode="run",
         )
@@ -488,6 +503,8 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session_id: str | None = None,
         on_step: Any = None,
+        on_step_start: Any = None,
+        on_progress: Any = None,
         requested_mode: str = "run",
         hatch: str = "",
     ) -> Dict[str, Any] | AssistantOutput:
@@ -529,6 +546,8 @@ class QteasyAssistant:
             explanation_depth=explanation_depth,
             session=session,
             on_step=on_step,
+            on_step_start=on_step_start,
+            on_progress=on_progress,
             query=str(getattr(plan, "user_query", "") or ""),
             requested_mode=str(requested_mode or "run"),
             hatch=str(hatch or ""),
@@ -546,6 +565,8 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session: Optional[ConversationState] = None,
         on_step: Optional[Any] = None,
+        on_step_start: Optional[Any] = None,
+        on_progress: Optional[Any] = None,
         query: str = "",
         requested_mode: str = "plan",
         hatch: str = "",
@@ -565,7 +586,7 @@ class QteasyAssistant:
             session.task.high_side_effect = plan_has_high_side_effect(plan)
             self.session_store.save(session)
             live_sid = str(session.session_id or "")
-            register_live_running(live_sid)
+            register_live_running(live_sid, steps=list(getattr(plan, "steps", None) or []))
         reuse_run_id = ""
         assumptions = getattr(plan, "assumptions", None) or {}
         if (
@@ -578,18 +599,63 @@ class QteasyAssistant:
             status = str(((existing.get("execution") or {}) if isinstance(existing, dict) else {}).get("status") or "")
             if status == "dry_run":
                 reuse_run_id = str(existing.get("run_id") or "")
+
+        def _on_step_start(step_id: str, skill_name: str, index: int, total: int) -> None:
+            if live_sid:
+                mark_live_step_start(
+                    live_sid,
+                    step_id=step_id,
+                    skill_name=skill_name,
+                    index=index,
+                    total=total,
+                )
+            if on_step_start is not None:
+                on_step_start(step_id, skill_name, index, total)
+
+        def _on_step(record: Any) -> None:
+            if live_sid:
+                result = getattr(record, "result", None) or {}
+                if result.get("skipped"):
+                    status = "skipped"
+                elif result.get("ok"):
+                    status = "done"
+                else:
+                    status = "error"
+                mark_live_step_end(
+                    live_sid,
+                    step_id=str(getattr(record, "step_id", "") or ""),
+                    status=status,
+                    ok=result.get("ok"),
+                )
+            if on_step is not None:
+                on_step(record)
+
+        def _on_progress(done: int, total: int, label: str = "") -> None:
+            if live_sid:
+                mark_live_progress(live_sid, done=done, total=total, label=label)
+            if on_progress is not None:
+                on_progress(done, total, label)
+
+        progress_token = None
+        if live_sid:
+            install_qteasy_tqdm_bridge()
+            progress_token = bind_progress_callback(_on_progress)
         try:
             payload = self.executor.execute(
                 plan,
                 confirm=confirm,
                 persist_run=False,
-                on_step=on_step,
+                on_step=_on_step,
+                on_step_start=_on_step_start if (live_sid or on_step_start is not None) else None,
                 run_id=reuse_run_id,
             )
         except Exception:
             if live_sid:
                 clear_live_running(live_sid)
             raise
+        finally:
+            if progress_token is not None:
+                reset_progress_callback(progress_token)
         try:
             return self._persist_after_execute(
                 payload,
@@ -778,6 +844,8 @@ class QteasyAssistant:
         explanation_depth: str,
         agent_auto: Optional[bool] = None,
         on_step: Any = None,
+        on_step_start: Any = None,
+        on_progress: Any = None,
     ) -> Optional[Dict[str, Any] | AssistantOutput]:
         """两条模式缺口与 skip 澄清：不走 Hybrid。"""
 
@@ -837,6 +905,8 @@ class QteasyAssistant:
                 explanation_depth=explanation_depth,
                 session_id=sid or None,
                 on_step=on_step,
+                on_step_start=on_step_start,
+                on_progress=on_progress,
                 requested_mode=requested_mode,
                 hatch=hatch,
             )

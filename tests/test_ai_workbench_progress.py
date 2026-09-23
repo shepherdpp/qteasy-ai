@@ -76,6 +76,50 @@ class TestAiWorkbenchProgress(unittest.TestCase):
             self.assertEqual(oks, [True, True])
             self.assertEqual(payload["execution"]["status"], "success")
 
+    def test_on_step_start_fires_before_handler(self) -> None:
+        """步开始回调先于 handler；完成回调条数仍等于步数。"""
+
+        print("\n[TestAiWorkbenchProgress] on_step_start before handler")
+        registry = SkillRegistry()
+        order = []
+
+        def handler(**kwargs):
+            order.append("handler")
+            return {"ok": True}
+
+        meta = SkillMetadata(
+            name="qt.ai.test.slow",
+            version="0.1.0",
+            summary="readonly test",
+            inputs_schema={},
+            outputs_schema={"ok": "bool"},
+            side_effects=SkillSideEffects(description="readonly"),
+        )
+        registry.register(meta, handler)
+
+        def on_start(step_id, skill_name, index, total):
+            order.append(("start", step_id, index, total))
+
+        def on_step(record):
+            order.append(("end", record.step_id, record.result.get("ok")))
+
+        executor = PlanExecutor(registry=registry)
+        plan = ToolPlan(
+            plan_id="plan_start",
+            user_query="one step",
+            execution_mode="execute",
+            steps=[ToolStep(step_id="step_1", skill_name="qt.ai.test.slow", inputs={})],
+        )
+        payload = executor.execute(plan, confirm=True, on_step=on_step, on_step_start=on_start)
+        print(" order:", order)
+        print(" status:", payload["execution"]["status"])
+        self.assertEqual(order[0], ("start", "step_1", 1, 1))
+        self.assertEqual(order[1], "handler")
+        self.assertEqual(order[2], ("end", "step_1", True))
+        self.assertEqual(payload["execution"]["status"], "success")
+        ends = [item for item in order if isinstance(item, tuple) and item[0] == "end"]
+        self.assertEqual(len(ends), 1)
+
     def test_dry_run_skips_handlers_and_real_ok_callbacks(self) -> None:
         """confirm=False：不调 handler；回调无真实 ok 执行结果。"""
 

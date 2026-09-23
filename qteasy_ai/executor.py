@@ -63,6 +63,7 @@ class PlanExecutor:
         confirm: bool = False,
         persist_run: bool = True,
         on_step: Optional[Callable[[PlanStepRecord], None]] = None,
+        on_step_start: Optional[Callable[[str, str, int, int], None]] = None,
         run_id: str = "",
     ) -> Dict[str, Any]:
         """执行计划，支持 dry_run 与 execute。
@@ -77,6 +78,8 @@ class PlanExecutor:
             是否立刻写入 ``runs/``。
         on_step : callable, optional
             每步完成后的回调（``PlanStepRecord``）。dry_run 不触发真实执行回调。
+        on_step_start : callable, optional
+            步开始回调 ``(step_id, skill_name, index, total)``。dry_run 不触发。
         run_id : str, optional
             若提供则复用该 run_id（改槽覆盖未执行 dry-run）。
 
@@ -116,6 +119,8 @@ class PlanExecutor:
         step_results: Dict[str, Dict[str, Any]] = {}
         pending_steps = {step.step_id: step for step in plan.steps}
         ordered_steps = [step.step_id for step in plan.steps]
+        step_index_map = {step.step_id: idx + 1 for idx, step in enumerate(plan.steps)}
+        step_total = len(plan.steps)
         abort_execution = False
 
         while pending_steps and not abort_execution:
@@ -129,6 +134,13 @@ class PlanExecutor:
                 progressed = True
                 pending_steps.pop(step_id, None)
                 started_at = _utc_now_iso()
+                self._emit_on_step_start(
+                    on_step_start,
+                    step_id=step.step_id,
+                    skill_name=step.skill_name,
+                    index=step_index_map.get(step.step_id, len(step_records) + 1),
+                    total=step_total,
+                )
                 if not self._evaluate_run_if(step.run_if, step.depends_on, step_results):
                     result = {
                         "ok": True,
@@ -181,6 +193,13 @@ class PlanExecutor:
                 for cycle_step_id in cycle_step_ids:
                     step = pending_steps[cycle_step_id]
                     started_at = _utc_now_iso()
+                    self._emit_on_step_start(
+                        on_step_start,
+                        step_id=step.step_id,
+                        skill_name=step.skill_name,
+                        index=step_index_map.get(step.step_id, 0),
+                        total=step_total,
+                    )
                     ended_at = _utc_now_iso()
                     result = {
                         "ok": False,
@@ -237,11 +256,26 @@ class PlanExecutor:
         on_step: Optional[Callable[[PlanStepRecord], None]],
         record: PlanStepRecord,
     ) -> None:
-        """安全触发逐步回调。"""
+        """安全触发逐步完成回调。"""
 
         if on_step is None:
             return
         on_step(record)
+
+    @staticmethod
+    def _emit_on_step_start(
+        on_step_start: Optional[Callable[[str, str, int, int], None]],
+        *,
+        step_id: str,
+        skill_name: str,
+        index: int,
+        total: int,
+    ) -> None:
+        """安全触发步开始回调。"""
+
+        if on_step_start is None:
+            return
+        on_step_start(step_id, skill_name, index, total)
 
     @staticmethod
     def _plan_to_dict(plan: ToolPlan) -> Dict[str, Any]:

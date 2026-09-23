@@ -444,6 +444,40 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("MIN_SESSION_COL", src)
             self.assertIn("MIN_ARTIFACT_COL", src)
 
+    def test_elapsed_backfill_nm_and_determinate_bar(self) -> None:
+        """切回用 elapsed_s 回填 runStartedAt；Now/对话 N/M；progress 画确定条。"""
+
+        print("\n[TestAiWorkbenchWeb] elapsed backfill N/M determinate bar")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            apply_fn = src.split("function applyRunningWatch")[1].split("function startLivePoll")[0]
+            elapsed_pos = apply_fn.find("elapsed_s")
+            busy_pos = apply_fn.find("setBusy(true)")
+            print(" elapsed_pos:", elapsed_pos, "busy_pos:", busy_pos)
+            self.assertGreaterEqual(elapsed_pos, 0)
+            self.assertGreater(busy_pos, elapsed_pos)
+            self.assertIn("runStartedAt", apply_fn)
+            poll_fn = src.split("function startLivePoll")[1].split("function stopLivePoll")[0]
+            print(" poll renderChat:", "renderChat" in poll_fn)
+            self.assertIn("renderChat", poll_fn)
+            consume = src.split("async function consumeSse")[1].split("function applyLiveStep")[0]
+            print(" consume progress:", "progress" in consume)
+            self.assertIn("progress", consume)
+            self.assertIn("function formatRunClock", src)
+            self.assertIn("function progressBarHtml", src)
+            self.assertIn("step_index", src)
+            self.assertIn("progress-det", src)
+            self.assertIn("progress-indet", src)
+            self.assertIn("progress-det", css)
+            self.assertIn("Working", src)
+            self.assertIn("${n}/${m}", src)
+
     def test_plan_artifact_catalog_merge_open_while_busy(self) -> None:
         """catalog 合并 workspace 与 state；Open Plan 不带 busy disabled。"""
 

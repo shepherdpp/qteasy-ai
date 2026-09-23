@@ -851,6 +851,203 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertIn(dry_run_id, after_ids)
             self.assertNotIn(success_id, after_ids)
 
+    def test_live_elapsed_s_grows_on_get(self) -> None:
+        """登记 live 后 GET 投影 elapsed_s 随时间增加；clear 后不再 running。"""
+
+        print("\n[TestAiWorkbenchHttp] live elapsed_s grows")
+        import time
+
+        from qteasy_ai.session import clear_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            sid = "s-elapsed"
+            client.post("/v1/plan", json={"query": "list built-in strategies", "session_id": sid})
+            register_live_running(sid)
+            try:
+                first = client.get(f"/v1/session/{sid}").json()
+                time.sleep(1.1)
+                second = client.get(f"/v1/session/{sid}").json()
+                e1 = (first.get("execution") or {}).get("elapsed_s")
+                e2 = (second.get("execution") or {}).get("elapsed_s")
+                print(" first execution:", first.get("execution"))
+                print(" second execution:", second.get("execution"))
+                self.assertEqual((first.get("execution") or {}).get("status"), "running")
+                self.assertIsInstance(e1, int)
+                self.assertGreaterEqual(int(e2), int(e1) + 1)
+            finally:
+                clear_live_running(sid)
+            after = client.get(f"/v1/session/{sid}").json()
+            print(" after clear:", after.get("execution"))
+            self.assertNotEqual((after.get("execution") or {}).get("status"), "running")
+            self.assertNotIn("elapsed_s", after.get("execution") or {})
+
+    def test_live_step_start_projected_on_get(self) -> None:
+        """慢 handler 期间 GET 当前步 running，N/M 正确。"""
+
+        print("\n[TestAiWorkbenchHttp] live step start on GET")
+        import threading
+        import time
+
+        from qteasy_ai.contracts import SkillMetadata, SkillSideEffects
+        from qteasy_ai.session import ConversationState
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, asst = self._client(temp_dir)
+            sid = "s-step-nm"
+            started = threading.Event()
+            release = threading.Event()
+            calls = {"n": 0}
+
+            def handler(**kwargs):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    started.set()
+                    release.wait(timeout=8)
+                return {"ok": True}
+
+            asst.registry.register(
+                SkillMetadata(
+                    name="qt.ai.test.slow",
+                    version="0.1.0",
+                    summary="slow test",
+                    inputs_schema={},
+                    outputs_schema={"ok": "bool"},
+                    side_effects=SkillSideEffects(description="readonly"),
+                ),
+                handler,
+            )
+            state = ConversationState.empty(sid)
+            state.start_task(query="slow two", job="test.slow")
+            asst.session_store.save(state)
+            store.save_run(
+                "run_slow",
+                {
+                    "run_id": "run_slow",
+                    "plan": {
+                        "plan_id": "plan_slow",
+                        "user_query": "slow two",
+                        "execution_mode": "dry_run",
+                        "mode": "plan",
+                        "steps": [
+                            {"step_id": "step_1", "skill_name": "qt.ai.test.slow", "inputs": {}},
+                            {"step_id": "step_2", "skill_name": "qt.ai.test.slow", "inputs": {}},
+                        ],
+                    },
+                    "execution": {"status": "dry_run", "steps": []},
+                },
+            )
+            box = {}
+
+            def worker() -> None:
+                box["payload"] = asst.run_plan(
+                    "plan_slow",
+                    response_style="raw",
+                    session_id=sid,
+                )
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            self.assertTrue(started.wait(timeout=5))
+            time.sleep(0.05)
+            body = client.get(f"/v1/session/{sid}").json()
+            execution = body.get("execution") or {}
+            steps = execution.get("steps") or []
+            print(" live execution:", execution)
+            print(" live steps:", steps)
+            self.assertEqual(execution.get("status"), "running")
+            self.assertEqual(execution.get("step_index"), 1)
+            self.assertEqual(execution.get("step_total"), 2)
+            self.assertGreaterEqual(int(execution.get("elapsed_s") or 0), 0)
+            self.assertTrue(steps)
+            self.assertEqual(steps[0].get("status"), "running")
+            release.set()
+            thread.join(timeout=8)
+            print(" done status:", ((box.get("payload") or {}).get("execution") or {}).get("status"))
+            self.assertEqual(((box.get("payload") or {}).get("execution") or {}).get("status"), "success")
+
+    def test_stream_emits_step_start_and_progress(self) -> None:
+        """SSE 步开始必须 status=running；progress 含 done/total。"""
+
+        print("\n[TestAiWorkbenchHttp] sse step start and progress")
+        from qteasy_ai.contracts import PlanStepRecord
+        from qteasy_ai.workbench.http_app import WorkbenchHttp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            assistant = QteasyAssistant(memory_store=store, registry=build_default_registry())
+            http = WorkbenchHttp(assistant)
+
+            def runner(_on_step, on_step_start=None, on_progress=None):
+                if on_step_start is not None:
+                    on_step_start("step_1", "qt.ai.test.slow", 1, 2)
+                if on_progress is not None:
+                    on_progress(3, 10, "stock_daily")
+                _on_step(
+                    PlanStepRecord(
+                        step_id="step_1",
+                        skill_name="qt.ai.test.slow",
+                        started_at="",
+                        ended_at="",
+                        result={"ok": True},
+                    )
+                )
+                return {"ok": True, "execution": {"status": "success", "steps": []}}
+
+            chunks = list(http._stream_execute(runner, query="", session_id=""))
+            text = "".join(chunks)
+            print(" sse text:", text[:500])
+            self.assertIn("event: step_status", text)
+            self.assertIn('"status": "running"', text)
+            self.assertIn("event: progress", text)
+            self.assertIn('"done": 3', text)
+            self.assertIn('"total": 10', text)
+            self.assertIn("event: state", text)
+
+    def test_tqdm_update_reaches_progress_and_refill_still_runs(self) -> None:
+        """桥接后 tqdm.update 触发 progress；假 refill_func 仍可跑完。"""
+
+        print("\n[TestAiWorkbenchHttp] tqdm progress and fake refill")
+        from qteasy_ai.progress_bridge import (
+            bind_progress_callback,
+            install_qteasy_tqdm_bridge,
+            reset_progress_callback,
+        )
+        from qteasy_ai.skills.data_refill import build_data_refill_skill
+
+        seen = []
+
+        def on_progress(done, total, label=""):
+            seen.append((done, total, label))
+
+        install_qteasy_tqdm_bridge()
+        token = bind_progress_callback(on_progress)
+        try:
+            import qteasy.core as qt_core
+
+            with qt_core.tqdm(total=4, desc="stock_daily") as pbar:
+                pbar.update(1)
+                pbar.update(3)
+        finally:
+            reset_progress_callback(token)
+        print(" tqdm events:", seen)
+        self.assertTrue(seen)
+        self.assertEqual(seen[0][1], 4)
+        self.assertGreaterEqual(seen[-1][0], 4)
+        called = {"n": 0}
+
+        def fake_refill(**kwargs):
+            called["n"] += 1
+
+        _meta, handler = build_data_refill_skill(
+            refill_func=fake_refill,
+            token_getter=lambda: {"token_present": True},
+        )
+        result = handler(start="20240101", end="20240131")
+        print(" refill ok:", result.get("ok"), "calls:", called["n"])
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(called["n"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

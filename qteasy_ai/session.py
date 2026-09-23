@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,27 +34,199 @@ TASK_STATUSES = frozenset({"clarifying", "ready", "running", "done", "cancelled"
 STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto", "name"})
 _NAME_MAX = 80
 STALE_RUNNING_NOTICE = "Execution interrupted. Confirm again to retry, or start a new topic."
-_LIVE_RUNNING: set[str] = set()
 
 
-def register_live_running(session_id: str) -> None:
-    """登记本进程正在执行的 session，避免 load 误伤。"""
+@dataclass
+class _LiveSnap:
+    """进程内活执行快照：计时、步态、步内进度。不落盘。"""
+
+    started_at: float
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    step_index: int = 0
+    step_total: int = 0
+    progress: Optional[Dict[str, Any]] = None
+
+
+_LIVE_RUNNING: Dict[str, _LiveSnap] = {}
+_LIVE_LOCK = threading.Lock()
+
+
+def _normalize_live_steps(steps: Optional[List[Any]]) -> List[Dict[str, Any]]:
+    """plan 步清单 → 快照 steps（默认 pending）。"""
+
+    out: List[Dict[str, Any]] = []
+    for raw in steps or []:
+        if isinstance(raw, dict):
+            step_id = str(raw.get("step_id") or "")
+            skill_name = str(raw.get("skill_name") or "")
+            status = str(raw.get("status") or "pending") or "pending"
+            ok = raw.get("ok")
+        else:
+            step_id = str(getattr(raw, "step_id", "") or "")
+            skill_name = str(getattr(raw, "skill_name", "") or "")
+            status = "pending"
+            ok = None
+        out.append(
+            {
+                "step_id": step_id,
+                "skill_name": skill_name,
+                "status": status,
+                "ok": ok,
+            }
+        )
+    return out
+
+
+def register_live_running(
+    session_id: str,
+    steps: Optional[List[Any]] = None,
+) -> None:
+    """登记本进程正在执行的 session；首次记下 started_at，重复登记不覆盖。"""
 
     sid = str(session_id or "").strip()
-    if sid:
-        _LIVE_RUNNING.add(sid)
+    if not sid:
+        return
+    with _LIVE_LOCK:
+        existing = _LIVE_RUNNING.get(sid)
+        if existing is not None:
+            if steps is not None:
+                existing.steps = _normalize_live_steps(steps)
+                existing.step_total = len(existing.steps)
+            return
+        snap = _LiveSnap(started_at=time.monotonic())
+        if steps is not None:
+            snap.steps = _normalize_live_steps(steps)
+            snap.step_total = len(snap.steps)
+        _LIVE_RUNNING[sid] = snap
 
 
 def clear_live_running(session_id: str) -> None:
     """清除本进程活执行登记。"""
 
-    _LIVE_RUNNING.discard(str(session_id or "").strip())
+    with _LIVE_LOCK:
+        _LIVE_RUNNING.pop(str(session_id or "").strip(), None)
 
 
 def is_live_running(session_id: str) -> bool:
     """该 session 是否有进程内未结束的执行。"""
 
     return str(session_id or "").strip() in _LIVE_RUNNING
+
+
+def live_elapsed_s(session_id: str) -> Optional[int]:
+    """活执行已过秒数；未登记返回 None。"""
+
+    snap = _LIVE_RUNNING.get(str(session_id or "").strip())
+    if snap is None:
+        return None
+    return max(0, int(time.monotonic() - snap.started_at))
+
+
+def live_snapshot(session_id: str) -> Optional[Dict[str, Any]]:
+    """GET / heartbeat 用的活执行投影；未登记返回 None。"""
+
+    sid = str(session_id or "").strip()
+    with _LIVE_LOCK:
+        snap = _LIVE_RUNNING.get(sid)
+        if snap is None:
+            return None
+        out: Dict[str, Any] = {
+            "elapsed_s": max(0, int(time.monotonic() - snap.started_at)),
+            "step_index": snap.step_index,
+            "step_total": snap.step_total,
+            "steps": [dict(row) for row in snap.steps],
+        }
+        if snap.progress:
+            out["progress"] = dict(snap.progress)
+        return out
+
+
+def mark_live_step_start(
+    session_id: str,
+    *,
+    step_id: str,
+    skill_name: str,
+    index: int,
+    total: int,
+) -> None:
+    """步开始：当前步 running，清掉上一步 progress。"""
+
+    sid = str(session_id or "").strip()
+    with _LIVE_LOCK:
+        snap = _LIVE_RUNNING.get(sid)
+        if snap is None:
+            return
+        snap.step_index = int(index)
+        snap.step_total = int(total)
+        snap.progress = None
+        found = False
+        for row in snap.steps:
+            if str(row.get("step_id") or "") == str(step_id):
+                row["status"] = "running"
+                if skill_name:
+                    row["skill_name"] = skill_name
+                found = True
+                break
+        if not found:
+            snap.steps.append(
+                {
+                    "step_id": str(step_id),
+                    "skill_name": str(skill_name or ""),
+                    "status": "running",
+                    "ok": None,
+                }
+            )
+
+
+def mark_live_step_end(
+    session_id: str,
+    *,
+    step_id: str,
+    status: str,
+    ok: Any = None,
+) -> None:
+    """步结束：写入 done / error / skipped，清 progress。"""
+
+    sid = str(session_id or "").strip()
+    with _LIVE_LOCK:
+        snap = _LIVE_RUNNING.get(sid)
+        if snap is None:
+            return
+        snap.progress = None
+        for row in snap.steps:
+            if str(row.get("step_id") or "") == str(step_id):
+                row["status"] = str(status or "done")
+                row["ok"] = ok
+                return
+        snap.steps.append(
+            {
+                "step_id": str(step_id),
+                "skill_name": "",
+                "status": str(status or "done"),
+                "ok": ok,
+            }
+        )
+
+
+def mark_live_progress(
+    session_id: str,
+    *,
+    done: int,
+    total: int,
+    label: str = "",
+) -> None:
+    """步内 tqdm 进度写入快照。"""
+
+    sid = str(session_id or "").strip()
+    with _LIVE_LOCK:
+        snap = _LIVE_RUNNING.get(sid)
+        if snap is None:
+            return
+        snap.progress = {
+            "done": int(done),
+            "total": int(total),
+            "label": str(label or ""),
+        }
 
 
 def _new_task_id() -> str:

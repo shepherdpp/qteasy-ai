@@ -20,6 +20,9 @@ from qteasy_ai.session import (
     SessionStore,
     Slot,
     clear_live_running,
+    live_elapsed_s,
+    live_snapshot,
+    mark_live_step_start,
     register_live_running,
 )
 from qteasy_ai.session_gate import SessionGate
@@ -273,6 +276,49 @@ class TestAiSession(unittest.TestCase):
                 self.assertEqual(loaded.messages, [])
             finally:
                 clear_live_running("live-run")
+
+    def test_live_elapsed_grows_until_clear(self) -> None:
+        """首次登记记下 started_at；elapsed 随时间增加；clear 后不再增长。"""
+
+        print("\n[TestAiSession] live elapsed grows until clear")
+        import time
+
+        register_live_running(
+            "live-clock",
+            steps=[
+                {"step_id": "step_1", "skill_name": "qt.ai.test.a"},
+                {"step_id": "step_2", "skill_name": "qt.ai.test.b"},
+            ],
+        )
+        try:
+            first = live_elapsed_s("live-clock")
+            time.sleep(1.05)
+            second = live_elapsed_s("live-clock")
+            again = live_elapsed_s("live-clock")
+            print(" first:", first, "second:", second, "again:", again)
+            self.assertIsNotNone(first)
+            self.assertGreaterEqual(int(second), int(first) + 1)
+            register_live_running("live-clock")
+            after_rereg = live_elapsed_s("live-clock")
+            print(" after reregister:", after_rereg)
+            self.assertGreaterEqual(int(after_rereg), int(second))
+            mark_live_step_start(
+                "live-clock",
+                step_id="step_1",
+                skill_name="qt.ai.test.a",
+                index=1,
+                total=2,
+            )
+            snap = live_snapshot("live-clock")
+            print(" snap:", snap)
+            self.assertEqual(snap["step_index"], 1)
+            self.assertEqual(snap["step_total"], 2)
+            self.assertEqual(snap["steps"][0]["status"], "running")
+        finally:
+            clear_live_running("live-clock")
+        print(" after clear:", live_elapsed_s("live-clock"))
+        self.assertIsNone(live_elapsed_s("live-clock"))
+        self.assertIsNone(live_snapshot("live-clock"))
 
     def test_close_open_card_patches_latest_unanswered_clarify(self) -> None:
         """就地关闭最近未答 clarify，不追加消息。"""

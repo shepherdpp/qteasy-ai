@@ -575,6 +575,30 @@ function formatElapsed(sec) {
   return m > 0 ? `${m}m ${r}s` : `${r}s`;
 }
 
+function runningFraction() {
+  const exec = state.execution || {};
+  const n = Number(exec.step_index) || 0;
+  const m = Number(exec.step_total) || 0;
+  if (n > 0 && m > 0) return `${n}/${m}`;
+  return "";
+}
+
+function formatRunClock(prefix) {
+  const frac = runningFraction();
+  return frac ? `${prefix} · ${formatElapsed(runElapsedS)} · ${frac}` : `${prefix} · ${formatElapsed(runElapsedS)}`;
+}
+
+function progressBarHtml() {
+  const p = state.execution && state.execution.progress;
+  const total = p ? Number(p.total) || 0 : 0;
+  if (total > 0) {
+    const done = Math.max(0, Number(p.done) || 0);
+    const pct = Math.max(0, Math.min(100, (done / total) * 100));
+    return `<div class="progress-det" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><div class="progress-det-bar" style="width:${pct}%"></div></div>`;
+  }
+  return `<div class="progress-indet" aria-hidden="true"><div class="progress-indet-bar"></div></div>`;
+}
+
 function runningSkillName() {
   const steps = (state.execution && state.execution.steps) || [];
   const live = [...steps].reverse().find((row) => row && (row.status === "running" || row.status === "pending"));
@@ -584,9 +608,9 @@ function runningSkillName() {
 
 function updateBusyElapsedDom() {
   const label = $("busy-elapsed");
-  if (label) label.textContent = `Working · ${formatElapsed(runElapsedS)}`;
+  if (label) label.textContent = formatRunClock("Working");
   const now = $("now-run-status");
-  if (now) now.textContent = `Running · ${formatElapsed(runElapsedS)}`;
+  if (now) now.textContent = formatRunClock("Running");
 }
 
 function startElapsedClock() {
@@ -632,6 +656,12 @@ function applyRunningWatch(dto) {
     if (busy && !executeSseOpen) setBusy(false);
     return;
   }
+  const elapsed = dto.execution && dto.execution.elapsed_s;
+  if (elapsed != null && !runStartedAt) {
+    runStartedAt = Date.now() - Number(elapsed) * 1000;
+    runElapsedS = Math.max(0, Math.floor(Number(elapsed) || 0));
+  }
+  if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
   if (!busy) setBusy(true);
   if (!executeSseOpen) startLivePoll();
 }
@@ -645,6 +675,7 @@ function startLivePoll() {
       if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
       if (dto.plan_card) state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card, { confirmable: false });
       renderNow();
+      renderChat();
       return;
     }
     stopLivePoll();
@@ -764,6 +795,7 @@ async function consumeSse(res, signal) {
       }
       const ev = eventMatch ? eventMatch[1].trim() : "";
       if (ev === "step_status") applyLiveStep(payload);
+      else if (ev === "progress") applyLiveProgress(payload);
       else if (ev === "heartbeat") {
         if (payload.elapsed_s != null) runElapsedS = Number(payload.elapsed_s) || runElapsedS;
         updateBusyElapsedDom();
@@ -790,8 +822,27 @@ function applyLiveStep(event) {
   const idx = steps.findIndex((s) => s.step_id && s.step_id === event.step_id);
   if (idx >= 0) steps[idx] = Object.assign({}, steps[idx], row);
   else steps.push(row);
-  state.execution = Object.assign({}, state.execution || {}, { status: "running", steps });
+  const patch = { status: "running", steps };
+  if (event.status === "running") {
+    if (event.index != null) patch.step_index = Number(event.index) || 0;
+    if (event.total != null) patch.step_total = Number(event.total) || 0;
+    patch.progress = null;
+  }
+  state.execution = Object.assign({}, state.execution || {}, patch);
   renderChat();
+  renderNow();
+}
+
+function applyLiveProgress(event) {
+  const done = Number(event.done) || 0;
+  const total = Number(event.total) || 0;
+  const label = event.label || "";
+  state.execution = Object.assign({}, state.execution || {}, {
+    status: "running",
+    progress: total > 0 ? { done, total, label } : null,
+  });
+  renderChat();
+  renderNow();
 }
 
 function ingestDto(dto, { appendUser } = {}) {
@@ -1638,7 +1689,7 @@ function renderChat() {
   if (busy) {
     const skill = runningSkillName();
     const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
-    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">Working · ${formatElapsed(runElapsedS)}</span>${skillLine}<div class="progress-indet" aria-hidden="true"><div class="progress-indet-bar"></div></div><div class="actions"><button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
+    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock("Working")}</span>${skillLine}${progressBarHtml()}<div class="actions"><button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
   }
   parts.push(renderClarification());
   parts.push(renderPlanCard());
@@ -2023,7 +2074,7 @@ function renderNow() {
   const envBlock = env === "No env_facts yet." ? "" : `<div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(env)}</p></div>`;
   const execStatus = String((state.execution && state.execution.status) || "");
   const runLine = busy || execStatus === "running"
-    ? `<p class="now-run" id="now-run-status">Running · ${formatElapsed(runElapsedS)}</p>`
+    ? `<p class="now-run" id="now-run-status">${formatRunClock("Running")}</p>`
     : "";
   host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
     ${runLine}
