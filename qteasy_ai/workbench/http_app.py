@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from urllib.parse import unquote
@@ -29,7 +30,7 @@ from ..config import build_provider_from_overlay, ensure_mplbackend_agg, provide
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
-from ..session import SessionStore
+from ..session import SessionStore, is_live_running
 from ..plan_markdown import plan_artifact_title
 from .mapper import classify_artifacts, map_assistant_payload
 
@@ -54,6 +55,7 @@ _NEXT_ACTION = {
     "PROVIDER_CONFIRM_REQUIRED": "Review the new provider settings, then press Confirm.",
     "CONFIRM_REQUIRED": "Set confirm=true after reviewing the note, then retry the write.",
     "KB_WRITE_NOT_PENDING": "Lock the FactorSpec first (save this note), then confirm the write.",
+    "RUN_IN_PROGRESS": "Wait for the current run to finish, or open that session and watch it.",
 }
 
 
@@ -185,6 +187,22 @@ class WorkbenchHttp:
             dumped["artifacts"] = self._artifacts_for_session(conv, include_plan=include_plan)
         else:
             dumped["transcript"] = []
+        return self._overlay_live_running(dumped, sid)
+
+    def _overlay_live_running(self, dumped: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+        """进程内仍在执行时投影 running，并关掉 Confirm。"""
+
+        sid = str(session_id or "").strip()
+        if not sid or not is_live_running(sid):
+            return dumped
+        execution = dict(dumped.get("execution") or {})
+        execution["status"] = "running"
+        dumped["execution"] = execution
+        card = dumped.get("plan_card")
+        if isinstance(card, dict):
+            card = dict(card)
+            card["confirmable"] = False
+            dumped["plan_card"] = card
         return dumped
 
     def _artifacts_for_session(self, conv: Any, *, include_plan: bool = True) -> List[Dict[str, Any]]:
@@ -240,7 +258,7 @@ class WorkbenchHttp:
         query: str = "",
         session_id: str = "",
     ) -> Iterator[str]:
-        """在线程中执行 runner，按 on_step 推 SSE，最后推 state。
+        """在线程中执行 runner，按 on_step 推 SSE；空闲 ≥2s 推 heartbeat，最后推 state。
 
         Parameters
         ----------
@@ -260,6 +278,7 @@ class WorkbenchHttp:
         bucket: List[Dict[str, Any]] = []
         q: "queue.Queue[Any]" = queue.Queue()
         box: Dict[str, Any] = {}
+        started = time.monotonic()
 
         def on_step(record: PlanStepRecord) -> None:
             self._record_step(bucket, record)
@@ -274,7 +293,12 @@ class WorkbenchHttp:
 
         threading.Thread(target=worker, daemon=True).start()
         while True:
-            kind, data = q.get()
+            try:
+                kind, data = q.get(timeout=2.0)
+            except queue.Empty:
+                elapsed_s = int(time.monotonic() - started)
+                yield _sse_line("heartbeat", {"elapsed_s": elapsed_s})
+                continue
             if kind == "step":
                 yield _sse_line("step_status", data)
             else:
@@ -451,6 +475,12 @@ class WorkbenchHttp:
                 400,
             )
         session_id = str(body.get("session_id") or "").strip()
+        if session_id and is_live_running(session_id):
+            return _error(
+                "RUN_IN_PROGRESS",
+                "A run is already in progress for this session.",
+                409,
+            )
 
         def runner(on_step: Any) -> Dict[str, Any]:
             return self.assistant.run_plan(
@@ -538,7 +568,7 @@ class WorkbenchHttp:
                 break
             if kind in {"plan_ready", "result", "clarify", "executing", "error"}:
                 break
-        return JSONResponse(dumped)
+        return JSONResponse(self._overlay_live_running(dumped, session_id))
 
     async def patch_session(self, request: Request) -> JSONResponse:
         """PATCH /v1/session/{session_id}：改用户标签 ``name``。"""
@@ -574,6 +604,9 @@ class WorkbenchHttp:
         del request
         store = SessionStore(self.assistant.memory_store)
         rows = store.list_summaries()
+        for row in rows:
+            if isinstance(row, dict):
+                row["running"] = is_live_running(str(row.get("session_id") or ""))
         return JSONResponse({"ok": True, "sessions": rows})
 
     async def rewind_session(self, request: Request) -> JSONResponse:

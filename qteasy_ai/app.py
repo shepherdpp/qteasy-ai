@@ -586,9 +586,55 @@ class QteasyAssistant:
                 on_step=on_step,
                 run_id=reuse_run_id,
             )
+        except Exception:
+            if live_sid:
+                clear_live_running(live_sid)
+            raise
+        try:
+            return self._persist_after_execute(
+                payload,
+                plan=plan,
+                confirm=confirm,
+                execute_requested=execute_requested,
+                clarify_plan=clarify_plan,
+                persist_run=persist_run,
+                persist_mode=persist_mode,
+                keep=keep,
+                session=session,
+                query=query,
+                requested_mode=requested_mode,
+                hatch=hatch,
+                hatch_plan_id=hatch_plan_id,
+                response_style=response_style,
+                explanation_depth=explanation_depth,
+                assumptions=assumptions,
+            )
         finally:
             if live_sid:
                 clear_live_running(live_sid)
+
+    def _persist_after_execute(
+        self,
+        payload: Dict[str, Any],
+        *,
+        plan: Any,
+        confirm: bool,
+        execute_requested: bool,
+        clarify_plan: bool,
+        persist_run: bool,
+        persist_mode: str,
+        keep: bool,
+        session: Optional[ConversationState],
+        query: str,
+        requested_mode: str,
+        hatch: str,
+        hatch_plan_id: str,
+        response_style: str,
+        explanation_depth: str,
+        assumptions: Dict[str, Any],
+    ) -> Dict[str, Any] | AssistantOutput:
+        """execute 成功后落盘 / 标 done；调用方在 finally 里 clear_live。"""
+
         write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
         if write_plan_md:
             plan_md = tool_plan_to_markdown(

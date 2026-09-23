@@ -119,13 +119,21 @@ button.provider-badge {
 
 .layout {
   display: grid;
-  grid-template-columns: 200px 1.1fr 1.4fr 280px;
+  grid-template-columns: 200px 1.1fr 4px 1.4fr 280px;
   flex: 1;
   min-height: 0;
 }
-.layout.rail-collapsed { grid-template-columns: 44px 1.1fr 1.4fr 280px; }
-.layout.workspace-collapsed { grid-template-columns: 200px 1.1fr 1.4fr 44px; }
-.layout.rail-collapsed.workspace-collapsed { grid-template-columns: 44px 1.1fr 1.4fr 44px; }
+.layout.rail-collapsed { grid-template-columns: 44px 1.1fr 4px 1.4fr 280px; }
+.layout.workspace-collapsed { grid-template-columns: 200px 1.1fr 4px 1.4fr 44px; }
+.layout.rail-collapsed.workspace-collapsed { grid-template-columns: 44px 1.1fr 4px 1.4fr 44px; }
+.col-splitter {
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border);
+  z-index: 2;
+}
+.col-splitter:hover,
+.col-splitter.dragging { background: var(--accent); }
 
 .rail, .session-col, .artifact-col, .workspace-col {
   min-width: 0;
@@ -173,6 +181,7 @@ button.provider-badge {
 .session-item .session-main { flex: 1; min-width: 0; }
 .session-item .sid { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-item .meta { display: block; font-size: 11px; color: var(--text-muted); }
+.session-item .running-tag { color: var(--accent); }
 .session-actions {
   display: none;
   flex-shrink: 0;
@@ -321,6 +330,27 @@ button.chip.clarify-chip {
   font-style: italic;
 }
 .busy-dot { color: var(--accent); }
+.busy-skill { display: block; margin-top: 4px; font-style: normal; color: var(--text-muted); font-size: 12px; }
+.progress-indet {
+  position: relative;
+  height: 4px;
+  margin: 8px 0;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 2px;
+}
+.progress-indet-bar {
+  position: absolute;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  animation: progress-indet-slide 1.2s ease-in-out infinite;
+}
+@keyframes progress-indet-slide {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.now-run { margin: 4px 0 0; font-size: 12px; color: var(--accent); }
 .card {
   padding: 10px 12px;
   border: 1px solid var(--border);

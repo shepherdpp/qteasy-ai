@@ -115,7 +115,11 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("/v1/artifacts/", js.text)
             self.assertIn("busy-msg", js.text)
             self.assertIn("edit-composer", js.text)
-            self.assertIn("Working…", js.text)
+            self.assertIn("Working ·", js.text)
+            self.assertIn("btn-stop-watch", js.text)
+            self.assertIn("AbortController", js.text)
+            self.assertIn("heartbeat", js.text)
+            self.assertIn("progress-indet", js.text)
             self.assertNotIn("busy-label", js.text)
             self.assertIn("data-now-edit", js.text)
             self.assertIn("Switched to", js.text)
@@ -372,6 +376,73 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("JSON in runs/ is the executable source", src)
             self.assertIn("renderPlanMarkdown", src.split('current.type === "plan"')[1].split("host.innerHTML")[0])
             self.assertNotIn('<pre class="plan-md">${escapeHtml(markdown', src.split("function renderPlanMarkdown")[0])
+
+    def test_run_liveness_stop_and_switch_session(self) -> None:
+        """Stop 停观望；切 Session 不因 busy 早退，先 abort 再 load。"""
+
+        print("\n[TestAiWorkbenchWeb] run liveness stop switch")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            print(" has dropRunWatch:", "function dropRunWatch" in src)
+            print(" has stopWatchingRun:", "function stopWatchingRun" in src)
+            print(" has btn-stop-watch:", "btn-stop-watch" in src)
+            print(" switch early busy:", "|| busy" in src.split("async function switchSession")[1].split("async function refreshSessions")[0])
+            self.assertIn("function dropRunWatch", src)
+            self.assertIn("function stopWatchingRun", src)
+            self.assertIn("btn-stop-watch", src)
+            self.assertIn("Stopped watching this run. The server may still finish", src)
+            switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
+            self.assertNotIn("|| busy", switch_fn)
+            self.assertIn("dropRunWatch", switch_fn)
+            create_fn = src.split("async function createSession")[1].split("async function switchSession")[0]
+            print(" create calls dropRunWatch:", "dropRunWatch" in create_fn)
+            self.assertIn("dropRunWatch", create_fn)
+            consume = src.split("async function consumeSse")[1].split("function applyLiveStep")[0]
+            print(" consume heartbeat:", "heartbeat" in consume)
+            self.assertIn("heartbeat", consume)
+            print(" css progress-indet:", "progress-indet" in css)
+            self.assertIn("progress-indet", css)
+            self.assertIn("now-run-status", src)
+
+    def test_live_restore_poll_and_column_splitter(self) -> None:
+        """切回 running 不重 POST run-plan；2s GET 轮询；Session|Artifacts 可拖分隔。"""
+
+        print("\n[TestAiWorkbenchWeb] live restore poll splitter")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            print(" has startLivePoll:", "function startLivePoll" in src)
+            print(" has applyRunningWatch:", "function applyRunningWatch" in src)
+            print(" has col-splitter:", "col-splitter" in src)
+            switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
+            print(" switch applyRunningWatch:", "applyRunningWatch" in switch_fn)
+            print(" switch run-plan:", "/v1/run-plan" in switch_fn)
+            self.assertIn("function startLivePoll", src)
+            self.assertIn("function applyRunningWatch", src)
+            self.assertIn("applyRunningWatch", switch_fn)
+            self.assertNotIn("/v1/run-plan", switch_fn)
+            self.assertIn("2000", src.split("function startLivePoll")[1].split("function stopLivePoll")[0])
+            self.assertIn("/v1/session/", src.split("function startLivePoll")[1].split("function stopLivePoll")[0])
+            self.assertIn("row.running", src)
+            self.assertIn("col-splitter", src)
+            self.assertIn("col-resize", css)
+            self.assertIn("260", src)
+            self.assertIn("280", src)
+            self.assertIn("qteasy-ai.col-session", src)
+            self.assertIn("qteasy-ai.col-artifact", src)
+            self.assertIn("MIN_SESSION_COL", src)
+            self.assertIn("MIN_ARTIFACT_COL", src)
 
 
 if __name__ == "__main__":

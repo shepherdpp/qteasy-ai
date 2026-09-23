@@ -2,6 +2,10 @@ const STORAGE_SESSION = "qteasy-ai.session_id";
 const STORAGE_RAIL = "qteasy-ai.session-rail";
 const STORAGE_WORKSPACE = "qteasy-ai.workspace";
 const STORAGE_TRANSCRIPTS = "qteasy-ai.transcripts";
+const STORAGE_COL_SESSION = "qteasy-ai.col-session";
+const STORAGE_COL_ARTIFACT = "qteasy-ai.col-artifact";
+const MIN_SESSION_COL = 260;
+const MIN_ARTIFACT_COL = 280;
 
 const SLOT_LABELS = {
   shares: "Symbol",
@@ -46,6 +50,10 @@ let pendingCodeRun = false;
 let editingParams = false;
 let editingNowSlot = "";
 let busy = false;
+let runAbort = null;
+let runStartedAt = 0;
+let runElapsedS = 0;
+let elapsedTimer = null;
 let shellReady = false;
 let codeCache = {};
 let filePreview = null;
@@ -58,6 +66,8 @@ let editingUserIndex = -1;
 let providerInfo = null;
 let pendingRewind = null;
 let renamingSessionId = "";
+let livePoll = null;
+let executeSseOpen = false;
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -243,6 +253,7 @@ function mountShell() {
           </div>
         </div>
       </section>
+      <div class="col-splitter" id="col-splitter" role="separator" aria-orientation="vertical" title="Resize columns"></div>
       <section class="artifact-col" id="artifact-col">
         <div class="col-head"><h2>Artifacts</h2></div>
         <div class="artifact-body" id="artifact-panel"></div>
@@ -406,6 +417,8 @@ function bindShell() {
   $("session-list").addEventListener("dblclick", onSessionListDblClick);
   $("workspace-files").addEventListener("click", onWorkspaceArtifactClick);
   $("workspace-now").addEventListener("click", onNowClick);
+  bindColumnSplitter();
+  window.addEventListener("resize", applyColumnWidths);
 }
 
 function toggleWorkspace() {
@@ -426,6 +439,82 @@ function applyLayoutFlags() {
   $("btn-toggle-rail").textContent = railCollapsed ? "»" : "«";
   const wsBtn = $("btn-collapse-workspace");
   if (wsBtn) wsBtn.textContent = workspaceCollapsed ? "«" : "»";
+  applyColumnWidths();
+}
+
+function applyColumnWidths() {
+  const layout = $("layout");
+  if (!layout) return;
+  const rail = railCollapsed ? 44 : 200;
+  const ws = workspaceCollapsed ? 44 : 280;
+  const splitter = 4;
+  let sessionW = Number(localStorage.getItem(STORAGE_COL_SESSION) || 0);
+  let artW = Number(localStorage.getItem(STORAGE_COL_ARTIFACT) || 0);
+  if (sessionW < MIN_SESSION_COL || artW < MIN_ARTIFACT_COL) {
+    layout.style.gridTemplateColumns = `${rail}px minmax(${MIN_SESSION_COL}px, 1.1fr) ${splitter}px minmax(${MIN_ARTIFACT_COL}px, 1.4fr) ${ws}px`;
+    return;
+  }
+  const avail = layout.clientWidth - rail - ws - splitter;
+  if (avail > 0 && avail < MIN_SESSION_COL + MIN_ARTIFACT_COL) {
+    layout.style.gridTemplateColumns = `${rail}px ${MIN_SESSION_COL}px ${splitter}px ${MIN_ARTIFACT_COL}px ${ws}px`;
+    return;
+  }
+  if (avail > 0 && sessionW + artW > avail) {
+    let extra = sessionW + artW - avail;
+    const takeS = Math.min(Math.max(sessionW - MIN_SESSION_COL, 0), extra);
+    sessionW -= takeS;
+    extra -= takeS;
+    artW = Math.max(MIN_ARTIFACT_COL, artW - extra);
+    sessionW = Math.max(MIN_SESSION_COL, sessionW);
+  }
+  layout.style.gridTemplateColumns = `${rail}px ${sessionW}px ${splitter}px ${artW}px ${ws}px`;
+}
+
+function bindColumnSplitter() {
+  const split = $("col-splitter");
+  if (!split) return;
+  let dragging = false;
+  let startX = 0;
+  let startSession = 0;
+  let startArt = 0;
+  split.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+    const sessionCol = $("chat-col");
+    const artCol = $("artifact-col");
+    if (!sessionCol || !artCol) return;
+    dragging = true;
+    startX = ev.clientX;
+    startSession = sessionCol.getBoundingClientRect().width;
+    startArt = artCol.getBoundingClientRect().width;
+    split.classList.add("dragging");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  });
+  window.addEventListener("mousemove", (ev) => {
+    if (!dragging) return;
+    const dx = ev.clientX - startX;
+    let nextS = startSession + dx;
+    let nextA = startArt - dx;
+    if (nextS < MIN_SESSION_COL) {
+      nextA -= MIN_SESSION_COL - nextS;
+      nextS = MIN_SESSION_COL;
+    }
+    if (nextA < MIN_ARTIFACT_COL) {
+      nextS -= MIN_ARTIFACT_COL - nextA;
+      nextA = MIN_ARTIFACT_COL;
+    }
+    if (nextS < MIN_SESSION_COL || nextA < MIN_ARTIFACT_COL) return;
+    localStorage.setItem(STORAGE_COL_SESSION, String(Math.round(nextS)));
+    localStorage.setItem(STORAGE_COL_ARTIFACT, String(Math.round(nextA)));
+    applyColumnWidths();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    split.classList.remove("dragging");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  });
 }
 
 function applySessionMode(dto) {
@@ -479,8 +568,125 @@ function renderMode() {
   }
 }
 
+function formatElapsed(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}m ${r}s` : `${r}s`;
+}
+
+function runningSkillName() {
+  const steps = (state.execution && state.execution.steps) || [];
+  const live = [...steps].reverse().find((row) => row && (row.status === "running" || row.status === "pending"));
+  const name = (live && live.skill_name) || "";
+  return SKILL_TITLES[name] || name;
+}
+
+function updateBusyElapsedDom() {
+  const label = $("busy-elapsed");
+  if (label) label.textContent = `Working · ${formatElapsed(runElapsedS)}`;
+  const now = $("now-run-status");
+  if (now) now.textContent = `Running · ${formatElapsed(runElapsedS)}`;
+}
+
+function startElapsedClock() {
+  if (elapsedTimer) return;
+  elapsedTimer = setInterval(() => {
+    if (!runStartedAt) return;
+    runElapsedS = Math.floor((Date.now() - runStartedAt) / 1000);
+    updateBusyElapsedDom();
+  }, 1000);
+}
+
+function stopElapsedClock() {
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+}
+
+function isAbortError(exc) {
+  return Boolean(exc && (exc.name === "AbortError" || /aborted/i.test(String(exc.message || ""))));
+}
+
+function dropRunWatch() {
+  const controller = runAbort;
+  runAbort = null;
+  if (controller) controller.abort();
+  stopLivePoll();
+  if (busy) setBusy(false);
+  else {
+    stopElapsedClock();
+    runStartedAt = 0;
+    runElapsedS = 0;
+  }
+}
+
+function isDtoRunning(dto) {
+  return String((dto && dto.execution && dto.execution.status) || "") === "running";
+}
+
+function applyRunningWatch(dto) {
+  if (!isDtoRunning(dto)) {
+    stopLivePoll();
+    if (busy && !executeSseOpen) setBusy(false);
+    return;
+  }
+  if (!busy) setBusy(true);
+  if (!executeSseOpen) startLivePoll();
+}
+
+function startLivePoll() {
+  if (livePoll) return;
+  livePoll = setInterval(async () => {
+    if (executeSseOpen || !sessionId) return;
+    const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
+    if (isDtoRunning(dto)) {
+      if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
+      if (dto.plan_card) state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card, { confirmable: false });
+      renderNow();
+      return;
+    }
+    stopLivePoll();
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    setBusy(false);
+    renderPanes();
+    await refreshWorkspace();
+    await refreshSessions();
+  }, 2000);
+}
+
+function stopLivePoll() {
+  if (livePoll) {
+    clearInterval(livePoll);
+    livePoll = null;
+  }
+}
+
+function stopWatchingRun() {
+  if (!busy && !runAbort) return;
+  dropRunWatch();
+  transcript.push({
+    kind: "mode_notice",
+    text: "Stopped watching this run. The server may still finish; if status looks stuck, refresh the session or start a new topic.",
+  });
+  persistTranscript();
+  renderChat();
+}
+
 function setBusy(next) {
   busy = next;
+  if (busy) {
+    if (!runAbort) runAbort = new AbortController();
+    if (!runStartedAt) runStartedAt = Date.now();
+    startElapsedClock();
+  } else {
+    stopElapsedClock();
+    runStartedAt = 0;
+    runElapsedS = 0;
+    runAbort = null;
+  }
   const input = $("query-input");
   const send = $("btn-send");
   if (input) input.disabled = busy;
@@ -500,6 +706,7 @@ function setBusy(next) {
     el.disabled = busy;
   });
   renderChat();
+  renderNow();
 }
 
 function errorFromHttp(data) {
@@ -515,7 +722,7 @@ async function api(path, options) {
   const res = await fetch(path, options);
   const ctype = res.headers.get("content-type") || "";
   if (ctype.includes("text/event-stream") && res.body) {
-    return consumeSse(res);
+    return consumeSse(res, options && options.signal);
   }
   let data = {};
   try {
@@ -530,13 +737,16 @@ async function api(path, options) {
   return data;
 }
 
-async function consumeSse(res) {
+async function consumeSse(res, signal) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let finalDto = null;
   let sseError = null;
   while (true) {
+    if (signal && signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     const chunk = await reader.read();
     if (chunk.done) break;
     buf += decoder.decode(chunk.value, { stream: true });
@@ -554,9 +764,16 @@ async function consumeSse(res) {
       }
       const ev = eventMatch ? eventMatch[1].trim() : "";
       if (ev === "step_status") applyLiveStep(payload);
+      else if (ev === "heartbeat") {
+        if (payload.elapsed_s != null) runElapsedS = Number(payload.elapsed_s) || runElapsedS;
+        updateBusyElapsedDom();
+      }
       else if (ev === "state") finalDto = payload;
       else if (ev === "error") sseError = payload;
     }
+  }
+  if (signal && signal.aborted) {
+    throw new DOMException("Aborted", "AbortError");
   }
   if (sseError) return errorFromHttp(sseError);
   return finalDto || errorFromHttp({ error: { message: "Stream ended without a state event." } });
@@ -607,12 +824,13 @@ async function sendQuery(query, { keepDraft } = {}) {
   persistTranscript();
   renderChat();
   setBusy(true);
+  if (mode === "agent") executeSseOpen = true;
   try {
     const body = JSON.stringify({ query: text, session_id: sessionId });
     const path = mode === "ask" ? "/v1/ask" : mode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
     const headers = { "Content-Type": "application/json" };
     if (mode === "agent") headers.Accept = "text/event-stream";
-    const dto = await api(path, { method: "POST", headers, body });
+    const dto = await api(path, { method: "POST", headers, body, signal: runAbort ? runAbort.signal : undefined });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
     pendingCodeRun = false;
@@ -621,14 +839,17 @@ async function sendQuery(query, { keepDraft } = {}) {
     await refreshSessions();
     await refreshWorkspace();
   } catch (exc) {
-    transcript.push({
-      kind: "error",
-      text: "Network error. Check that the workbench server is running.",
-      payload: { next_action: "Retry when the server is reachable. You do not need to start over." },
-    });
-    persistTranscript();
-    renderChat();
+    if (!isAbortError(exc)) {
+      transcript.push({
+        kind: "error",
+        text: "Network error. Check that the workbench server is running.",
+        payload: { next_action: "Retry when the server is reachable. You do not need to start over." },
+      });
+      persistTranscript();
+      renderChat();
+    }
   } finally {
+    executeSseOpen = false;
     setBusy(false);
   }
 }
@@ -673,11 +894,13 @@ async function confirmPlan() {
   const planId = state.plan_card && state.plan_card.plan_id;
   if (!planId || (state.plan_card && state.plan_card.confirmable === false) || busy) return;
   setBusy(true);
+  executeSseOpen = true;
   try {
     const dto = await api("/v1/run-plan?stream=1", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ plan_id: planId, session_id: sessionId }),
+      signal: runAbort ? runAbort.signal : undefined,
     });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
@@ -686,14 +909,17 @@ async function confirmPlan() {
     renderPanes();
     await refreshWorkspace();
   } catch (exc) {
-    transcript.push({
-      kind: "error",
-      text: "Network error. Confirm did not complete. Retry when the server is reachable.",
-      payload: { next_action: "Press Retry. You do not need to start over." },
-    });
-    persistTranscript();
-    renderChat();
+    if (!isAbortError(exc)) {
+      transcript.push({
+        kind: "error",
+        text: "Network error. Confirm did not complete. Retry when the server is reachable.",
+        payload: { next_action: "Press Retry. You do not need to start over." },
+      });
+      persistTranscript();
+      renderChat();
+    }
   } finally {
+    executeSseOpen = false;
     setBusy(false);
   }
 }
@@ -729,6 +955,7 @@ function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
   if (t.id === "btn-confirm" || t.id === "btn-code-confirm") confirmPlan();
+  if (t.id === "btn-stop-watch") stopWatchingRun();
   if (t.id === "btn-cancel") cancelPlan();
   if (t.id === "btn-edit") {
     editingParams = true;
@@ -1162,6 +1389,8 @@ async function onWorkspaceArtifactClick(ev) {
 }
 
 async function createSession() {
+  stopLivePoll();
+  dropRunWatch();
   persistTranscript();
   sessionId = newSessionId();
   localStorage.setItem(STORAGE_SESSION, sessionId);
@@ -1185,8 +1414,9 @@ async function createSession() {
 }
 
 async function switchSession(id) {
-  if (!id || id === sessionId || busy) return;
+  if (!id || id === sessionId) return;
   persistTranscript();
+  dropRunWatch();
   sessionId = id;
   localStorage.setItem(STORAGE_SESSION, sessionId);
   transcript = [];
@@ -1202,6 +1432,7 @@ async function switchSession(id) {
   await refreshWorkspace();
   await refreshProvider();
   renderPanes();
+  applyRunningWatch(dto);
   focusComposer();
 }
 
@@ -1252,8 +1483,9 @@ function renderSessionList() {
         ? `<input class="session-rename" value="${escapeHtml(name)}" aria-label="Rename session" />`
         : `<span class="sid">${escapeHtml(name)}</span>`;
       const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
+      const runTag = row.running ? `<span class="meta running-tag">Running</span>` : "";
       return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
-        <div class="session-main">${nameBlock}${meta}</div>
+        <div class="session-main">${nameBlock}${meta}${runTag}</div>
         <div class="session-actions">
           <button type="button" class="icon-btn ghost" data-session-rename title="Rename">✎</button>
           <button type="button" class="icon-btn ghost" data-session-delete title="Delete">🗑</button>
@@ -1384,7 +1616,9 @@ function renderChat() {
     }
   }
   if (busy) {
-    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot">Working…</span></div></div>`);
+    const skill = runningSkillName();
+    const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
+    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">Working · ${formatElapsed(runElapsedS)}</span>${skillLine}<div class="progress-indet" aria-hidden="true"><div class="progress-indet-bar"></div></div><div class="actions"><button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
   }
   parts.push(renderClarification());
   parts.push(renderPlanCard());
@@ -1767,7 +2001,12 @@ function renderNow() {
     : "";
   const env = envLine(bar.env_summary);
   const envBlock = env === "No env_facts yet." ? "" : `<div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(env)}</p></div>`;
+  const execStatus = String((state.execution && state.execution.status) || "");
+  const runLine = busy || execStatus === "running"
+    ? `<p class="now-run" id="now-run-status">Running · ${formatElapsed(runElapsedS)}</p>`
+    : "";
   host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
+    ${runLine}
     ${pipe}</div>
     ${missingLine}
     ${slotBlock}

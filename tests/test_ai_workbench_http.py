@@ -307,6 +307,34 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertIn("event: state", streamed.text)
             self.assertIn("qt.ai.strategy_meta.list", streamed.text)
 
+    def test_stream_execute_emits_heartbeat_while_runner_blocks(self) -> None:
+        """慢 runner 时 SSE 在结束前至少一条 heartbeat，且含 elapsed_s。"""
+
+        print("\n[TestAiWorkbenchHttp] sse heartbeat during long step")
+        import time
+
+        from qteasy_ai.workbench.http_app import WorkbenchHttp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            assistant = QteasyAssistant(memory_store=store, registry=build_default_registry())
+            http = WorkbenchHttp(assistant)
+
+            def runner(_on_step):
+                time.sleep(2.2)
+                return {"ok": True, "execution": {"status": "success", "steps": []}}
+
+            started = time.monotonic()
+            chunks = list(http._stream_execute(runner, query="", session_id=""))
+            elapsed = time.monotonic() - started
+            text = "".join(chunks)
+            print(" elapsed_wall:", round(elapsed, 2))
+            print(" sse head:", text[:360])
+            self.assertGreaterEqual(elapsed, 2.0)
+            self.assertIn("event: heartbeat", text)
+            self.assertIn("elapsed_s", text)
+            self.assertIn("event: state", text)
+
     def test_confirm_list_strategies_persists_artifact(self) -> None:
         """两次同文案 Plan 后 Confirm：messages 含 Finished，Artifacts 含策略表。"""
 
@@ -719,6 +747,54 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" unknown message:", message)
             self.assertTrue(message)
             self.assertNotIn("Traceback", message)
+
+    def test_live_running_locks_confirm_and_blocks_second_run_plan(self) -> None:
+        """进程内 live 时 GET 为 running 且 Confirm 关；再 run-plan 得 409。"""
+
+        print("\n[TestAiWorkbenchHttp] live running restore gate")
+        from qteasy_ai.session import clear_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            sid = "s-live"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            plan_id = (planned.get("plan_card") or {}).get("plan_id")
+            print(" plan_id:", plan_id)
+            self.assertTrue(plan_id)
+            register_live_running(sid)
+            try:
+                sess = client.get(f"/v1/session/{sid}")
+                body = sess.json()
+                card = body.get("plan_card") or {}
+                print(" get status:", sess.status_code)
+                print(" execution:", body.get("execution"))
+                print(" confirmable:", card.get("confirmable"))
+                self.assertEqual(sess.status_code, 200)
+                self.assertEqual((body.get("execution") or {}).get("status"), "running")
+                self.assertFalse(card.get("confirmable"))
+                listed = client.get("/v1/sessions").json().get("sessions") or []
+                row = next(item for item in listed if item.get("session_id") == sid)
+                print(" listed row:", row)
+                self.assertTrue(row.get("running"))
+                blocked = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
+                print(" run-plan:", blocked.status_code, blocked.json())
+                self.assertEqual(blocked.status_code, 409)
+                err = blocked.json().get("error") or {}
+                self.assertEqual(err.get("code"), "RUN_IN_PROGRESS")
+                self.assertIn("Wait for the current run", str(err.get("next_action") or ""))
+                streamed = client.post(
+                    "/v1/run-plan",
+                    params={"stream": "1"},
+                    json={"plan_id": plan_id, "session_id": sid},
+                    headers={"Accept": "text/event-stream"},
+                )
+                print(" streamed:", streamed.status_code)
+                self.assertEqual(streamed.status_code, 409)
+            finally:
+                clear_live_running(sid)
 
 
 if __name__ == "__main__":
