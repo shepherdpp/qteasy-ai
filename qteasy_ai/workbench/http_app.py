@@ -180,11 +180,10 @@ class WorkbenchHttp:
                         if isinstance(art, dict)
                     ][:12]
                 item["payload"] = payload_row
-        include_plan = run_status == "dry_run"
         if sid:
             conv = SessionStore(self.assistant.memory_store).load(sid)
             dumped["transcript"] = list(conv.messages)
-            dumped["artifacts"] = self._artifacts_for_session(conv, include_plan=include_plan)
+            dumped["artifacts"] = self._artifacts_for_session(conv)
         else:
             dumped["transcript"] = []
         return self._overlay_live_running(dumped, sid)
@@ -205,8 +204,13 @@ class WorkbenchHttp:
             dumped["plan_card"] = card
         return dumped
 
-    def _artifacts_for_session(self, conv: Any, *, include_plan: bool = True) -> List[Dict[str, Any]]:
-        """按 messages 中的 run_id 收集本 Session 产物。execute 路径不展示 plan.md。"""
+    def _artifacts_for_session(self, conv: Any) -> List[Dict[str, Any]]:
+        """按 messages 中的 run_id 收集本 Session 产物。
+
+        某个 run 自身是 dry-run 且 ``{run_id}.plan.md`` 在盘上则列入 ``type=plan``。
+        不因最新 execute 为 success/running 而扣掉已落盘的审阅文档；
+        success/running 的 execute run 没有 plan.md，不会另造 plan 项。
+        """
 
         sid = str(getattr(conv, "session_id", "") or "")
         ordered: List[str] = []
@@ -228,7 +232,7 @@ class WorkbenchHttp:
                 items.append(art)
             status = str((run.get("execution") or {}).get("status") or "")
             md_path = self.assistant.memory_store.runs_dir / f"{rid}.plan.md"
-            if include_plan and status == "dry_run" and md_path.is_file():
+            if status == "dry_run" and md_path.is_file():
                 markdown = ""
                 try:
                     markdown = md_path.read_text(encoding="utf-8")[:200000]
@@ -559,8 +563,7 @@ class WorkbenchHttp:
                 conv.append_messages(hist)
                 SessionStore(self.assistant.memory_store).save(conv)
         dumped["transcript"] = list(conv.messages)
-        exec_status = str((dumped.get("execution") or {}).get("status") or "")
-        dumped["artifacts"] = self._artifacts_for_session(conv, include_plan=(exec_status == "dry_run"))
+        dumped["artifacts"] = self._artifacts_for_session(conv)
         for row in reversed(conv.messages):
             kind = str(row.get("kind") or "")
             if kind == "ask":

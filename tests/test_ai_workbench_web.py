@@ -444,6 +444,39 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("MIN_SESSION_COL", src)
             self.assertIn("MIN_ARTIFACT_COL", src)
 
+    def test_plan_artifact_catalog_merge_open_while_busy(self) -> None:
+        """catalog 合并 workspace 与 state；Open Plan 不带 busy disabled。"""
+
+        print("\n[TestAiWorkbenchWeb] plan catalog merge open while busy")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            print(" has mergeArtifactLists:", "function mergeArtifactLists" in src)
+            print(" has absorbPlanArtifacts:", "function absorbPlanArtifacts" in src)
+            self.assertIn("function mergeArtifactLists", src)
+            self.assertIn("function absorbPlanArtifacts", src)
+            catalog = src.split("function catalogArtifacts")[1].split("function absorbPlanArtifacts")[0]
+            print(" catalog merge:", "mergeArtifactLists" in catalog)
+            print(" catalog workspace:", "workspace.artifacts" in catalog)
+            print(" catalog state:", "state.artifacts" in catalog)
+            self.assertIn("mergeArtifactLists", catalog)
+            self.assertIn("workspace.artifacts", catalog)
+            self.assertIn("state.artifacts", catalog)
+            self.assertNotIn("workspace.artifacts || state.artifacts", catalog)
+            ingest = src.split("function ingestDto")[1].split("async function sendQuery")[0]
+            print(" ingest absorbPlan:", "absorbPlanArtifacts" in ingest)
+            self.assertIn("absorbPlanArtifacts", ingest)
+            open_plan = [line for line in src.splitlines() if "data-open-plan" in line]
+            print(" open-plan lines:", open_plan)
+            self.assertTrue(open_plan)
+            for line in open_plan:
+                self.assertNotIn("disabled", line)
+                self.assertNotIn("${lock}", line)
+
 
 if __name__ == "__main__":
     unittest.main()

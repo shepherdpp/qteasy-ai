@@ -455,11 +455,13 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual((body.get("execution") or {}).get("status"), "success")
             arts = body.get("artifacts") or []
             self.assertTrue(arts)
-            self.assertEqual(arts[0].get("type"), "data_table")
-            summary = (arts[0].get("preview") or {}).get("data_summary") or {}
+            table = next((item for item in arts if item.get("type") == "data_table"), None)
+            print(" table art type:", (table or {}).get("type"))
+            self.assertIsNotNone(table)
+            summary = (table.get("preview") or {}).get("data_summary") or {}
             print(" summary:", summary)
             self.assertEqual(summary.get("strategy_id"), "bband")
-            rows = (arts[0].get("preview") or {}).get("preview_rows") or []
+            rows = (table.get("preview") or {}).get("preview_rows") or []
             print(" doc lines head:", rows[:3])
             self.assertTrue(rows)
             ws = client.get("/v1/workspace", params={"session_id": sid}).json()
@@ -795,6 +797,59 @@ class TestAiWorkbenchHttp(unittest.TestCase):
                 self.assertEqual(streamed.status_code, 409)
             finally:
                 clear_live_running(sid)
+
+    def test_plan_artifact_listed_while_running_and_after_success(self) -> None:
+        """同一 plan_id：live running 与更新的 success run 之后仍列出 dry-run plan.md。"""
+
+        print("\n[TestAiWorkbenchHttp] plan artifact while running")
+        from qteasy_ai.session import clear_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            sid = "s-plan-art"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            plan_id = (planned.get("plan_card") or {}).get("plan_id")
+            dry_run_id = str(planned.get("run_id") or "")
+            print(" plan_id:", plan_id)
+            print(" dry_run_id:", dry_run_id)
+            self.assertTrue(plan_id)
+            self.assertTrue(dry_run_id)
+            md_path = store.runs_dir / f"{dry_run_id}.plan.md"
+            print(" dry-run plan.md exists:", md_path.is_file())
+            self.assertTrue(md_path.is_file())
+            register_live_running(sid)
+            try:
+                sess = client.get(f"/v1/session/{sid}").json()
+                ws = client.get("/v1/workspace", params={"session_id": sid}).json()
+                sess_plans = [row for row in (sess.get("artifacts") or []) if row.get("type") == "plan"]
+                ws_plans = [row for row in (ws.get("artifacts") or []) if row.get("type") == "plan"]
+                print(" live execution:", sess.get("execution"))
+                print(" live session plan run_ids:", [row.get("run_id") for row in sess_plans])
+                print(" live workspace plan run_ids:", [row.get("run_id") for row in ws_plans])
+                self.assertEqual((sess.get("execution") or {}).get("status"), "running")
+                self.assertTrue(any(str(row.get("run_id")) == dry_run_id for row in sess_plans))
+                self.assertTrue(any(str(row.get("run_id")) == dry_run_id for row in ws_plans))
+            finally:
+                clear_live_running(sid)
+            executed = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid}).json()
+            success_id = str(executed.get("run_id") or "")
+            print(" success_id:", success_id)
+            print(" execute status:", (executed.get("execution") or {}).get("status"))
+            self.assertTrue(success_id)
+            self.assertNotEqual(success_id, dry_run_id)
+            self.assertEqual((executed.get("execution") or {}).get("status"), "success")
+            print(" success plan.md exists:", (store.runs_dir / f"{success_id}.plan.md").is_file())
+            self.assertFalse((store.runs_dir / f"{success_id}.plan.md").is_file())
+            after = client.get(f"/v1/session/{sid}").json()
+            after_plans = [row for row in (after.get("artifacts") or []) if row.get("type") == "plan"]
+            after_ids = [str(row.get("run_id") or "") for row in after_plans]
+            print(" after success plan run_ids:", after_ids)
+            print(" after execution:", after.get("execution"))
+            self.assertIn(dry_run_id, after_ids)
+            self.assertNotIn(success_id, after_ids)
 
 
 if __name__ == "__main__":

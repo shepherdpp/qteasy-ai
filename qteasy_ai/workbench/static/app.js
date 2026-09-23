@@ -811,6 +811,7 @@ function ingestDto(dto, { appendUser } = {}) {
   if (prevCard && prevCard.plan_id !== (state.plan_card && state.plan_card.plan_id)) {
     editingParams = false;
   }
+  absorbPlanArtifacts(state.artifacts);
   persistTranscript();
 }
 
@@ -1299,8 +1300,27 @@ function applyServerTranscript(dto) {
   persistTranscript();
 }
 
+function mergeArtifactLists(left, right) {
+  const merged = [];
+  const seen = new Set();
+  for (const row of (left || []).concat(right || [])) {
+    if (!row || !row.type) continue;
+    const key = artifactKey(row);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
+}
+
 function catalogArtifacts() {
-  return workspace.artifacts || state.artifacts || [];
+  return mergeArtifactLists(workspace.artifacts, state.artifacts);
+}
+
+function absorbPlanArtifacts(arts) {
+  const plans = (arts || []).filter((row) => row && row.type === "plan");
+  if (!plans.length) return;
+  workspace.artifacts = mergeArtifactLists(workspace.artifacts, plans);
 }
 
 function artifactKey(art) {
@@ -1382,7 +1402,7 @@ async function onWorkspaceArtifactClick(ev) {
   const btn = ev.target.closest("[data-art-index]");
   if (!btn) return;
   const idx = Number(btn.getAttribute("data-art-index") || 0);
-  const listed = workspace.artifacts || state.artifacts || [];
+  const listed = catalogArtifacts();
   if (listed.length) state.artifacts = listed;
   const art = listed[idx];
   if (art) openArtifactTab(art);
@@ -2065,7 +2085,7 @@ function renderWorkspace() {
   renderNow();
   const host = $("workspace-files");
   if (!host) return;
-  const arts = workspace.artifacts || state.artifacts || [];
+  const arts = catalogArtifacts();
   if (!arts.length) {
     host.innerHTML = `<p class="files-k">This session</p><p class="empty-hint">No artifacts in this session yet.</p>`;
     return;
