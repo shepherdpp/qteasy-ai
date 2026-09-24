@@ -23,29 +23,6 @@ from typing import Any, Dict, List, Optional
 from .knowledge_base import KbEntry, KnowledgeBase
 from .provider import BaseLLMProvider
 
-_PLAN_LIKE_HINTS = (
-    "list built-in",
-    "list builtin",
-    "list built in",
-    "列出所有内置",
-    "列出内置策略",
-    "download ",
-    "refill ",
-    "backtest",
-    "optimize",
-    "export kline",
-    "screen stock",
-    "筛股",
-    "下载",
-    "回测",
-    "优化",
-    "生成策略",
-    "strategybuilder",
-    "帮我写",
-    "写一个",
-    "创建策略",
-)
-
 _ASK_SYSTEM_PROMPT = (
     "You are a qteasy expert. Answer ONLY using the provided knowledge snippets. "
     "Reply in the same language as the user's Question "
@@ -152,9 +129,6 @@ class AskEngine:
 
         text = (query or "").strip()
         depth = explanation_depth if explanation_depth in {"brief", "standard", "deep"} else "standard"
-        if self._is_plan_like(text):
-            return self._plan_suggested(query=text, depth=depth)
-
         hits = self.knowledge_base.retrieve(text)
         if not hits:
             return self._not_found(query=text, depth=depth)
@@ -176,32 +150,6 @@ class AskEngine:
             ok=True,
             error=None,
             extra_raw=extra,
-        )
-
-    @staticmethod
-    def _is_plan_like(query: str) -> bool:
-        """判断是否为应走 Plan/preview 的执行型请求。"""
-
-        q_lower = query.lower()
-        return any(hint in q_lower for hint in _PLAN_LIKE_HINTS)
-
-    def _plan_suggested(self, *, query: str, depth: str) -> AskResponse:
-        """执行型请求：提示改用 Plan，不生成 steps。"""
-
-        answer = (
-            "This looks like an executable request (list/download/backtest/optimize/export/codegen). "
-            "Ask mode does not call skills or PlanExecutor. "
-            "Use Plan or preview to review a ToolPlan, then confirm before run."
-        )
-        return self._pack(
-            query=query,
-            answer=answer,
-            hits=[],
-            sources=["ask_plan_agent"],
-            depth=depth,
-            ok=True,
-            error=None,
-            extra_raw={"suggest": "plan_or_preview"},
         )
 
     def _not_found(self, *, query: str, depth: str) -> AskResponse:

@@ -31,7 +31,7 @@ Default **plan / ask**. Do not `run` unbounded refill. Confirm on the Plan card 
 | G9 | TUI Confirm on list-strategies | Step checklist ticks; CLI `runs/` updated |
 | G10 | First `serve` / MemoryStore | `user_kb/` scaffold still present; Ask does not search it |
 
-**Close bar:** Jackie signs G1–G10. Optional `1.0.0` is Jackie-only (CHANGELOG / pyproject). David does not bump.
+**Close bar:** Jackie signs G1–G10. **1.0.0 发版前测试真源**已迁至 [`LIVE_FIRE_DRILL_1.0.md`](LIVE_FIRE_DRILL_1.0.md)（全 KB + 全 skill）。本页仍是 G 雏形检查点。David does not bump.
 
 ## Cross links
 

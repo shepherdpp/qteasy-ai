@@ -16,6 +16,8 @@ Jackie-only smoke checklist. Automated regression: `python -m unittest discover 
 
 **Q-AI.7 G.8/G.9/G.10 人读卡、闭合 Job 与 plan.md 叙事**：**等人读观感、生命周期与 Artifact 手测**。手册 [`LIVE_FIRE_DRILL_QAI7_HUMAN.md`](LIVE_FIRE_DRILL_QAI7_HUMAN.md)。对照「原始 `--raw` → CLI `--human` / Web 气泡」；PlanReady 完成态、换题 skip、两条模式缺口、clarify skip；Artifact `# Plan` + mermaid。不关 G.6 / G.7，不升版。
 
+**1.0 发版前（G.5 + G.6）**：手续真源 [`LIVE_FIRE_DRILL_1.0.md`](LIVE_FIRE_DRILL_1.0.md)。空白结果表 [`LIVE_FIRE_DRILL_1.0_RESULTS.md`](LIVE_FIRE_DRILL_1.0_RESULTS.md)（Jackie 填写）。Part A = 全量 `test_ai_*.py` + CLI 全 22 skill + 全 18 KB。Part B = Jackie 仅 Workbench，语料覆盖同一 18+22。未关闸不得打 `1.0.0`。
+
 Plan source (qteasy repo): `.cursor/plans/s1.4a人工测试金标准_6d66df64.plan.md`.
 
 ## 1. Environment

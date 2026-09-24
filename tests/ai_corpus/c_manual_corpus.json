@@ -63,7 +63,7 @@
       "mode": "ask",
       "expected_skill": "",
       "expected_step_count": 0,
-      "notes": "suggest Plan/preview; no strategy_meta.list steps"
+      "notes": "same-width Ask; zero skill; sources come from KB, not a canned plan redirect"
     },
     {
       "id": "C-F2",
@@ -82,7 +82,7 @@
       "mode": "ask",
       "expected_skill": "",
       "expected_step_count": 0,
-      "notes": "ask must NOT emit refill step; suggest Plan instead"
+      "notes": "same-width Ask; zero skill; must NOT emit a refill step"
     },
     {
       "id": "C-P1",

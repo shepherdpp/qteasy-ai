@@ -137,37 +137,53 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertEqual(fake.prompts, [])
         self._assert_no_plan_execution(payload)
 
-    def test_plan_like_query_suggests_plan_without_steps(self) -> None:
-        """列出策略并执行类请求应提示改用 Plan，不生成 steps。"""
+    def test_executable_phrasing_still_zero_skill(self) -> None:
+        """办事句进 Ask 仍零 skill；sources 来自 KB，不短路劝退。"""
 
-        print("\n[TestAiAskEngine] plan-like query")
+        print("\n[TestAiAskEngine] executable phrasing stays in Ask")
         engine = AskEngine(knowledge_base=self.kb)
         result = engine.ask("list built-in strategies")
         payload = result.to_dict()
-        print(" answer:", payload.get("answer"))
+        print(" answer:", str(payload.get("answer", ""))[:300])
         print(" ok:", payload.get("ok"))
         print(" sources:", payload.get("sources"))
-        self.assertEqual(payload["mode"], "ask")
-        self.assertIn("plan", payload["answer"].lower())
-        self.assertNotIn("execution", payload)
-        plan = payload.get("plan")
-        self.assertTrue(plan is None or plan.get("steps") in (None, []))
+        self._assert_no_plan_execution(payload)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload.get("sources"))
         self.assertEqual(self.executor.execute_calls, 0)
         self.assertEqual(self.registry.call_count, 0)
 
-    def test_codegen_query_suggests_plan_without_writing(self) -> None:
-        """写策略类 Ask 提示改用 Plan，不写盘、不调 skill。"""
+    def test_codegen_query_hits_strategy_builder_intro(self) -> None:
+        """写策略问法进 KB，命中 strategy_builder_intro，不写盘、不调 skill。"""
 
-        print("\n[TestAiAskEngine] codegen ask suggests Plan")
+        print("\n[TestAiAskEngine] codegen ask hits intro")
         engine = AskEngine(knowledge_base=self.kb)
         result = engine.ask("帮我写一个双均线策略")
         payload = result.to_dict()
-        print(" answer:", payload.get("answer"))
-        self.assertEqual(payload["mode"], "ask")
-        self.assertIn("plan", payload["answer"].lower())
-        self.assertNotIn("execution", payload)
+        print(" sources:", payload.get("sources"))
+        print(" answer:", str(payload.get("answer", ""))[:300])
+        self._assert_no_plan_execution(payload)
+        self.assertTrue(payload["ok"])
+        self.assertIn("strategy_builder_intro", payload["sources"])
         self.assertEqual(self.executor.execute_calls, 0)
         self.assertEqual(self.registry.call_count, 0)
+
+    def test_a3_intro_queries_hit_curated_pages(self) -> None:
+        """A3 概念语料命中 intro 页，不被 plan-like 短路。"""
+
+        print("\n[TestAiAskEngine] A3 intro queries")
+        engine = AskEngine(knowledge_base=self.kb)
+        cases = (
+            ("回测入门", "backtest_intro"),
+            ("优化入门", "optimize_intro"),
+            ("strategybuilder", "strategy_builder_intro"),
+        )
+        for query, kb_id in cases:
+            payload = engine.ask(query).to_dict()
+            print(" query:", query, "sources:", payload.get("sources"))
+            self._assert_no_plan_execution(payload)
+            self.assertTrue(payload["ok"])
+            self.assertIn(kb_id, payload["sources"])
 
     def test_offline_run_freq_sources_only_operator(self) -> None:
         """Offline run_freq 问句 sources 仅为 operator_run_freq。"""

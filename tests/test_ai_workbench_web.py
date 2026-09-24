@@ -115,7 +115,7 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("/v1/artifacts/", js.text)
             self.assertIn("busy-msg", js.text)
             self.assertIn("edit-composer", js.text)
-            self.assertIn("Working ·", js.text)
+            self.assertIn('formatRunClock("Working")', js.text)
             self.assertIn("btn-stop-watch", js.text)
             self.assertIn("AbortController", js.text)
             self.assertIn("heartbeat", js.text)

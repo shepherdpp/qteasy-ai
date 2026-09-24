@@ -14,6 +14,62 @@ from pathlib import Path
 
 from qteasy_ai.app import QteasyAssistant
 
+_FALLBACK_ERROR = {
+    "clarify_required": "CLARIFY_REQUIRED",
+    "not_supported_yet": "NOT_SUPPORTED_YET",
+    "plan_only": "PLAN_ONLY",
+}
+
+
+def _plan_fallback_action(payload: dict) -> str:
+    """从 plan 第一步读取 fallback_action。"""
+
+    steps = ((payload.get("plan") or {}).get("steps") or [])
+    if not steps:
+        return ""
+    return str((steps[0].get("inputs") or {}).get("fallback_action") or "")
+
+
+def _fallback_from_run(payload: dict) -> tuple[str, str]:
+    """G.9 clarify / not_supported 可在 dry_run 下空 execution.steps。"""
+
+    steps = (payload.get("execution") or {}).get("steps") or []
+    if steps:
+        result = steps[0].get("result") or {}
+        action = str((result.get("payload") or {}).get("fallback_action") or "")
+        error_code = str((result.get("error") or {}).get("code") or "")
+        if action and error_code:
+            return action, error_code
+    action = _plan_fallback_action(payload)
+    if payload.get("clarification"):
+        return action or "clarify_required", "CLARIFY_REQUIRED"
+    if action:
+        return action, _FALLBACK_ERROR.get(action, "")
+    return action, str(((payload.get("error") or {}).get("code") or ""))
+
+
+def _error_from_run(payload: dict) -> dict:
+    """结构化错误：优先 execution.steps，否则 plan fallback / clarification。"""
+
+    steps = (payload.get("execution") or {}).get("steps") or []
+    if steps:
+        error = (steps[0].get("result") or {}).get("error") or {}
+        if error.get("code"):
+            return error
+    action = _plan_fallback_action(payload)
+    code = _FALLBACK_ERROR.get(action, "")
+    if payload.get("clarification") and not code:
+        code = "CLARIFY_REQUIRED"
+    hint = ""
+    plan_steps = ((payload.get("plan") or {}).get("steps") or [])
+    if plan_steps:
+        hint = str((plan_steps[0].get("inputs") or {}).get("hint") or "")
+    if not hint and isinstance(payload.get("clarification"), dict):
+        hint = str(payload["clarification"].get("confirm_prompt") or "")
+    if not hint and isinstance(payload.get("error"), dict):
+        return payload["error"]
+    return {"code": code, "message": hint or code}
+
 
 class TestAiCorpusRegression(unittest.TestCase):
     """测试 AI 语料回归。"""
@@ -78,10 +134,17 @@ class TestAiCorpusRegression(unittest.TestCase):
         print("\n[TestAiCorpusRegression] future capability cases:", len(cases))
         for case in cases:
             payload = assistant.run(case["query"], response_style="raw")
-            result = payload["execution"]["steps"][0]["result"]
-            action = result.get("payload", {}).get("fallback_action")
-            error_code = (result.get("error") or {}).get("code", "")
-            print(" future case:", case["id"], "action:", action, "error:", error_code)
+            action, error_code = _fallback_from_run(payload)
+            print(
+                " future case:",
+                case["id"],
+                "action:",
+                action,
+                "error:",
+                error_code,
+                "exec_steps:",
+                len((payload.get("execution") or {}).get("steps") or []),
+            )
             self.assertEqual(action, case["expected_fallback_action"])
             self.assertIn(error_code, ["PLAN_ONLY", "NOT_SUPPORTED_YET", "CLARIFY_REQUIRED"])
 
@@ -93,12 +156,12 @@ class TestAiCorpusRegression(unittest.TestCase):
         print("\n[TestAiCorpusRegression] error cases:", len(cases))
         for case in cases:
             payload = assistant.run(case["query"], response_style="raw")
-            status = payload["execution"]["status"]
-            steps = payload["execution"]["steps"]
+            status = (payload.get("execution") or {}).get("status")
+            steps = (payload.get("execution") or {}).get("steps") or []
+            error = _error_from_run(payload)
             print(" error case:", case["id"], "status:", status, "steps:", len(steps))
-            self.assertGreaterEqual(len(steps), 1)
-            error = (steps[0]["result"].get("error") or {})
             print("  error:", error)
+            self.assertTrue(steps or payload.get("clarification") or payload.get("error"))
             self.assertIn(error.get("code", ""), case["expected_error_codes"])
             self.assertIn("message", error)
 
