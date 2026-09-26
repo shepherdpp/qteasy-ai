@@ -51,14 +51,15 @@ class TestAiReadonlySkills(unittest.TestCase):
     def test_data_summary_and_export_skills(self) -> None:
         """验证数据摘要与图像导出技能。"""
 
-        date_index = pd.date_range("2024-01-01", periods=5, freq="D")
+        date_index = pd.date_range("2024-01-01", periods=8, freq="D")
+        date_index.name = "date"
         frame = pd.DataFrame(
             {
-                "open": [1, 2, 3, 4, 5],
-                "high": [2, 3, 4, 5, 6],
-                "low": [0.5, 1.5, 2.5, 3.5, 4.5],
-                "close": [1.2, 2.2, 3.1, 3.8, 5.0],
-                "vol": [10, 11, 12, 13, 14],
+                "open": [1, 2, 3, 4, 5, 6, 7, 8],
+                "high": [2, 3, 4, 5, 6, 7, 8, 9],
+                "low": [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5],
+                "close": [1.2, 2.2, 3.1, 3.8, 5.0, 5.2, 5.4, 6.0],
+                "vol": [10, 11, 12, 13, 14, 15, 16, 17],
             },
             index=date_index,
         )
@@ -70,13 +71,22 @@ class TestAiReadonlySkills(unittest.TestCase):
         simple_rets = close.pct_change().dropna()
         exp_vol_daily = float(simple_rets.std(ddof=1))
         exp_vol_annual = exp_vol_daily * float(np.sqrt(252.0))
+        rows = summary_result["payload"]["preview_rows"]
         print("\n[TestAiReadonlySkills] summary skill:", summary_meta.name)
         print(" metrics:", summary_result["metrics"])
+        print(" preview_rows:", rows)
         print(" expected vol_daily/annual:", exp_vol_daily, exp_vol_annual)
 
         self.assertTrue(summary_result["ok"])
-        self.assertEqual(summary_result["metrics"]["n_rows"], 5)
-        self.assertEqual(summary_result["metrics"]["n_trading_days"], 5)
+        self.assertEqual(summary_result["metrics"]["n_rows"], 8)
+        self.assertEqual(summary_result["metrics"]["n_trading_days"], 8)
+        self.assertEqual(len(rows), 8)
+        self.assertEqual(rows[0]["close"], 1.2)
+        self.assertEqual(rows[7]["close"], 6.0)
+        self.assertIn("2024-01-01", str(rows[0]["date"]))
+        self.assertIn("2024-01-08", str(rows[7]["date"]))
+        self.assertTrue(all(isinstance(row, dict) and "close" in row for row in rows))
+        self.assertFalse(any(isinstance(row, list) for row in rows))
         self.assertAlmostEqual(summary_result["metrics"]["volatility_daily"], exp_vol_daily, places=10)
         self.assertAlmostEqual(
             summary_result["metrics"]["volatility_annualized"], exp_vol_annual, places=10

@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from .preview_rows import tabular_preview_rows
 
 
 def _normalize_freq(freq: Optional[str]) -> str:
@@ -148,7 +149,7 @@ def build_data_summary_skill(
                 inputs_echo=inputs_echo,
                 metrics=metrics,
                 data_summary=data_summary,
-                payload={"preview": data.head(5).to_dict(orient="records")},
+                payload={"preview_rows": tabular_preview_rows(data)},
             )
         except Exception as exc:
             result = SkillResult(

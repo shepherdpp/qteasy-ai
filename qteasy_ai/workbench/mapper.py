@@ -45,6 +45,8 @@ def _slice_preview_rows(payload: Any) -> List[Any]:
     if isinstance(rows, list):
         return rows[:_PREVIEW_ROW_CAP]
     preview = payload.get("preview")
+    if isinstance(preview, list):
+        return preview[:_PREVIEW_ROW_CAP]
     if preview in (None, ""):
         return []
     return [preview]

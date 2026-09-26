@@ -11,9 +11,13 @@
 import tempfile
 import unittest
 
+import pandas as pd
+
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState
+from qteasy_ai.skills.data_read import build_data_read_skill
+from qteasy_ai.skills.data_summary import build_data_summary_skill
 from qteasy_ai.workbench.mapper import classify_artifacts, map_assistant_payload
 
 
@@ -310,6 +314,106 @@ class TestAiWorkbenchDto(unittest.TestCase):
             self.assertNotEqual(title, "plan.md")
             self.assertTrue("List" in title or "strateg" in title.lower())
             self.assertIn(str(plan_id).replace("plan_", "")[:8], title)
+
+    def test_preview_list_splits_into_rows_and_caps_at_fifty(self) -> None:
+        """payload.preview 为记录列表时按行展开，超过 50 行截断。"""
+
+        print("\n[TestAiWorkbenchDto] preview list split")
+        step = {
+            "step_id": "s1",
+            "skill_name": "qt.ai.data.summary_kline",
+            "result": {
+                "ok": True,
+                "skill_name": "qt.ai.data.summary_kline",
+                "data_summary": {"columns": ["close"]},
+                "payload": {
+                    "preview": [{"close": 1.0}, {"close": 2.0}, {"close": 3.0}],
+                },
+            },
+        }
+        items = classify_artifacts("run_prev", [step])
+        rows = items[0]["preview"]["preview_rows"]
+        print(" split rows:", rows)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0], {"close": 1.0})
+        self.assertEqual(rows[2], {"close": 3.0})
+        self.assertNotIsInstance(rows[0], list)
+
+        long_step = {
+            "step_id": "s2",
+            "skill_name": "qt.ai.data.read",
+            "result": {
+                "ok": True,
+                "data_summary": {"channel": "history"},
+                "payload": {"preview": [{"close": float(i)} for i in range(60)]},
+            },
+        }
+        capped = classify_artifacts("run_cap", [long_step])[0]["preview"]["preview_rows"]
+        print(" capped n:", len(capped), "first:", capped[0], "last:", capped[-1])
+        self.assertEqual(len(capped), 50)
+        self.assertEqual(capped[0]["close"], 0.0)
+        self.assertEqual(capped[49]["close"], 49.0)
+
+    def test_skill_payload_classifies_as_column_rows(self) -> None:
+        """data.read / data.summary 的 handler 输出经 mapper 仍是列名字典行。"""
+
+        print("\n[TestAiWorkbenchDto] skill payload to artifact rows")
+        index = pd.date_range("2024-01-02", periods=2, freq="D")
+        index.name = "date"
+        history = {"000300.SH": pd.DataFrame({"close": [10.5, 11.0]}, index=index)}
+        _, read_handler = build_data_read_skill(
+            history_func=lambda **kwargs: history,
+            reference_func=lambda **kwargs: {},
+            static_func=lambda **kwargs: {},
+        )
+        read_result = read_handler(channel="history", names="close", shares="000300.SH")
+        read_items = classify_artifacts(
+            "run_read",
+            [
+                {
+                    "step_id": "s1",
+                    "skill_name": "qt.ai.data.read",
+                    "result": read_result,
+                }
+            ],
+        )
+        read_rows = read_items[0]["preview"]["preview_rows"]
+        print(" data.read rows:", read_rows)
+
+        kline_index = pd.date_range("2024-01-01", periods=6, freq="D")
+        kline_index.name = "date"
+        kline = pd.DataFrame(
+            {
+                "open": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                "high": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+                "low": [0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
+                "close": [1.2, 2.2, 3.1, 3.8, 5.0, 5.2],
+                "vol": [10, 11, 12, 13, 14, 15],
+            },
+            index=kline_index,
+        )
+        _, summary_handler = build_data_summary_skill(get_kline_func=lambda **kwargs: kline.copy())
+        summary_result = summary_handler(shares="000300.SH", freq="d")
+        summary_items = classify_artifacts(
+            "run_sum",
+            [
+                {
+                    "step_id": "s1",
+                    "skill_name": "qt.ai.data.summary_kline",
+                    "result": summary_result,
+                }
+            ],
+        )
+        summary_rows = summary_items[0]["preview"]["preview_rows"]
+        print(" summary rows:", summary_rows)
+        self.assertEqual(len(read_rows), 2)
+        self.assertEqual(read_rows[0]["share"], "000300.SH")
+        self.assertEqual(read_rows[0]["close"], 10.5)
+        self.assertEqual(len(summary_rows), 6)
+        self.assertEqual(summary_rows[0]["close"], 1.2)
+        self.assertEqual(summary_rows[5]["close"], 5.2)
+        self.assertIn("2024-01-01", str(summary_rows[0]["date"]))
+        self.assertTrue(all(isinstance(row, dict) for row in summary_rows))
 
 
 if __name__ == "__main__":

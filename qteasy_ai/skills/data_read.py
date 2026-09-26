@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from .preview_rows import tabular_preview_rows
 
 VALID_CHANNELS = ("history", "reference", "static")
 
@@ -144,7 +145,7 @@ def build_data_read_skill(
             inputs_echo=inputs_echo,
             metrics={"n_items": n_keys, "channel": channel_name},
             data_summary={"channel": channel_name, "names": type_names},
-            payload={"preview": str(type(data))},
+            payload={"preview_rows": tabular_preview_rows(data)},
         )
         return result.to_dict()
 
