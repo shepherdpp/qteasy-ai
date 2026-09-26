@@ -1,13 +1,13 @@
 # 1.0 发版前测试手册（G.5 + G.6）
 
-**状态：手册已冻结（2026-09-24）。Part A 未关闸（A3 3 条 Ask 未命中）。Part B 未签。任一 FAIL 不得打** `1.0.0`**。David 不改 semver。**
+**状态：手册已冻结（2026-09-24）。Part A 未关闸（A3 3 条 Ask 未命中）。Part B 未签。任一 FAIL 不得打** `0.1`** 产品标签（文件名历史 `1.0`）。David 不改 semver。2026-09-26：Part B 手测缺陷 backlog 已挂修错清单（见 Status §0.1 修错）。**
 
 基线：qteasy-ai 工作台 extra · qteasy **>=2.6** · Python **py39** · **Mode-R**（可不配 Provider）
 
 
 | 项       | 说明                                                                                                                                      |
 | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **闸门**  | 1.0 = G.5 非 UI 包 + G.6。本手册是发版前测试真源                                                                                                      |
+| **闸门**  | **0.1** = G.5 非 UI 包 + G.6（手册文件名历史 `1.0`）。本手册是发版前测试真源                                                                                                      |
 | **覆盖**  | 现行 **全部 18 条**官方 KB + **全部 22 个** registry skill（含负例 `screen_stocks`）                                                                   |
 | **非目标** | 全站文档 RAG、Tutorial 6/7 / HP 2.6+ 深能力、ingest / Plan 队列、场景三 H、升版                                                                           |
 | **契约**  | 执行层 G.6；Catalog `[OFFICIAL_SKILL_CATALOG.md](OFFICIAL_SKILL_CATALOG.md)`；KB `[KB_TIER1.md](KB_TIER1.md)`；`[WORKBENCH.md](WORKBENCH.md)` |
@@ -27,16 +27,18 @@
 | **B0** Workbench 可用性壳     | —          | PENDING                                                                                         | Jackie |
 | **B1** Workbench 18 KB    | —          | PENDING                                                                                         | Jackie |
 | **B2** Workbench 22 skill | —          | PENDING                                                                                         | Jackie |
-| **关单** G.6 + 能力边界         | —          | 未签                                                                                              | Jackie |
+| **关单** G.6 + 能力边界         | —          | 未签；Part B 手测缺陷 backlog 见下 **§0.1 修错**                                                                                              | Jackie |
 
 
-**关闸顺序：** A1+A2+A3 全绿（或合法 SKIP）→ Jackie 做 B0–B2 → 两项签字成立 → Jackie 可打 `1.0.0`。
+**关闸顺序：** A1+A2+A3 全绿（或合法 SKIP）→ Jackie 做 B0–B2 → 两项签字成立 → Jackie 可打 `0.1` 线产品标签（手册历史文件名仍含 `1.0`；semver 政策见 qteasy 顶层：产品闸门 **0.1**）。
+
+**0.1 修错 backlog（2026-09-26，未关单）：** Jackie Part B 手测列出缺陷 0–19，**全部修完**才可签 Part B / 打 0.1。分诊与分组修错清单（含 TDD 纪律、设计门）：qteasy 仓 [`.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md`](https://github.com/shepherdpp/qteasy/blob/main/.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md)；记忆 [`knowledge/runlog/qteasy-ai-0.1-fix-backlog-2026-09`](https://github.com/shepherdpp/qteasy/blob/main/knowledge/runlog/qteasy-ai-0.1-fix-backlog-2026-09.md)。**已知须进 Part A 自动化覆盖的方向（修完后补断言，禁止只手测绿）：** data.read preview 非 `str(type)`；reference/static channel（含有 Provider）；改槽后 shares 生效；insight/optimize 产 Artifact；行业短名 clarify 样例进人读；factor IC 可执行或可行动错误；Stop 放行策略（须先改 Domain）。壳层（Mode 色、tab 关闭钮、栏宽折叠、Workspace 树、用户气泡 Edit 位置）用工作台定向 unittest。
 
 **A 记录（2026-09-24，Mode-R，隔离** `QTEASY_AI_HOME`**）：**
 
 - A1：`unittest discover -s tests -p 'test_ai_*.py'`。首跑 2 FAIL + 1 ERROR 为断言漂移（G.6 时钟 `formatRunClock("Working")`；G.9 clarify 可空 `execution.steps`），对齐后重跑全绿。
 - A2：CLI `plan --raw` 全员；只读/低副作用另 `run`。22b `explain PT and PS`：`plan` 转 Ask（`mode=ask`，`sources` 含 `pt_ps_vs`，零办事 step），按手册 route_to_ask 记 PASS。
-- A3：手册语料原句。三败因 Ask 把「回测/优化/strategybuilder」当可执行请求，检索落到 `ask_plan_agent`。属 1.0.x Ask 覆盖，本轮不改检索。
+- A3：手册语料原句。三败因 Ask 把「回测/优化/strategybuilder」当可执行请求，检索落到 `ask_plan_agent`。属 **0.1.x** Ask 覆盖，本轮不改检索。
 
 ---
 
@@ -164,12 +166,14 @@ TUI 不作为签字主路径（CLI/自动化已覆盖契约）。可选一行 TU
 
 | #    | 操作                                                     | 期望                                                            | Jackie |
 | ---- | ------------------------------------------------------ | ------------------------------------------------------------- | ------ |
-| B0.1 | 打开 Web                                                 | Ask/Plan/Agent 徽章可见；默认 Plan；槽齐 **不**自动 Agent                  |        |
+| B0.1 | 打开 Web                                                 | Ask/Plan/Agent 徽章可见（可无 Mode 字样；三色区分）；默认 Plan；槽齐 **不**自动 Agent                  |        |
 | B0.2 | Plan `download A-share daily data to local datasource` | 澄清选项卡；Skip = 失败结束                                             |        |
-| B0.3 | Plan `list built-in strategies`                        | `plan_ready` 短通知；Artifact 只读 `plan.md`；改 md **不**执行           |        |
-| B0.4 | Confirm 只读 plan                                        | `steps[]` / 进度 N/M / elapsed；Stop = 停观望（服务端可能仍跑）              |        |
+| B0.3 | Plan `list built-in strategies`                        | `plan_ready` 短通知；Artifact 只读 `plan.md`；改 md **不**执行；参数细节在 plan.md 不在卡上堆满           |        |
+| B0.4 | Confirm 只读 plan                                        | `steps[]` / 进度 N/M / elapsed；Stop = 现行停观望（服务端可能仍跑）；**0.1 修错 #9 将重议真取消**              |        |
 | B0.5 | 执行后                                                    | Artifact + `run_id` 可导出；切 Session 不串 tab；改名/删除 **不**删 `runs/` |        |
 | B0.6 | 安全                                                     | 无界 refill 拒绝；live 不 auto；Ask 不搜 `user_kb`；失败英文提示可行动           |        |
+| B0.7 | 栏宽（0.1 #18）                                            | 折叠 Sessions 只动对话栏宽；折叠 Workspace 只动 Artifacts 宽且贴右缘           |        |
+| B0.8 | 用户气泡 Edit（0.1 #19）                                   | hover 铅笔在用户气泡内最右侧，不占用「You」旁空间；Edit 仍走 rewind           |        |
 
 
 
@@ -240,7 +244,7 @@ Jackie 签两项均成立：
 1. **可用性**：不看内部开发手册，能在 Workbench 走完闭合 Beginner 体验（G.6）。
 2. **能力边界**：B1 全部 18 KB + B2 全部 22 skill 勾选完成（FAIL 清零或已记录可接受 SKIP）。
 
-然后 Jackie 可打 **1.0.0** + CHANGELOG。David **不**改 semver。
+然后 Jackie 可打 **0.1** 线产品标签 + CHANGELOG（手册文件名历史保留 `1.0`）。David **不**改 semver。**Part B 手测缺陷 0–19 须先按修错清单清零。**
 
 ---
 
@@ -253,6 +257,7 @@ Jackie 签两项均成立：
 - 工作台：`[WORKBENCH.md](WORKBENCH.md)`
 - 手测总入口：`[MANUAL_TEST.md](MANUAL_TEST.md)`
 - 空白结果表（Jackie 填写）：[`LIVE_FIRE_DRILL_1.0_RESULTS.md`](LIVE_FIRE_DRILL_1.0_RESULTS.md)
+- **0.1 修错清单**：qteasy 仓 `.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md`
 - 执行层 G.6 / §七：qteasy 仓 `.cursor/plans/qteasy_ai_execution_plan_1c8aecc7.plan.md`
 - 顶层 §3.9：`.cursor/plans/qteasy_ai_top_level_design.plan.md`
 

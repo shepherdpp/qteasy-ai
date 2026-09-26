@@ -22,7 +22,11 @@ Open `http://127.0.0.1:8765`. Columns: **Session** (conversation, clarification,
 - Runs are stored in the same `.qteasy/ai/runs/` directory as the CLI.
 - `GET /v1/sessions` lists saved sessions; `GET /v1/workspace` lists local files. Neither searches user KB.
 
-CLI and Notebook default to **`--human`**: they print the same kernel human cards the chat pane uses (Ask, `plan_ready`, clarify, result, error, `mode_notice`). Do not treat that text or `plan.md` as executable. Plan dry-run also writes a **`plan` Artifact** (`runs/{run_id}.plan.md`) for review: English narrative plus a mermaid flowchart from the JSON DAG (optional Why paragraph when a Provider is configured). JSON in `runs/{run_id}.json` is the only execute source (**json_wins**). **`run` / Agent does not create or show `plan.md`**. **`plan_id` is not the filename**. Same-session execute: `qteasy-ai plan "请执行上面的计划" --session-id …` or `qteasy-ai run --plan-id`. Use `--raw` or `--pretty` when you need the payload. `qteasy-ai` with no subcommand prints a usage card (`ask` / `plan` / `run --plan-id`) and does not execute.
+CLI and Notebook default to **`--human`**: they print the same kernel human cards the chat pane uses (Ask, `plan_ready`, clarify, result, error, `mode_notice`). Do not treat that text or `plan.md` as executable. Plan dry-run also writes a **`plan` Artifact** (`runs/{run_id}.plan.md`) for review: Mode-R narrative plus a mermaid flowchart from the JSON DAG (optional Why paragraph when a Provider is configured). Parameter details belong in `plan.md`, not on the short `plan_ready` card. JSON in `runs/{run_id}.json` is the only execute source (**json_wins**). **`run` / Agent does not create or show `plan.md`**. **`plan_id` is not the filename**. Same-session execute: `qteasy-ai plan "请执行上面的计划" --session-id …` or `qteasy-ai run --plan-id`. Use `--raw` or `--pretty` when you need the payload. `qteasy-ai` with no subcommand prints a usage card (`ask` / `plan` / `run --plan-id`) and does not execute.
+
+Column fold (0.1 backlog): collapsing **Sessions** should only resize the Session (chat) column; collapsing **Workspace** should only resize **Artifacts** and keep the Workspace strip flush to the right edge. User-bubble Edit (✎) belongs **inside** the bubble on the far right on hover, not beside the "You" label.
+
+**0.1 pre-release defect backlog:** qteasy repo `.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md`. Gate tests: [LIVE_FIRE_DRILL_1.0.md](LIVE_FIRE_DRILL_1.0.md).
 
 ## Minimal TUI
 
