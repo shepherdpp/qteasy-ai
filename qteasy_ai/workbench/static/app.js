@@ -68,6 +68,7 @@ let pendingRewind = null;
 let renamingSessionId = "";
 let livePoll = null;
 let executeSseOpen = false;
+let treeCollapsed = new Set();
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -234,7 +235,7 @@ function mountShell() {
           <textarea id="query-input" placeholder="Ask in natural language · Ctrl/⌘+Enter to send" rows="3"></textarea>
           <div class="composer-row">
             <div class="mode-dropdown">
-              <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="composer-mode" aria-haspopup="listbox" aria-expanded="false">Mode: PLAN ▾</button>
+              <button type="button" class="mode-badge btn-mode-menu mode-plan" data-testid="mode-badge" id="composer-mode" aria-haspopup="listbox" aria-expanded="false">Plan ▾</button>
               <div class="mode-menu" id="mode-menu" hidden>
                 <button type="button" data-mode="ask">Ask</button>
                 <button type="button" data-mode="plan">Plan</button>
@@ -442,32 +443,74 @@ function applyLayoutFlags() {
   applyColumnWidths();
 }
 
+function computeColumnTracks(opts) {
+  const input = opts || {};
+  const clientWidth = Number(input.clientWidth) || 0;
+  const railIsCollapsed = Boolean(input.railCollapsed);
+  const workspaceIsCollapsed = Boolean(input.workspaceCollapsed);
+  const sessionW = Number(input.sessionW) || 0;
+  const artW = Number(input.artW) || 0;
+  const railOpen = 200;
+  const railNarrow = 44;
+  const workspaceOpen = 280;
+  const workspaceNarrow = 44;
+  const splitter = 4;
+  const minSession = 260;
+  const minArtifact = 280;
+  const openAvail = clientWidth - railOpen - workspaceOpen - splitter;
+  let baseS;
+  let baseA;
+  const missing = sessionW < minSession || artW < minArtifact;
+  if (missing) {
+    baseS = openAvail * 11 / 25;
+    baseA = openAvail - baseS;
+  } else {
+    baseS = sessionW;
+    baseA = artW;
+  }
+  if (openAvail > 0 && baseS + baseA > openAvail) {
+    let extra = baseS + baseA - openAvail;
+    const takeS = Math.min(Math.max(baseS - minSession, 0), extra);
+    baseS -= takeS;
+    extra -= takeS;
+    baseA = Math.max(minArtifact, baseA - extra);
+    baseS = Math.max(minSession, baseS);
+  }
+  const slack = openAvail - baseS - baseA;
+  const slackPos = slack > 0 ? slack : 0;
+  let session = baseS;
+  let artifact = baseA;
+  if (railIsCollapsed && !workspaceIsCollapsed) {
+    session += (railOpen - railNarrow) + slackPos;
+  } else if (workspaceIsCollapsed && !railIsCollapsed) {
+    artifact += (workspaceOpen - workspaceNarrow) + slackPos;
+  } else if (railIsCollapsed && workspaceIsCollapsed) {
+    session += railOpen - railNarrow;
+    artifact += (workspaceOpen - workspaceNarrow) + slackPos;
+  }
+  const rail = railIsCollapsed ? railNarrow : railOpen;
+  const workspace = workspaceIsCollapsed ? workspaceNarrow : workspaceOpen;
+  return {
+    rail,
+    session,
+    splitter,
+    artifact,
+    workspace,
+    template: `${rail}px ${session}px ${splitter}px ${artifact}px ${workspace}px`,
+  };
+}
+
 function applyColumnWidths() {
   const layout = $("layout");
-  if (!layout) return;
-  const rail = railCollapsed ? 44 : 200;
-  const ws = workspaceCollapsed ? 44 : 280;
-  const splitter = 4;
-  let sessionW = Number(localStorage.getItem(STORAGE_COL_SESSION) || 0);
-  let artW = Number(localStorage.getItem(STORAGE_COL_ARTIFACT) || 0);
-  if (sessionW < MIN_SESSION_COL || artW < MIN_ARTIFACT_COL) {
-    layout.style.gridTemplateColumns = `${rail}px minmax(${MIN_SESSION_COL}px, 1.1fr) ${splitter}px minmax(${MIN_ARTIFACT_COL}px, 1.4fr) ${ws}px`;
-    return;
-  }
-  const avail = layout.clientWidth - rail - ws - splitter;
-  if (avail > 0 && avail < MIN_SESSION_COL + MIN_ARTIFACT_COL) {
-    layout.style.gridTemplateColumns = `${rail}px ${MIN_SESSION_COL}px ${splitter}px ${MIN_ARTIFACT_COL}px ${ws}px`;
-    return;
-  }
-  if (avail > 0 && sessionW + artW > avail) {
-    let extra = sessionW + artW - avail;
-    const takeS = Math.min(Math.max(sessionW - MIN_SESSION_COL, 0), extra);
-    sessionW -= takeS;
-    extra -= takeS;
-    artW = Math.max(MIN_ARTIFACT_COL, artW - extra);
-    sessionW = Math.max(MIN_SESSION_COL, sessionW);
-  }
-  layout.style.gridTemplateColumns = `${rail}px ${sessionW}px ${splitter}px ${artW}px ${ws}px`;
+  if (!layout || !layout.clientWidth) return;
+  const tracks = computeColumnTracks({
+    clientWidth: layout.clientWidth,
+    railCollapsed,
+    workspaceCollapsed,
+    sessionW: Number(localStorage.getItem(STORAGE_COL_SESSION) || 0),
+    artW: Number(localStorage.getItem(STORAGE_COL_ARTIFACT) || 0),
+  });
+  layout.style.gridTemplateColumns = tracks.template;
 }
 
 function bindColumnSplitter() {
@@ -545,9 +588,13 @@ function setMode(next) {
 }
 
 function renderMode() {
-  const label = `Mode: ${mode.toUpperCase()} ▾`;
+  const names = { ask: "Ask", plan: "Plan", agent: "Agent" };
+  const tone = names[mode] ? mode : "plan";
+  const label = `${names[tone]} ▾`;
   document.querySelectorAll("[data-testid='mode-badge'], #composer-mode, #edit-mode").forEach((el) => {
     el.textContent = label;
+    el.classList.remove("mode-ask", "mode-plan", "mode-agent");
+    el.classList.add(`mode-${tone}`);
   });
   document.querySelectorAll("#mode-menu button[data-mode], #edit-mode-menu button[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
@@ -1196,6 +1243,7 @@ function onArtifactClick(ev) {
     pendingCodeRun = false;
     filePreview = null;
     renderArtifacts();
+    renderWorkspace();
   }
   if (t.id === "btn-code-run") {
     pendingCodeRun = true;
@@ -1388,6 +1436,7 @@ function openArtifactTab(art) {
   activeKey = key;
   filePreview = null;
   renderArtifacts();
+  renderWorkspace();
 }
 
 function closeArtifactTab(key) {
@@ -1399,6 +1448,7 @@ function closeArtifactTab(key) {
     activeKey = neighbor ? artifactKey(neighbor) : "";
   }
   renderArtifacts();
+  renderWorkspace();
 }
 
 function closePlanTabsForRun(runId) {
@@ -1450,6 +1500,14 @@ function currentPlanRunId() {
 }
 
 async function onWorkspaceArtifactClick(ev) {
+  const toggle = ev.target.closest("[data-tree-toggle]");
+  if (toggle) {
+    const key = toggle.getAttribute("data-tree-toggle") || "";
+    if (treeCollapsed.has(key)) treeCollapsed.delete(key);
+    else treeCollapsed.add(key);
+    renderWorkspace();
+    return;
+  }
   const btn = ev.target.closest("[data-art-index]");
   if (!btn) return;
   const idx = Number(btn.getAttribute("data-art-index") || 0);
@@ -1469,6 +1527,7 @@ async function createSession() {
   transcript = [];
   persistTranscript();
   clearOpenTabs();
+  treeCollapsed = new Set();
   pendingCodeRun = false;
   editingParams = false;
   editingNowSlot = "";
@@ -1496,6 +1555,7 @@ async function switchSession(id) {
   applySessionMode(dto);
   applyServerTranscript(dto);
   clearOpenTabs();
+  treeCollapsed = new Set();
   filePreview = null;
   editingNowSlot = "";
   editingUserIndex = -1;
@@ -1659,7 +1719,7 @@ function renderChat() {
             <textarea id="rewind-text" rows="3" placeholder="Ask in natural language · Ctrl/⌘+Enter to send">${escapeHtml((pendingRewind && pendingRewind.query) || msg.text || "")}</textarea>
             <div class="composer-row">
               <div class="mode-dropdown">
-                <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="edit-mode" aria-haspopup="listbox" aria-expanded="false">Mode: ${mode.toUpperCase()} ▾</button>
+                <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="edit-mode" aria-haspopup="listbox" aria-expanded="false">${mode === "ask" ? "Ask" : mode === "agent" ? "Agent" : "Plan"} ▾</button>
                 <div class="mode-menu" id="edit-mode-menu" hidden>
                   <button type="button" data-mode="ask">Ask</button>
                   <button type="button" data-mode="plan">Plan</button>
@@ -1673,7 +1733,7 @@ function renderChat() {
           </div>
         </div>`);
       } else {
-        parts.push(`<div class="msg user"><div class="msg-role">You <span class="msg-actions"><button type="button" class="icon-btn ghost" data-edit-user="${i}" title="Edit">✎</button></span></div><div class="bubble">${escapeHtml(msg.text)}</div></div>`);
+        parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${i}" title="Edit">✎</button></div></div>`);
       }
     } else if (msg.kind === "error") {
       const next = (msg.payload && msg.payload.next_action) || "";
@@ -1948,8 +2008,7 @@ function renderArtifacts() {
       const key = artifactKey(tab);
       const label =
         tab.type === "settings" ? "Settings" : (art && (art.title || art.type)) || tab.type || "artifact";
-      return `<div class="tab ${key === activeKey ? "active" : ""}" data-tab="${escapeHtml(key)}">${escapeHtml(label)}
-        <button type="button" class="tab-close" data-tab-close="${escapeHtml(key)}" title="Close">×</button></div>`;
+      return `<div class="tab ${key === activeKey ? "active" : ""}" data-tab="${escapeHtml(key)}"><span class="tab-label">${escapeHtml(label)}</span><button type="button" class="tab-close" data-tab-close="${escapeHtml(key)}" title="Close">×</button></div>`;
     })
     .join("");
   const currentTab = openTabs.find((tab) => artifactKey(tab) === activeKey) || openTabs[0];
@@ -2132,6 +2191,92 @@ function renderProviderBlock() {
     <button type="button" class="ghost" id="btn-prov-edit">Change provider</button>`;
 }
 
+function groupSessionArtifacts(arts, messages) {
+  const list = Array.isArray(arts) ? arts : [];
+  const rows = Array.isArray(messages) ? messages : [];
+  const runToPlan = {};
+  const planToRuns = {};
+  rows.forEach((msg) => {
+    const payload = (msg && msg.payload) || {};
+    const rid = String(payload.run_id || "");
+    const pid = String(payload.plan_id || "");
+    if (!rid || !pid) return;
+    runToPlan[rid] = pid;
+    if (!planToRuns[pid]) planToRuns[pid] = [];
+    if (planToRuns[pid].indexOf(rid) < 0) planToRuns[pid].push(rid);
+  });
+  const claimed = {};
+  const children = [];
+  list.forEach((art, index) => {
+    if (!art || art.type !== "plan") return;
+    const rid = String(art.run_id || "");
+    const pid = runToPlan[rid] || "";
+    const runIds = {};
+    runIds[rid] = true;
+    if (pid) {
+      (planToRuns[pid] || []).forEach((id) => {
+        runIds[id] = true;
+      });
+    }
+    const kids = [];
+    list.forEach((other, j) => {
+      if (!other || other.type === "plan" || claimed[j]) return;
+      if (!runIds[String(other.run_id || "")]) return;
+      kids.push({
+        kind: "artifact",
+        art_index: j,
+        run_id: String(other.run_id || ""),
+        type: String(other.type || ""),
+        title: String(other.title || ""),
+      });
+      claimed[j] = true;
+    });
+    claimed[index] = true;
+    children.push({
+      kind: "plan",
+      label: String(art.title || "plan"),
+      run_id: rid,
+      art_index: index,
+      children: kids,
+    });
+  });
+  const orphanOrder = [];
+  const orphanKids = {};
+  list.forEach((art, index) => {
+    if (!art || claimed[index] || art.type === "plan") return;
+    const rid = String(art.run_id || "");
+    if (!orphanKids[rid]) {
+      orphanKids[rid] = [];
+      orphanOrder.push(rid);
+    }
+    orphanKids[rid].push({
+      kind: "artifact",
+      art_index: index,
+      run_id: rid,
+      type: String(art.type || ""),
+      title: String(art.title || ""),
+    });
+  });
+  orphanOrder.forEach((rid) => {
+    children.push({
+      kind: "run",
+      label: `Run ${rid.slice(0, 8)}`,
+      run_id: rid,
+      children: orphanKids[rid],
+    });
+  });
+  return { label: "This session", children };
+}
+
+function workspaceTreeClass(art) {
+  const key = artifactKey(art);
+  const opened = openTabs.some((tab) => artifactKey(tab) === key);
+  const active = Boolean(key) && key === activeKey;
+  const kind = art && art.type === "plan" ? "tree-plan" : "tree-artifact";
+  const state = active ? "is-active" : opened ? "is-open" : "is-closed";
+  return `file ${kind} ${state}`;
+}
+
 function renderWorkspace() {
   renderNow();
   const host = $("workspace-files");
@@ -2141,12 +2286,29 @@ function renderWorkspace() {
     host.innerHTML = `<p class="files-k">This session</p><p class="empty-hint">No artifacts in this session yet.</p>`;
     return;
   }
-  host.innerHTML = `<p class="files-k">This session</p><ul class="file-tree">${arts
-    .map(
-      (art, i) =>
-        `<li><button type="button" class="file" data-art-index="${i}">${escapeHtml(art.type || "artifact")} · ${escapeHtml(art.title || art.run_id || "")}</button></li>`
-    )
-    .join("")}</ul>`;
+  const tree = groupSessionArtifacts(arts, transcript);
+  const sessionOpen = !treeCollapsed.has("session");
+  const nodes = (tree.children || [])
+    .map((node) => {
+      const key = `${node.kind}::${node.run_id || ""}`;
+      const open = !treeCollapsed.has(key);
+      const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+      const head = node.kind === "plan"
+        ? `<button type="button" class="${workspaceTreeClass(arts[node.art_index])}" data-art-index="${node.art_index}">${escapeHtml(node.label || "plan")}</button>`
+        : `<span class="dir-name">${escapeHtml(node.label || "Run")}</span>`;
+      const kids = (node.children || [])
+        .map((child) => {
+          const label = `${child.type || "artifact"} · ${child.title || child.run_id || ""}`;
+          return `<li><button type="button" class="${workspaceTreeClass(arts[child.art_index])}" data-art-index="${child.art_index}">${escapeHtml(label)}</button></li>`;
+        })
+        .join("");
+      return `<li class="tree-node">${twist}${head}${open ? `<ul>${kids}</ul>` : ""}</li>`;
+    })
+    .join("");
+  const sessionTwist = `<button type="button" class="tree-twist" data-tree-toggle="session" aria-expanded="${sessionOpen ? "true" : "false"}">${sessionOpen ? "▾" : "▸"}</button>`;
+  host.innerHTML = `<div class="tree-node">${sessionTwist}<span class="files-k">This session</span>${
+    sessionOpen ? `<ul class="file-tree">${nodes}</ul>` : ""
+  }</div>`;
 }
 
 function renderPanes() {
