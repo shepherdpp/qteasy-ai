@@ -433,10 +433,17 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("function dropRunWatch", src)
             self.assertIn("function stopWatchingRun", src)
             self.assertIn("btn-stop-watch", src)
-            self.assertIn("Stopped watching this run. The server may still finish", src)
+            self.assertIn("function stopWatchingRun", src)
+            self.assertIn("cancel-run", src)
+            self.assertIn("btn-background-run", src)
+            self.assertIn("background-run", src)
+            self.assertIn("Stop this run?", src)
+            self.assertNotIn("Stopped watching this run. The server may still finish", src)
             switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
             self.assertNotIn("|| busy", switch_fn)
             self.assertIn("dropRunWatch", switch_fn)
+            self.assertNotIn("cancel-run", switch_fn)
+            self.assertNotIn("background-run", switch_fn)
             create_fn = src.split("async function createSession")[1].split("async function switchSession")[0]
             print(" create calls dropRunWatch:", "dropRunWatch" in create_fn)
             self.assertIn("dropRunWatch", create_fn)
@@ -446,6 +453,53 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" css progress-indet:", "progress-indet" in css)
             self.assertIn("progress-indet", css)
             self.assertIn("now-run-status", src)
+
+    def test_background_watch_keeps_clock_and_plan_card(self) -> None:
+        """后台监视：计时不被 setBusy 清掉，结束后收起进度条，Confirm 不被轮询关掉。"""
+
+        print("\n[TestAiWorkbenchWeb] background watch clock and plan card")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            set_busy = _extract_js_function(src, "setBusy")
+            clock = _extract_js_function(src, "updateBusyElapsedDom")
+            watch = _extract_js_function(src, "applyRunningWatch")
+            poll = _extract_js_function(src, "startLivePoll")
+            stop_fn = _extract_js_function(src, "stopWatchingRun")
+            confirm = _extract_js_function(src, "confirmPlan")
+            steps = _extract_js_function(src, "renderSteps")
+            now = _extract_js_function(src, "renderNow")
+            background_fn = _extract_js_function(src, "backgroundThisRun")
+            print(" setBusy keeps clock:", "else if (!backgrounded)" in set_busy)
+            print(" clock prefix:", 'formatRunClock("Background")' in clock and 'formatRunClock("Working")' in clock)
+            print(" watch starts clock after elapsed:", "startElapsedClock();\n  if (!executeSseOpen)" in watch)
+            print(" poll clears backgrounded:", "backgrounded = false" in poll)
+            print(" poll guards confirmable:", "blocks_composer" in poll and "confirmable: false" in poll)
+            print(" poll ignores error dto:", "dto.error" in poll)
+            print(" stop ingests:", "ingestDto" in stop_fn)
+            print(" confirm guards sse:", "if (!backgrounded)" in confirm and confirm.find("executeSseOpen = true") > confirm.find("if (!backgrounded)"))
+            print(" steps hidden when backgrounded:", "if (backgrounded) return" in steps)
+            print(" now uses Background:", 'backgrounded ? "Background"' in now)
+            print(" background copies plan_card:", "dto.plan_card" in background_fn)
+            self.assertIn("else if (!backgrounded)", set_busy)
+            self.assertIn('formatRunClock("Background")', clock)
+            self.assertIn('formatRunClock("Working")', clock)
+            self.assertIn("startElapsedClock();\n  if (!executeSseOpen)", watch)
+            self.assertIn("backgrounded = false", poll)
+            self.assertIn("blocks_composer", poll)
+            self.assertIn("confirmable: false", poll)
+            self.assertIn("dto.error", poll)
+            self.assertIn("elapsed_s", poll)
+            self.assertIn("ingestDto", stop_fn)
+            self.assertIn("if (!backgrounded)", confirm)
+            self.assertGreater(confirm.find("executeSseOpen = true"), confirm.find("if (!backgrounded)"))
+            self.assertIn("if (backgrounded) return", steps)
+            self.assertIn('backgrounded ? "Background"', now)
+            self.assertIn("dto.plan_card", background_fn)
 
     def test_live_restore_poll_and_column_splitter(self) -> None:
         """切回 running 不重 POST run-plan；2s GET 轮询；Session|Artifacts 可拖分隔。"""

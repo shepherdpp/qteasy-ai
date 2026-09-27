@@ -41,6 +41,10 @@ class _LiveSnap:
     """进程内活执行快照：计时、步态、步内进度。不落盘。"""
 
     started_at: float
+    generation: str = ""
+    task_id: str = ""
+    backgrounded: bool = False
+    cancel_event: threading.Event = field(default_factory=threading.Event)
     steps: List[Dict[str, Any]] = field(default_factory=list)
     step_index: int = 0
     step_total: int = 0
@@ -49,6 +53,22 @@ class _LiveSnap:
 
 _LIVE_RUNNING: Dict[str, _LiveSnap] = {}
 _LIVE_LOCK = threading.Lock()
+_CANCELLED_TASK_IDS: set = set()
+_DEFERRED_RUNS: Dict[str, str] = {}
+
+CANCEL_RUN_NOTICE = (
+    "Run cancelled. You can send another request. A step already inside the engine "
+    "may finish; its result will not update this session."
+)
+BACKGROUND_RUN_NOTICE = (
+    "This run continues in the background. You can ask or plan something else. "
+    "A new run starts after this one finishes."
+)
+DEFERRED_RUN_NOTICE = "A run is still in progress. This request will start after it finishes."
+DEFERRED_REPLACED_NOTICE = (
+    "A run is still in progress. This request replaces the one already waiting "
+    "and will start after the current run finishes."
+)
 
 
 def _normalize_live_steps(steps: Optional[List[Any]]) -> List[Dict[str, Any]]:
@@ -80,31 +100,140 @@ def _normalize_live_steps(steps: Optional[List[Any]]) -> List[Dict[str, Any]]:
 def register_live_running(
     session_id: str,
     steps: Optional[List[Any]] = None,
-) -> None:
-    """登记本进程正在执行的 session；首次记下 started_at，重复登记不覆盖。"""
+    task_id: str = "",
+) -> str:
+    """登记本进程正在执行的 session；首次记下 started_at，重复登记不覆盖。
+
+    Returns
+    -------
+    str
+        本次 generation。空 session_id 返回空串。
+    """
 
     sid = str(session_id or "").strip()
     if not sid:
-        return
+        return ""
     with _LIVE_LOCK:
         existing = _LIVE_RUNNING.get(sid)
         if existing is not None:
             if steps is not None:
                 existing.steps = _normalize_live_steps(steps)
                 existing.step_total = len(existing.steps)
-            return
-        snap = _LiveSnap(started_at=time.monotonic())
+            if task_id and not existing.task_id:
+                existing.task_id = str(task_id)
+            return existing.generation
+        snap = _LiveSnap(
+            started_at=time.monotonic(),
+            generation=uuid.uuid4().hex,
+            task_id=str(task_id or ""),
+        )
         if steps is not None:
             snap.steps = _normalize_live_steps(steps)
             snap.step_total = len(snap.steps)
         _LIVE_RUNNING[sid] = snap
+        return snap.generation
 
 
-def clear_live_running(session_id: str) -> None:
-    """清除本进程活执行登记。"""
+def clear_live_running(session_id: str, generation: Optional[str] = None) -> None:
+    """清除本进程活执行登记。generation 不匹配时保留更新的 run。"""
+
+    sid = str(session_id or "").strip()
+    with _LIVE_LOCK:
+        snap = _LIVE_RUNNING.get(sid)
+        if snap is None:
+            return
+        if generation is not None and snap.generation != str(generation):
+            return
+        _LIVE_RUNNING.pop(sid, None)
+
+
+def live_generation(session_id: str) -> str:
+    """当前 live generation；没有则空串。"""
+
+    snap = _LIVE_RUNNING.get(str(session_id or "").strip())
+    return str(snap.generation) if snap is not None else ""
+
+
+def live_task_id(session_id: str) -> str:
+    """当前 live 绑定的 task id；没有则空串。"""
+
+    snap = _LIVE_RUNNING.get(str(session_id or "").strip())
+    return str(snap.task_id) if snap is not None else ""
+
+
+def live_cancel_event(session_id: str) -> Optional[threading.Event]:
+    """当前 live 的取消事件。Stop 置位后，执行线程里的检查函数会返回真。"""
+
+    snap = _LIVE_RUNNING.get(str(session_id or "").strip())
+    return snap.cancel_event if snap is not None else None
+
+
+def is_live_backgrounded(session_id: str) -> bool:
+    """该 live run 是否已放到后台（不锁 Composer）。"""
+
+    snap = _LIVE_RUNNING.get(str(session_id or "").strip())
+    return bool(snap is not None and snap.backgrounded)
+
+
+def mark_live_background(session_id: str) -> bool:
+    """把当前 live run 标为后台。没有 live 时返回假。"""
 
     with _LIVE_LOCK:
-        _LIVE_RUNNING.pop(str(session_id or "").strip(), None)
+        snap = _LIVE_RUNNING.get(str(session_id or "").strip())
+        if snap is None:
+            return False
+        snap.backgrounded = True
+        return True
+
+
+def note_cancelled_task(task_id: str) -> None:
+    """记下已取消的 task id，迟到回写必须丢弃。"""
+
+    tid = str(task_id or "").strip()
+    if tid:
+        _CANCELLED_TASK_IDS.add(tid)
+
+
+def task_was_cancelled(task_id: str) -> bool:
+    """该 task id 是否已被 Stop 取消。"""
+
+    return str(task_id or "").strip() in _CANCELLED_TASK_IDS
+
+
+def request_live_cancel(session_id: str) -> str:
+    """置取消事件、记下 task id，并清掉当前 live。返回被取消的 task id。"""
+
+    sid = str(session_id or "").strip()
+    with _LIVE_LOCK:
+        snap = _LIVE_RUNNING.get(sid)
+        task_id = str(snap.task_id) if snap is not None else ""
+        if task_id:
+            _CANCELLED_TASK_IDS.add(task_id)
+        if snap is not None:
+            snap.cancel_event.set()
+        _LIVE_RUNNING.pop(sid, None)
+        _DEFERRED_RUNS.pop(sid, None)
+        return task_id
+
+
+def set_deferred_run(session_id: str, plan_id: str) -> bool:
+    """记下一条等待中的 execute。已有等待时覆盖，返回是否发生覆盖。"""
+
+    sid = str(session_id or "").strip()
+    pid = str(plan_id or "").strip()
+    if not sid or not pid:
+        return False
+    with _LIVE_LOCK:
+        replaced = sid in _DEFERRED_RUNS
+        _DEFERRED_RUNS[sid] = pid
+        return replaced
+
+
+def pop_deferred_run(session_id: str) -> str:
+    """取出并清除等待中的 plan_id。没有则空串。"""
+
+    with _LIVE_LOCK:
+        return str(_DEFERRED_RUNS.pop(str(session_id or "").strip(), "") or "")
 
 
 def is_live_running(session_id: str) -> bool:
@@ -135,6 +264,9 @@ def live_snapshot(session_id: str) -> Optional[Dict[str, Any]]:
             "step_index": snap.step_index,
             "step_total": snap.step_total,
             "steps": [dict(row) for row in snap.steps],
+            "backgrounded": bool(snap.backgrounded),
+            "blocks_composer": not bool(snap.backgrounded),
+            "task_id": str(snap.task_id or ""),
         }
         if snap.progress:
             out["progress"] = dict(snap.progress)

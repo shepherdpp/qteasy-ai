@@ -164,6 +164,25 @@ class TestAiSessionGate(unittest.TestCase):
         print(" kind:", decision.kind, "status:", session.task_status())
         self.assertEqual(decision.kind, "block_running")
 
+    def test_background_running_allows_new_intent(self) -> None:
+        """后台运行时 Composer 开新话题，不静默取消。"""
+
+        print("\n[TestAiSessionGate] background allows new intent")
+        from qteasy_ai.session import clear_live_running, mark_live_background, register_live_running
+
+        gate = SessionGate(provider=None)
+        session = _backtest_session(clarifying=False)
+        session.task.mark_running()
+        session.task.high_side_effect = True
+        register_live_running(session.session_id, task_id=session.task.id)
+        mark_live_background(session.session_id)
+        try:
+            decision = gate.classify(session, "请列出所有内置交易策略")
+            print(" kind:", decision.kind)
+            self.assertEqual(decision.kind, "new_intent")
+        finally:
+            clear_live_running(session.session_id)
+
     def test_completed_task_allows_new_job(self) -> None:
         """任务完成后同句可走新 Job。"""
 

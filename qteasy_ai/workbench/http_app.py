@@ -30,7 +30,19 @@ from ..config import build_provider_from_overlay, ensure_mplbackend_agg, provide
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore
-from ..session import SessionStore, is_live_running, live_elapsed_s, live_snapshot
+from ..session import (
+    BACKGROUND_RUN_NOTICE,
+    CANCEL_RUN_NOTICE,
+    SessionStore,
+    is_live_backgrounded,
+    is_live_running,
+    live_elapsed_s,
+    live_task_id,
+    live_snapshot,
+    mark_live_background,
+    note_cancelled_task,
+    request_live_cancel,
+)
 from ..plan_markdown import plan_artifact_title
 from .mapper import classify_artifacts, map_assistant_payload
 
@@ -189,7 +201,11 @@ class WorkbenchHttp:
         return self._overlay_live_running(dumped, sid)
 
     def _overlay_live_running(self, dumped: Dict[str, Any], session_id: str) -> Dict[str, Any]:
-        """进程内仍在执行时投影 running / elapsed / 步态，并关掉 Confirm。"""
+        """进程内仍在执行时投影 running / elapsed / 步态。
+
+        前台关掉 Confirm。后台只关掉属于当前 live 任务的那张计划卡；
+        后发的另一张计划保持自己的 confirmable。
+        """
 
         sid = str(session_id or "").strip()
         snap = live_snapshot(sid) if sid else None
@@ -198,6 +214,8 @@ class WorkbenchHttp:
         execution = dict(dumped.get("execution") or {})
         execution["status"] = "running"
         execution["elapsed_s"] = snap["elapsed_s"]
+        execution["backgrounded"] = bool(snap.get("backgrounded"))
+        execution["blocks_composer"] = bool(snap.get("blocks_composer", True))
         if snap.get("step_index"):
             execution["step_index"] = snap["step_index"]
             execution["step_total"] = snap["step_total"]
@@ -207,7 +225,14 @@ class WorkbenchHttp:
             execution["progress"] = snap["progress"]
         dumped["execution"] = execution
         card = dumped.get("plan_card")
-        if isinstance(card, dict):
+        hide_confirm = bool(execution.get("blocks_composer", True))
+        live_task = str(snap.get("task_id") or "")
+        if not hide_confirm and live_task:
+            conv = SessionStore(self.assistant.memory_store).load(sid)
+            task = conv.task
+            if task is not None and str(task.id or "") == live_task:
+                hide_confirm = True
+        if isinstance(card, dict) and hide_confirm:
             card = dict(card)
             card["confirmable"] = False
             dumped["plan_card"] = card
@@ -527,7 +552,7 @@ class WorkbenchHttp:
                 400,
             )
         session_id = str(body.get("session_id") or "").strip()
-        if session_id and is_live_running(session_id):
+        if session_id and is_live_running(session_id) and not is_live_backgrounded(session_id):
             return _error(
                 "RUN_IN_PROGRESS",
                 "A run is already in progress for this session.",
@@ -650,6 +675,64 @@ class WorkbenchHttp:
         if not store.delete(session_id):
             return _error("SESSION_NOT_FOUND", "Session not found.", 404)
         return JSONResponse({"ok": True, "session_id": session_id})
+
+    async def cancel_run(self, request: Request) -> JSONResponse:
+        """POST /v1/session/{session_id}/cancel-run：确认后的 Stop。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.exists(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        conv = store.load(session_id)
+        task_id = live_task_id(session_id)
+        stopped = bool(task_id)
+        if conv.task is not None and conv.task.status == "running" and (not task_id or conv.task.id == task_id):
+            note_cancelled_task(conv.task.id)
+            conv.cancel_task()
+            stopped = True
+        request_live_cancel(session_id)
+        if stopped:
+            conv.append_messages(
+                [
+                    {
+                        "kind": "mode_notice",
+                        "text": CANCEL_RUN_NOTICE,
+                        "payload": {"reason": "run_cancelled", "task_id": task_id},
+                    }
+                ]
+            )
+            store.save(conv)
+        return await self.get_session(request)
+
+    async def background_run(self, request: Request) -> JSONResponse:
+        """POST /v1/session/{session_id}/background-run：进度留下，Composer 解锁。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.exists(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        if not mark_live_background(session_id):
+            return _error(
+                "RUN_NOT_IN_PROGRESS",
+                "No run is in progress for this session.",
+                409,
+            )
+        conv = store.load(session_id)
+        conv.append_messages(
+            [
+                {
+                    "kind": "mode_notice",
+                    "text": BACKGROUND_RUN_NOTICE,
+                    "payload": {"reason": "background_run"},
+                }
+            ]
+        )
+        store.save(conv)
+        return await self.get_session(request)
 
     async def list_sessions(self, request: Request) -> JSONResponse:
         """GET /v1/sessions：只读列举已落盘会话。"""
@@ -909,6 +992,8 @@ def create_app(
         Route("/v1/kb/write", api.kb_write, methods=["POST"]),
         Route("/v1/sessions", api.list_sessions, methods=["GET"]),
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
+        Route("/v1/session/{session_id}/cancel-run", api.cancel_run, methods=["POST"]),
+        Route("/v1/session/{session_id}/background-run", api.background_run, methods=["POST"]),
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
         Route("/v1/session/{session_id}", api.patch_session, methods=["PATCH"]),
         Route("/v1/session/{session_id}", api.delete_session, methods=["DELETE"]),

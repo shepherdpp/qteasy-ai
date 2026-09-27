@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from .planner import Planner
 from .provider import BaseLLMProvider
-from .session import ConversationState
+from .session import ConversationState, is_live_backgrounded
 
 _PLAN_ID_RE = re.compile(r"plan_[0-9a-f]+", flags=re.IGNORECASE)
 _DISCUSS_ONLY = (
@@ -90,6 +90,8 @@ class SessionGate:
             return GateDecision(kind="fill_slot", patches=patches, rationale="answers_slot")
         status = session.task_status()
         if status == "running" and bool(getattr(session.task, "high_side_effect", False)):
+            if is_live_backgrounded(session.session_id):
+                return GateDecision(kind="new_intent", rationale="background_run")
             return GateDecision(kind="block_running", rationale="high_side_effect_running")
         return GateDecision(kind="new_intent", rationale="composer_new_task")
 

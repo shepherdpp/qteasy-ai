@@ -798,6 +798,203 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             finally:
                 clear_live_running(sid)
 
+    def test_cancel_run_clears_live_and_discards_late_cards(self) -> None:
+        """Stop 后 GET 不再是 running，迟到结果卡不写回。"""
+
+        print("\n[TestAiWorkbenchHttp] cancel run")
+        from qteasy_ai.session import SessionStore, is_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, assistant = self._client(temp_dir)
+            sid = "s-cancel"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            print(" plan ok:", planned.get("ok"), "plan_id:", (planned.get("plan_card") or {}).get("plan_id"))
+            self.assertTrue((planned.get("plan_card") or {}).get("plan_id"))
+            conv = SessionStore(store).load(sid)
+            task_id = conv.task.id
+            conv.task.mark_running()
+            conv.task.high_side_effect = True
+            SessionStore(store).save(conv)
+            register_live_running(sid, task_id=task_id)
+            cancelled = client.post(f"/v1/session/{sid}/cancel-run")
+            body = cancelled.json()
+            print(" cancel status:", cancelled.status_code)
+            print(" execution:", body.get("execution"))
+            texts = [str(row.get("text") or "") for row in (body.get("transcript") or [])]
+            print(" notices:", [text for text in texts if "cancelled" in text.lower()])
+            self.assertEqual(cancelled.status_code, 200)
+            self.assertNotEqual((body.get("execution") or {}).get("status"), "running")
+            self.assertFalse(is_live_running(sid))
+            self.assertTrue(any("Run cancelled" in text for text in texts))
+            fresh = SessionStore(store).load(sid)
+            print(" task status:", fresh.task.status)
+            self.assertEqual(fresh.task.status, "cancelled")
+            before = len(fresh.messages)
+            assistant._commit_execute_cards(
+                fresh,
+                [{"kind": "result", "text": "late result", "payload": {}}],
+                executing_task_id=task_id,
+                append_only=False,
+                run_status="success",
+                run_id="run-late",
+            )
+            again = SessionStore(store).load(sid)
+            print(" messages before/after:", before, len(again.messages))
+            print(" late present:", any(row.get("text") == "late result" for row in again.messages))
+            self.assertEqual(len(again.messages), before)
+            self.assertEqual(again.task.status, "cancelled")
+            follow = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            print(" follow block:", (follow.get("error") or {}).get("code"), follow.get("messages"))
+            blob = json.dumps(follow)
+            self.assertNotIn("block_running", blob)
+            self.assertNotIn("still running", blob.lower())
+
+    def test_background_run_unlocks_ask_and_defers_execute(self) -> None:
+        """Background 后 Ask 放行，再来的 execute 只有一条等待。"""
+
+        print("\n[TestAiWorkbenchHttp] background defers execute")
+        from qteasy_ai.session import SessionStore, is_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _assistant = self._client(temp_dir)
+            sid = "s-bg"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            plan_id = (planned.get("plan_card") or {}).get("plan_id")
+            print(" plan_id:", plan_id)
+            self.assertTrue(plan_id)
+            conv = SessionStore(store).load(sid)
+            conv.task.mark_running()
+            conv.task.high_side_effect = True
+            SessionStore(store).save(conv)
+            register_live_running(sid, task_id=conv.task.id)
+            backed = client.post(f"/v1/session/{sid}/background-run")
+            body = backed.json()
+            execution = body.get("execution") or {}
+            print(" background status:", backed.status_code, execution)
+            self.assertEqual(backed.status_code, 200)
+            self.assertEqual(execution.get("status"), "running")
+            self.assertTrue(execution.get("backgrounded"))
+            self.assertFalse(execution.get("blocks_composer"))
+            self.assertTrue(is_live_running(sid))
+            asked = client.post("/v1/ask", json={"query": "What is qteasy?", "session_id": sid})
+            print(" ask:", asked.status_code, asked.json().get("ok"), asked.json().get("error"))
+            self.assertEqual(asked.status_code, 200)
+            self.assertTrue(asked.json().get("ok"))
+            deferred = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
+            dbody = deferred.json()
+            texts = [str(row.get("text") or "") for row in (dbody.get("transcript") or [])]
+            print(" deferred:", deferred.status_code, [text for text in texts if "in progress" in text])
+            self.assertEqual(deferred.status_code, 200)
+            self.assertTrue(any("will start after it finishes" in text for text in texts))
+            self.assertTrue(is_live_running(sid))
+            again = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
+            atexts = [str(row.get("text") or "") for row in (again.json().get("transcript") or [])]
+            print(" replaced:", [text for text in atexts if "replaces" in text])
+            self.assertTrue(any("replaces the one already waiting" in text for text in atexts))
+
+    def test_background_hides_the_running_plan_card(self) -> None:
+        """Background 后正在跑的那张计划卡不可确认；进度投影仍在。"""
+
+        print("\n[TestAiWorkbenchHttp] background hides the running plan card")
+        from qteasy_ai.session import SessionStore, clear_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _assistant = self._client(temp_dir)
+            sid = "s-bg-hide"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            card = planned.get("plan_card") or {}
+            print(" before plan_id:", card.get("plan_id"), "confirmable:", card.get("confirmable"))
+            self.assertTrue(card.get("plan_id"))
+            self.assertTrue(card.get("confirmable"))
+            conv = SessionStore(store).load(sid)
+            conv.task.mark_running()
+            conv.task.high_side_effect = True
+            SessionStore(store).save(conv)
+            register_live_running(sid, task_id=conv.task.id)
+            try:
+                backed = client.post(f"/v1/session/{sid}/background-run")
+                body = backed.json()
+                execution = body.get("execution") or {}
+                shown = body.get("plan_card") or {}
+                print(" background status:", backed.status_code, execution.get("status"), execution.get("backgrounded"))
+                print(" running card confirmable:", shown.get("confirmable"), "plan_id:", shown.get("plan_id"))
+                self.assertEqual(backed.status_code, 200)
+                self.assertEqual(execution.get("status"), "running")
+                self.assertTrue(execution.get("backgrounded"))
+                self.assertFalse(execution.get("blocks_composer"))
+                self.assertEqual(shown.get("plan_id"), card.get("plan_id"))
+                self.assertFalse(shown.get("confirmable"))
+                sess = client.get(f"/v1/session/{sid}").json()
+                got = sess.get("plan_card") or {}
+                print(" get confirmable:", got.get("confirmable"), "get backgrounded:", (sess.get("execution") or {}).get("backgrounded"))
+                self.assertFalse(got.get("confirmable"))
+                self.assertTrue((sess.get("execution") or {}).get("backgrounded"))
+            finally:
+                clear_live_running(sid)
+
+    def test_background_followup_plan_stays_confirmable(self) -> None:
+        """Background 后再 plan，live 仍在，新计划卡保持可确认。"""
+
+        print("\n[TestAiWorkbenchHttp] background follow-up plan stays confirmable")
+        from qteasy_ai.session import SessionStore, clear_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _assistant = self._client(temp_dir)
+            sid = "s-bg-card"
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": sid},
+            ).json()
+            plan_id = (planned.get("plan_card") or {}).get("plan_id")
+            print(" first plan_id:", plan_id, "confirmable:", (planned.get("plan_card") or {}).get("confirmable"))
+            self.assertTrue(plan_id)
+            self.assertTrue((planned.get("plan_card") or {}).get("confirmable"))
+            conv = SessionStore(store).load(sid)
+            conv.task.mark_running()
+            conv.task.high_side_effect = True
+            SessionStore(store).save(conv)
+            register_live_running(sid, task_id=conv.task.id)
+            try:
+                backed = client.post(f"/v1/session/{sid}/background-run")
+                print(" background:", backed.status_code, (backed.json().get("execution") or {}).get("backgrounded"))
+                self.assertEqual(backed.status_code, 200)
+                follow = client.post(
+                    "/v1/plan",
+                    json={"query": "list built-in strategies", "session_id": sid},
+                )
+                body = follow.json()
+                card = body.get("plan_card") or {}
+                execution = body.get("execution") or {}
+                print(" follow status:", follow.status_code)
+                print(" follow plan_id:", card.get("plan_id"))
+                print(" backgrounded:", execution.get("backgrounded"), "blocks_composer:", execution.get("blocks_composer"))
+                print(" confirmable:", card.get("confirmable"), "execution status:", execution.get("status"))
+                self.assertEqual(follow.status_code, 200)
+                self.assertEqual(execution.get("status"), "running")
+                self.assertTrue(execution.get("backgrounded"))
+                self.assertFalse(execution.get("blocks_composer"))
+                self.assertTrue(card.get("plan_id"))
+                self.assertTrue(card.get("confirmable"))
+                sess = client.get(f"/v1/session/{sid}").json()
+                got = sess.get("plan_card") or {}
+                print(" get confirmable:", got.get("confirmable"), "get backgrounded:", (sess.get("execution") or {}).get("backgrounded"))
+                self.assertTrue(got.get("confirmable"))
+                self.assertTrue((sess.get("execution") or {}).get("backgrounded"))
+            finally:
+                clear_live_running(sid)
+
     def test_plan_artifact_listed_while_running_and_after_success(self) -> None:
         """同一 plan_id：live running 与更新的 success run 之后仍列出 dry-run plan.md。"""
 

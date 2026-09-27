@@ -50,6 +50,8 @@ let pendingCodeRun = false;
 let editingParams = false;
 let editingNowSlot = "";
 let busy = false;
+let backgrounded = false;
+const STOP_CONFIRM = "Stop this run? Backtests and optimizations stop at the next step, and this run's result is discarded. A refill saves rows already fetched, then stops; that result is not applied.";
 let runAbort = null;
 let runStartedAt = 0;
 let runElapsedS = 0;
@@ -655,9 +657,9 @@ function runningSkillName() {
 
 function updateBusyElapsedDom() {
   const label = $("busy-elapsed");
-  if (label) label.textContent = formatRunClock("Working");
+  if (label) label.textContent = backgrounded ? formatRunClock("Background") : formatRunClock("Working");
   const now = $("now-run-status");
-  if (now) now.textContent = formatRunClock("Running");
+  if (now) now.textContent = backgrounded ? formatRunClock("Background") : formatRunClock("Running");
 }
 
 function startElapsedClock() {
@@ -685,6 +687,7 @@ function dropRunWatch() {
   runAbort = null;
   if (controller) controller.abort();
   stopLivePoll();
+  backgrounded = false;
   if (busy) setBusy(false);
   else {
     stopElapsedClock();
@@ -697,20 +700,48 @@ function isDtoRunning(dto) {
   return String((dto && dto.execution && dto.execution.status) || "") === "running";
 }
 
+function noteRunClock(dto) {
+  const elapsed = dto && dto.execution && dto.execution.elapsed_s;
+  if (elapsed != null && !runStartedAt) {
+    runElapsedS = Math.max(0, Math.floor(Number(elapsed) || 0));
+    runStartedAt = Date.now() - runElapsedS * 1000;
+  }
+  if (!runStartedAt) runStartedAt = Date.now();
+  startElapsedClock();
+}
+
 function applyRunningWatch(dto) {
   if (!isDtoRunning(dto)) {
     stopLivePoll();
+    backgrounded = false;
     if (busy && !executeSseOpen) setBusy(false);
     return;
   }
   const elapsed = dto.execution && dto.execution.elapsed_s;
   if (elapsed != null && !runStartedAt) {
-    runStartedAt = Date.now() - Number(elapsed) * 1000;
     runElapsedS = Math.max(0, Math.floor(Number(elapsed) || 0));
+    runStartedAt = Date.now() - runElapsedS * 1000;
   }
   if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
-  if (!busy) setBusy(true);
+  const lockComposer = dto.execution && dto.execution.blocks_composer !== false && !dto.execution.backgrounded;
+  backgrounded = !lockComposer;
+  if (lockComposer) {
+    if (!busy) setBusy(true);
+  } else if (busy) {
+    setBusy(false);
+  }
+  if (!runStartedAt) {
+    runStartedAt = Date.now();
+  }
+  startElapsedClock();
   if (!executeSseOpen) startLivePoll();
+  renderChat();
+  renderNow();
+}
+
+function isTerminalRun(dto) {
+  const status = String((dto && dto.execution && dto.execution.status) || "");
+  return status === "success" || status === "error" || status === "failed" || status === "partial_failed" || status === "cancelled" || status === "dry_run";
 }
 
 function startLivePoll() {
@@ -718,13 +749,21 @@ function startLivePoll() {
   livePoll = setInterval(async () => {
     if (executeSseOpen || !sessionId) return;
     const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
+    if (dto && dto.error) return;
     if (isDtoRunning(dto)) {
       if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
-      if (dto.plan_card) state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card, { confirmable: false });
+      const foreground = dto.execution && dto.execution.blocks_composer !== false && !dto.execution.backgrounded;
+      if (dto.plan_card) {
+        state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card, foreground ? { confirmable: false } : {});
+      }
+      const elapsed = dto.execution && dto.execution.elapsed_s;
+      if (elapsed != null || isDtoRunning(dto)) noteRunClock(dto);
       renderNow();
       renderChat();
       return;
     }
+    if (!isTerminalRun(dto)) return;
+    backgrounded = false;
     stopLivePoll();
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
@@ -742,24 +781,75 @@ function stopLivePoll() {
   }
 }
 
-function stopWatchingRun() {
-  if (!busy && !runAbort) return;
+async function stopWatchingRun() {
+  if (!busy && !backgrounded && !runAbort) return;
+  if (!window.confirm(STOP_CONFIRM)) return;
+  if (!sessionId) {
+    dropRunWatch();
+    backgrounded = false;
+    return;
+  }
+  const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/cancel-run`, { method: "POST" });
+  if (dto && dto.error) {
+    transcript.push({
+      kind: "error",
+      text: dto.error.message || "Stop did not complete.",
+      payload: dto.error,
+    });
+    persistTranscript();
+    renderChat();
+    return;
+  }
+  backgrounded = false;
   dropRunWatch();
-  transcript.push({
-    kind: "mode_notice",
-    text: "Stopped watching this run. The server may still finish; if status looks stuck, refresh the session or start a new topic.",
-  });
-  persistTranscript();
+  if (dto && !dto.error) {
+    ingestDto(dto, { appendUser: false });
+    if (dto.transcript) applyServerTranscript(dto);
+  }
   renderChat();
+  renderNow();
+}
+
+async function backgroundThisRun() {
+  if (!busy || !sessionId) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/background-run`, { method: "POST" });
+  if (dto && dto.error) {
+    transcript.push({
+      kind: "error",
+      text: dto.error.message || "Background did not complete.",
+      payload: dto.error,
+    });
+    persistTranscript();
+    renderChat();
+    return;
+  }
+  const controller = runAbort;
+  const started = runStartedAt;
+  runAbort = null;
+  if (controller) controller.abort();
+  executeSseOpen = false;
+  backgrounded = true;
+  setBusy(false);
+  runStartedAt = started || Date.now();
+  if (dto && dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
+  if (dto && dto.plan_card) state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card);
+  if (dto && dto.transcript) applyServerTranscript(dto);
+  if (!runStartedAt) runStartedAt = Date.now();
+  startElapsedClock();
+  startLivePoll();
+  renderChat();
+  renderNow();
 }
 
 function setBusy(next) {
   busy = next;
   if (busy) {
-    if (!runAbort) runAbort = new AbortController();
-    if (!runStartedAt) runStartedAt = Date.now();
-    startElapsedClock();
-  } else {
+    if (!backgrounded) {
+      if (!runAbort) runAbort = new AbortController();
+      if (!runStartedAt) runStartedAt = Date.now();
+      startElapsedClock();
+    }
+  } else if (!backgrounded) {
     stopElapsedClock();
     runStartedAt = 0;
     runElapsedS = 0;
@@ -922,14 +1012,20 @@ async function sendQuery(query, { keepDraft } = {}) {
   transcript.push({ kind: "user_text", text });
   persistTranscript();
   renderChat();
+  const keepWatch = backgrounded;
   setBusy(true);
-  if (mode === "agent") executeSseOpen = true;
+  if (mode === "agent" && !backgrounded) executeSseOpen = true;
   try {
     const body = JSON.stringify({ query: text, session_id: sessionId });
     const path = mode === "ask" ? "/v1/ask" : mode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
     const headers = { "Content-Type": "application/json" };
     if (mode === "agent") headers.Accept = "text/event-stream";
-    const dto = await api(path, { method: "POST", headers, body, signal: runAbort ? runAbort.signal : undefined });
+    const dto = await api(path, {
+      method: "POST",
+      headers,
+      body,
+      signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
+    });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
     pendingCodeRun = false;
@@ -948,7 +1044,7 @@ async function sendQuery(query, { keepDraft } = {}) {
       renderChat();
     }
   } finally {
-    executeSseOpen = false;
+    if (!keepWatch) executeSseOpen = false;
     setBusy(false);
   }
 }
@@ -989,18 +1085,32 @@ async function sendControlSkip() {
   }
 }
 
+function isDeferredNotice(dto) {
+  const rows = (dto && (dto.transcript || dto.messages)) || [];
+  return rows.some((row) => row && row.payload && row.payload.reason === "deferred_run");
+}
+
 async function confirmPlan() {
   const planId = state.plan_card && state.plan_card.plan_id;
   if (!planId || (state.plan_card && state.plan_card.confirmable === false) || busy) return;
-  setBusy(true);
-  executeSseOpen = true;
+  const keepWatch = backgrounded;
+  if (!backgrounded) {
+    setBusy(true);
+    executeSseOpen = true;
+  }
   try {
     const dto = await api("/v1/run-plan?stream=1", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ plan_id: planId, session_id: sessionId }),
-      signal: runAbort ? runAbort.signal : undefined,
+      signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
     });
+    if (keepWatch && isDeferredNotice(dto)) {
+      if (dto && dto.transcript) applyServerTranscript(dto);
+      renderChat();
+      renderNow();
+      return;
+    }
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
     pendingCodeRun = false;
@@ -1018,8 +1128,10 @@ async function confirmPlan() {
       renderChat();
     }
   } finally {
-    executeSseOpen = false;
-    setBusy(false);
+    if (!keepWatch) {
+      executeSseOpen = false;
+      setBusy(false);
+    }
   }
 }
 
@@ -1055,6 +1167,7 @@ function onChatClick(ev) {
   if (!(t instanceof HTMLElement)) return;
   if (t.id === "btn-confirm" || t.id === "btn-code-confirm") confirmPlan();
   if (t.id === "btn-stop-watch") stopWatchingRun();
+  if (t.id === "btn-background-run") backgroundThisRun();
   if (t.id === "btn-cancel") cancelPlan();
   if (t.id === "btn-edit") {
     editingParams = true;
@@ -1746,10 +1859,13 @@ function renderChat() {
       parts.push(`<div class="msg"><div class="msg-role">Assistant</div><div class="bubble">${escapeHtml(msg.text || "")}${extra}</div></div>`);
     }
   }
-  if (busy) {
+  if (busy || backgrounded) {
     const skill = runningSkillName();
     const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
-    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock("Working")}</span>${skillLine}${progressBarHtml()}<div class="actions"><button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
+    const backgroundBtn = backgrounded
+      ? ""
+      : `<button type="button" class="ghost" id="btn-background-run">Background</button>`;
+    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock(backgrounded ? "Background" : "Working")}</span>${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
   }
   parts.push(renderClarification());
   parts.push(renderPlanCard());
@@ -1872,6 +1988,7 @@ function renderPlanCard() {
 }
 
 function renderSteps() {
+  if (backgrounded) return "";
   const steps = (state.execution && state.execution.steps) || [];
   if (!steps.length) return "";
   const failed = steps.some((s) => s.status === "error");
@@ -2132,8 +2249,8 @@ function renderNow() {
   const env = envLine(bar.env_summary);
   const envBlock = env === "No env_facts yet." ? "" : `<div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(env)}</p></div>`;
   const execStatus = String((state.execution && state.execution.status) || "");
-  const runLine = busy || execStatus === "running"
-    ? `<p class="now-run" id="now-run-status">${formatRunClock("Running")}</p>`
+  const runLine = busy || backgrounded || execStatus === "running"
+    ? `<p class="now-run" id="now-run-status">${formatRunClock(backgrounded ? "Background" : "Running")}</p>`
     : "";
   host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
     ${runLine}

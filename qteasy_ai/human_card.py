@@ -198,7 +198,7 @@ def project_human_cards(
         cards.append(
             make_card(
                 "mode_notice",
-                "A high side-effect plan is still running. Wait for it to finish, or press Cancel.",
+                "A high side-effect plan is still running. Wait for it to finish, press Background, or press Stop.",
                 {"requested_mode": requested, "effective_kind": "block_running"},
             )
         )

@@ -47,12 +47,21 @@ from .run_policy import RunStorePolicy
 from .progress_bridge import bind_progress_callback, install_qteasy_tqdm_bridge, reset_progress_callback
 from .session import (
     ConversationState,
+    DEFERRED_REPLACED_NOTICE,
+    DEFERRED_RUN_NOTICE,
     SessionStore,
+    _LIVE_LOCK,
     clear_live_running,
+    is_live_backgrounded,
+    is_live_running,
+    live_cancel_event,
     mark_live_progress,
     mark_live_step_end,
     mark_live_step_start,
+    pop_deferred_run,
     register_live_running,
+    set_deferred_run,
+    task_was_cancelled,
 )
 from .session_gate import (
     SessionGate,
@@ -535,6 +544,8 @@ class QteasyAssistant:
         plan.execution_mode = "execute"
         session = None
         sid = str(session_id or "").strip()
+        if sid and is_live_running(sid) and is_live_backgrounded(sid):
+            return self._deferred_execute_notice(sid, str(plan_id or ""))
         if sid:
             session = self.session_store.load(sid)
         return self._execute_and_format(
@@ -581,12 +592,26 @@ class QteasyAssistant:
         if clarify_plan:
             confirm = False
         live_sid = ""
+        live_generation = ""
+        executing_task_id = ""
+        append_only = False
         if confirm and session is not None and session.task is not None:
-            session.task.status = "running"
-            session.task.high_side_effect = plan_has_high_side_effect(plan)
-            self.session_store.save(session)
+            plan_key = str(getattr(plan, "plan_id", "") or "")
+            owns_task = (not plan_key) or str(session.task.plan_id or "") == plan_key
+            if owns_task:
+                executing_task_id = str(session.task.id or "")
+                session.task.status = "running"
+                session.task.high_side_effect = plan_has_high_side_effect(plan)
+                self.session_store.save(session)
+            else:
+                executing_task_id = "detached-" + plan_key
+                append_only = True
             live_sid = str(session.session_id or "")
-            register_live_running(live_sid, steps=list(getattr(plan, "steps", None) or []))
+            live_generation = register_live_running(
+                live_sid,
+                steps=list(getattr(plan, "steps", None) or []),
+                task_id=executing_task_id,
+            )
         reuse_run_id = ""
         assumptions = getattr(plan, "assumptions", None) or {}
         if (
@@ -637,27 +662,48 @@ class QteasyAssistant:
                 on_progress(done, total, label)
 
         progress_token = None
+        cancel_token = None
         if live_sid:
             install_qteasy_tqdm_bridge()
             progress_token = bind_progress_callback(_on_progress)
+            event = live_cancel_event(live_sid)
+            if event is not None:
+                from qteasy.cancel_check import bind_cancel_check
+
+                cancel_token = bind_cancel_check(event.is_set)
         try:
-            payload = self.executor.execute(
-                plan,
-                confirm=confirm,
-                persist_run=False,
-                on_step=_on_step,
-                on_step_start=_on_step_start if (live_sid or on_step_start is not None) else None,
-                run_id=reuse_run_id,
-            )
-        except Exception:
-            if live_sid:
-                clear_live_running(live_sid)
-            raise
+            try:
+                payload = self.executor.execute(
+                    plan,
+                    confirm=confirm,
+                    persist_run=False,
+                    on_step=_on_step,
+                    on_step_start=_on_step_start if (live_sid or on_step_start is not None) else None,
+                    run_id=reuse_run_id,
+                )
+            except Exception as exc:
+                from qteasy.cancel_check import RunCancelled
+
+                if isinstance(exc, RunCancelled):
+                    payload = {
+                        "execution": {"status": "cancelled", "steps": []},
+                        "run_id": "",
+                        "plan": plan.to_dict() if hasattr(plan, "to_dict") else {},
+                    }
+                else:
+                    if live_sid:
+                        clear_live_running(live_sid, generation=live_generation)
+                    raise
         finally:
             if progress_token is not None:
                 reset_progress_callback(progress_token)
+            if cancel_token is not None:
+                from qteasy.cancel_check import reset_cancel_check
+
+                reset_cancel_check(cancel_token)
+        start_deferred = False
         try:
-            return self._persist_after_execute(
+            result = self._persist_after_execute(
                 payload,
                 plan=plan,
                 confirm=confirm,
@@ -674,10 +720,21 @@ class QteasyAssistant:
                 response_style=response_style,
                 explanation_depth=explanation_depth,
                 assumptions=assumptions,
+                executing_task_id=executing_task_id,
+                append_only=append_only,
             )
+            start_deferred = bool(live_sid) and not task_was_cancelled(executing_task_id)
+            return result
         finally:
             if live_sid:
-                clear_live_running(live_sid)
+                clear_live_running(live_sid, generation=live_generation)
+            if start_deferred:
+                nxt = pop_deferred_run(live_sid)
+                if nxt:
+                    try:
+                        self.run_plan(nxt, session_id=live_sid, response_style="raw")
+                    except Exception:
+                        pass
 
     def _persist_after_execute(
         self,
@@ -698,6 +755,8 @@ class QteasyAssistant:
         response_style: str,
         explanation_depth: str,
         assumptions: Dict[str, Any],
+        executing_task_id: str = "",
+        append_only: bool = False,
     ) -> Dict[str, Any] | AssistantOutput:
         """execute 成功后落盘 / 标 done；调用方在 finally 里 clear_live。"""
 
@@ -722,14 +781,6 @@ class QteasyAssistant:
             payload["block_running"] = True
         elif confirm:
             self._merge_env_facts_from_execution(payload)
-            if session is not None and session.task is not None:
-                status = str((payload.get("execution") or {}).get("status") or "")
-                session.task.mark_done()
-                session.task.run_id = str(payload.get("run_id") or "")
-                if status == "success":
-                    session.task.set_pending(None)
-                    session.task.set_missing([])
-                self.session_store.save(session)
         elif session is not None and session.task is not None:
             pending = session.task.pending_clarification
             if clarify_plan or pending or session.task.missing:
@@ -783,6 +834,9 @@ class QteasyAssistant:
             requested_mode=requested_mode,
             session=session,
             include_user_text=include_user,
+            executing_task_id=executing_task_id if confirm else "",
+            append_only=append_only if confirm else False,
+            run_status=str((payload.get("execution") or {}).get("status") or "") if confirm else "",
         )
 
         if response_style == "raw":
@@ -1073,7 +1127,10 @@ class QteasyAssistant:
                     )
                     self.session_store.save(state)
                     return dummy, state
-                topic_skipped = bool(state.task and state.task.status in {"clarifying", "ready", "running"})
+                backgrounded = is_live_backgrounded(state.session_id)
+                topic_skipped = bool(
+                    state.task and state.task.status in {"clarifying", "ready", "running"}
+                ) and not backgrounded
                 if topic_skipped:
                     state.cancel_task()
                 state.start_task(query=asked)
@@ -1193,6 +1250,9 @@ class QteasyAssistant:
         requested_mode: str,
         session: Optional[ConversationState],
         include_user_text: bool = True,
+        executing_task_id: str = "",
+        append_only: bool = False,
+        run_status: str = "",
     ) -> None:
         """投影人读卡写入 payload 与 session messages[]。"""
 
@@ -1206,9 +1266,73 @@ class QteasyAssistant:
             include_user_text=include_user_text,
         )
         payload["human_cards"] = cards
-        if session is not None:
+        if session is None:
+            return
+        if not executing_task_id:
             session.append_messages(cards)
             self.session_store.save(session)
+            return
+        self._commit_execute_cards(
+            session,
+            cards,
+            executing_task_id=executing_task_id,
+            append_only=append_only,
+            run_status=run_status,
+            run_id=str(payload.get("run_id") or ""),
+        )
+
+    def _commit_execute_cards(
+        self,
+        session: ConversationState,
+        cards: list,
+        *,
+        executing_task_id: str,
+        append_only: bool,
+        run_status: str,
+        run_id: str,
+    ) -> None:
+        """锁内重载后再写 Task / 结果卡，避免旧对象盖掉 Stop 或新 Task。"""
+
+        with _LIVE_LOCK:
+            if task_was_cancelled(executing_task_id):
+                return
+            fresh = self.session_store.load(session.session_id)
+            task = fresh.task
+            same = task is not None and str(task.id or "") == str(executing_task_id)
+            if same and str(task.status or "") == "running" and not append_only:
+                task.mark_done()
+                task.run_id = str(run_id or "")
+                if run_status == "success":
+                    task.set_pending(None)
+                    task.set_missing([])
+            elif not same and not append_only and not is_live_backgrounded(session.session_id):
+                return
+            fresh.append_messages(cards)
+            self.session_store.save(fresh)
+
+    def _deferred_execute_notice(self, session_id: str, plan_id: str) -> Dict[str, Any]:
+        """后台仍在跑时，把新的 execute 排成一条等待。"""
+
+        replaced = set_deferred_run(session_id, plan_id)
+        text = DEFERRED_REPLACED_NOTICE if replaced else DEFERRED_RUN_NOTICE
+        state = self.session_store.load(session_id)
+        state.append_messages(
+            [
+                {
+                    "kind": "mode_notice",
+                    "text": text,
+                    "payload": {"reason": "deferred_run", "plan_id": str(plan_id or "")},
+                }
+            ]
+        )
+        self.session_store.save(state)
+        return {
+            "mode": "plan",
+            "plan": {"plan_id": str(plan_id or ""), "steps": [], "assumptions": {"deferred_run": True}},
+            "execution": {"status": "", "steps": []},
+            "assumptions": {"deferred_run": True},
+            "deferred_run": True,
+        }
 
     def _attach_session_payload(
         self,
