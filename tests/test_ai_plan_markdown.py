@@ -11,10 +11,11 @@
 import tempfile
 import unittest
 
-from qteasy_ai.app import QteasyAssistant
+from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.plan_markdown import plan_artifact_title, tool_plan_to_markdown
+from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 
 
@@ -207,6 +208,82 @@ class TestAiPlanMarkdown(unittest.TestCase):
         print(" empty steps:", empty)
         self.assertTrue(empty.startswith("Plan ·"))
         self.assertIn("ab12cd34", empty)
+
+    def test_optimize_plan_states_date_source_and_ai_defaults(self) -> None:
+        """优化计划写明日期来源，以及 AI 默认 opti_method / opti_sample_count。"""
+
+        print("\n[TestAiPlanMarkdown] optimize date source and AI defaults")
+        plan = Planner(build_default_registry(), env_facts={}).build_plan(
+            "optimize DMA parameters",
+            mode="plan",
+        )
+        md = tool_plan_to_markdown(plan)
+        print(" plan_md:\n", md)
+        self.assertIn("qt.ai.optimize.run_builtin", md)
+        self.assertIn("opti_method=montecarlo", md)
+        self.assertIn("opti_sample_count=32", md)
+        self.assertIn("AI default", md)
+        self.assertIn("kernel", md)
+        self.assertNotIn("drawdown", md.lower())
+        self.assertNotIn("hit_count", md.lower())
+
+    def test_chinese_query_without_provider_stays_english(self) -> None:
+        """无 Provider 时中文问句仍是英文 Mode-R。"""
+
+        print("\n[TestAiPlanMarkdown] chinese query mode-r stays english")
+        plan = self._two_step_plan()
+        plan.user_query = "请导出 K 线"
+        md = tool_plan_to_markdown(plan)
+        print(" head:", md.splitlines()[:6])
+        self.assertIn("# Plan", md)
+        self.assertIn("You asked: 请导出 K 线", md)
+        self.assertNotIn("## Why this plan", md)
+
+    def test_chinese_provider_rewrites_prose_and_keeps_code_mermaid(self) -> None:
+        """中文问句 + Provider：散文跟用户语言，mermaid 仍是代码生成的。"""
+
+        print("\n[TestAiPlanMarkdown] chinese provider rewrite")
+        plan = self._two_step_plan()
+        plan.user_query = "请先检查环境再导出 K 线"
+        mode_r = tool_plan_to_markdown(plan)
+        zh = (
+            "# 计划\n\n"
+            "先检查环境，再导出 K 线。\n\n"
+            "1. 检查 Tushare（`qt.ai.env.check_tushare`）\n"
+            "2. 导出 K 线（`qt.ai.visual.export_kline`）\n"
+            "预期产物是图表文件，没有收益数字。\n"
+        )
+        provider = FakeLLMProvider(replies=[zh])
+        md = tool_plan_to_markdown(plan, provider=provider)
+        print(" md:\n", md)
+        self.assertIn("先检查环境", md)
+        self.assertIn("qt.ai.env.check_tushare", md)
+        self.assertIn("qt.ai.visual.export_kline", md)
+        self.assertNotIn("## What will run", md)
+        self.assertNotIn("## Why this plan", md)
+        self.assertIn("```mermaid", md)
+        self.assertIn("step_1 --> step_2", md)
+        fence = mode_r.index("```mermaid")
+        fence_end = mode_r.index("```", fence + 3) + 3
+        self.assertIn(mode_r[fence:fence_end], md)
+        self.assertNotIn("gold_lock", md)
+
+    def test_chinese_provider_metric_falls_back_to_english(self) -> None:
+        """中文改写若夹带回撤数字则丢弃，留英文 Mode-R。"""
+
+        print("\n[TestAiPlanMarkdown] chinese rewrite dropped on metric")
+        plan = self._two_step_plan()
+        plan.user_query = "请导出 K 线"
+        provider = FakeLLMProvider(
+            replies=["计划会把最大回撤降到 12%，并调用 qt.ai.env.check_tushare 与 qt.ai.visual.export_kline。"]
+        )
+        md = tool_plan_to_markdown(plan, provider=provider)
+        print(" has plan heading:", "# Plan" in md)
+        print(" has drawdown:", "回撤" in md or "drawdown" in md.lower())
+        self.assertIn("# Plan", md)
+        self.assertIn("You asked:", md)
+        self.assertNotIn("回撤", md)
+        self.assertNotIn("drawdown", md.lower())
 
 
 if __name__ == "__main__":

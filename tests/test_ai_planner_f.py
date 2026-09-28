@@ -215,6 +215,59 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(names[0], "qt.ai.env.check_tushare")
             self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
 
+    def test_confirmed_slot_overrides_old_symbol_on_data_read(self) -> None:
+        """已确认 shares 盖过问句里更早的旧代码；data.read 步骤输入跟着新槽。"""
+
+        print("\n[TestAiPlannerF] confirmed slot overrides data.read shares")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self._assistant(temp_dir)
+            sid = "s-slot-read"
+            first = assistant.plan(
+                "get_history_data close for 000300.SH from 20240101 to 20240131",
+                response_style="raw",
+                session_id=sid,
+            )
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            print(" first inputs:", read[0]["inputs"] if read else None)
+            self.assertTrue(read)
+            self.assertEqual(read[0]["inputs"].get("shares"), "000300.SH")
+
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"shares": "000001.SZ", "freq": "w", "start": "20240201"},
+            )
+            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            store = SessionStore(assistant.memory_store)
+            state = store.load(sid)
+            slot = state.task.slots["shares"].to_dict()
+            print(" slot:", slot)
+            print(" second inputs:", read2[0]["inputs"] if read2 else None)
+            self.assertTrue(read2)
+            self.assertTrue(slot["confirmed"])
+            self.assertEqual(slot["value"], "000001.SZ")
+            self.assertEqual(read2[0]["inputs"].get("shares"), "000001.SZ")
+            self.assertEqual(read2[0]["inputs"].get("freq"), "w")
+            self.assertEqual(read2[0]["inputs"].get("start"), "20240201")
+            self.assertNotIn("000300.SH", str(read2[0]["inputs"].get("shares")))
+
+    def test_unconfirmed_profile_shares_do_not_override_explicit_code(self) -> None:
+        """未确认的 profile 默认不盖过问句里的显式代码。"""
+
+        print("\n[TestAiPlannerF] unconfirmed default does not override explicit shares")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self._assistant(temp_dir, defaults={"shares": "000300.SH"})
+            payload = assistant.plan(
+                "get_history_data close for 000001.SZ from 20240101 to 20240131",
+                response_style="raw",
+                session_id="s-explicit",
+            )
+            read = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            print(" inputs:", read[0]["inputs"] if read else None)
+            self.assertTrue(read)
+            self.assertEqual(read[0]["inputs"].get("shares"), "000001.SZ")
+
 
 if __name__ == "__main__":
     unittest.main()

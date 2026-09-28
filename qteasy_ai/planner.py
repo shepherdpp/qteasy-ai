@@ -217,6 +217,7 @@ class Planner:
 
         query = user_query.strip()
         q_lower = query.lower()
+        self._market_overrides = self._confirmed_market_overrides(session)
         self.intent_engine.provider = self.provider
         task = getattr(session, "task", None) if session is not None else None
         skip = bool(skip_classify and task is not None and str(getattr(task, "job", "") or ""))
@@ -276,10 +277,44 @@ class Planner:
         steps, default_notes = self._apply_optional_defaults(steps, decision.job, profile or {}, session)
         if default_notes:
             assumptions["slot_defaults"] = default_notes
+        input_sources: Dict[str, str] = {}
+        for key, note in (default_notes or {}).items():
+            if note != "profile":
+                continue
+            if key == "start":
+                input_sources["invest_start"] = "profile"
+            elif key == "end":
+                input_sources["invest_end"] = "profile"
+            else:
+                input_sources[str(key)] = "profile"
+        for step in steps:
+            if step.skill_name != "qt.ai.optimize.run_builtin":
+                continue
+            input_sources["opti_method"] = "ai_default"
+            input_sources["opti_sample_count"] = "ai_default"
+            if step.inputs.get("invest_start") or step.inputs.get("start"):
+                input_sources.setdefault("invest_start", "user")
+            else:
+                input_sources["invest_start"] = "kernel"
+            if step.inputs.get("invest_end") or step.inputs.get("end"):
+                input_sources.setdefault("invest_end", "user")
+            else:
+                input_sources["invest_end"] = "kernel"
+        if input_sources:
+            assumptions["input_sources"] = input_sources
         missing = self._required_missing(decision.job, steps, session)
         if missing:
             assumptions["clarification"] = self._session_clarification(user_query, missing)
             assumptions["session_missing"] = missing
+        intent_flags = dict(decision.flags or {})
+        for step in steps:
+            if step.skill_name == "qt.ai.data.read":
+                channel = str((step.inputs or {}).get("channel") or "").strip()
+                if channel:
+                    intent_flags["channel"] = channel
+        if intent_flags:
+            assumptions["intent_flags"] = intent_flags
+        self._market_overrides = None
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=user_query,
@@ -324,6 +359,27 @@ class Planner:
                 parts.append(f"{key} {value}")
         return " ".join(item for item in parts if item).strip()
 
+    @staticmethod
+    def _confirmed_market_overrides(session: Any) -> Dict[str, Any]:
+        """已确认的标的/日期/频率。抽槽时这些值优先于问句里更早的代码。"""
+
+        task = getattr(session, "task", None) if session is not None else None
+        slots = getattr(task, "slots", {}) or {} if task is not None else {}
+        overrides: Dict[str, Any] = {}
+        for key in ("shares", "start", "end", "freq"):
+            slot = slots.get(key)
+            if slot is None or not getattr(slot, "confirmed", False):
+                continue
+            value = getattr(slot, "value", None)
+            if value not in (None, ""):
+                overrides[key] = value
+        return overrides
+
+    def _market_inputs(self, query: str) -> Dict[str, Any]:
+        """抽标的与日期；已确认槽盖过问句中先出现的旧代码。"""
+
+        return self._extract_market_inputs(query, overrides=getattr(self, "_market_overrides", None))
+
     def _overlay_session_slots(self, steps: List[ToolStep], session: Any) -> List[ToolStep]:
         """用 session 槽覆盖步骤输入；补齐后可把 refill 澄清换成真步骤。"""
 
@@ -335,6 +391,13 @@ class Planner:
         def _val(name: str) -> Any:
             slot = slots.get(name)
             return getattr(slot, "value", None) if slot is not None else None
+
+        def _confirmed(name: str) -> Any:
+            slot = slots.get(name)
+            if slot is None or not getattr(slot, "confirmed", False):
+                return None
+            value = getattr(slot, "value", None)
+            return None if value in (None, "") else value
 
         for step in steps:
             name = step.skill_name
@@ -361,6 +424,15 @@ class Planner:
                     step.inputs["asset_pool"] = _val("shares")
                 if _val("strategy_id"):
                     step.inputs["strategy_id"] = _val("strategy_id")
+            if name == "qt.ai.data.read":
+                if _confirmed("shares"):
+                    step.inputs["shares"] = _confirmed("shares")
+                if _confirmed("start"):
+                    step.inputs["start"] = _confirmed("start")
+                if _confirmed("end"):
+                    step.inputs["end"] = _confirmed("end")
+                if _confirmed("freq"):
+                    step.inputs["freq"] = _confirmed("freq")
             if name == "qt.ai.strategy.spec_from_nl":
                 if _val("slow") is not None:
                     step.inputs["slow"] = _val("slow")
@@ -844,7 +916,7 @@ class Planner:
             ),
         ]
         if self._is_backtest_query(q_lower):
-            market = self._extract_market_inputs(query)
+            market = self._market_inputs(query)
             bt_inputs: Dict[str, Any] = {
                 "strategy_id": spec.class_name or "GeneratedSmaCross",
                 "freq": spec.run_freq or market.get("freq") or "d",
@@ -970,7 +1042,7 @@ class Planner:
             primary = self._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.research.factor_ic_summary",
-                inputs=self._extract_market_inputs(query),
+                inputs=self._market_inputs(query),
             )
             return [primary]
 
@@ -978,7 +1050,7 @@ class Planner:
             primary = self._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.data.summary_kline",
-                inputs=self._extract_market_inputs(query),
+                inputs=self._market_inputs(query),
             )
             return [primary]
 
@@ -986,7 +1058,7 @@ class Planner:
             primary = self._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.visual.export_kline",
-                inputs=self._extract_market_inputs(query),
+                inputs=self._market_inputs(query),
             )
             return [primary]
 
@@ -1248,7 +1320,7 @@ class Planner:
 
         if not skip_query_guard and not self._is_download_query(q_lower):
             return None
-        market = self._extract_market_inputs(query)
+        market = self._market_inputs(query)
         start = market.get("start")
         end = market.get("end")
         if not start or not end:
@@ -1301,7 +1373,7 @@ class Planner:
                     ),
                 )
             ]
-        market = self._extract_market_inputs(query)
+        market = self._market_inputs(query)
         inputs: Dict[str, Any] = {
             "strategy_id": strategy_id,
             "opti_method": "montecarlo",
@@ -1346,7 +1418,7 @@ class Planner:
                     ),
                 )
             ]
-        market = self._extract_market_inputs(query)
+        market = self._market_inputs(query)
         inputs: Dict[str, Any] = {"strategy_id": strategy_id, "freq": market.get("freq") or "d"}
         if market.get("shares"):
             inputs["asset_pool"] = market["shares"]
@@ -1601,7 +1673,10 @@ class Planner:
         return alias_map
 
     @staticmethod
-    def _extract_market_inputs(query: str) -> Dict[str, Any]:
+    def _extract_market_inputs(
+        query: str,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """提取标的与时间参数。
 
         当前支持抽取：
@@ -1610,6 +1685,19 @@ class Planner:
         - 频率：`1min/5min/15min/30min/60min/d/w/m`。
 
         返回值仅包含命中的字段，未命中的字段由技能内部使用默认值。
+        ``overrides`` 里已确认的 shares/start/end/freq 盖过问句中先出现的旧值。
+
+        Parameters
+        ----------
+        query : str
+            用户问句或拼进槽之后的文本。
+        overrides : dict, optional
+            已确认槽。非空键优先于正则第一次命中。
+
+        Returns
+        -------
+        dict
+            命中的标的、日期与频率。
         """
 
         result: Dict[str, Any] = {}
@@ -1651,4 +1739,10 @@ class Planner:
         freq_match = re.search(r"\b(1min|5min|15min|30min|60min|d|w|m)\b", query, flags=re.IGNORECASE)
         if freq_match:
             result["freq"] = freq_match.group(1)
+        for key in ("shares", "start", "end", "freq"):
+            if not overrides:
+                break
+            value = overrides.get(key)
+            if value not in (None, ""):
+                result[key] = value
         return result

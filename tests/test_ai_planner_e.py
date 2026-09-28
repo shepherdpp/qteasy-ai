@@ -9,11 +9,14 @@
 # ======================================
 
 import json
+import tempfile
 import unittest
 
-from qteasy_ai.app import build_default_registry
+from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
+from qteasy_ai.session import SessionStore
 
 
 class TestAiPlannerE(unittest.TestCase):
@@ -124,6 +127,81 @@ class TestAiPlannerE(unittest.TestCase):
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertEqual(plan.steps[0].inputs.get("reason"), "invalid_frequency_expression")
+
+    def test_mode_r_reference_gold_keeps_channel(self) -> None:
+        """Mode-R gold 句 cn_gdp 仍是 reference，不打进 history。"""
+
+        print("\n[TestAiPlannerE] mode-r cn_gdp channel")
+        plan = Planner(self.registry, env_facts={}).build_plan(
+            "get_reference_data cn_gdp from 20240101 to 20240131",
+            mode="plan",
+        )
+        inputs = plan.steps[0].inputs
+        print(" skill:", plan.steps[0].skill_name)
+        print(" inputs:", inputs)
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
+        self.assertEqual(inputs.get("channel"), "reference")
+        self.assertEqual(inputs.get("names"), "cn_gdp")
+
+    def test_provider_dtype_channel_persists_on_task(self) -> None:
+        """有 Provider 时按 DataType 定 channel，并写入 task.flags，跟进不退回 history。"""
+
+        print("\n[TestAiPlannerE] provider dtype channel")
+        cases = (
+            ("please fetch cn_gdp from 20240101 to 20240131", "reference", "cn_gdp"),
+            ("please fetch industry for 000001.SZ", "static", "industry"),
+            ("please fetch close for 000300.SH from 20240101 to 20240131", "history", "close"),
+        )
+        for query, channel, names in cases:
+            fake = FakeLLMProvider(replies=[json.dumps({"job": "data.read", "uncertain": False})])
+            plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+            inputs = plan.steps[0].inputs
+            print(" query:", query)
+            print(" inputs:", inputs)
+            self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
+            self.assertEqual(inputs.get("channel"), channel)
+            self.assertEqual(inputs.get("names"), names)
+            self.assertNotIn("get_reference_data", query)
+            self.assertNotIn("get_static_data", query)
+            self.assertNotIn("get_history_data", query)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            reply = json.dumps({"job": "data.read", "uncertain": False})
+            fake = FakeLLMProvider(replies=[reply, reply])
+            assistant = QteasyAssistant(
+                memory_store=store,
+                registry=self.registry,
+                provider=fake,
+            )
+            sid = "s-gdp"
+            first = assistant.plan(
+                "please fetch cn_gdp from 20240101 to 20240131",
+                response_style="raw",
+                session_id=sid,
+            )
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            state = SessionStore(store).load(sid)
+            print(" first inputs:", read[0]["inputs"] if read else None)
+            print(" task flags:", state.task.flags if state.task else None)
+            self.assertTrue(read)
+            self.assertEqual(read[0]["inputs"].get("channel"), "reference")
+            self.assertEqual(read[0]["inputs"].get("names"), "cn_gdp")
+            self.assertEqual(state.task.flags.get("channel"), "reference")
+
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"end": "20240630"},
+            )
+            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            print(" second inputs:", read2[0]["inputs"] if read2 else None)
+            print(" second source:", second["plan"]["planner_trace"].get("source"))
+            self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
+            self.assertTrue(read2)
+            self.assertEqual(read2[0]["inputs"].get("channel"), "reference")
+            self.assertEqual(read2[0]["inputs"].get("names"), "cn_gdp")
 
 
 if __name__ == "__main__":

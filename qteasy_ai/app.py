@@ -1203,6 +1203,9 @@ class QteasyAssistant:
 
         job = str((plan.planner_trace or {}).get("intent_job") or "")
         flags = dict(state.task.flags or {}) if state.task is not None else {}
+        incoming = (getattr(plan, "assumptions", None) or {}).get("intent_flags")
+        if isinstance(incoming, dict):
+            flags.update(incoming)
         if job and job not in {"clarify", "route_to_ask", "unsafe", "open"}:
             if state.task is None:
                 state.start_task(query=query, job=job, flags=flags)

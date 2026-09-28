@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from ..intent_engine import IntentDecision
@@ -145,7 +146,7 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             planner._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.data.summary_kline",
-                inputs=planner._extract_market_inputs(query),
+                inputs=planner._market_inputs(query),
             )
         ]
     if job == "data.export":
@@ -153,7 +154,7 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             planner._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.visual.export_kline",
-                inputs=planner._extract_market_inputs(query),
+                inputs=planner._market_inputs(query),
             )
         ]
     if job == "data.refill":
@@ -166,7 +167,7 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             planner._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.research.factor_ic_summary",
-                inputs=planner._extract_market_inputs(query),
+                inputs=planner._market_inputs(query),
             )
         ]
     if job == "research.factor_explore":
@@ -272,11 +273,58 @@ def _compose_strategy_meta(planner: "Planner", query: str, q_lower: str) -> List
     return [planner._make_step(step_id="step_1", skill_name="qt.ai.strategy_meta.list", inputs={})]
 
 
-def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) -> List["ToolStep"]:
-    """三入口只读取数。"""
+_API_TO_CHANNEL = {
+    "get_history_data": "history",
+    "get_reference_data": "reference",
+    "get_static_data": "static",
+}
 
-    market = planner._extract_market_inputs(query)
-    channel = str(flags.get("channel") or "history")
+
+@lru_cache(maxsize=64)
+def _recommended_channel(dtype_name: str) -> str:
+    """按 DataType 推荐入口给出 history / reference / static。
+
+    Parameters
+    ----------
+    dtype_name : str
+        宽名，如 ``cn_gdp`` / ``industry`` / ``close``。
+
+    Returns
+    -------
+    str
+        三入口之一；查不到或多种入口并存时返回空串。
+    """
+
+    name = str(dtype_name or "").strip()
+    if not name:
+        return ""
+    try:
+        import qteasy as qt
+
+        frame = qt.find_history_data(name, as_data_frame=True)
+    except Exception:
+        return ""
+    if frame is None or getattr(frame, "empty", True) or "name" not in getattr(frame, "columns", []):
+        return ""
+    exact = frame.loc[frame["name"].astype(str) == name]
+    if exact.empty or "recommended_api" not in exact.columns:
+        return ""
+    apis = {str(item).strip() for item in exact["recommended_api"].tolist() if str(item).strip()}
+    if len(apis) != 1:
+        return ""
+    return _API_TO_CHANNEL.get(next(iter(apis)), "")
+
+
+def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) -> List["ToolStep"]:
+    """三入口只读取数。字面非 history 的 channel 保持不动；否则跟 DataType 推荐入口。"""
+
+    market = planner._market_inputs(query)
+    channel = str(flags.get("channel") or "history").strip().lower() or "history"
+    names = _extract_dtype_names(query)
+    if channel == "history" and names:
+        recommended = _recommended_channel(names)
+        if recommended in {"reference", "static"}:
+            channel = recommended
     inputs: Dict[str, Any] = {"channel": channel}
     if market.get("shares"):
         inputs["shares"] = market["shares"]
@@ -286,7 +334,6 @@ def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) ->
         inputs["end"] = market["end"]
     if market.get("freq"):
         inputs["freq"] = market["freq"]
-    names = _extract_dtype_names(query)
     if names:
         inputs["names"] = names
     return [

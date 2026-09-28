@@ -45,9 +45,23 @@ ASSUMPTION_BLACKLIST = frozenset(
     }
 )
 _METRIC_RE = re.compile(
-    r"\b(sharpe|drawdown|hit_count|max_drawdown|annual(?:ized)?\s+return|hit count)\b",
+    r"(\b(sharpe|drawdown|hit_count|max_drawdown|annual(?:ized)?\s+return|hit count)\b|回撤|夏普)",
     re.IGNORECASE,
 )
+_SOURCE_LABEL = {
+    "user": "user",
+    "profile": "profile",
+    "kernel": "kernel",
+    "ai_default": "AI default",
+}
+_STEP_EXPECT = {
+    "qt.ai.data.read": "a data-table artifact",
+    "qt.ai.data.summary_kline": "a k-line summary artifact",
+    "qt.ai.visual.export_kline": "a chart-file artifact",
+    "qt.ai.backtest.run_builtin": "a backtest report artifact; return and drawdown are unknown until the run",
+    "qt.ai.optimize.run_builtin": "an optimization artifact; best parameters are unknown until the run",
+    "qt.ai.env.check_tushare": "an environment-check artifact",
+}
 _SKILL_RE = re.compile(r"qt\.ai\.[a-zA-Z0-9_.]+")
 _WHY_HEADING_RE = re.compile(r"^#{1,3}\s*Why this plan\s*", re.IGNORECASE)
 
@@ -71,6 +85,12 @@ _WHY_SYSTEM_PROMPT = (
     "Use only skill names, slot values, and the plan_id from the fact pack. "
     "Do not invent extra steps, qt.ai skill names, returns, drawdowns, hit counts, "
     "or other metrics."
+)
+_ZH_SYSTEM_PROMPT = (
+    "Rewrite this qteasy-ai plan review into Simplified Chinese markdown. "
+    "Keep every qt.ai skill id and every parameter value unchanged. "
+    "Do not add steps, returns, drawdowns, hit counts, or a mermaid diagram. "
+    "Output the rewritten prose only."
 )
 
 
@@ -322,6 +342,42 @@ def _build_mermaid(steps: Sequence[Dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _source_label(sources: Dict[str, str], key: str, default: str) -> str:
+    """把来源键译成英文标签。"""
+
+    raw = str((sources or {}).get(key) or default)
+    return _SOURCE_LABEL.get(raw, raw or default)
+
+
+def _optimize_lines(step: Dict[str, Any], sources: Dict[str, str]) -> List[str]:
+    """优化步骤：AI 默认与日期来源。不写未跑出的最优值。"""
+
+    inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+    method = inputs.get("opti_method", "montecarlo")
+    count = inputs.get("opti_sample_count", 32)
+    lines = [
+        (
+            "   - Optimized settings: "
+            f"opti_method={method} ({_source_label(sources, 'opti_method', 'ai_default')}), "
+            f"opti_sample_count={count} ({_source_label(sources, 'opti_sample_count', 'ai_default')})"
+        ),
+        "   - Search space: strategy parameters with opt_tag 1 or 2.",
+    ]
+    start = inputs.get("invest_start") or inputs.get("start")
+    end = inputs.get("invest_end") or inputs.get("end")
+    if start or end:
+        lines.append(
+            "   - Dates: "
+            f"invest_start={start or 'unset'} ({_source_label(sources, 'invest_start', 'user')}), "
+            f"invest_end={end or 'unset'} ({_source_label(sources, 'invest_end', 'user')})"
+        )
+    else:
+        lines.append(
+            "   - Dates: not set in the plan; the kernel window is used at run time (source: kernel)."
+        )
+    return lines
+
+
 def _mode_r_body(
     *,
     plan_id: str,
@@ -330,10 +386,12 @@ def _mode_r_body(
     risk: str,
     steps: Sequence[Dict[str, Any]],
     slots: Sequence[Tuple[str, str]],
+    sources: Optional[Dict[str, str]] = None,
     registry: Any = None,
 ) -> str:
     """无 Provider 时的确定性人读正文。"""
 
+    source_map = dict(sources or {})
     lines: List[str] = ["# Plan", ""]
     if plan_id:
         lines.append(f"plan_id: {plan_id}")
@@ -355,10 +413,15 @@ def _mode_r_body(
             lines.append(f"{index}. {title}")
         label = _side_effects_label(step.get("side_effects"))
         lines.append(f"   - Side effects: {label}")
+        lines.append(f"   - Reads as: {title}.")
+        expect = _STEP_EXPECT.get(skill, "a result artifact; performance figures are unknown until the run")
+        lines.append(f"   - Expected output: {expect}")
         step_slots = _collect_slots({}, [step])
         if step_slots:
             shown = ", ".join(f"{key}={value}" for key, value in step_slots)
             lines.append(f"   - Inputs: {shown}")
+        if skill == "qt.ai.optimize.run_builtin":
+            lines.extend(_optimize_lines(step, source_map))
         lines.append("")
     lines.extend(["## Flow", "", "```mermaid", _build_mermaid(steps).rstrip(), "```", ""])
     if slots:
@@ -366,6 +429,20 @@ def _mode_r_body(
         for key, value in slots:
             lines.append(f"- {_slot_title(key)}: {value}")
         lines.append("")
+    lines.extend(
+        [
+            "## Expected result",
+            "",
+            "After confirm, the run writes the step artifacts above. "
+            "This file states artifact types only.",
+            "",
+            "## Confirm",
+            "",
+            "High side effects wait for an explicit confirm. "
+            "JSON wins; editing this markdown does not change the plan.",
+            "",
+        ]
+    )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -399,6 +476,51 @@ def _normalize_why(text: str) -> str:
 
     body = str(text or "").strip()
     body = _WHY_HEADING_RE.sub("", body).strip()
+    return body
+
+
+def _mermaid_fence(mode_r: str) -> str:
+    """取出 Mode-R 里由代码生成的 mermaid 块。"""
+
+    match = re.search(r"```mermaid\n.*?```", mode_r, flags=re.DOTALL)
+    if not match:
+        return ""
+    return match.group(0)
+
+
+def _llm_language_overlay(
+    *,
+    provider: Any,
+    mode_r: str,
+    plan_id: str,
+    steps: Sequence[Dict[str, Any]],
+) -> str:
+    """中文问句时改写散文；失败返回空串。框图仍用 Mode-R 原块。"""
+
+    if provider is None or not hasattr(provider, "chat"):
+        return ""
+    allowed = _allowed_skills(steps)
+    fact_pack = (
+        f"plan_id: {plan_id}\n"
+        f"allowed_skills: {sorted(allowed)}\n"
+        f"mode_r_markdown:\n{mode_r}"
+    )
+    try:
+        raw = provider.chat(fact_pack, system_prompt=_ZH_SYSTEM_PROMPT)
+    except Exception:
+        return ""
+    body = str(raw or "").strip()
+    if not _why_is_allowed(body, allowed_skills=allowed):
+        return ""
+    for skill in allowed:
+        if skill not in body:
+            return ""
+    body = re.sub(r"```mermaid\n.*?```", "", body, flags=re.DOTALL).strip()
+    fence = _mermaid_fence(mode_r)
+    if fence:
+        body = f"{body}\n\n{fence}"
+    if not body.endswith("\n"):
+        body += "\n"
     return body
 
 
@@ -437,8 +559,9 @@ def tool_plan_to_markdown(
 ) -> str:
     """将 ToolPlan（对象或 dict）转为 plan.md 文本。
 
-    Mode-R 叙事与 mermaid 必须独立成立。``provider`` 仅用于叠
-    ``## Why this plan``；校验失败则丢弃叠段。
+    Mode-R 叙事与 mermaid 必须独立成立。英文问句时 ``provider`` 只叠
+    ``## Why this plan``。中文问句时改写散文并保留代码生成的 mermaid；
+    校验失败则留英文 Mode-R。
 
     Parameters
     ----------
@@ -458,7 +581,10 @@ def tool_plan_to_markdown(
     unpacked = _unpack_plan(plan)
     raw_steps = unpacked["steps"]
     steps = [_normalize_step(item, index) for index, item in enumerate(raw_steps, start=1)]
-    slots = _collect_slots(unpacked["assumptions"], steps)
+    assumptions = unpacked["assumptions"] if isinstance(unpacked["assumptions"], dict) else {}
+    slots = _collect_slots(assumptions, steps)
+    raw_sources = assumptions.get("input_sources")
+    sources = dict(raw_sources) if isinstance(raw_sources, dict) else {}
     trace = unpacked["planner_trace"] if isinstance(unpacked["planner_trace"], dict) else {}
     job = str(trace.get("intent_job") or "").strip()
     risk = _overall_risk([_side_effects_label(item.get("side_effects")) for item in steps])
@@ -469,8 +595,19 @@ def tool_plan_to_markdown(
         risk=risk,
         steps=steps,
         slots=slots,
+        sources=sources,
         registry=registry,
     )
+    if provider is not None and re.search(r"[\u4e00-\u9fff]", unpacked["user_query"]):
+        rewritten = _llm_language_overlay(
+            provider=provider,
+            mode_r=mode_r,
+            plan_id=unpacked["plan_id"],
+            steps=steps,
+        )
+        if rewritten:
+            return rewritten
+        return mode_r
     why = _llm_why_overlay(
         provider=provider,
         mode_r=mode_r,
