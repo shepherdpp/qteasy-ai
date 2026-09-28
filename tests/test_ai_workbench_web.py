@@ -783,6 +783,77 @@ class TestAiWorkbenchWeb(unittest.TestCase):
                 client_width,
             )
 
+    def test_splitter_drag_stores_base_widths(self) -> None:
+        """拖动写入的是展开基准宽，折叠后再画回同一显示宽；分割线不因悬停或拖动变色。"""
+
+        print("\n[TestAiWorkbenchWeb] splitter drag stores base widths")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            convert = _extract_js_function(src, "storedColumnsFromDisplayed")
+            tracks_fn = _extract_js_function(src, "computeColumnTracks")
+            bind_fn = _extract_js_function(src, "bindColumnSplitter")
+            print(" bind uses storedColumnsFromDisplayed:", "storedColumnsFromDisplayed" in bind_fn)
+            self.assertIn("storedColumnsFromDisplayed", bind_fn)
+            self.assertNotIn('classList.add("dragging")', bind_fn)
+            client_width = 2984
+
+            def round_trip(
+                rail_collapsed: bool,
+                workspace_collapsed: bool,
+                session_displayed: int,
+                artifact_displayed: int,
+            ) -> dict:
+                stored_call = (
+                    "storedColumnsFromDisplayed({"
+                    f"clientWidth:{client_width},"
+                    f"railCollapsed:{str(rail_collapsed).lower()},"
+                    f"workspaceCollapsed:{str(workspace_collapsed).lower()},"
+                    f"sessionDisplayed:{session_displayed},"
+                    f"artifactDisplayed:{artifact_displayed}"
+                    "})"
+                )
+                stored = _eval_js(convert, stored_call)
+                track_call = (
+                    "computeColumnTracks({"
+                    f"clientWidth:{client_width},"
+                    f"railCollapsed:{str(rail_collapsed).lower()},"
+                    f"workspaceCollapsed:{str(workspace_collapsed).lower()},"
+                    f"sessionW:{stored['sessionW']},artW:{stored['artW']}"
+                    "})"
+                )
+                painted = _eval_js(tracks_fn, track_call)
+                print(
+                    " displayed", session_displayed, artifact_displayed,
+                    "stored", stored,
+                    "painted", painted["session"], painted["artifact"],
+                )
+                return painted
+
+            still = round_trip(False, True, 800, 1936)
+            self.assertEqual(still["session"], 800)
+            self.assertEqual(still["artifact"], 1936)
+            moved = round_trip(False, True, 810, 1926)
+            self.assertEqual(moved["session"], 810)
+            self.assertEqual(moved["artifact"], 1926)
+            opened = round_trip(False, False, 800, 900)
+            self.assertEqual(opened["session"], 800)
+            self.assertEqual(opened["artifact"], 900)
+            rail_only = round_trip(True, False, 1756, 900)
+            self.assertEqual(rail_only["session"], 1756)
+            self.assertEqual(rail_only["artifact"], 900)
+            splitter_block = css.split(".col-splitter {", 1)[1].split("}", 1)[0]
+            print(" splitter css:", splitter_block.strip())
+            self.assertIn("cursor: col-resize", splitter_block)
+            self.assertIn("background: var(--border)", splitter_block)
+            self.assertNotIn(".col-splitter:hover", css)
+            self.assertNotIn(".col-splitter.dragging", css)
+
     def test_session_artifact_tree_groups_under_plan(self) -> None:
         """#16：本 Session 为根；plan 下挂同 plan 的后续 run；无 plan 的产物单独成 Run 节点。"""
 

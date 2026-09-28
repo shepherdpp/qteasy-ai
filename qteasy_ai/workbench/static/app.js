@@ -515,6 +515,54 @@ function applyColumnWidths() {
   layout.style.gridTemplateColumns = tracks.template;
 }
 
+function storedColumnsFromDisplayed(opts) {
+  const input = opts || {};
+  const clientWidth = Number(input.clientWidth) || 0;
+  const railIsCollapsed = Boolean(input.railCollapsed);
+  const workspaceIsCollapsed = Boolean(input.workspaceCollapsed);
+  let sessionDisplayed = Number(input.sessionDisplayed) || 0;
+  let artifactDisplayed = Number(input.artifactDisplayed) || 0;
+  const railOpen = 200;
+  const railNarrow = 44;
+  const workspaceOpen = 280;
+  const workspaceNarrow = 44;
+  const splitter = 4;
+  const minSession = typeof MIN_SESSION_COL === "number" ? MIN_SESSION_COL : 260;
+  const minArtifact = typeof MIN_ARTIFACT_COL === "number" ? MIN_ARTIFACT_COL : 280;
+  const openAvail = clientWidth - railOpen - workspaceOpen - splitter;
+  const railBonus = railIsCollapsed ? (railOpen - railNarrow) : 0;
+  const workspaceBonus = workspaceIsCollapsed ? (workspaceOpen - workspaceNarrow) : 0;
+  const slackInSession = railIsCollapsed && !workspaceIsCollapsed;
+  const minSessionDisplayed = minSession + railBonus;
+  const minArtifactDisplayed = minArtifact + workspaceBonus;
+  if (sessionDisplayed < minSessionDisplayed) {
+    artifactDisplayed -= minSessionDisplayed - sessionDisplayed;
+    sessionDisplayed = minSessionDisplayed;
+  }
+  if (artifactDisplayed < minArtifactDisplayed) {
+    sessionDisplayed -= minArtifactDisplayed - artifactDisplayed;
+    artifactDisplayed = minArtifactDisplayed;
+  }
+  if (sessionDisplayed < minSessionDisplayed) sessionDisplayed = minSessionDisplayed;
+  if (artifactDisplayed < minArtifactDisplayed) artifactDisplayed = minArtifactDisplayed;
+  let sessionW;
+  let artW;
+  if (slackInSession) {
+    artW = artifactDisplayed;
+    sessionW = openAvail - artW;
+  } else if (workspaceIsCollapsed) {
+    sessionW = sessionDisplayed - railBonus;
+    artW = openAvail - sessionW;
+  } else {
+    sessionW = sessionDisplayed;
+    artW = artifactDisplayed;
+  }
+  return {
+    sessionW: Math.round(sessionW),
+    artW: Math.round(artW),
+  };
+}
+
 function bindColumnSplitter() {
   const split = $("col-splitter");
   if (!split) return;
@@ -531,32 +579,26 @@ function bindColumnSplitter() {
     startX = ev.clientX;
     startSession = sessionCol.getBoundingClientRect().width;
     startArt = artCol.getBoundingClientRect().width;
-    split.classList.add("dragging");
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   });
   window.addEventListener("mousemove", (ev) => {
     if (!dragging) return;
-    const dx = ev.clientX - startX;
-    let nextS = startSession + dx;
-    let nextA = startArt - dx;
-    if (nextS < MIN_SESSION_COL) {
-      nextA -= MIN_SESSION_COL - nextS;
-      nextS = MIN_SESSION_COL;
-    }
-    if (nextA < MIN_ARTIFACT_COL) {
-      nextS -= MIN_ARTIFACT_COL - nextA;
-      nextA = MIN_ARTIFACT_COL;
-    }
-    if (nextS < MIN_SESSION_COL || nextA < MIN_ARTIFACT_COL) return;
-    localStorage.setItem(STORAGE_COL_SESSION, String(Math.round(nextS)));
-    localStorage.setItem(STORAGE_COL_ARTIFACT, String(Math.round(nextA)));
+    const layout = $("layout");
+    const stored = storedColumnsFromDisplayed({
+      clientWidth: layout ? layout.clientWidth : 0,
+      railCollapsed,
+      workspaceCollapsed,
+      sessionDisplayed: startSession + (ev.clientX - startX),
+      artifactDisplayed: startArt - (ev.clientX - startX),
+    });
+    localStorage.setItem(STORAGE_COL_SESSION, String(stored.sessionW));
+    localStorage.setItem(STORAGE_COL_ARTIFACT, String(stored.artW));
     applyColumnWidths();
   });
   window.addEventListener("mouseup", () => {
     if (!dragging) return;
     dragging = false;
-    split.classList.remove("dragging");
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
   });

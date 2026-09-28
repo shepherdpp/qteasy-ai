@@ -147,8 +147,6 @@ button.provider-badge {
   background: var(--border);
   z-index: 2;
 }
-.col-splitter:hover,
-.col-splitter.dragging { background: var(--accent); }
 
 .rail, .session-col, .artifact-col, .workspace-col {
   min-width: 0;
