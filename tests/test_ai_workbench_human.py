@@ -324,6 +324,62 @@ class TestAiWorkbenchHuman(unittest.TestCase):
         self.assertIn("Failed to get strategy details: unknown id.", text)
         self.assertNotIn("Result: FAILED", text)
 
+    def test_industry_clarify_samples_enter_human_stdout(self) -> None:
+        """制造业 0 命中：--human 打出 Tushare 说明与样例短名。"""
+
+        print("\n[TestAiWorkbenchHuman] industry samples on --human")
+        message = (
+            "Industry '制造业' has 0 exact matches in stock_basic. "
+            "stock_basic.industry uses Tushare short names, not national GB categories. "
+            "Please pick one of the sample industry names."
+        )
+        payload = {
+            "run_id": "run_screen",
+            "plan": {
+                "plan_id": "plan_screen",
+                "mode": "plan",
+                "user_query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+                "planner_trace": {"intent_job": "research.screen"},
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "skill_name": "qt.ai.research.universe_filter",
+                        "inputs": {"industry": "制造业"},
+                    }
+                ],
+            },
+            "execution": {
+                "status": "failed",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "skill_name": "qt.ai.research.universe_filter",
+                        "result": {
+                            "ok": False,
+                            "error": {
+                                "code": "CLARIFY_REQUIRED",
+                                "message": message,
+                                "details": {
+                                    "missing_info": "industry",
+                                    "industry_samples": ["银行", "电气设备"],
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        }
+        text = format_human_from_payload(payload, query="")
+        print(" human:", text)
+        self.assertIn("[MODE: RUN]  executed", text)
+        self.assertIn("Tushare short names", text)
+        self.assertIn("national GB", text)
+        self.assertIn("Sample Tushare industry short names:", text)
+        self.assertIn("银行", text)
+        self.assertIn("电气设备", text)
+        self.assertIn("exact", text.lower())
+        self.assertNotIn("retry this step", text.lower())
+
     def test_run_data_read_shows_summary_not_rows(self) -> None:
         """data.read：只打 summary/metrics，不倾倒行数据。"""
 

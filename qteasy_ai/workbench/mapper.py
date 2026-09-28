@@ -263,6 +263,27 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             )
             continue
+        if skill == "qt.ai.research.project_universe":
+            payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+            metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+            raw_hits = payload.get("hits") if isinstance(payload.get("hits"), list) else []
+            preview_rows = [dict(row) for row in raw_hits if isinstance(row, dict)]
+            hit_count = metrics.get("hit_count")
+            if hit_count is None:
+                hit_count = len(preview_rows)
+            items.append(
+                WorkbenchArtifact(
+                    type="data_table",
+                    run_id=rid,
+                    title=skill or "screen hits",
+                    export_path="",
+                    preview={
+                        "data_summary": {"hit_count": hit_count},
+                        "preview_rows": preview_rows,
+                    },
+                )
+            )
+            continue
         source_art = next(
             (
                 item

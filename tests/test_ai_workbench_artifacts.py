@@ -239,6 +239,108 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
         self.assertEqual(items[1]["preview"]["data_summary"]["opti_method"], "montecarlo")
         self.assertEqual(items[1]["preview"]["data_summary"]["opti_sample_count"], 32)
 
+    def test_project_universe_hits_become_data_table(self) -> None:
+        """筛股 DAG 只把 project_universe 的 hits 投影成一张 data_table。"""
+
+        print("\n[TestAiWorkbenchArtifacts] screen hits table")
+        hit = {
+            "symbol": "600180.SH",
+            "name": "Alpha",
+            "return": -0.25,
+            "start_price": 4.0,
+            "end_price": 3.0,
+            "start_date": "20260325",
+            "end_date": "20260924",
+        }
+        items = classify_artifacts(
+            "run_screen",
+            [
+                {
+                    "step_id": "s_uni",
+                    "skill_name": "qt.ai.research.universe_filter",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"universe_size": 49},
+                        "payload": {"symbols": ["600180.SH"], "industry": "仓储物流"},
+                    },
+                },
+                {
+                    "step_id": "s_pred",
+                    "skill_name": "qt.ai.research.price_predicate",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"hit_count": 1},
+                        "payload": {"hits": [hit], "industry": "仓储物流"},
+                    },
+                },
+                {
+                    "step_id": "s_proj",
+                    "skill_name": "qt.ai.research.project_universe",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"hit_count": 1, "enumerated": False},
+                        "payload": {"hits": [hit], "industry_samples": []},
+                    },
+                },
+            ],
+        )
+        print(" types:", [item["type"] for item in items])
+        print(" titles:", [item["title"] for item in items])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["type"], "data_table")
+        self.assertEqual(items[0]["title"], "qt.ai.research.project_universe")
+        rows = items[0]["preview"]["preview_rows"]
+        print(" hit row:", rows[0] if rows else None)
+        print(" summary:", items[0]["preview"]["data_summary"])
+        self.assertEqual(rows[0]["symbol"], "600180.SH")
+        self.assertEqual(rows[0]["name"], "Alpha")
+        self.assertEqual(rows[0]["return"], -0.25)
+        self.assertEqual(rows[0]["start_price"], 4.0)
+        self.assertEqual(rows[0]["end_price"], 3.0)
+        self.assertEqual(rows[0]["start_date"], "20260325")
+        self.assertEqual(rows[0]["end_date"], "20260924")
+        self.assertEqual(items[0]["preview"]["data_summary"]["hit_count"], 1)
+
+        enumerated = classify_artifacts(
+            "run_enum",
+            [
+                {
+                    "step_id": "s_proj",
+                    "skill_name": "qt.ai.research.project_universe",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"hit_count": 1, "enumerated": True},
+                        "payload": {"hits": [{"symbol": "000001.SZ", "name": "Beta"}]},
+                    },
+                }
+            ],
+        )
+        enum_rows = enumerated[0]["preview"]["preview_rows"]
+        print(" enumerated row:", enum_rows[0])
+        self.assertEqual(len(enumerated), 1)
+        self.assertEqual(enum_rows[0], {"symbol": "000001.SZ", "name": "Beta"})
+
+        empty = classify_artifacts(
+            "run_empty",
+            [
+                {
+                    "step_id": "s_proj",
+                    "skill_name": "qt.ai.research.project_universe",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"hit_count": 0, "enumerated": False},
+                        "payload": {"hits": []},
+                    },
+                }
+            ],
+        )
+        print(" empty rows:", empty[0]["preview"]["preview_rows"])
+        print(" empty summary:", empty[0]["preview"]["data_summary"])
+        self.assertEqual(len(empty), 1)
+        self.assertEqual(empty[0]["type"], "data_table")
+        self.assertEqual(empty[0]["preview"]["preview_rows"], [])
+        self.assertEqual(empty[0]["preview"]["data_summary"]["hit_count"], 0)
+
     def test_backtest_report_text_not_metrics_card(self) -> None:
         """回测 Artifact 正文是 report_result 文本，不用 metrics 卡片冒充。"""
 

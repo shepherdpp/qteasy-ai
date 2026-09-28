@@ -129,6 +129,92 @@ class TestAiHumanCardProjector(unittest.TestCase):
         self.assertIn("Reviewed plan not found", err["text"])
         self.assertTrue(str(err["payload"].get("next_action") or "").strip())
 
+    def test_industry_clarify_samples_enter_error_card(self) -> None:
+        """行业 0 精确命中：Tushare 说明与样例必须进人读 error 卡正文。"""
+
+        print("\n[TestAiHumanCardProjector] industry clarify samples on error card")
+        message = (
+            "Industry '制造业' has 0 exact matches in stock_basic. "
+            "stock_basic.industry uses Tushare short names, not national GB categories. "
+            "Please pick one of the sample industry names."
+        )
+        samples = ["银行", "电气设备"]
+        payload = {
+            "run_id": "run_screen",
+            "plan": {
+                "plan_id": "plan_screen",
+                "mode": "plan",
+                "user_query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
+                "planner_trace": {"intent_job": "research.screen"},
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "skill_name": "qt.ai.research.universe_filter",
+                        "inputs": {"industry": "制造业"},
+                    }
+                ],
+            },
+            "execution": {
+                "status": "failed",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "skill_name": "qt.ai.research.universe_filter",
+                        "result": {
+                            "ok": False,
+                            "error": {
+                                "code": "CLARIFY_REQUIRED",
+                                "message": message,
+                                "details": {
+                                    "missing_info": "industry",
+                                    "industry_samples": samples,
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        }
+        cards = project_human_cards(payload, requested_mode="run", query="", include_user_text=False)
+        err = next(item for item in cards if item["kind"] == "error")
+        human = format_human_cards(cards, payload=payload)
+        next_action = str(err["payload"].get("next_action") or "")
+        print(" error text:", err["text"])
+        print(" next_action:", next_action)
+        print(" human:", human)
+        self.assertIn("Tushare short names", err["text"])
+        self.assertIn("national GB", err["text"])
+        self.assertIn("Sample Tushare industry short names:", err["text"])
+        self.assertIn("银行", err["text"])
+        self.assertIn("电气设备", err["text"])
+        self.assertIn("银行", human)
+        self.assertIn("电气设备", human)
+        self.assertIn("exact", next_action.lower())
+        self.assertIn("short name", next_action.lower())
+        self.assertNotIn("retry this step", next_action.lower())
+
+    def test_industry_clarify_without_samples_keeps_message(self) -> None:
+        """样例为空时不编造名单，保留技能原文。"""
+
+        print("\n[TestAiHumanCardProjector] industry clarify empty samples")
+        message = (
+            "Industry '制造业' has 0 exact matches in stock_basic. "
+            "stock_basic.industry uses Tushare short names, not national GB categories."
+        )
+        payload = {
+            "error": {
+                "code": "CLARIFY_REQUIRED",
+                "message": message,
+                "details": {"missing_info": "industry", "industry_samples": []},
+            }
+        }
+        cards = project_human_cards(payload, requested_mode="run", query="", include_user_text=False)
+        err = next(item for item in cards if item["kind"] == "error")
+        print(" error text:", err["text"])
+        print(" next_action:", err["payload"].get("next_action"))
+        self.assertEqual(err["text"], message)
+        self.assertNotIn("Sample Tushare industry short names:", err["text"])
+
     def test_result_uses_json_hit_count_not_invented(self) -> None:
         """metrics.hit_count=3 必须出现在 result 正文。"""
 

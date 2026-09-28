@@ -50,6 +50,10 @@ from .side_effects import HIGH_SIDE_EFFECT_SKILLS, step_needs_confirm as _step_n
 _DEFAULT_NEXT_ACTION = (
     "Fix the issue above, then retry this step. You do not need to start over."
 )
+_INDUSTRY_SAMPLE_NEXT_ACTION = (
+    "Revise the query using one exact Tushare industry short name from the samples. "
+    "Do not retry the same industry name."
+)
 USAGE_NOTICE_TEXT = (
     "qteasy-ai needs a subcommand. It does not run tasks by default.\n"
     "Examples:\n"
@@ -260,7 +264,7 @@ def project_human_cards(
         cards.append(make_card("ask", answer, {"sources": sources}))
         err = _enrich_error(raw.get("error") if isinstance(raw.get("error"), dict) else None)
         if err:
-            cards.append(make_card("error", str(err.get("message") or "An error occurred."), dict(err)))
+            cards.append(make_card("error", _error_card_text(err), dict(err)))
         return cards
 
     clar = _clarification_blob(raw)
@@ -319,7 +323,7 @@ def project_human_cards(
         }
         cards.append(make_card("result", result_text, result_payload))
         if err and status != "success":
-            cards.append(make_card("error", str(err.get("message") or "An error occurred."), dict(err)))
+            cards.append(make_card("error", _error_card_text(err), dict(err)))
         return cards
 
     card_steps = _plan_step_rows(plan)
@@ -350,7 +354,7 @@ def project_human_cards(
         )
 
     if err:
-        cards.append(make_card("error", str(err.get("message") or "An error occurred."), dict(err)))
+        cards.append(make_card("error", _error_card_text(err), dict(err)))
     if not any(item.get("kind") != "user_text" for item in cards):
         cards.append(make_card("ask", "No output.", {}))
     return cards
@@ -459,12 +463,40 @@ def _clarification_blob(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _industry_samples(err: Dict[str, Any]) -> List[str]:
+    """从 error.details 取出非空的 Tushare 行业短名。"""
+
+    details = err.get("details") if isinstance(err.get("details"), dict) else {}
+    raw = details.get("industry_samples")
+    if not isinstance(raw, list):
+        return []
+    names: List[str] = []
+    for item in raw:
+        name = str(item).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _error_card_text(err: Dict[str, Any]) -> str:
+    """error 卡正文。有行业样例时把短名追加到技能说明后面。"""
+
+    message = str(err.get("message") or "An error occurred.").rstrip()
+    samples = _industry_samples(err)
+    if not samples:
+        return message
+    return "\n".join([message, "Sample Tushare industry short names:", *samples])
+
+
 def _enrich_error(err: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """补英文 next_action。"""
 
     if not isinstance(err, dict) or not err:
         return err
     out = dict(err)
+    if _industry_samples(out) and not str(out.get("next_action") or "").strip():
+        out["next_action"] = _INDUSTRY_SAMPLE_NEXT_ACTION
+        return out
     if str(out.get("next_action") or "").strip():
         return out
     message = str(out.get("message") or "").lower()
