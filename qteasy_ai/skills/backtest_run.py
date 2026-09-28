@@ -18,6 +18,35 @@ from pathlib import Path
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
 
+_REPORT_TEXT_CAP = 200000
+
+
+def _backtest_report_text(operator: Any) -> str:
+    """从 Operator.backtested 取 report_result 文本，不打印。
+
+    Parameters
+    ----------
+    operator : Any
+        本次回测使用的 Operator。内核在 ``report=False`` 时仍挂 ``backtested``。
+
+    Returns
+    -------
+    str
+        报告正文；没有可调用的 ``report_result`` 时为空串。
+    """
+
+    backtested = getattr(operator, "backtested", None)
+    reporter = getattr(backtested, "report_result", None)
+    if not callable(reporter):
+        return ""
+    try:
+        text = reporter()
+    except Exception:
+        return ""
+    if not isinstance(text, str):
+        return ""
+    return text[:_REPORT_TEXT_CAP]
+
 
 def _json_safe_metric(value: Any) -> Any:
     """将回测指标转为 JSON 友好标量。"""
@@ -258,6 +287,7 @@ def build_backtest_run_skill(
             if end_date:
                 run_kwargs["invest_end"] = end_date
             raw = run_func(operator, **run_kwargs)
+            report_text = _backtest_report_text(operator)
             metrics, artifacts = _slice_backtest_output(raw)
             png_path = _save_backtest_visual_png(raw, run_id)
             if png_path and not any(
@@ -272,7 +302,11 @@ def build_backtest_run_skill(
                 metrics=metrics,
                 data_summary={"strategy_id": canonical, "asset_pool": pool, "mode": 1},
                 artifacts=artifacts,
-                payload={"strategy_id": canonical, "strategy_path": path_text},
+                payload={
+                    "strategy_id": canonical,
+                    "strategy_path": path_text,
+                    **({"report_text": report_text} if report_text else {}),
+                },
             )
         except Exception as exc:
             result = SkillResult(

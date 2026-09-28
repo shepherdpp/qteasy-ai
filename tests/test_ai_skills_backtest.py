@@ -72,6 +72,8 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(result["artifacts"][1]["path"], "/tmp/backtest_visual.png")
         self.assertEqual(captured.get("visual"), False)
         self.assertEqual(captured.get("report"), False)
+        print(" report_text:", (result.get("payload") or {}).get("report_text"))
+        self.assertFalse(str((result.get("payload") or {}).get("report_text") or "").strip())
         self.assertEqual(captured.get("trade_log"), True)
         self.assertEqual(captured.get("mode"), 1)
         self.assertNotIn("freq", captured)
@@ -192,6 +194,44 @@ class TestAiBacktestSkill(unittest.TestCase):
         self.assertEqual(result["metrics"]["final_value"], 99.0)
         self.assertEqual(result["metrics"]["annual_rtn"], 0.05)
         self.assertEqual(result["metrics"]["mdd"], 0.1)
+
+    def test_report_text_from_backtester_not_printed(self) -> None:
+        """report=False 时仍从 operator.backtested.report_result 取金标准文本。"""
+
+        print("\n[TestAiBacktestSkill] report_text from backtester")
+        gold = "Backtest Report\nfinal value:              ¥   112,000.00\n"
+        captured = {}
+
+        class _Operator:
+            """假 Operator：挂着与内核相同的 backtested.report_result。"""
+
+            def __init__(self) -> None:
+                self.backtested = self
+
+            def report_result(self) -> str:
+                return gold
+
+        def fake_run(op, **kwargs):
+            captured["kwargs"] = dict(kwargs)
+            captured["has_backtested"] = getattr(op, "backtested", None) is op
+            return {"final_value": 112000.0, "annual_rtn": 0.12, "mdd": 0.25}
+
+        _, handler = build_backtest_run_skill(
+            run_func=fake_run,
+            operator_factory=lambda sid, run_freq="d": _Operator(),
+            list_func=lambda: ["macd"],
+        )
+        result = handler(strategy_id="macd", asset_pool="000300.SH")
+        print(" report kw:", captured.get("kwargs", {}).get("report"))
+        print(" report_text:", result.get("payload", {}).get("report_text"))
+        print(" metrics final_value:", result["metrics"]["final_value"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["kwargs"]["report"], False)
+        self.assertTrue(captured["has_backtested"])
+        self.assertEqual(result["payload"]["report_text"], gold)
+        self.assertEqual(result["metrics"]["final_value"], 112000.0)
+        self.assertEqual(result["metrics"]["annual_rtn"], 0.12)
+        self.assertEqual(result["metrics"]["mdd"], 0.25)
 
 
 if __name__ == "__main__":

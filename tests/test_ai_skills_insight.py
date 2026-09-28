@@ -79,6 +79,33 @@ class TestAiInsightSkill(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["qty"], 1)
 
+    def test_unnamed_time_column_selects_peak_row(self) -> None:
+        """trade_log 首列是未命名时间时，按回撤峰值取行，而不是文件开头。"""
+
+        print("\n[TestAiInsightSkill] unnamed time column")
+        import tempfile
+        from pathlib import Path
+
+        import pandas as pd
+
+        from qteasy_ai.skills.insight_backtest import _trade_summary_from_log
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "trade_log.csv"
+            frame = pd.DataFrame(
+                {
+                    "Unnamed: 0": ["2015-01-05 15:00:00", "2015-12-22 15:00:00"],
+                    "Unnamed: 1": ["Group_1", "Group_1"],
+                    "000300.SH": [0.0, 1.0],
+                }
+            )
+            frame.to_csv(path, index=False)
+            rows = _trade_summary_from_log(str(path), peak_date="2015-12-22", valley_date="")
+            print(" rows:", rows)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["Unnamed: 0"], "2015-12-22 15:00:00")
+            self.assertEqual(rows[0]["000300.SH"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

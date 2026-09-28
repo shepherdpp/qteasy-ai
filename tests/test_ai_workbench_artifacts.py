@@ -182,6 +182,133 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
         self.assertIn("requires confirm", js.lower())
         self.assertIn("btn-code-confirm", js)
         self.assertIn("/v1/run-plan", js)
+        self.assertIn("id=\"code-editor\"", js)
+        self.assertIn("highlightPython", js)
+        self.assertIn("code-highlight", js)
+        self.assertNotIn("monaco", js.lower())
+
+    def test_insight_and_optimize_project_data_table(self) -> None:
+        """insight / optimize 的 metrics 必须投影成 data_table，而不是没有 Artifact。"""
+
+        print("\n[TestAiWorkbenchArtifacts] insight and optimize tables")
+        items = classify_artifacts(
+            "run_io",
+            [
+                {
+                    "step_id": "s_insight",
+                    "skill_name": "qt.ai.insight.summarize_backtest",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"annual_rtn": 0.12, "mdd": 0.25, "final_value": 112000.0},
+                        "payload": {
+                            "change_hint": "Review strategy_meta parameters.",
+                            "nearby_trades": [{"side": "buy", "price": 10.5}],
+                        },
+                    },
+                },
+                {
+                    "step_id": "s_opt",
+                    "skill_name": "qt.ai.optimize.run_builtin",
+                    "result": {
+                        "ok": True,
+                        "metrics": {
+                            "best_pars": [12, 26, 9],
+                            "fv": 1.35,
+                            "opti_method": "montecarlo",
+                            "opti_sample_count": 32,
+                        },
+                    },
+                },
+            ],
+        )
+        print(" items:", json.dumps(items, ensure_ascii=False))
+        self.assertEqual([item["type"] for item in items], ["data_table", "data_table"])
+        insight_rows = items[0]["preview"]["preview_rows"]
+        print(" insight rows:", insight_rows)
+        annual = next(row for row in insight_rows if row.get("field") == "annual_rtn")
+        hint = next(row for row in insight_rows if row.get("field") == "change_hint")
+        self.assertEqual(annual["value"], 0.12)
+        self.assertEqual(hint["value"], "Review strategy_meta parameters.")
+        self.assertEqual(insight_rows[-1], {"side": "buy", "price": 10.5})
+        opt_rows = items[1]["preview"]["preview_rows"]
+        print(" optimize rows:", opt_rows)
+        self.assertEqual(opt_rows[0], {"index": 0, "value": 12})
+        self.assertEqual(opt_rows[1], {"index": 1, "value": 26})
+        self.assertEqual(opt_rows[2], {"index": 2, "value": 9})
+        self.assertEqual(opt_rows[3], {"parameter": "fv", "value": 1.35})
+        self.assertEqual(items[1]["preview"]["data_summary"]["opti_method"], "montecarlo")
+        self.assertEqual(items[1]["preview"]["data_summary"]["opti_sample_count"], 32)
+
+    def test_backtest_report_text_not_metrics_card(self) -> None:
+        """回测 Artifact 正文是 report_result 文本，不用 metrics 卡片冒充。"""
+
+        print("\n[TestAiWorkbenchArtifacts] backtest report text")
+        report = "Backtest Report\nfinal value:              ¥   112,000.00\n"
+        items = classify_artifacts(
+            "run_bt",
+            [
+                {
+                    "step_id": "s4",
+                    "skill_name": "qt.ai.backtest.run_builtin",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"mdd": -0.1, "final_value": 112000.0},
+                        "artifacts": [{"kind": "trade_log", "path": "/tmp/t.csv"}],
+                        "payload": {"report_text": report},
+                    },
+                }
+            ],
+        )
+        print(" preview:", items[0]["preview"])
+        self.assertEqual(items[0]["type"], "backtest_report")
+        self.assertEqual(items[0]["preview"]["report"], report)
+        self.assertNotIn("metrics", items[0]["preview"])
+        self.assertEqual(items[0]["export_path"], "/tmp/t.csv")
+        js = (Path(__file__).resolve().parents[1] / "qteasy_ai" / "workbench" / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        report_branch = js.split('current.type === "backtest_report"')[1].split("else if")[0]
+        print(" report branch:", report_branch[:400])
+        self.assertIn("report-text", report_branch)
+        self.assertNotIn("metricsCards", report_branch)
+
+    def test_insight_nan_trades_stay_json_compliant(self) -> None:
+        """nearby_trades 里的 NaN/Inf 投影为 null，Starlette allow_nan=False 能序列化。"""
+
+        print("\n[TestAiWorkbenchArtifacts] insight nan trades")
+        items = classify_artifacts(
+            "run_nan",
+            [
+                {
+                    "step_id": "s_insight",
+                    "skill_name": "qt.ai.insight.summarize_backtest",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"annual_rtn": 0.12},
+                        "payload": {
+                            "change_hint": "Review strategy_meta parameters.",
+                            "nearby_trades": [
+                                {
+                                    "Unnamed: 0": "2015-12-22 15:00:00",
+                                    "add. invest": float("nan"),
+                                    "value": float("inf"),
+                                    "000300.SH": 0.0,
+                                }
+                            ],
+                        },
+                    },
+                }
+            ],
+        )
+        trade = items[0]["preview"]["preview_rows"][-1]
+        print(" trade row:", trade)
+        self.assertEqual(trade["Unnamed: 0"], "2015-12-22 15:00:00")
+        self.assertIsNone(trade["add. invest"])
+        self.assertIsNone(trade["value"])
+        self.assertEqual(trade["000300.SH"], 0.0)
+        encoded = json.dumps(items, allow_nan=False)
+        print(" encoded has null:", "null" in encoded)
+        self.assertIn("null", encoded)
 
 
 if __name__ == "__main__":

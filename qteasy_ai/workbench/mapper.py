@@ -13,9 +13,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..human_card import normalize_card_kind, project_human_cards
+from ..memory_store import _json_safe
 from ..plan_markdown import plan_artifact_title, skill_step_title
 from ..session import ConversationState
 from ..side_effects import step_needs_confirm
@@ -64,6 +65,58 @@ def _read_text_file(path: str, *, cap: int = 200000) -> str:
         return target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
+
+
+_INSIGHT_FIELDS = (
+    "annual_rtn",
+    "mdd",
+    "final_value",
+    "peak_date",
+    "valley_date",
+    "recover_date",
+)
+
+
+def _insight_table(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """把 insight metrics / nearby_trades 收成 data_table 行。"""
+
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    rows: List[Dict[str, Any]] = []
+    for key in _INSIGHT_FIELDS:
+        if key in metrics:
+            rows.append({"field": key, "value": metrics.get(key)})
+    hint = payload.get("change_hint")
+    if hint not in (None, ""):
+        rows.append({"field": "change_hint", "value": hint})
+    trades = payload.get("nearby_trades") if isinstance(payload.get("nearby_trades"), list) else []
+    for trade in trades:
+        if isinstance(trade, dict):
+            rows.append(trade)
+    summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
+    return rows, summary
+
+
+def _optimize_table(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """把 best_pars / fv 收成 data_table 行。"""
+
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    pars = metrics.get("best_pars")
+    rows: List[Dict[str, Any]] = []
+    if isinstance(pars, dict):
+        for key, value in pars.items():
+            rows.append({"parameter": str(key), "value": value})
+    elif isinstance(pars, list):
+        for index, value in enumerate(pars):
+            rows.append({"index": index, "value": value})
+    else:
+        rows.append({"parameter": "best_pars", "value": pars})
+    rows.append({"parameter": "fv", "value": metrics.get("fv")})
+    summary = {
+        "opti_method": metrics.get("opti_method"),
+        "opti_sample_count": metrics.get("opti_sample_count"),
+    }
+    return rows, summary
 
 
 def _image_artifact(arts: List[Any]) -> Optional[Dict[str, Any]]:
@@ -180,6 +233,36 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             )
             continue
+        if skill == "qt.ai.insight.summarize_backtest":
+            preview_rows, summary = _insight_table(result)
+            items.append(
+                WorkbenchArtifact(
+                    type="data_table",
+                    run_id=rid,
+                    title=skill or "insight",
+                    export_path="",
+                    preview={
+                        "data_summary": summary,
+                        "preview_rows": preview_rows,
+                    },
+                )
+            )
+            continue
+        if skill == "qt.ai.optimize.run_builtin":
+            preview_rows, summary = _optimize_table(result)
+            items.append(
+                WorkbenchArtifact(
+                    type="data_table",
+                    run_id=rid,
+                    title=skill or "optimize",
+                    export_path="",
+                    preview={
+                        "data_summary": summary,
+                        "preview_rows": preview_rows,
+                    },
+                )
+            )
+            continue
         source_art = next(
             (
                 item
@@ -215,16 +298,17 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
             ),
             None,
         )
-        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
         if skill == "qt.ai.backtest.run_builtin" or trade_art is not None:
             path = str((trade_art or {}).get("path") or "")
+            payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+            report = payload.get("report_text") if isinstance(payload.get("report_text"), str) else ""
             items.append(
                 WorkbenchArtifact(
                     type="backtest_report",
                     run_id=rid,
                     title=skill or "backtest_report",
                     export_path=path,
-                    preview={"metrics": metrics, "path": path},
+                    preview={"report": report, "path": path},
                 )
             )
             image_art = _image_artifact(arts)
@@ -256,7 +340,7 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                     warnings=warnings,
                 )
             )
-    return [item.to_dict() for item in items]
+    return [_json_safe(item.to_dict()) for item in items]
 
 
 def _is_ask_payload(payload: Dict[str, Any]) -> bool:

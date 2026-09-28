@@ -137,6 +137,37 @@ class TestAiMemoryStore(unittest.TestCase):
             self.assertEqual(loaded["tables"]["trade_calendar"]["pk_min"], "1990-12-19")
             self.assertEqual(loaded["tables"]["trade_calendar"]["pk_max"], "2026-08-25")
 
+    def test_nonfinite_float_roundtrip_is_null(self) -> None:
+        """磁盘上的 NaN/Infinity 以及新写入的非有限浮点都必须变成 null。"""
+
+        print("\n[TestAiMemoryStore] nonfinite float")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            raw_path = store.runs_dir / "run_nan.json"
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path.write_text(
+                '{"payload": {"cash": NaN, "fv": Infinity, "annual_rtn": 0.12}}\n',
+                encoding="utf-8",
+            )
+            loaded = store.load_run("run_nan")
+            print(" loaded:", loaded)
+            self.assertIsNone(loaded["payload"]["cash"])
+            self.assertIsNone(loaded["payload"]["fv"])
+            self.assertEqual(loaded["payload"]["annual_rtn"], 0.12)
+            store.save_run(
+                "run_live",
+                {"metrics": {"x": float("nan"), "y": float("inf"), "z": 1.25}},
+            )
+            text = (store.runs_dir / "run_live.json").read_text(encoding="utf-8")
+            print(" saved:", text)
+            self.assertNotIn("NaN", text)
+            self.assertNotIn("Infinity", text)
+            again = store.load_run("run_live")
+            print(" again metrics:", again["metrics"])
+            self.assertIsNone(again["metrics"]["x"])
+            self.assertIsNone(again["metrics"]["y"])
+            self.assertEqual(again["metrics"]["z"], 1.25)
+
 
 if __name__ == "__main__":
     unittest.main()

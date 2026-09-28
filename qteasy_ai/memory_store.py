@@ -26,6 +26,7 @@ MemoryStore 是阶段A“可追溯”能力的核心支撑模块，解决三个�
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import os
 import re
@@ -104,10 +105,14 @@ def _json_safe(value: Any) -> Any:
     Returns
     -------
     Any
-        ``date``/``datetime`` 转为 ISO 字符串；其它未知类型转为 ``str``。
+        ``date``/``datetime`` 转为 ISO 字符串；非有限浮点转为 ``None``；其它未知类型转为 ``str``。
     """
 
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return value
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, datetime):
         return value.replace(microsecond=0).isoformat() + ("Z" if value.tzinfo is None else "")
@@ -249,7 +254,10 @@ class MemoryStore:
             return default
         try:
             with path.open("r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, (dict, list)):
+                return _json_safe(loaded)
+            return loaded
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             # 损坏文件备份后降级，便于用户排查手工编辑/写半截问题。
             backup = path.with_suffix(path.suffix + ".corrupt.json")

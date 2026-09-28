@@ -2020,6 +2020,56 @@ function tableFromRows(rows) {
     .join("")}</tbody></table>`;
 }
 
+const PY_KEYWORDS = new Set([
+  "def", "class", "return", "if", "elif", "else", "for", "while", "import", "from", "as",
+  "try", "except", "finally", "with", "pass", "break", "continue", "lambda", "yield",
+  "in", "and", "or", "not", "is", "None", "True", "False", "raise", "assert",
+]);
+
+function highlightPython(source) {
+  const text = String(source ?? "");
+  let html = "";
+  let i = 0;
+  while (i < text.length) {
+    const rest = text.slice(i);
+    if (rest.startsWith("#")) {
+      const end = rest.indexOf("\n");
+      const chunk = end < 0 ? rest : rest.slice(0, end);
+      html += `<span class="tok-comment">${escapeHtml(chunk)}</span>`;
+      i += chunk.length;
+      continue;
+    }
+    const str = rest.match(/^(?:'''[\s\S]*?'''|"""[\s\S]*?"""|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/);
+    if (str) {
+      html += `<span class="tok-str">${escapeHtml(str[0])}</span>`;
+      i += str[0].length;
+      continue;
+    }
+    const num = rest.match(/^\d+(?:\.\d+)?/);
+    if (num) {
+      html += `<span class="tok-num">${escapeHtml(num[0])}</span>`;
+      i += num[0].length;
+      continue;
+    }
+    const word = rest.match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    if (word) {
+      if (PY_KEYWORDS.has(word[0])) html += `<span class="tok-kw">${escapeHtml(word[0])}</span>`;
+      else html += escapeHtml(word[0]);
+      i += word[0].length;
+      continue;
+    }
+    html += escapeHtml(text[i]);
+    i += 1;
+  }
+  return html;
+}
+
+function paintCodeHighlight(source) {
+  const pre = document.querySelector("#artifact-panel .code-highlight");
+  if (!pre) return;
+  pre.innerHTML = `${highlightPython(source)}\n`;
+}
+
 function metricsCards(metrics) {
   const entries = Object.entries(metrics || {});
   if (!entries.length) return "<p class=\"empty-hint\">No metrics.</p>";
@@ -2162,7 +2212,7 @@ function renderArtifacts() {
     const path = (current.preview && current.preview.path) || current.export_path || "";
     const loaded = (current.preview && current.preview.source) || codeCache[path] || "";
     const draft = codeCache._draft != null ? codeCache._draft : loaded;
-    body += `<textarea id="code-editor" rows="12">${escapeHtml(draft)}</textarea>
+    body += `<div class="code-editor-wrap"><pre class="code-highlight" aria-hidden="true">${highlightPython(draft)}\n</pre><textarea id="code-editor" rows="12" spellcheck="false">${escapeHtml(draft)}</textarea></div>
       <div class="actions"><button type="button" id="btn-code-run">Run (requires confirm)</button></div>
       ${
         pendingCodeRun
@@ -2172,8 +2222,10 @@ function renderArtifacts() {
       }`;
     if (path && !(current.preview && current.preview.source) && codeCache[path] == null) loadCode(path);
   } else if (current.type === "backtest_report") {
-    const metrics = (current.preview && current.preview.metrics) || {};
-    body += `${metricsCards(metrics)}`;
+    const report = (current.preview && current.preview.report) || "";
+    body += report
+      ? `<pre class="report-text">${escapeHtml(report)}</pre>`
+      : `<p class="warn">Backtest report text is missing.</p>`;
   } else if (current.type === "plan") {
     const markdown = (current.preview && current.preview.markdown) || "";
     const path = (current.preview && current.preview.path) || current.export_path || "";
@@ -2189,6 +2241,13 @@ function renderArtifacts() {
   if (ta) {
     ta.addEventListener("input", () => {
       codeCache._draft = ta.value;
+      paintCodeHighlight(ta.value);
+    });
+    ta.addEventListener("scroll", () => {
+      const pre = document.querySelector("#artifact-panel .code-highlight");
+      if (!pre) return;
+      pre.scrollTop = ta.scrollTop;
+      pre.scrollLeft = ta.scrollLeft;
     });
   }
 }
@@ -2198,7 +2257,10 @@ async function loadCode(path) {
   if (dto.content != null) {
     codeCache[path] = dto.content;
     const ta = $("code-editor");
-    if (ta && !codeCache._draft) ta.value = dto.content;
+    if (ta && !codeCache._draft) {
+      ta.value = dto.content;
+      paintCodeHighlight(dto.content);
+    }
   }
 }
 

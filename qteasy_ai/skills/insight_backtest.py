@@ -77,6 +77,21 @@ def _safe_date_prefix(value: Any) -> str:
     return text[:10]
 
 
+def _time_column(frame: Any) -> str:
+    """找出 trade_log 的时间列；没有标准列名时用首列里的日期。"""
+
+    for candidate in ("date", "trade_date", "datetime", "time"):
+        if candidate in getattr(frame, "columns", []):
+            return str(candidate)
+    columns = list(frame.columns)
+    if not columns:
+        return ""
+    sample = frame.iloc[:5, 0].astype(str)
+    if sample.str.contains(r"\d{4}-\d{2}-\d{2}", regex=True).any():
+        return str(columns[0])
+    return ""
+
+
 def _trade_summary_from_log(path: str, *, peak_date: str, valley_date: str) -> List[Dict[str, Any]]:
     """读取 trade_log 中回撤邻近日的少量摘要（有文件才读）。"""
 
@@ -91,12 +106,8 @@ def _trade_summary_from_log(path: str, *, peak_date: str, valley_date: str) -> L
         return []
     if frame.empty:
         return []
-    date_col = None
-    for candidate in ("date", "trade_date", "datetime", "time"):
-        if candidate in frame.columns:
-            date_col = candidate
-            break
-    if date_col is None:
+    date_col = _time_column(frame)
+    if not date_col:
         return frame.head(5).to_dict(orient="records")
     text = frame[date_col].astype(str)
     anchors = []
