@@ -121,6 +121,30 @@ class IntentCatalog:
                 return "open" if raw == "open" else "closed"
         return "closed"
 
+    def job_slots(self, job_id: str) -> List[Dict[str, Any]]:
+        """该 Job 的人读槽。没有 ``slots`` 时为空名单。
+
+        Parameters
+        ----------
+        job_id : str
+            官方或系统 Job id。
+
+        Returns
+        -------
+        list of dict
+            每项至少含 ``name``。
+        """
+
+        wanted = str(job_id or "").strip()
+        for item in self.jobs_doc.get("official", []) + self.jobs_doc.get("system", []):
+            if str(item.get("id") or "") != wanted:
+                continue
+            raw = item.get("slots") or []
+            if not isinstance(raw, list):
+                return []
+            return [dict(row) for row in raw if isinstance(row, dict) and row.get("name")]
+        return []
+
 
 def _read(path: Path) -> Dict[str, Any]:
     """读 JSON，缺文件则空 dict。"""

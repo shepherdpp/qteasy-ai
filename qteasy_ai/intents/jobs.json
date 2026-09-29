@@ -5,7 +5,50 @@
     {"id": "data.export", "summary": "Export a K-line chart or image.", "workflow": "closed"},
     {"id": "data.refill", "summary": "Bounded download of equity/index daily data.", "workflow": "closed"},
     {"id": "data.read", "summary": "Read-only fetch via history, reference, or static channel.", "workflow": "closed"},
-    {"id": "research.factor_ic", "summary": "Factor IC summary for a selection pool.", "workflow": "closed"},
+    {
+      "id": "research.factor_ic",
+      "summary": "Factor IC summary for a selection pool.",
+      "workflow": "closed",
+      "slots": [
+        {
+          "name": "shares",
+          "label": "Symbols",
+          "hint": "At least two exchange codes, such as 000001.SZ and 000002.SZ.",
+          "cardinality": "many",
+          "value_kind": "symbol_list",
+          "min_count": 2
+        },
+        {
+          "name": "start",
+          "label": "Start date",
+          "hint": "YYYYMMDD, such as 20240101.",
+          "cardinality": "one",
+          "value_kind": "date"
+        },
+        {
+          "name": "end",
+          "label": "End date",
+          "hint": "YYYYMMDD, such as 20240331.",
+          "cardinality": "one",
+          "value_kind": "date"
+        },
+        {
+          "name": "factor_htype",
+          "label": "Factor column",
+          "hint": "One local history column, such as close.",
+          "cardinality": "one",
+          "value_kind": "history_panel_column"
+        },
+        {
+          "name": "return_htype",
+          "label": "Return column",
+          "hint": "One different local history column, such as volume. This skill does not compute or shift return columns.",
+          "cardinality": "one",
+          "value_kind": "history_panel_column",
+          "distinct_from": "factor_htype"
+        }
+      ]
+    },
     {"id": "research.factor_explore", "summary": "Explore an unnamed factor: design a FactorSpec draft, then optionally nest one closed IC trial.", "workflow": "open"},
     {"id": "research.screen", "summary": "Stock screen: universe plus optional return predicate and projection.", "workflow": "closed"},
     {"id": "strategy.meta", "summary": "List or get built-in strategy metadata.", "workflow": "closed"},

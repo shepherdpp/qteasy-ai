@@ -33,6 +33,7 @@ from .intents.recipes import compose_recipe
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
+from .slot_decl import clarification_prompt, interpret_declared_slots
 
 
 class RuleValidator:
@@ -362,14 +363,30 @@ class Planner:
                 parts.append(f"{key} {value}")
         return " ".join(item for item in parts if item).strip()
 
-    @staticmethod
-    def _confirmed_market_overrides(session: Any) -> Dict[str, Any]:
-        """已确认的标的、日期、频率，以及因子 IC 的两侧列名。"""
+    def _job_slots(self, job: str) -> List[Dict[str, Any]]:
+        """当前 Job 在 Catalog 里登记的人读槽。"""
+
+        catalog = getattr(self.intent_engine, "catalog", None)
+        getter = getattr(catalog, "job_slots", None)
+        if not callable(getter):
+            return []
+        return list(getter(job) or [])
+
+    def _job_slot_names(self, job: str) -> List[str]:
+        """人读槽名。回填键用这份名单，不另写列名元组。"""
+
+        return [str(item.get("name") or "") for item in self._job_slots(job) if item.get("name")]
+
+    def _confirmed_market_overrides(self, session: Any) -> Dict[str, Any]:
+        """已确认槽。有 ``slots`` 的 Job 只回填这些键；否则仍是标的、日期和频率。"""
 
         task = getattr(session, "task", None) if session is not None else None
         slots = getattr(task, "slots", {}) or {} if task is not None else {}
+        job = str(getattr(task, "job", "") or "") if task is not None else ""
+        declared = self._job_slot_names(job)
+        keys = declared if declared else ["shares", "start", "end", "freq"]
         overrides: Dict[str, Any] = {}
-        for key in ("shares", "start", "end", "freq", "factor_htype", "return_htype"):
+        for key in keys:
             slot = slots.get(key)
             if slot is None or not getattr(slot, "confirmed", False):
                 continue
@@ -572,26 +589,11 @@ class Planner:
                 missing.append(key)
         if self._is_clarify_fallback(steps) and not missing:
             info = str((steps[0].inputs or {}).get("missing_info") or "")
-            reason = str((steps[0].inputs or {}).get("reason") or "")
             if "date" in info:
                 missing = ["start", "end"]
-            elif reason == "factor_ic_unknown_htype":
-                missing = self._factor_ic_unknown_slots(info)
             elif info:
                 missing = [part.strip() for part in info.replace("|", ",").split(",") if part.strip()]
         return missing
-
-    def _factor_ic_unknown_slots(self, missing_info: str) -> List[str]:
-        """未知列名对应已确认的 factor_htype / return_htype，便于表单改原槽。"""
-
-        unknown = [part.strip() for part in str(missing_info or "").replace("|", ",").split(",") if part.strip()]
-        overrides = getattr(self, "_market_overrides", None) or {}
-        slots = [
-            key
-            for key in ("factor_htype", "return_htype")
-            if str(overrides.get(key) or "").strip() in unknown
-        ]
-        return slots or unknown
 
     @staticmethod
     def _session_clarification(query: str, missing: List[str]) -> Dict[str, Any]:
@@ -619,13 +621,15 @@ class Planner:
 
     @staticmethod
     def _factor_ic_clarification(blob: Dict[str, Any], steps: List[ToolStep]) -> Dict[str, Any]:
-        """因子 IC 澄清卡用 fallback 的 hint，槽位 hint 保持短说明。"""
+        """有槽声明时，正文和 pending 都来自该声明，不再写整段两列说明。"""
 
         if not Planner._is_clarify_fallback(steps):
             return blob
-        reason = str((steps[0].inputs or {}).get("reason") or "")
-        if not reason.startswith("factor_ic_"):
+        details = (steps[0].inputs or {}).get("details")
+        pending = details.get("slot_pending") if isinstance(details, dict) else None
+        if not isinstance(pending, list) or not pending:
             return blob
+        blob["pending"] = list(pending)
         hint = str((steps[0].inputs or {}).get("hint") or "").strip()
         if hint:
             blob["confirm_prompt"] = hint
@@ -1166,22 +1170,17 @@ class Planner:
         return any(item in q_lower for item in keywords)
 
     def _factor_ic_steps(self, query: str) -> List[ToolStep]:
-        """因子 IC 步骤：缺槽或未知列名时澄清，否则带上全部代码与列名。"""
+        """因子 IC 步骤：问、拒、拆只读 Job slots，否则带上抽到的输入。"""
 
         inputs = self._extract_factor_ic_inputs(query)
-        codes = [item for item in str(inputs.get("shares") or "").split(",") if item]
-        missing: List[str] = []
-        if len(codes) < 2:
-            missing.append("shares")
-        if not inputs.get("start"):
-            missing.append("start")
-        if not inputs.get("end"):
-            missing.append("end")
-        if not inputs.get("factor_htype"):
-            missing.append("factor_htype")
-        if not inputs.get("return_htype"):
-            missing.append("return_htype")
-        if missing:
+        verdict = interpret_declared_slots(
+            self._job_slots("research.factor_ic"),
+            inputs,
+            is_history_column=self._is_history_panel_htype,
+        )
+        pending = [item for item in (verdict.get("pending") or []) if isinstance(item, dict)]
+        if pending:
+            names = [str(item.get("name") or "") for item in pending if item.get("name")]
             return [
                 self._make_step(
                     step_id="step_1",
@@ -1189,53 +1188,21 @@ class Planner:
                     inputs=self._fallback_step_inputs(
                         query=query,
                         action="clarify_required",
-                        reason="factor_ic_missing_fields",
-                        hint=(
-                            "Factor IC needs at least two symbols, a start and end date, "
-                            "and two local history columns (for example close and volume). "
-                            "This skill does not compute or shift return columns."
-                        ),
-                        missing_info="|".join(missing),
-                        next_step=(
-                            "Example: factor IC of close vs volume for 000001.SZ,000002.SZ "
-                            "from 20240101 to 20240331."
-                        ),
+                        reason="factor_ic_slots",
+                        hint=clarification_prompt(pending),
+                        missing_info="|".join(names),
+                        next_step="Fill the fields on the card.",
+                        details={"slot_pending": pending},
                     ),
                 )
             ]
-        unknown = [
-            str(name)
-            for name in (inputs.get("factor_htype"), inputs.get("return_htype"))
-            if name and not self._is_history_panel_htype(str(name))
-        ]
-        if unknown:
-            shown = ", ".join(repr(name) for name in unknown)
-            return [
-                self._make_step(
-                    step_id="step_1",
-                    skill_name="qt.ai.system.fallback",
-                    inputs=self._fallback_step_inputs(
-                        query=query,
-                        action="clarify_required",
-                        reason="factor_ic_unknown_htype",
-                        hint=(
-                            f"Column(s) {shown} are not local history columns usable on a HistoryPanel. "
-                            "Use columns that already exist, for example close and volume. "
-                            "This skill does not compute or shift return columns."
-                        ),
-                        missing_info="|".join(unknown),
-                        next_step=(
-                            "Example: factor IC of close vs volume for 000001.SZ,000002.SZ "
-                            "from 20240101 to 20240331."
-                        ),
-                    ),
-                )
-            ]
+        cleaned = dict(inputs)
+        cleaned.update(dict(verdict.get("values") or {}))
         return [
             self._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.research.factor_ic_summary",
-                inputs=inputs,
+                inputs=cleaned,
             )
         ]
 
@@ -1272,8 +1239,8 @@ class Planner:
         overrides = getattr(self, "_market_overrides", None) or {}
         if len(seen) < 2 and overrides.get("shares") not in (None, ""):
             result["shares"] = str(overrides.get("shares")).strip()
-        for key in ("start", "end", "factor_htype", "return_htype"):
-            if result.get(key) not in (None, ""):
+        for key in self._job_slot_names("research.factor_ic"):
+            if key == "shares" or result.get(key) not in (None, ""):
                 continue
             value = overrides.get(key)
             if value not in (None, ""):

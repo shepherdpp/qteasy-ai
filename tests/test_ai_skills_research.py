@@ -100,6 +100,27 @@ class TestAiResearchFactorIcSkill(unittest.TestCase):
         self.assertIn("date range", message)
         self.assertNotIn("panel_builder", message)
         self.assertNotIn("skill injection", message)
+        self.assertNotIn("clarification", result)
+
+    def test_skill_rejects_one_symbol_without_clarify_card(self) -> None:
+        """少于两只代码仍由技能拒绝，不映回澄清卡。"""
+
+        print("\n[TestAiResearchFactorIcSkill] one symbol stays a skill error")
+        registry = build_default_registry()
+        result = registry.call(
+            "qt.ai.research.factor_ic_summary",
+            shares="000001.SZ",
+            start="20240101",
+            end="20240331",
+            factor_htype="close",
+            return_htype="volume",
+        )
+        message = result["error"]["message"]
+        print(" error:", result["error"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "FACTOR_IC_SUMMARY_FAILED")
+        self.assertIn("at least two symbols", message)
+        self.assertNotIn("clarification", result)
 
     def test_local_builder_gold_when_history_injected(self) -> None:
         """注入行情返回合成面板时，请求列与 IC 金标准一致。"""

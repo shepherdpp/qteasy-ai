@@ -40,6 +40,7 @@ from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
 from .plan_markdown import tool_plan_to_markdown
 from .planner import Planner
+from .slot_decl import interpret_declared_slots
 from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
@@ -1061,6 +1062,35 @@ class QteasyAssistant:
             return False
         return str((getattr(step, "inputs", None) or {}).get("fallback_action") or "") == "clarify_required"
 
+    def _coerce_declared_slot_patches(
+        self,
+        state: ConversationState,
+        patches: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """写入前用 Job slots 整理补丁。拆开成功时修订通知带上两格。"""
+
+        task = state.task if state is not None else None
+        job = str(getattr(task, "job", "") or "") if task is not None else ""
+        declarations = self.planner.intent_engine.catalog.job_slots(job)
+        if not declarations:
+            return dict(patches or {})
+        current: Dict[str, Any] = {}
+        for key, slot in (getattr(task, "slots", {}) or {}).items():
+            value = getattr(slot, "value", None)
+            if value not in (None, ""):
+                current[str(key)] = value
+        merged = dict(current)
+        merged.update(patches or {})
+        verdict = interpret_declared_slots(
+            declarations,
+            merged,
+            is_history_column=Planner._is_history_panel_htype,
+        )
+        out = dict(patches or {})
+        for key, value in (verdict.get("patches") or {}).items():
+            out[str(key)] = value
+        return out
+
     def _assemble_plan(
         self,
         query: str,
@@ -1093,6 +1123,7 @@ class QteasyAssistant:
             self.session_store.save(state)
 
         if inbound == "control":
+            structured = self._coerce_declared_slot_patches(state, structured)
             merge_facts(state, structured, source="user", confirmed=True)
             answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
             if state.task is not None and (state.task.pending_clarification or state.task.missing):

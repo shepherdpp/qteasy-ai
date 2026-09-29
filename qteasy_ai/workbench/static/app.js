@@ -1984,8 +1984,11 @@ function renderClarification() {
       const value = current && current.value != null ? String(current.value) : "";
       const row = pendingItems.find((item) => (item.name || item) === name);
       const hint = row && typeof row === "object" ? row.hint || "" : "";
+      const label = row && row.label ? String(row.label) : slotLabel(name);
+      const error = row && row.error ? String(row.error) : "";
       const hintHtml = hint ? `<span class="slot-hint">${escapeHtml(hint)}</span>` : "";
-      return `<div class="slot-row"><label>${escapeHtml(slotLabel(name))}<input data-slot="${escapeHtml(name)}" value="${escapeHtml(value)}" /></label>${hintHtml}</div>`;
+      const errorHtml = error ? `<span class="slot-error">${escapeHtml(error)}</span>` : "";
+      return `<div class="slot-row"><label>${escapeHtml(label)}<input data-slot="${escapeHtml(name)}" value="${escapeHtml(value)}" /></label>${hintHtml}${errorHtml}</div>`;
     })
     .join("");
   const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit. Skip ends this request.</p>";
