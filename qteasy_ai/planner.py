@@ -304,7 +304,10 @@ class Planner:
             assumptions["input_sources"] = input_sources
         missing = self._required_missing(decision.job, steps, session)
         if missing:
-            assumptions["clarification"] = self._session_clarification(user_query, missing)
+            assumptions["clarification"] = self._factor_ic_clarification(
+                self._session_clarification(user_query, missing),
+                steps,
+            )
             assumptions["session_missing"] = missing
         intent_flags = dict(decision.flags or {})
         for step in steps:
@@ -361,12 +364,12 @@ class Planner:
 
     @staticmethod
     def _confirmed_market_overrides(session: Any) -> Dict[str, Any]:
-        """已确认的标的/日期/频率。抽槽时这些值优先于问句里更早的代码。"""
+        """已确认的标的、日期、频率，以及因子 IC 的两侧列名。"""
 
         task = getattr(session, "task", None) if session is not None else None
         slots = getattr(task, "slots", {}) or {} if task is not None else {}
         overrides: Dict[str, Any] = {}
-        for key in ("shares", "start", "end", "freq"):
+        for key in ("shares", "start", "end", "freq", "factor_htype", "return_htype"):
             slot = slots.get(key)
             if slot is None or not getattr(slot, "confirmed", False):
                 continue
@@ -569,11 +572,26 @@ class Planner:
                 missing.append(key)
         if self._is_clarify_fallback(steps) and not missing:
             info = str((steps[0].inputs or {}).get("missing_info") or "")
+            reason = str((steps[0].inputs or {}).get("reason") or "")
             if "date" in info:
                 missing = ["start", "end"]
+            elif reason == "factor_ic_unknown_htype":
+                missing = self._factor_ic_unknown_slots(info)
             elif info:
                 missing = [part.strip() for part in info.replace("|", ",").split(",") if part.strip()]
         return missing
+
+    def _factor_ic_unknown_slots(self, missing_info: str) -> List[str]:
+        """未知列名对应已确认的 factor_htype / return_htype，便于表单改原槽。"""
+
+        unknown = [part.strip() for part in str(missing_info or "").replace("|", ",").split(",") if part.strip()]
+        overrides = getattr(self, "_market_overrides", None) or {}
+        slots = [
+            key
+            for key in ("factor_htype", "return_htype")
+            if str(overrides.get(key) or "").strip() in unknown
+        ]
+        return slots or unknown
 
     @staticmethod
     def _session_clarification(query: str, missing: List[str]) -> Dict[str, Any]:
@@ -597,6 +615,20 @@ class Planner:
         }
         if options:
             blob["options"] = options
+        return blob
+
+    @staticmethod
+    def _factor_ic_clarification(blob: Dict[str, Any], steps: List[ToolStep]) -> Dict[str, Any]:
+        """因子 IC 澄清卡用 fallback 的 hint，槽位 hint 保持短说明。"""
+
+        if not Planner._is_clarify_fallback(steps):
+            return blob
+        reason = str((steps[0].inputs or {}).get("reason") or "")
+        if not reason.startswith("factor_ic_"):
+            return blob
+        hint = str((steps[0].inputs or {}).get("hint") or "").strip()
+        if hint:
+            blob["confirm_prompt"] = hint
         return blob
 
     _DATA_INTENT_SKILLS = {
@@ -1039,12 +1071,7 @@ class Planner:
             return [self._make_step(step_id="step_1", skill_name=skill_name, inputs=inputs)]
 
         if self._is_factor_ic_query(q_lower):
-            primary = self._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.research.factor_ic_summary",
-                inputs=self._market_inputs(query),
-            )
-            return [primary]
+            return self._factor_ic_steps(query)
 
         if self._is_summary_query(q_lower):
             primary = self._make_step(
@@ -1137,6 +1164,144 @@ class Planner:
             "n_rows",
         ]
         return any(item in q_lower for item in keywords)
+
+    def _factor_ic_steps(self, query: str) -> List[ToolStep]:
+        """因子 IC 步骤：缺槽或未知列名时澄清，否则带上全部代码与列名。"""
+
+        inputs = self._extract_factor_ic_inputs(query)
+        codes = [item for item in str(inputs.get("shares") or "").split(",") if item]
+        missing: List[str] = []
+        if len(codes) < 2:
+            missing.append("shares")
+        if not inputs.get("start"):
+            missing.append("start")
+        if not inputs.get("end"):
+            missing.append("end")
+        if not inputs.get("factor_htype"):
+            missing.append("factor_htype")
+        if not inputs.get("return_htype"):
+            missing.append("return_htype")
+        if missing:
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="factor_ic_missing_fields",
+                        hint=(
+                            "Factor IC needs at least two symbols, a start and end date, "
+                            "and two local history columns (for example close and volume). "
+                            "This skill does not compute or shift return columns."
+                        ),
+                        missing_info="|".join(missing),
+                        next_step=(
+                            "Example: factor IC of close vs volume for 000001.SZ,000002.SZ "
+                            "from 20240101 to 20240331."
+                        ),
+                    ),
+                )
+            ]
+        unknown = [
+            str(name)
+            for name in (inputs.get("factor_htype"), inputs.get("return_htype"))
+            if name and not self._is_history_panel_htype(str(name))
+        ]
+        if unknown:
+            shown = ", ".join(repr(name) for name in unknown)
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="factor_ic_unknown_htype",
+                        hint=(
+                            f"Column(s) {shown} are not local history columns usable on a HistoryPanel. "
+                            "Use columns that already exist, for example close and volume. "
+                            "This skill does not compute or shift return columns."
+                        ),
+                        missing_info="|".join(unknown),
+                        next_step=(
+                            "Example: factor IC of close vs volume for 000001.SZ,000002.SZ "
+                            "from 20240101 to 20240331."
+                        ),
+                    ),
+                )
+            ]
+        return [
+            self._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.research.factor_ic_summary",
+                inputs=inputs,
+            )
+        ]
+
+    def _extract_factor_ic_inputs(self, query: str) -> Dict[str, Any]:
+        """抽取因子 IC 的多代码、日期与 vs 两侧列名。
+
+        不改全局「第一只代码」抽槽。问句里已有至少两个交易所代码时，以问句为准。
+        """
+
+        market = self._extract_market_inputs(
+            query,
+            overrides=getattr(self, "_market_overrides", None),
+        )
+        result: Dict[str, Any] = {}
+        seen: List[str] = []
+        for match in re.findall(r"(\d{6}\.(?:SH|SZ|BJ))", query, flags=re.IGNORECASE):
+            code = str(match).upper()
+            if code not in seen:
+                seen.append(code)
+        if len(seen) >= 2:
+            result["shares"] = ",".join(seen)
+        elif market.get("shares"):
+            result["shares"] = market["shares"]
+        for key in ("start", "end", "freq"):
+            if market.get(key):
+                result[key] = market[key]
+        versus = re.search(
+            r"\b([A-Za-z][A-Za-z0-9_|%]*)\s+vs\s+([A-Za-z][A-Za-z0-9_|%]*)\b",
+            query,
+        )
+        if versus:
+            result["factor_htype"] = versus.group(1)
+            result["return_htype"] = versus.group(2)
+        overrides = getattr(self, "_market_overrides", None) or {}
+        if len(seen) < 2 and overrides.get("shares") not in (None, ""):
+            result["shares"] = str(overrides.get("shares")).strip()
+        for key in ("start", "end", "factor_htype", "return_htype"):
+            if result.get(key) not in (None, ""):
+                continue
+            value = overrides.get(key)
+            if value not in (None, ""):
+                result[key] = str(value).strip()
+        return result
+
+    @staticmethod
+    def _is_history_panel_htype(name: str) -> bool:
+        """列名是否为可进 HistoryPanel 的 history 数据类型。"""
+
+        try:
+            import qteasy as qt
+
+            frame = qt.find_history_data(name, as_data_frame=True, fuzzy=False)
+        except Exception:
+            return False
+        if frame is None or not hasattr(frame, "iterrows") or bool(getattr(frame, "empty", True)):
+            return False
+        wanted = str(name).lower()
+        for _, row in frame.iterrows():
+            if str(row.get("name") or "").lower() != wanted:
+                continue
+            if str(row.get("kind") or "") != "history":
+                continue
+            flags = {part.strip() for part in str(row.get("usable_in") or "").split(",") if part.strip()}
+            if "history_panel" in flags:
+                return True
+        return False
 
     @staticmethod
     def _is_factor_ic_query(q_lower: str) -> bool:

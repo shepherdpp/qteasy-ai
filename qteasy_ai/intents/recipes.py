@@ -163,13 +163,7 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
     if job == "data.read":
         return _compose_data_read(planner, query, flags)
     if job == "research.factor_ic":
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.research.factor_ic_summary",
-                inputs=planner._market_inputs(query),
-            )
-        ]
+        return planner._factor_ic_steps(query)
     if job == "research.factor_explore":
         return []
     if job == "research.screen":

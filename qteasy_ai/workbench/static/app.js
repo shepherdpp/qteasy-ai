@@ -1969,7 +1969,8 @@ function renderClarification() {
   const clar = live || (missing.length ? latestClarify() : null);
   if (!shouldShowLiveClarify()) return "";
   if (!clar && !missing.length) return "";
-  const pending = ((clar && clar.payload && clar.payload.pending) || []).map((item) => item.name || item).filter(Boolean);
+  const pendingItems = ((clar && clar.payload && clar.payload.pending) || []).filter(Boolean);
+  const pending = pendingItems.map((item) => item.name || item).filter(Boolean);
   const fields = missing.length ? missing : pending;
   const lock = busy ? "disabled" : "";
   const skipBtn = `<button type="button" class="ghost" id="btn-clarify-skip" ${lock}>Skip</button>`;
@@ -1981,7 +1982,10 @@ function renderClarification() {
     .map((name) => {
       const current = ((state.sidebar && state.sidebar.slots) || []).find((s) => s.name === name);
       const value = current && current.value != null ? String(current.value) : "";
-      return `<div class="slot-row"><label>${escapeHtml(slotLabel(name))}<input data-slot="${escapeHtml(name)}" value="${escapeHtml(value)}" /></label></div>`;
+      const row = pendingItems.find((item) => (item.name || item) === name);
+      const hint = row && typeof row === "object" ? row.hint || "" : "";
+      const hintHtml = hint ? `<span class="slot-hint">${escapeHtml(hint)}</span>` : "";
+      return `<div class="slot-row"><label>${escapeHtml(slotLabel(name))}<input data-slot="${escapeHtml(name)}" value="${escapeHtml(value)}" /></label>${hintHtml}</div>`;
     })
     .join("");
   const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit. Skip ends this request.</p>";

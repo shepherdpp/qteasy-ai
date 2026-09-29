@@ -12,8 +12,9 @@ import unittest
 
 from qteasy_ai.app import build_default_registry
 from qteasy_ai.intents import load_default_catalog
-from qteasy_ai.planner import Planner
+from qteasy_ai.planner import Planner, ToolPlan
 from qteasy_ai.provider import FakeLLMProvider
+from qteasy_ai.session import ConversationState
 
 
 class TestAiOpenWorkflow(unittest.TestCase):
@@ -49,18 +50,136 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.factor_explore")
         self.assertFalse(bool((plan.assumptions or {}).get("design_loop")))
 
-    def test_named_ic_gold_stays_closed(self) -> None:
-        """点名 IC 金句仍闭合菜谱。"""
+    def test_named_ic_gold_asks_for_missing_slots(self) -> None:
+        """裸句缺代码、日期和列名时出澄清，不出可执行 IC 步。"""
 
-        print("\n[TestAiOpenWorkflow] closed IC gold")
+        print("\n[TestAiOpenWorkflow] bare factor IC clarifies")
         plan = Planner(self.registry, env_facts={}).build_plan(
             "factor IC summary for selection pool", mode="plan"
         )
         names = [step.skill_name for step in plan.steps]
+        inputs = plan.steps[0].inputs if plan.steps else {}
         print(" intent:", plan.planner_trace.get("intent_job"), "skills:", names)
+        print(" missing_info:", inputs.get("missing_info"))
+        print(" clarification:", (plan.assumptions or {}).get("clarification"))
+        self.assertEqual(plan.planner_trace.get("intent_job"), "research.factor_ic")
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(inputs.get("fallback_action"), "clarify_required")
+        missing = str(inputs.get("missing_info") or "")
+        self.assertIn("shares", missing)
+        self.assertIn("htype", missing)
+        self.assertNotIn("qt.ai.research.factor_ic_summary", names)
+        self.assertTrue((plan.assumptions or {}).get("clarification"))
+        self.assertFalse((plan.assumptions or {}).get("design_loop"))
+
+    def test_factor_ic_unknown_column_clarifies(self) -> None:
+        """pct_chg 不是 history 列时澄清，不出 IC 步。"""
+
+        print("\n[TestAiOpenWorkflow] unknown pct_chg clarifies")
+        query = (
+            "factor IC of close vs pct_chg for 000001.SZ,000002.SZ "
+            "from 20240101 to 20240331"
+        )
+        plan = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
+        names = [step.skill_name for step in plan.steps]
+        inputs = plan.steps[0].inputs if plan.steps else {}
+        print(" skills:", names)
+        print(" missing_info:", inputs.get("missing_info"))
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(inputs.get("fallback_action"), "clarify_required")
+        self.assertIn("pct_chg", str(inputs.get("missing_info") or ""))
+        self.assertNotIn("qt.ai.research.factor_ic_summary", names)
+
+    def test_factor_ic_known_columns_keep_all_symbols(self) -> None:
+        """close vs volume 保留两只代码和两侧列名。"""
+
+        print("\n[TestAiOpenWorkflow] close vs volume keeps symbols")
+        query = (
+            "factor IC of close vs volume for 000001.SZ,000002.SZ "
+            "from 20240101 to 20240331"
+        )
+        plan = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
+        names = [step.skill_name for step in plan.steps]
+        inputs = plan.steps[0].inputs if plan.steps else {}
+        print(" intent:", plan.planner_trace.get("intent_job"))
+        print(" skills:", names)
+        print(" inputs:", inputs)
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.factor_ic")
         self.assertEqual(names, ["qt.ai.research.factor_ic_summary"])
-        self.assertFalse((plan.assumptions or {}).get("design_loop"))
+        self.assertEqual(inputs.get("shares"), "000001.SZ,000002.SZ")
+        self.assertEqual(inputs.get("start"), "20240101")
+        self.assertEqual(inputs.get("end"), "20240331")
+        self.assertEqual(inputs.get("factor_htype"), "close")
+        self.assertEqual(inputs.get("return_htype"), "volume")
+
+    def _factor_ic_replan(self, slots: dict) -> ToolPlan:
+        """用已确认槽、跳过分类，重出因子 IC 计划。"""
+
+        session = ConversationState.empty("factor-ic-reclarify")
+        session.start_task(query="factor IC summary for selection pool", job="research.factor_ic")
+        for name, value in slots.items():
+            session.set_slot(name, value, source="user", confirmed=True)
+        return Planner(self.registry, env_facts={}).build_plan(
+            "factor IC summary for selection pool",
+            mode="plan",
+            session=session,
+            skip_classify=True,
+        )
+
+    def test_factor_ic_confirmed_bad_column_names_the_slot(self) -> None:
+        """已确认的 pct_chg 重出计划时仍澄清，文案点名该列。"""
+
+        print("\n[TestAiOpenWorkflow] confirmed pct_chg replan clarifies")
+        plan = self._factor_ic_replan(
+            {
+                "shares": "000001.SZ,000002.SZ",
+                "start": "20240101",
+                "end": "20240331",
+                "factor_htype": "pct_chg",
+                "return_htype": "volume",
+            }
+        )
+        names = [step.skill_name for step in plan.steps]
+        inputs = plan.steps[0].inputs if plan.steps else {}
+        clar = (plan.assumptions or {}).get("clarification") or {}
+        prompt = str(clar.get("confirm_prompt") or "")
+        pending = [str(item.get("name") or "") for item in (clar.get("pending") or []) if isinstance(item, dict)]
+        print(" skills:", names)
+        print(" missing_info:", inputs.get("missing_info"))
+        print(" pending:", pending)
+        print(" confirm_prompt:", prompt)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertIn("pct_chg", str(inputs.get("missing_info") or ""))
+        self.assertIn("factor_htype", pending)
+        self.assertNotIn("pct_chg", pending)
+        self.assertIn("pct_chg", prompt)
+        self.assertIn("close", prompt)
+        self.assertIn("volume", prompt)
+        self.assertNotIn("qt.ai.research.factor_ic_summary", names)
+
+    def test_factor_ic_confirmed_legal_slots_emit_ic_step(self) -> None:
+        """已确认的 close / volume 与两只代码、日期齐全时出 IC 步。"""
+
+        print("\n[TestAiOpenWorkflow] confirmed close vs volume emits IC")
+        plan = self._factor_ic_replan(
+            {
+                "shares": "000001.SZ,000002.SZ",
+                "start": "20240101",
+                "end": "20240331",
+                "factor_htype": "close",
+                "return_htype": "volume",
+            }
+        )
+        names = [step.skill_name for step in plan.steps]
+        inputs = plan.steps[0].inputs if plan.steps else {}
+        print(" skills:", names)
+        print(" inputs:", inputs)
+        print(" clarification:", (plan.assumptions or {}).get("clarification"))
+        self.assertEqual(names, ["qt.ai.research.factor_ic_summary"])
+        self.assertEqual(inputs.get("shares"), "000001.SZ,000002.SZ")
+        self.assertEqual(inputs.get("factor_htype"), "close")
+        self.assertEqual(inputs.get("return_htype"), "volume")
+        self.assertFalse((plan.assumptions or {}).get("clarification"))
 
     def test_system_open_job_still_legal_dag(self) -> None:
         """系统 Job open 仍走合法边 DAG，不是设计环。"""
