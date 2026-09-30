@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .ask_engine import AskEngine, AskResponse
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
@@ -121,6 +121,85 @@ def _normalize_patches(patches: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             continue
         out[name] = value
     return out
+
+
+def _revision_changes(
+    written: Dict[str, Any],
+    submitted: Dict[str, Any],
+    labels: Dict[str, str],
+    source_name: str,
+) -> List[Dict[str, Any]]:
+    """标出每个写入键是用户提交还是系统填入。
+
+    Parameters
+    ----------
+    written : dict
+        最终写入的槽值。
+    submitted : dict
+        用户这次提交的键。
+    labels : dict
+        槽名到 Job slots 的 label。未声明时用槽名。
+    source_name : str
+        系统填入键的来源槽名。空则不带来源。
+
+    Returns
+    -------
+    list of dict
+        ``origin`` 为 ``accepted`` 或 ``filled``。
+    """
+
+    source = str(source_name or "").strip()
+    source_label = str(labels.get(source) or source)
+    rows: List[Dict[str, Any]] = []
+    for key, value in written.items():
+        name = str(key)
+        label = str(labels.get(name) or name)
+        if name in submitted:
+            rows.append({"name": name, "label": label, "value": value, "origin": "accepted"})
+            continue
+        item: Dict[str, Any] = {"name": name, "label": label, "value": value, "origin": "filled"}
+        if source:
+            item["from"] = source
+            item["from_label"] = source_label
+        rows.append(item)
+    return rows
+
+
+def _mark_rejected_slot_changes(
+    changes: List[Dict[str, Any]],
+    assumptions: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """澄清卡 ``pending.error`` 非空的提交键改为 rejected。
+
+    Parameters
+    ----------
+    changes : list of dict
+        本轮写入键。``origin`` 为 ``accepted`` 或 ``filled``。
+    assumptions : dict, optional
+        计划假设。``clarification.pending`` 与用户看见的卡一致。
+
+    Returns
+    -------
+    list of dict
+        被拒绝的提交键 ``origin`` 为 ``rejected``。系统填入且不在名单里的键仍是 ``filled``。
+    """
+
+    clarification = (assumptions or {}).get("clarification") if isinstance(assumptions, dict) else None
+    pending = clarification.get("pending") if isinstance(clarification, dict) else None
+    rejected = {
+        str(item.get("name") or "").strip()
+        for item in (pending or [])
+        if isinstance(item, dict) and str(item.get("error") or "").strip() and str(item.get("name") or "").strip()
+    }
+    if not rejected:
+        return [dict(item) for item in changes]
+    rows: List[Dict[str, Any]] = []
+    for item in changes:
+        row = dict(item)
+        if str(row.get("name") or "") in rejected and str(row.get("origin") or "accepted") == "accepted":
+            row["origin"] = "rejected"
+        rows.append(row)
+    return rows
 
 
 def build_default_registry() -> SkillRegistry:
@@ -826,6 +905,7 @@ class QteasyAssistant:
             include_user = False
         if isinstance(assumptions.get("slot_revision"), dict) and assumptions.get("slot_revision"):
             payload["slot_revision"] = dict(assumptions.get("slot_revision") or {})
+            payload["slot_changes"] = list(assumptions.get("slot_changes") or [])
             payload["revision"] = int(assumptions.get("revision") or 0)
         if assumptions.get("block_running"):
             payload["block_running"] = True
@@ -1066,30 +1146,39 @@ class QteasyAssistant:
         self,
         state: ConversationState,
         patches: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """写入前用 Job slots 整理补丁。拆开成功时修订通知带上两格。"""
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """写入前整理补丁，并标出用户接受的槽与系统填入的槽。"""
 
+        submitted = dict(patches or {})
         task = state.task if state is not None else None
         job = str(getattr(task, "job", "") or "") if task is not None else ""
         declarations = self.planner.intent_engine.catalog.job_slots(job)
+        labels = {
+            str(item.get("name") or ""): str(item.get("label") or item.get("name") or "")
+            for item in declarations
+            if item.get("name")
+        }
         if not declarations:
-            return dict(patches or {})
+            return submitted, _revision_changes(submitted, submitted, labels, "")
         current: Dict[str, Any] = {}
         for key, slot in (getattr(task, "slots", {}) or {}).items():
             value = getattr(slot, "value", None)
             if value not in (None, ""):
                 current[str(key)] = value
         merged = dict(current)
-        merged.update(patches or {})
+        merged.update(submitted)
         verdict = interpret_declared_slots(
             declarations,
             merged,
             is_history_column=Planner._is_history_panel_htype,
         )
-        out = dict(patches or {})
-        for key, value in (verdict.get("patches") or {}).items():
+        out = dict(submitted)
+        coerced = dict(verdict.get("patches") or {})
+        for key, value in coerced.items():
             out[str(key)] = value
-        return out
+        sources = [str(key) for key in coerced if str(key) in submitted]
+        source_name = sources[0] if len(sources) == 1 else ""
+        return out, _revision_changes(out, submitted, labels, source_name)
 
     def _assemble_plan(
         self,
@@ -1117,13 +1206,14 @@ class QteasyAssistant:
         topic_skipped = False
         keep_plan_id = ""
         slot_revision: Optional[Dict[str, Any]] = None
+        slot_changes: List[Dict[str, Any]] = []
 
         if inbound == "composer" and asked:
             state.append_user_text(asked)
             self.session_store.save(state)
 
         if inbound == "control":
-            structured = self._coerce_declared_slot_patches(state, structured)
+            structured, slot_changes = self._coerce_declared_slot_patches(state, structured)
             merge_facts(state, structured, source="user", confirmed=True)
             answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
             if state.task is not None and (state.task.pending_clarification or state.task.missing):
@@ -1185,8 +1275,10 @@ class QteasyAssistant:
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["topic_skipped"] = True
         if slot_revision:
+            slot_changes = _mark_rejected_slot_changes(slot_changes, getattr(plan, "assumptions", None))
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["slot_revision"] = dict(slot_revision)
+            plan.assumptions["slot_changes"] = list(slot_changes)
             plan.assumptions["revision"] = int(getattr(state.task, "revision", 0) or 0) if state.task else 0
         self._sync_session_from_plan(state, plan, query=asked or query, skip_classify=skip_classify)
         self.session_store.save(state)

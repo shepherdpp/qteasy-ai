@@ -250,15 +250,19 @@ def _slot_title(name: str) -> str:
 def _collect_slots(
     assumptions: Dict[str, Any],
     steps: Sequence[Dict[str, Any]],
+    *,
+    extra: Optional[Set[str]] = None,
 ) -> List[Tuple[str, str]]:
-    """白名单用户槽；内部 Hybrid 键永不出现。"""
+    """白名单用户槽，外加当前 Job 声明过的槽。内部 Hybrid 键永不出现。"""
 
+    allowed = set(SLOT_WHITELIST)
+    allowed.update(str(name) for name in (extra or set()) if str(name).strip())
     collected: Dict[str, str] = {}
     for key, value in (assumptions or {}).items():
         name = str(key or "").strip()
         if name in ASSUMPTION_BLACKLIST:
             continue
-        if name not in SLOT_WHITELIST:
+        if name not in allowed:
             continue
         text = str(value).strip()
         if text:
@@ -269,12 +273,33 @@ def _collect_slots(
             continue
         for key, value in inputs.items():
             name = str(key or "").strip()
-            if name in ASSUMPTION_BLACKLIST or name not in SLOT_WHITELIST:
+            if name in ASSUMPTION_BLACKLIST or name not in allowed:
                 continue
             text = str(value).strip()
             if text:
                 collected[name] = text
     return [(key, collected[key]) for key in sorted(collected)]
+
+
+def _job_slot_meta(job: str) -> Dict[str, Dict[str, str]]:
+    """当前 Job 的槽 label 与 hint。没有声明时为空。"""
+
+    name = str(job or "").strip()
+    if not name:
+        return {}
+    from .intents import load_default_catalog
+
+    rows = load_default_catalog().job_slots(name)
+    meta: Dict[str, Dict[str, str]] = {}
+    for item in rows:
+        slot = str(item.get("name") or "").strip()
+        if not slot:
+            continue
+        meta[slot] = {
+            "label": str(item.get("label") or slot),
+            "hint": str(item.get("hint") or "").strip(),
+        }
+    return meta
 
 
 def _skill_title(skill_name: str, registry: Any = None) -> str:
@@ -388,10 +413,13 @@ def _mode_r_body(
     slots: Sequence[Tuple[str, str]],
     sources: Optional[Dict[str, str]] = None,
     registry: Any = None,
+    slot_meta: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> str:
     """无 Provider 时的确定性人读正文。"""
 
     source_map = dict(sources or {})
+    meta = dict(slot_meta or {})
+    declared = set(meta)
     lines: List[str] = ["# Plan", ""]
     if plan_id:
         lines.append(f"plan_id: {plan_id}")
@@ -416,7 +444,7 @@ def _mode_r_body(
         lines.append(f"   - Reads as: {title}.")
         expect = _STEP_EXPECT.get(skill, "a result artifact; performance figures are unknown until the run")
         lines.append(f"   - Expected output: {expect}")
-        step_slots = _collect_slots({}, [step])
+        step_slots = _collect_slots({}, [step], extra=declared)
         if step_slots:
             shown = ", ".join(f"{key}={value}" for key, value in step_slots)
             lines.append(f"   - Inputs: {shown}")
@@ -427,7 +455,12 @@ def _mode_r_body(
     if slots:
         lines.extend(["## Slots", ""])
         for key, value in slots:
-            lines.append(f"- {_slot_title(key)}: {value}")
+            row = meta.get(key) or {}
+            title = str(row.get("label") or _slot_title(key))
+            lines.append(f"- {title}: {value}")
+            hint = str(row.get("hint") or "").strip()
+            if hint:
+                lines.append(f"  {hint}")
         lines.append("")
     lines.extend(
         [
@@ -582,11 +615,12 @@ def tool_plan_to_markdown(
     raw_steps = unpacked["steps"]
     steps = [_normalize_step(item, index) for index, item in enumerate(raw_steps, start=1)]
     assumptions = unpacked["assumptions"] if isinstance(unpacked["assumptions"], dict) else {}
-    slots = _collect_slots(assumptions, steps)
     raw_sources = assumptions.get("input_sources")
     sources = dict(raw_sources) if isinstance(raw_sources, dict) else {}
     trace = unpacked["planner_trace"] if isinstance(unpacked["planner_trace"], dict) else {}
     job = str(trace.get("intent_job") or "").strip()
+    slot_meta = _job_slot_meta(job)
+    slots = _collect_slots(assumptions, steps, extra=set(slot_meta))
     risk = _overall_risk([_side_effects_label(item.get("side_effects")) for item in steps])
     mode_r = _mode_r_body(
         plan_id=unpacked["plan_id"],
@@ -597,6 +631,7 @@ def tool_plan_to_markdown(
         slots=slots,
         sources=sources,
         registry=registry,
+        slot_meta=slot_meta,
     )
     if provider is not None and re.search(r"[\u4e00-\u9fff]", unpacked["user_query"]):
         rewritten = _llm_language_overlay(

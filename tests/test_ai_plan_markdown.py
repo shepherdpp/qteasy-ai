@@ -285,6 +285,47 @@ class TestAiPlanMarkdown(unittest.TestCase):
         self.assertNotIn("回撤", md)
         self.assertNotIn("drawdown", md.lower())
 
+    def test_factor_ic_plan_lists_declared_slot_hints(self) -> None:
+        """因子 IC 的 plan.md 写出两列的 label 与 hint，不写出技能参数 method。"""
+
+        print("\n[TestAiPlanMarkdown] factor IC slots in plan.md")
+        plan = ToolPlan(
+            plan_id=new_plan_id(),
+            user_query="factor IC summary for selection pool",
+            mode="plan",
+            execution_mode="dry_run",
+            assumptions={"shares": "000001.SZ 000002.SZ"},
+            planner_trace={"intent_job": "research.factor_ic"},
+            steps=[
+                ToolStep(
+                    step_id="step_1",
+                    skill_name="qt.ai.research.factor_ic_summary",
+                    inputs={
+                        "shares": "000001.SZ 000002.SZ",
+                        "start": "20240101",
+                        "end": "20240331",
+                        "factor_htype": "close",
+                        "return_htype": "volume",
+                        "method": "spearman",
+                    },
+                    side_effects=SkillSideEffects(description="readonly"),
+                ),
+            ],
+        )
+        md = tool_plan_to_markdown(plan)
+        print(" plan_md:\n", md)
+        self.assertIn("factor_htype=close", md)
+        self.assertIn("return_htype=volume", md)
+        self.assertIn("- Factor column: close", md)
+        self.assertIn("  One local history column, such as close.", md)
+        self.assertIn("- Return column: volume", md)
+        self.assertIn(
+            "  One different local history column, such as volume. "
+            "This skill does not compute or shift return columns.",
+            md,
+        )
+        self.assertNotIn("method", md)
+
 
 if __name__ == "__main__":
     unittest.main()

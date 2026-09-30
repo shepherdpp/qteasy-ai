@@ -15,12 +15,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.app import QteasyAssistant, _mark_rejected_slot_changes, build_default_registry
 from qteasy_ai.human_card import (
     HUMAN_CARD_KINDS,
     format_human_cards,
     infer_effective_kind,
     project_human_cards,
+    revision_notice_text,
     usage_notice_card,
 )
 from qteasy_ai.memory_store import MemoryStore
@@ -479,6 +480,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertEqual(second_run, first_run)
             self.assertEqual(int(session.task.slots["slow"].value), 50)
             self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
+            self.assertTrue(any("Accepted slow = 50." in str(row.get("text") or "") for row in notices))
             self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
             spoken = asst.plan("把慢线改成 50", response_style="raw", session_id=sid)
@@ -490,6 +492,198 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertNotEqual(spoken_id, first_id)
             self.assertIn("把慢线改成 50", [row.get("text") for row in users])
             self.assertGreater(len(users), len(users_before))
+
+    def test_revision_notice_lists_accepted_and_filled_slots(self) -> None:
+        """任意改槽都逐条写出接受值；系统填入的槽带来源 label。"""
+
+        print("\n[TestAiHumanCardPlanArtifact] revision notice accepted and filled")
+        shares = project_human_cards(
+            {
+                "requested_mode": "plan",
+                "slot_revision": {"shares": "000001.SZ 000002.SZ"},
+                "slot_changes": [
+                    {
+                        "name": "shares",
+                        "label": "shares",
+                        "value": "000001.SZ 000002.SZ",
+                        "origin": "accepted",
+                    }
+                ],
+                "revision": 3,
+            },
+            requested_mode="plan",
+            include_user_text=False,
+        )
+        split = project_human_cards(
+            {
+                "requested_mode": "plan",
+                "slot_revision": {"return_htype": "close", "factor_htype": "volume"},
+                "slot_changes": [
+                    {
+                        "name": "return_htype",
+                        "label": "Return column",
+                        "value": "close",
+                        "origin": "accepted",
+                    },
+                    {
+                        "name": "factor_htype",
+                        "label": "Factor column",
+                        "value": "volume",
+                        "origin": "filled",
+                        "from": "return_htype",
+                        "from_label": "Return column",
+                    },
+                ],
+                "revision": 4,
+            },
+            requested_mode="plan",
+            include_user_text=False,
+        )
+        shares_text = next(row["text"] for row in shares if row.get("kind") == "mode_notice")
+        split_text = next(row["text"] for row in split if row.get("kind") == "mode_notice")
+        print(" shares:", shares_text)
+        print(" split:", split_text)
+        self.assertIn("Plan revised (revision 3).", shares_text)
+        self.assertIn("Accepted shares = 000001.SZ 000002.SZ.", shares_text)
+        self.assertIn("Plan revised (revision 4).", split_text)
+        self.assertIn("Accepted Return column = close.", split_text)
+        self.assertIn("Filled Factor column = volume from Return column.", split_text)
+        self.assertNotIn("from Factor", split_text)
+
+    def test_rejected_slot_is_not_called_accepted(self) -> None:
+        """各类被拒输入不写成 Accepted；整笔拒绝不发 Notice，混合则分开写。"""
+
+        print("\n[TestAiHumanCardPlanArtifact] rejected slots stay rejected")
+        marked = _mark_rejected_slot_changes(
+            [
+                {"name": "x", "label": "X", "value": "close", "origin": "accepted"},
+                {"name": "y", "label": "Y", "value": "ok", "origin": "accepted"},
+            ],
+            {
+                "clarification": {
+                    "pending": [
+                        {
+                            "name": "x",
+                            "error": "'close' cannot be accepted for this field.",
+                        }
+                    ]
+                }
+            },
+        )
+        unknown_only = _mark_rejected_slot_changes(
+            [{"name": "x", "label": "X", "value": "close", "origin": "accepted"}],
+            {
+                "clarification": {
+                    "pending": [
+                        {
+                            "name": "x",
+                            "error": "'close' cannot be accepted for this field.",
+                        }
+                    ]
+                }
+            },
+        )
+        mixed_unknown = revision_notice_text(2, {"x": "close", "y": "ok"}, marked)
+        only_unknown = revision_notice_text(1, {"x": "close"}, unknown_only)
+        print(" unknown mixed:", mixed_unknown)
+        print(" unknown only:", repr(only_unknown))
+        print(" origins:", [row.get("origin") for row in marked])
+        self.assertEqual(marked[0]["origin"], "rejected")
+        self.assertEqual(marked[1]["origin"], "accepted")
+        self.assertIn("Rejected X = close.", mixed_unknown)
+        self.assertIn("Accepted Y = ok.", mixed_unknown)
+        self.assertNotIn("Accepted X", mixed_unknown)
+        self.assertEqual(only_unknown, "")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+
+            def submit(sid: str, patches: dict) -> tuple:
+                asst.plan(
+                    "factor IC summary for selection pool",
+                    response_style="raw",
+                    session_id=sid,
+                )
+                payload = asst.plan("", response_style="raw", session_id=sid, patches=patches)
+                cards = payload.get("human_cards") or []
+                notices = [
+                    str(row.get("text") or "")
+                    for row in cards
+                    if row.get("kind") == "mode_notice"
+                ]
+                pending = []
+                for row in cards:
+                    if row.get("kind") == "clarify":
+                        pending = (row.get("payload") or {}).get("pending") or []
+                return "\n".join(notices), pending
+
+            date_only, date_pending = submit("rej-date", {"start": "20241254"})
+            print(" date only:", repr(date_only))
+            print(" date pending:", date_pending)
+            self.assertNotIn("Plan revised", date_only)
+            self.assertNotIn("Accepted", date_only)
+            self.assertIn("20241254", _pending_error(date_pending, "start"))
+
+            symbols, symbol_pending = submit("rej-symbol", {"shares": "000001.SZ"})
+            print(" symbol only:", repr(symbols))
+            print(" symbol pending:", symbol_pending)
+            self.assertNotIn("Plan revised", symbols)
+            self.assertNotIn("Accepted", symbols)
+            self.assertIn("at least 2", _pending_error(symbol_pending, "shares"))
+
+            htype, htype_pending = submit("rej-htype", {"factor_htype": "not_a_htype"})
+            print(" htype only:", repr(htype))
+            print(" htype pending:", htype_pending)
+            self.assertNotIn("Plan revised", htype)
+            self.assertNotIn("Accepted", htype)
+            self.assertIn("not_a_htype", _pending_error(htype_pending, "factor_htype"))
+
+            mixed, mixed_pending = submit(
+                "rej-mixed",
+                {"start": "20241254", "end": "20241231", "factor_htype": "pct_chg"},
+            )
+            print(" mixed:", mixed)
+            print(" mixed pending:", mixed_pending)
+            self.assertIn("Plan revised", mixed)
+            self.assertIn("Accepted End date = 20241231.", mixed)
+            self.assertIn("Rejected Start date = 20241254.", mixed)
+            self.assertIn("Rejected Factor column = pct_chg.", mixed)
+            self.assertNotIn("Accepted Start date", mixed)
+            self.assertNotIn("Accepted Factor column", mixed)
+
+            same, same_pending = submit(
+                "rej-same",
+                {"factor_htype": "close", "return_htype": "close"},
+            )
+            print(" distinct:", same)
+            print(" distinct pending:", same_pending)
+            self.assertIn("Accepted Factor column = close.", same)
+            self.assertIn("Rejected Return column = close.", same)
+            self.assertNotIn("Accepted Return column", same)
+            self.assertIn("must differ", _pending_error(same_pending, "return_htype"))
+
+            crowded, crowded_pending = submit(
+                "rej-multi",
+                {"factor_htype": "volume", "return_htype": "close, volume"},
+            )
+            print(" multi:", crowded)
+            print(" multi pending:", crowded_pending)
+            self.assertIn("Accepted Factor column = volume.", crowded)
+            self.assertIn("Rejected Return column = close, volume.", crowded)
+            self.assertNotIn("Accepted Return column", crowded)
+            self.assertIn("not one value", _pending_error(crowded_pending, "return_htype"))
+
+
+def _pending_error(pending: list, name: str) -> str:
+    """取出澄清卡上该槽的 error。"""
+
+    for item in pending:
+        if str(item.get("name") or "") == name:
+            return str(item.get("error") or "")
+    return ""
 
 
 class TestAiHumanCardClarify(unittest.TestCase):

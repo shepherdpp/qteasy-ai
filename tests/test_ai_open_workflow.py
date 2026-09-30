@@ -388,10 +388,19 @@ class TestAiOpenWorkflow(unittest.TestCase):
             inputs = ((second.get("plan") or {}).get("steps") or [{}])[0].get("inputs") or {}
             print(" revision:", revision)
             print(" inputs:", inputs)
+            notices = [
+                str(row.get("text") or "")
+                for row in (second.get("human_cards") or [])
+                if row.get("kind") == "mode_notice"
+            ]
+            print(" notices:", notices)
             self.assertEqual(revision.get("return_htype"), "close")
             self.assertEqual(revision.get("factor_htype"), "volume")
             self.assertEqual(inputs.get("return_htype"), "close")
             self.assertEqual(inputs.get("factor_htype"), "volume")
+            joined = "\n".join(notices)
+            self.assertIn("Accepted Return column = close.", joined)
+            self.assertIn("Filled Factor column = volume from Return column.", joined)
 
     def test_system_open_job_still_legal_dag(self) -> None:
         """系统 Job open 仍走合法边 DAG，不是设计环。"""

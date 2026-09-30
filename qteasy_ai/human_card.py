@@ -152,6 +152,58 @@ def infer_effective_kind(payload: Dict[str, Any]) -> str:
     return "plan"
 
 
+def revision_notice_text(
+    revision: int,
+    patches: Dict[str, Any],
+    changes: Optional[Sequence[Dict[str, Any]]] = None,
+) -> str:
+    """改槽 Notice：接受、系统填入、拒绝分条写出。
+
+    Parameters
+    ----------
+    revision : int
+        修订序号。
+    patches : dict
+        本次写入的槽值。无 ``changes`` 时按用户接受逐条列出。
+    changes : sequence of dict, optional
+        每项含 ``label`` / ``value`` / ``origin``（``accepted``、``filled`` 或 ``rejected``）。
+        ``filled`` 且有 ``from_label`` 时说明来源槽。
+
+    Returns
+    -------
+    str
+        英文正文。没有任何接受或填入时为空串，不发 Notice。
+    """
+
+    rows = [item for item in (changes or []) if isinstance(item, dict)]
+    if not rows:
+        rows = [
+            {"label": str(key), "value": value, "origin": "accepted"}
+            for key, value in (patches or {}).items()
+        ]
+    lines: List[str] = []
+    progressed = False
+    for item in rows:
+        label = str(item.get("label") or item.get("name") or "").strip()
+        value = item.get("value")
+        origin = str(item.get("origin") or "accepted")
+        if origin == "filled":
+            progressed = True
+            source = str(item.get("from_label") or item.get("from") or "").strip()
+            if source:
+                lines.append(f"Filled {label} = {value} from {source}.")
+            else:
+                lines.append(f"Filled {label} = {value}.")
+        elif origin == "rejected":
+            lines.append(f"Rejected {label} = {value}.")
+        else:
+            progressed = True
+            lines.append(f"Accepted {label} = {value}.")
+    if not progressed:
+        return ""
+    return "\n".join([f"Plan revised (revision {int(revision)})."] + lines)
+
+
 def project_human_cards(
     payload: Dict[str, Any],
     *,
@@ -211,13 +263,16 @@ def project_human_cards(
     revision = raw.get("slot_revision")
     if isinstance(revision, dict) and revision:
         rev_n = int(raw.get("revision") or 0)
-        cards.append(
-            make_card(
-                "mode_notice",
-                f"Plan revised (revision {rev_n}).",
-                {"patches": dict(revision), "revision": rev_n},
+        changes = raw.get("slot_changes") if isinstance(raw.get("slot_changes"), list) else []
+        notice = revision_notice_text(rev_n, revision, changes)
+        if notice:
+            cards.append(
+                make_card(
+                    "mode_notice",
+                    notice,
+                    {"patches": dict(revision), "revision": rev_n},
+                )
             )
-        )
 
     if raw.get("topic_skipped"):
         cards.append(
