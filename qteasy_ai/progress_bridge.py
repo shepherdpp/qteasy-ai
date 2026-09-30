@@ -6,12 +6,14 @@
 # Created: 2026-09-23
 # Desc:
 # 只桥 qteasy.core.tqdm，把 refill 批进度接到 on_progress。
+# 已绑定回调时不向终端画条。
 # ======================================
 
 """把 ``qteasy.core.tqdm.update`` 转发到本线程 contextvar。
 
 只替换 ``qteasy.core.tqdm``，不改内核签名，不桥 ``optimization``。
 装一次、不在 finally 里换回去。未绑定回调时行为与原 tqdm 相同。
+已绑定则不向终端画条，进度只走回调。
 """
 
 from __future__ import annotations
@@ -72,10 +74,30 @@ def install_qteasy_tqdm_bridge() -> None:
         return
 
     class BridgedTqdm(base):
-        """转发 update 到本线程 on_progress。"""
+        """转发 update 到本线程 on_progress。已绑回调时不画终端条。"""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            silent = _progress_cb.get() is not None
+            desc = kwargs.get("desc")
+            if silent:
+                kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+            self._qt_ai_silent = silent
+            if silent and desc:
+                # disable 早退不会记下构造参数 desc
+                text = str(desc)
+                self.desc = text if text.endswith(": ") else f"{text}: "
 
         def update(self, n: Any = 1) -> Any:
-            result = super().update(n)
+            if getattr(self, "_qt_ai_silent", False):
+                # tqdm 在 disable 时 update 直接返回，不会增加 n
+                try:
+                    self.n = int(getattr(self, "n", 0) or 0) + int(n)
+                except (TypeError, ValueError):
+                    return super().update(n)
+                result: Any = None
+            else:
+                result = super().update(n)
             cb = _progress_cb.get()
             if cb is None:
                 return result

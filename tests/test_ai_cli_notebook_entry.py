@@ -342,6 +342,67 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         self.assertEqual(plan_default.output_format, "human")
         self.assertEqual(plan_raw.output_format, "raw")
 
+    def test_serve_log_config_has_time_and_drops_client(self) -> None:
+        """serve 访问日志带时间，且不含客户端地址。"""
+
+        print("\n[TestAiCliNotebookEntry] serve 日志格式")
+        import uvicorn.config
+
+        from qteasy_ai.workbench.serve_log import SERVE_LOG_DATEFMT, build_serve_log_config
+
+        original_access = uvicorn.config.LOGGING_CONFIG["formatters"]["access"]["fmt"]
+        cfg = build_serve_log_config()
+        access_fmt = cfg["formatters"]["access"]["fmt"]
+        default_fmt = cfg["formatters"]["default"]["fmt"]
+        print(" access fmt:", access_fmt)
+        print(" default fmt:", default_fmt)
+        print(" datefmt:", cfg["formatters"]["access"]["datefmt"])
+        print(" original still has client:", "client_addr" in original_access)
+        self.assertIn("%(asctime)s", access_fmt)
+        self.assertNotIn("client_addr", access_fmt)
+        self.assertIn("%(asctime)s", default_fmt)
+        self.assertEqual(cfg["formatters"]["access"]["datefmt"], SERVE_LOG_DATEFMT)
+        self.assertEqual(cfg["formatters"]["default"]["datefmt"], SERVE_LOG_DATEFMT)
+        self.assertEqual(SERVE_LOG_DATEFMT, "%m-%d %H:%M:%S")
+        self.assertFalse(cfg["disable_existing_loggers"])
+        self.assertIn("client_addr", original_access)
+        self.assertIn("client_addr", uvicorn.config.LOGGING_CONFIG["formatters"]["access"]["fmt"])
+
+    def test_serve_console_handler_is_warning_and_restores(self) -> None:
+        """serve 把 core 的 stderr handler 降到 WARNING，文件 handler 仍为 DEBUG。"""
+
+        print("\n[TestAiCliNotebookEntry] serve core 控制台级别")
+        import logging
+
+        import qteasy  # noqa: F401
+        from qteasy_ai.workbench.serve_log import configure_qteasy_console_for_serve
+
+        logger = logging.getLogger("core")
+        stream_handlers = [
+            handler
+            for handler in logger.handlers
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
+        ]
+        file_handlers = [handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)]
+        print(" stream handlers:", len(stream_handlers), "file handlers:", len(file_handlers))
+        self.assertTrue(stream_handlers)
+        self.assertTrue(file_handlers)
+        saved_stream = [(handler, handler.level, handler.formatter) for handler in stream_handlers]
+        saved_file = [(handler.level, handler.formatter) for handler in file_handlers]
+        try:
+            configure_qteasy_console_for_serve()
+            print(" stream level:", stream_handlers[0].level, "file level:", file_handlers[0].level)
+            self.assertEqual(stream_handlers[0].level, logging.WARNING)
+            self.assertIsNot(stream_handlers[0].formatter, saved_stream[0][2])
+            for handler, (level, formatter) in zip(file_handlers, saved_file):
+                self.assertEqual(handler.level, logging.DEBUG)
+                self.assertEqual(level, logging.DEBUG)
+                self.assertIs(handler.formatter, formatter)
+        finally:
+            for handler, level, formatter in saved_stream:
+                handler.setLevel(level)
+                handler.setFormatter(formatter)
+
 
 if __name__ == "__main__":
     unittest.main()

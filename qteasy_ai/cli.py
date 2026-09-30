@@ -354,9 +354,16 @@ def main() -> int:
             )
             return 1
         from .workbench.http_app import create_app
+        from .workbench.serve_log import build_serve_log_config, configure_qteasy_console_for_serve
 
         app = create_app(assistant=assistant)
-        uvicorn.run(app, host=str(args.host), port=int(args.port))
+        configure_qteasy_console_for_serve()
+        uvicorn.run(
+            app,
+            host=str(args.host),
+            port=int(args.port),
+            log_config=build_serve_log_config(),
+        )
         return 0
     if args.command == "tui":
         try:

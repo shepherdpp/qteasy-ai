@@ -1220,17 +1220,34 @@ class TestAiWorkbenchHttp(unittest.TestCase):
         install_qteasy_tqdm_bridge()
         token = bind_progress_callback(on_progress)
         try:
+            import io
+            from contextlib import redirect_stderr
+
             import qteasy.core as qt_core
 
-            with qt_core.tqdm(total=4, desc="stock_daily") as pbar:
-                pbar.update(1)
-                pbar.update(3)
-        finally:
+            silent_err = io.StringIO()
+            with redirect_stderr(silent_err):
+                with qt_core.tqdm(total=4, desc="stock_daily") as pbar:
+                    pbar.update(1)
+                    pbar.update(3)
+            print(" silent stderr:", repr(silent_err.getvalue()))
+            self.assertEqual(silent_err.getvalue(), "")
+            visible_err = io.StringIO()
             reset_progress_callback(token)
+            token = None
+            with redirect_stderr(visible_err):
+                with qt_core.tqdm(total=2, desc="visible") as pbar:
+                    pbar.update(2)
+            print(" visible stderr nonempty:", bool(visible_err.getvalue().strip()))
+            self.assertTrue(visible_err.getvalue().strip())
+        finally:
+            if token is not None:
+                reset_progress_callback(token)
         print(" tqdm events:", seen)
         self.assertTrue(seen)
         self.assertEqual(seen[0][1], 4)
         self.assertGreaterEqual(seen[-1][0], 4)
+        self.assertIn("stock_daily", seen[-1][2])
         called = {"n": 0}
 
         def fake_refill(**kwargs):
