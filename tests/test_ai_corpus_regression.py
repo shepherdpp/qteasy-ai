@@ -124,7 +124,10 @@ class TestAiCorpusRegression(unittest.TestCase):
                         [s["skill_name"] for s in steps],
                         case["expected_skills"],
                     )
-                self.assertTrue(str(payload.get("plan_md", "")).strip())
+                if case.get("expect_plan_md", True):
+                    self.assertTrue(str(payload.get("plan_md", "")).strip())
+                else:
+                    print(" plan_md skipped:", case["id"])
 
     def test_future_capability_fallback_corpus(self) -> None:
         """验证前瞻语料回退行为。"""

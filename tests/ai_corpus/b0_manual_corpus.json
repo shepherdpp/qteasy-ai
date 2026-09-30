@@ -108,25 +108,33 @@
       "group": "G1",
       "query": "factor IC summary for selection pool",
       "mode": "plan",
-      "expected_skill": "qt.ai.research.factor_ic_summary"
+      "expected_job": "research.factor_ic",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "gold R1; missing_info=shares|start|end|factor_htype|return_htype; clarify plans omit plan_md"
     },
     {
       "id": "R1-run",
       "group": "G1",
       "query": "factor IC summary for selection pool",
       "mode": "run",
-      "expected_skill": "qt.ai.research.factor_ic_summary",
+      "expected_job": "research.factor_ic",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
       "expected_error_codes": [
-        "FACTOR_IC_SUMMARY_FAILED"
+        "CLARIFY_REQUIRED"
       ],
-      "notes": "known gap: default registry has no panel_builder"
+      "notes": "裸句 run 不调用 IC。FACTOR_IC_SUMMARY_FAILED 只在槽齐且默认 registry 无 panel_builder 时出现"
     },
     {
       "id": "R2",
       "group": "G1",
       "query": "对选股池做因子 IC 摘要",
       "mode": "plan",
-      "expected_skill": "qt.ai.research.factor_ic_summary"
+      "expected_job": "research.factor_ic",
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_fallback_action": "clarify_required",
+      "notes": "gold R2；与 R1 同一缺槽名单。句中「摘要」会撞 data.summary，靠 gold_lock 留在 research.factor_ic"
     },
     {
       "id": "PM1",

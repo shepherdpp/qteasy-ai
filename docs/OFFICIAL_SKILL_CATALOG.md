@@ -25,7 +25,7 @@
 | `data.summary` | Plan | `qt.ai.data.summary_kline` | 只读 | `2.4-historypanel-basics.md`；`2.5-historypanel-data-analysis.md` | BJ-SUM |
 | `data.export` | Plan | `qt.ai.visual.export_kline` | 写图文件 | 同上 / getting started 看 K 线 | BJ-EXP |
 | `research.screen` | Plan | `universe_filter` → 可选 `price_predicate` → `project_universe` | 只读；**无**申万 DSL | 2.5 入门 | BJ-SCR（有阈值） |
-| `research.factor_ic` | Plan | `qt.ai.research.factor_ic_summary` | 只读 | 2.5 / `qteasy.research` | BJ-IC |
+| `research.factor_ic` | Plan | `qt.ai.research.factor_ic_summary` | 只读；缺代码/日期/列名 → clarify | 2.5 / `qteasy.research` | BJ-IC |
 | `strategy.meta` | Plan | `strategy_meta.list` 或 `.get` | 只读 | `3-start-first-strategy.md`；`4-build-in-strategies.md` | BJ-META-L / G |
 | `backtest.builtin` | Plan | `backtest.run_builtin`；`with_insight` 时再 `insight.summarize_backtest` | 回测写日志 / 曲线 | 3 / 4 | BJ-BT（只 plan） |
 | `strategy.builder` | Plan | spec → codegen → sanity → operator → 可选 backtest | codegen 写盘 | `5-first-self-defined-strategy.md` | BJ-SB（只 plan） |

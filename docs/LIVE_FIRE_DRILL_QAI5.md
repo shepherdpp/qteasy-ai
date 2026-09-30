@@ -50,7 +50,7 @@ Registry = 覆盖闭包。来源：`build_default_registry()`（22 个）。**�
 | 6 | `qt.ai.data.read` | L1 **E 新** | E-READ-H/R/S | 三通道各 1 句 | [x] |
 | 7 | `qt.ai.visual.export_kline` | L1 | E-EXP | C1；只 plan | [x] |
 | 8 | `qt.ai.data.refill_basic_equity_and_index` | L2 高副作用 | E-REFILL-P + E-REFILL-C | 有日期 plan；无日期 clarify。**禁止**无界 `run` | [x] |
-| 9 | `qt.ai.research.factor_ic_summary` | L1 | E-IC | R1 | [x] |
+| 9 | `qt.ai.research.factor_ic_summary` | L1 | 槽齐的 IC 句（裸句 E-IC 不出本 skill） | 补齐代码、日期与两列 history 后 | [x] |
 | 10 | `qt.ai.research.universe_filter` | L1 **E 新** | E-SCR-TH / E-SCR-EN | screen DAG 第一步 | [x] |
 | 11 | `qt.ai.research.price_predicate` | L1 **E 新** | E-SCR-TH | 有阈值才出现 | [x] |
 | 12 | `qt.ai.research.project_universe` | L1 **E 新** | E-SCR-TH / E-SCR-EN | 投影 | [x] |
@@ -146,7 +146,7 @@ Ask 核对：`mode=ask`、**无** `execution`。
 | E-READ-S | `get_static_data industry for 000001.SZ` | `data.read`；`channel=static` |
 | E-REFILL-P | `download daily data from 20180101 to 20231231` | `data.refill`；`refill_basic_equity_and_index`。**禁止 `run`**（全市场成本） |
 | E-REFILL-C | `download A-share daily data to local datasource` | `intent_job` 仍为 `data.refill`；`system.fallback`；`clarify_required` + `missing_info=date_range` |
-| E-IC | `factor IC summary for selection pool` | `research.factor_ic`；`factor_ic_summary` |
+| E-IC | `factor IC summary for selection pool` | `research.factor_ic`；`system.fallback`；`clarify_required`；`missing_info=shares\|start\|end\|factor_htype\|return_htype` |
 | E-SCR-TH | `请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。` | `research.screen`；`universe_filter` → `price_predicate` → `project_universe`。**不得**出现 `screen_stocks` |
 | E-SCR-EN | `请搜索过去半年行业属于制造业的股票` | `research.screen`；`universe_filter` + `project_universe`；**无** `price_predicate`；不因缺 threshold 整单澄清 |
 | E-BT | `用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤` | `backtest.builtin`；`backtest.run_builtin` + `insight.summarize_backtest`（en-dash 一句即可） |

@@ -73,7 +73,7 @@ Run each with `qteasy-ai plan "<query>" --pretty` (Mode-R is enough for routing)
 4. `export kline of 000300.SH to png` → `qt.ai.visual.export_kline` (confirm side effect / artifact path on `run`)
 5. Ask: `qteasy-ai ask "explain PT vs PS"` → `mode=ask`, sources include `pt_ps_vs`, **no** `execution` / no plan steps. To preview a ToolPlan: `qteasy-ai preview "list built-in strategies"`
 6. **B0 env**: `帮我看 Tushare 是否配好、本地缺哪些表` → `check_tushare` + `overview_tables`；payload 含 `plan_md`
-7. **B0 research**: `factor IC summary for selection pool` → `qt.ai.research.factor_ic_summary`（执行需注入 panel_builder / 有研究面板）
+7. **B0 research**: `factor IC summary for selection pool` → Job `research.factor_ic`，裸句缺代码/日期/列名时 `qt.ai.system.fallback` / `clarify_required`；槽齐（至少两只代码、起止日期、两列 history）后才是 `qt.ai.research.factor_ic_summary`（执行需注入 panel_builder / 有研究面板）
 8. **B refill**: `download daily data from 20180101 to 20231231` → `qt.ai.data.refill_basic_equity_and_index`（`plan` 零执行；无日期问法应 `clarify_required` / `date_range`）
 9. **B P0**: `用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤` → `backtest.run_builtin` 然后 `insight.summarize_backtest`（`depends_on`）
 10. **B screen**: `请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。` → `qt.ai.research.screen_stocks`（不得落到 `summary_kline`；制造业若 0 精确命中则 `CLARIFY_REQUIRED` 并附 `industry_samples`）

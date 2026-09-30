@@ -73,6 +73,14 @@
       "lock": true
     },
     {
+      "id": "R2",
+      "query": "对选股池做因子 IC 摘要",
+      "job": "research.factor_ic",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
       "id": "G7-FX",
       "query": "explore a useful momentum factor for hs300",
       "job": "research.factor_explore",

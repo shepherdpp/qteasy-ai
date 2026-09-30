@@ -57,7 +57,9 @@
       "query": "factor IC summary for selection pool",
       "mode": "plan",
       "expected_job": "research.factor_ic",
-      "expected_skill": "qt.ai.research.factor_ic_summary"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false,
+      "notes": "裸句缺槽 → clarify_required，不写 plan_md；槽齐后才出 factor_ic_summary"
     },
     {
       "id": "B-F1",

@@ -66,9 +66,9 @@ qteasy-ai provider-check
 | E1 | `帮我看 Tushare 是否配好、本地缺哪些表` | plan 然后 run | 两步 `check_tushare` + `overview_tables`；有 `plan_md`；run 后 `env_facts.json` 含 tushare/tables |
 | E2 | `check tushare token` | plan | 含 `qt.ai.env.check_tushare`（可与 overview 两步） |
 | E3 | `本地缺哪些数据表` | plan | 环境两步（「数据表」关键词） |
-| R1 | `factor IC summary for selection pool` | plan | `qt.ai.research.factor_ic_summary` |
-| R1-run | 同上 | run | **预期失败** `FACTOR_IC_SUMMARY_FAILED`（默认无 panel_builder） |
-| R2 | `对选股池做因子 IC 摘要` | plan | `qt.ai.research.factor_ic_summary` |
+| R1 | `factor IC summary for selection pool` | plan | Job `research.factor_ic`；`qt.ai.system.fallback` / `clarify_required`；缺 `shares\|start\|end\|factor_htype\|return_htype` |
+| R1-run | 同上 | run | **不执行** IC；澄清 `CLARIFY_REQUIRED` |
+| R2 | `对选股池做因子 IC 摘要` | plan | 同 R1（gold_lock；不因「摘要」落到多意图 clarify） |
 | PM1 | 任意成功 plan（建议复用 A1） | plan --raw | `plan_md` 非空且含 skill 名；有 persist 时 `runs/*.plan.md` |
 
 示例：
@@ -147,7 +147,7 @@ qteasy-ai run "帮我看 Tushare 是否配好、本地缺哪些表" --raw
 ## 验收清单
 
 - [ ] G0 provider-check 通过（Mode-R）
-- [ ] G1 正路径记录完整（含 B2 误路由修复、E1 `plan_md`、R1-run 预期失败）
+- [ ] G1 正路径记录完整（含 B2 误路由修复、E1 `plan_md`、R1-run 预期澄清）
 - [ ] G2 / G3 fallback 与错误码符合表
 - [ ] G4 `env_facts` dry_run 不写 / run 写入 / 门禁前置
 - [ ] G5 至少 raw vs pretty + 一处 Notebook 或 CLI run

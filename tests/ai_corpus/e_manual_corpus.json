@@ -116,9 +116,10 @@
       "query": "factor IC summary for selection pool",
       "mode": "plan",
       "expected_job": "research.factor_ic",
-      "expected_skill": "qt.ai.research.factor_ic_summary",
-      "expected_skills": ["qt.ai.research.factor_ic_summary"],
-      "notes": "gold R1"
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "notes": "gold R1; intent_job stays research.factor_ic; missing_info=shares|start|end|factor_htype|return_htype; slots filled then factor_ic_summary"
     },
     {
       "id": "E-SCR-TH",
