@@ -67,8 +67,11 @@ let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
 let modeNotice = "";
 let editingUserIndex = -1;
 let providerInfo = null;
-let pendingRewind = null;
 let renamingSessionId = "";
+let openProcessTurns = new Set();
+const PENCIL_RESEND = "Edit the blue message (pencil) and send it again.";
+const REWIND_LATER_TURNS = "Later turns will be dropped from this session. Files in ai/runs/ stay on disk; this session will no longer track them.";
+const PROCESS_KINDS = new Set(["executing", "mode_notice", "plan_ready", "clarify", "clarification"]);
 let livePoll = null;
 let executeSseOpen = false;
 let treeCollapsed = new Set();
@@ -929,7 +932,7 @@ function setBusy(next) {
     const badge = $(id);
     if (badge) badge.disabled = busy;
   });
-  ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-clarify-skip", "btn-retry"].forEach((id) => {
+  ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-clarify-skip"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy;
   });
@@ -1100,7 +1103,7 @@ async function sendQuery(query, { keepDraft } = {}) {
       transcript.push({
         kind: "error",
         text: "Network error. Check that the workbench server is running.",
-        payload: { next_action: "Retry when the server is reachable. You do not need to start over." },
+        payload: { next_action: PENCIL_RESEND },
       });
       persistTranscript();
       renderChat();
@@ -1182,8 +1185,8 @@ async function confirmPlan() {
     if (!isAbortError(exc)) {
       transcript.push({
         kind: "error",
-        text: "Network error. Confirm did not complete. Retry when the server is reachable.",
-        payload: { next_action: "Press Retry. You do not need to start over." },
+        text: "Network error. Confirm did not complete.",
+        payload: { next_action: PENCIL_RESEND },
       });
       persistTranscript();
       renderChat();
@@ -1207,25 +1210,17 @@ async function cancelPlan() {
   renderChat();
 }
 
-function retryLast() {
-  if (busy) return;
-  const planId = state.plan_card && state.plan_card.plan_id;
-  const failed = ((state.execution && state.execution.steps) || []).some((s) => s.status === "error");
-  if (planId && (failed || state.error)) {
-    confirmPlan();
-    return;
-  }
-  if (planId && state.plan_card && state.plan_card.confirmable) {
-    confirmPlan();
-    return;
-  }
-  const lastUser = [...transcript].reverse().find((m) => m.kind === "user_text");
-  if (lastUser) sendQuery(lastUser.text);
-}
-
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
+  const foldBtn = t.closest("button.process-toggle");
+  if (foldBtn) {
+    const key = Number(foldBtn.getAttribute("data-process-turn"));
+    if (openProcessTurns.has(key)) openProcessTurns.delete(key);
+    else openProcessTurns.add(key);
+    renderChat();
+    return;
+  }
   if (t.id === "btn-confirm") confirmPlan();
   if (t.id === "btn-stop-watch") stopWatchingRun();
   if (t.id === "btn-background-run") backgroundThisRun();
@@ -1250,7 +1245,6 @@ function onChatClick(ev) {
     sendControlPatches({ [key]: t.dataset.clarifyOption });
     return;
   }
-  if (t.classList.contains("btn-retry") || t.id === "btn-retry") retryLast();
   if (t.id === "edit-mode") {
     ev.stopPropagation();
     toggleEditModeMenu();
@@ -1263,28 +1257,20 @@ function onChatClick(ev) {
   const editUser = t.closest("[data-edit-user]");
   if (editUser) {
     editingUserIndex = Number(editUser.getAttribute("data-edit-user"));
-    pendingRewind = null;
     renderChat();
     return;
   }
   if (t.id === "btn-rewind-cancel") {
     editingUserIndex = -1;
-    pendingRewind = null;
     renderChat();
     return;
   }
   if (t.id === "btn-rewind-submit") {
     const box = $("rewind-text");
-    rewindUserMessage(editingUserIndex, box ? box.value : "", false);
+    submitRewindEdit(editingUserIndex, box ? box.value : "");
     return;
   }
-  if (t.id === "btn-rewind-discard") {
-    const box = $("rewind-text");
-    const text = (pendingRewind && pendingRewind.query) || (box ? box.value : "");
-    rewindUserMessage(editingUserIndex, text, true);
-    return;
-  }
-    if (t.dataset.openPlan != null) {
+  if (t.dataset.openPlan != null) {
     openPlanFromRunId(t.dataset.openPlan);
     return;
   }
@@ -1342,7 +1328,7 @@ async function submitParamEdits() {
   } catch (exc) {
     transcript.push({
       kind: "error",
-      text: "Network error. Parameter update did not complete. Retry when the server is reachable.",
+      text: "Network error. Parameter update did not complete.",
       payload: { next_action: "Press Apply again. You do not need to start over." },
     });
     persistTranscript();
@@ -1527,6 +1513,7 @@ async function rewindUserMessage(index, text, confirmDiscard) {
   const query = String(text || "").trim();
   if (!query || busy || index < 0) return;
   setBusy(true);
+  let retryDiscard = false;
   try {
     const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/rewind`, {
       method: "POST",
@@ -1539,8 +1526,8 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       }),
     });
     if (dto && dto.needs_confirm) {
-      pendingRewind = { query, executed: dto.executed_run_ids || [] };
-      renderChat();
+      if (confirmDiscard || !window.confirm(REWIND_LATER_TURNS)) return;
+      retryDiscard = true;
       return;
     }
     if (dto && dto.error && !dto.transcript) {
@@ -1553,7 +1540,6 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       return;
     }
     editingUserIndex = -1;
-    pendingRewind = null;
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
     filePreview = null;
@@ -1562,8 +1548,9 @@ async function rewindUserMessage(index, text, confirmDiscard) {
     await refreshWorkspace();
   } finally {
     setBusy(false);
-    focusComposer();
+    if (!retryDiscard) focusComposer();
   }
+  if (retryDiscard) await rewindUserMessage(index, query, true);
 }
 
 function applyServerTranscript(dto) {
@@ -1701,11 +1688,11 @@ async function createSession() {
   persistTranscript();
   clearOpenTabs();
   treeCollapsed = new Set();
+  openProcessTurns = new Set();
   editingParams = false;
   editingNowSlot = "";
   editingProvider = false;
   editingUserIndex = -1;
-  pendingRewind = null;
   filePreview = null;
   workspace = { artifacts: [] };
   state.artifacts = [];
@@ -1729,10 +1716,10 @@ async function switchSession(id) {
   applyServerTranscript(dto);
   clearOpenTabs();
   treeCollapsed = new Set();
+  openProcessTurns = new Set();
   filePreview = null;
   editingNowSlot = "";
   editingUserIndex = -1;
-  pendingRewind = null;
   await refreshWorkspace();
   await refreshProvider();
   renderPanes();
@@ -1818,6 +1805,230 @@ function renderSessionList() {
   }
 }
 
+function errorGuidance(next) {
+  const text = String(next || "").trim();
+  if (!text) return PENCIL_RESEND;
+  const retryish = /press retry|retry this step|then retry\b|retry when the server/i.test(text);
+  if (!retryish) return text;
+  const concrete = /token|allow_|industry|confirm the plan|select a plan|create or select/i.test(text);
+  if (!concrete) return PENCIL_RESEND;
+  let kept = text
+    .replace(/,?\s*then press retry\b[^.]*(?:\.|$)/i, ".")
+    .replace(/,?\s*then retry this step\b[^.]*(?:\.|$)/i, ".")
+    .replace(/,?\s*then retry\b[^.]*(?:\.|$)/i, ".")
+    .replace(/\s*you do not need to start over\.?/i, "")
+    .trim();
+  kept = kept.replace(/^[.\s]+/, "").replace(/[.\s]*$/, "");
+  if (!kept) return PENCIL_RESEND;
+  return `${kept}. ${PENCIL_RESEND}`;
+}
+
+function userEditRewindAction(messages, index) {
+  const rows = Array.isArray(messages) ? messages : [];
+  let laterUser = false;
+  let executed = false;
+  for (let i = index + 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (!row) continue;
+    if (row.kind === "user_text") laterUser = true;
+    const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+    if (payload.run_id && payload.executed) executed = true;
+  }
+  if (!laterUser && !executed) {
+    return { confirm: false, discard: false, label: "Send" };
+  }
+  if (!laterUser && executed) {
+    return { confirm: false, discard: true, label: "Discard and resend" };
+  }
+  return {
+    confirm: true,
+    discard: Boolean(executed),
+    label: "Send",
+    dialog: REWIND_LATER_TURNS,
+  };
+}
+
+function submitRewindEdit(index, text) {
+  const action = userEditRewindAction(transcript, index);
+  if (action.confirm && !window.confirm(action.dialog)) return;
+  rewindUserMessage(index, text, action.discard);
+}
+
+function chatTurnRanges() {
+  const starts = [];
+  for (let i = 0; i < transcript.length; i += 1) {
+    if (transcript[i] && transcript[i].kind === "user_text") starts.push(i);
+  }
+  if (!starts.length) return [{ userIndex: -1, start: 0, end: transcript.length }];
+  const ranges = [];
+  if (starts[0] > 0) ranges.push({ userIndex: -1, start: 0, end: starts[0] });
+  for (let n = 0; n < starts.length; n += 1) {
+    const at = starts[n];
+    const stop = n + 1 < starts.length ? starts[n + 1] : transcript.length;
+    ranges.push({ userIndex: at, start: at, end: stop });
+  }
+  return ranges;
+}
+
+function lastClarifyIndex() {
+  for (let j = transcript.length - 1; j >= 0; j -= 1) {
+    const row = transcript[j];
+    if (row && (row.kind === "clarify" || row.kind === "clarification")) return j;
+  }
+  return -1;
+}
+
+function transcriptRowHidden(msg, index) {
+  if (!msg) return true;
+  if (msg.kind === "plan_card" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") return true;
+  if ((msg.kind === "clarification" || msg.kind === "clarify") && shouldShowLiveClarify() && index === lastClarifyIndex()) {
+    return true;
+  }
+  if (
+    (msg.kind === "ask_text" || msg.kind === "ask") &&
+    String(msg.text || "").startsWith("Plan ready:") &&
+    state.plan_card &&
+    state.plan_card.confirmable &&
+    mode !== "ask"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function turnHasTerminal(start, end) {
+  for (let i = start; i < end; i += 1) {
+    const msg = transcript[i];
+    if (msg && (msg.kind === "result" || msg.kind === "error")) return true;
+  }
+  return false;
+}
+
+function latestTurnOwnsSteps(start, end) {
+  const steps = (state.execution && state.execution.steps) || [];
+  if (!steps.length) return false;
+  if (busy || backgrounded) return true;
+  for (let i = start; i < end; i += 1) {
+    const msg = transcript[i];
+    if (!msg) continue;
+    if (msg.kind === "executing" || msg.kind === "plan_ready" || msg.kind === "result" || msg.kind === "error") return true;
+  }
+  return false;
+}
+
+function lastExecutingIndex(start, end) {
+  let found = -1;
+  for (let i = start; i < end; i += 1) {
+    const msg = transcript[i];
+    if (msg && msg.kind === "executing" && !transcriptRowHidden(msg, i)) found = i;
+  }
+  return found;
+}
+
+function renderProcessGroup(html, foldable, turnKey) {
+  if (!html) return "";
+  if (!foldable) return html;
+  const open = openProcessTurns.has(turnKey);
+  const label = open ? "Hide process" : "Show process";
+  const arrow = open ? "▾" : "▸";
+  const body = open ? `<div class="process-body">${html}</div>` : "";
+  return `<div class="process-fold" data-testid="process-fold"><button type="button" class="ghost process-toggle" data-process-turn="${turnKey}" aria-expanded="${open ? "true" : "false"}">${arrow} ${label}</button>${body}</div>`;
+}
+
+function renderProcessMessage(msg, stepsHtml) {
+  if (msg.kind === "clarification" || msg.kind === "clarify") {
+    const answer = msg.payload && msg.payload.answer ? String(msg.payload.answer) : "";
+    const answered = answer ? `<div class="answered">Answered: ${escapeHtml(answer)}</div>` : "";
+    return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
+  }
+  if (msg.kind === "mode_notice") {
+    return `<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}</div></div>`;
+  }
+  if (msg.kind === "executing") {
+    const steps = stepsHtml ? `<div class="running-steps">${stepsHtml}</div>` : "";
+    return `<div class="msg"><div class="msg-role">Running</div><div class="bubble">${escapeHtml(msg.text || "Running steps.")}${steps}</div></div>`;
+  }
+  if (msg.kind === "plan_ready") {
+    const rid = (msg.payload && msg.payload.run_id) || "";
+    const openBtn = rid
+      ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button></div>`
+      : "";
+    return `<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}</div></div>`;
+  }
+  return "";
+}
+
+function renderVisibleMessage(msg, index) {
+  if (msg.kind === "user_text") {
+    if (editingUserIndex === index) {
+      const action = userEditRewindAction(transcript, index);
+      return `<div class="msg user editing">
+          <div class="composer edit-composer">
+            <textarea id="rewind-text" rows="3" placeholder="Ask in natural language · Ctrl/⌘+Enter to send">${escapeHtml(msg.text || "")}</textarea>
+            <div class="composer-row">
+              <div class="mode-dropdown">
+                <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="edit-mode" aria-haspopup="listbox" aria-expanded="false">${mode === "ask" ? "Ask" : mode === "agent" ? "Agent" : "Plan"} ▾</button>
+                <div class="mode-menu" id="edit-mode-menu" hidden>
+                  <button type="button" data-mode="ask">Ask</button>
+                  <button type="button" data-mode="plan">Plan</button>
+                  <button type="button" data-mode="agent">Agent</button>
+                </div>
+              </div>
+              <span class="composer-row-spacer"></span>
+              <button type="button" class="ghost" id="btn-rewind-cancel">Cancel</button>
+              <button type="button" class="primary" id="btn-rewind-submit">${escapeHtml(action.label)}</button>
+            </div>
+          </div>
+        </div>`;
+    }
+    return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
+  }
+  if (msg.kind === "result") {
+    return `<div class="msg"><div class="msg-role">Result</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`;
+  }
+  if (msg.kind === "error") {
+    const next = errorGuidance(msg.payload && msg.payload.next_action);
+    return `<div class="msg"><div class="msg-role">Error</div><div class="bubble err-text">${escapeHtml(msg.text || "Something went wrong.")}<div class="next-action">${escapeHtml(next)}</div></div></div>`;
+  }
+  const src = (msg.payload && msg.payload.sources) || state.sources || [];
+  const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
+  return `<div class="msg"><div class="msg-role">Assistant</div><div class="bubble">${escapeHtml(msg.text || "")}${extra}</div></div>`;
+}
+
+function renderTurn(range, isLatest) {
+  const ownsSteps = isLatest && latestTurnOwnsSteps(range.start, range.end);
+  const stepsHtml = ownsSteps ? renderSteps() : "";
+  const liveTail = isLatest && (busy || backgrounded);
+  const foldable = !liveTail && turnHasTerminal(range.start, range.end);
+  const execAt = lastExecutingIndex(range.start, range.end);
+  const parts = [];
+  const pending = [];
+  let stepsPlaced = execAt >= 0;
+  const flush = () => {
+    if (!pending.length) return;
+    parts.push(renderProcessGroup(pending.join(""), foldable, range.userIndex));
+    pending.length = 0;
+  };
+  const runningCard = `<div class="msg"><div class="msg-role">Running</div><div class="bubble"><div class="running-steps">${stepsHtml}</div></div></div>`;
+  for (let i = range.start; i < range.end; i += 1) {
+    const msg = transcript[i];
+    if (transcriptRowHidden(msg, i)) continue;
+    if (PROCESS_KINDS.has(msg.kind)) {
+      pending.push(renderProcessMessage(msg, i === execAt ? stepsHtml : ""));
+      continue;
+    }
+    if (stepsHtml && !stepsPlaced && (msg.kind === "result" || msg.kind === "error" || msg.kind === "ask" || msg.kind === "ask_text")) {
+      pending.push(runningCard);
+      stepsPlaced = true;
+    }
+    flush();
+    parts.push(renderVisibleMessage(msg, i));
+  }
+  if (stepsHtml && !stepsPlaced) pending.push(runningCard);
+  flush();
+  return parts.join("");
+}
+
 function renderChat() {
   const host = $("chat-log");
   if (!host) return;
@@ -1831,93 +2042,17 @@ function renderChat() {
       ).join("")}</div>
     </div>`);
   }
-  for (let i = 0; i < transcript.length; i += 1) {
-    const msg = transcript[i];
-    if (msg.kind === "plan_card" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") continue;
-    if (msg.kind === "clarification" || msg.kind === "clarify") {
-      let lastClarifyIdx = -1;
-      for (let j = transcript.length - 1; j >= 0; j -= 1) {
-        const row = transcript[j];
-        if (row && (row.kind === "clarify" || row.kind === "clarification")) {
-          lastClarifyIdx = j;
-          break;
-        }
-      }
-      if (shouldShowLiveClarify() && i === lastClarifyIdx) continue;
-      const answer = msg.payload && msg.payload.answer ? String(msg.payload.answer) : "";
-      const answered = answer ? `<div class="answered">Answered: ${escapeHtml(answer)}</div>` : "";
-      parts.push(
-        `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`
-      );
-      continue;
+  const ranges = chatTurnRanges();
+  let latestIndex = -1;
+  for (let n = ranges.length - 1; n >= 0; n -= 1) {
+    if (ranges[n].userIndex >= 0) {
+      latestIndex = ranges[n].userIndex;
+      break;
     }
-    if (
-      (msg.kind === "ask_text" || msg.kind === "ask") &&
-      String(msg.text || "").startsWith("Plan ready:") &&
-      state.plan_card &&
-      state.plan_card.confirmable &&
-      mode !== "ask"
-    ) {
-      continue;
-    }
-    if (msg.kind === "mode_notice") {
-      parts.push(`<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}</div></div>`);
-      continue;
-    }
-    if (msg.kind === "executing") {
-      parts.push(`<div class="msg"><div class="msg-role">Running</div><div class="bubble">${escapeHtml(msg.text || "Running steps.")}</div></div>`);
-      continue;
-    }
-    if (msg.kind === "result") {
-      parts.push(`<div class="msg"><div class="msg-role">Result</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`);
-      continue;
-    }
-    if (msg.kind === "plan_ready") {
-      const rid = (msg.payload && msg.payload.run_id) || "";
-      const openBtn = rid
-        ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button></div>`
-        : "";
-      parts.push(`<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}</div></div>`);
-      continue;
-    }
-    if (msg.kind === "user_text") {
-      if (editingUserIndex === i) {
-        const warn = pendingRewind
-          ? `<p class="warn">Later executed runs will be discarded: ${(pendingRewind.executed || []).join(", ") || "yes"}. Confirm to continue.</p>`
-          : "";
-        const sendId = pendingRewind ? "btn-rewind-discard" : "btn-rewind-submit";
-        parts.push(`<div class="msg user editing">
-          ${warn}
-          <div class="composer edit-composer">
-            <textarea id="rewind-text" rows="3" placeholder="Ask in natural language · Ctrl/⌘+Enter to send">${escapeHtml((pendingRewind && pendingRewind.query) || msg.text || "")}</textarea>
-            <div class="composer-row">
-              <div class="mode-dropdown">
-                <button type="button" class="mode-badge btn-mode-menu" data-testid="mode-badge" id="edit-mode" aria-haspopup="listbox" aria-expanded="false">${mode === "ask" ? "Ask" : mode === "agent" ? "Agent" : "Plan"} ▾</button>
-                <div class="mode-menu" id="edit-mode-menu" hidden>
-                  <button type="button" data-mode="ask">Ask</button>
-                  <button type="button" data-mode="plan">Plan</button>
-                  <button type="button" data-mode="agent">Agent</button>
-                </div>
-              </div>
-              <span class="composer-row-spacer"></span>
-              <button type="button" class="ghost" id="btn-rewind-cancel">Cancel</button>
-              <button type="button" class="primary" id="${sendId}">Send</button>
-            </div>
-          </div>
-        </div>`);
-      } else {
-        parts.push(`<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${i}" title="Edit">✎</button></div></div>`);
-      }
-    } else if (msg.kind === "error") {
-      const next = (msg.payload && msg.payload.next_action) || "";
-      parts.push(`<div class="msg"><div class="msg-role">Error</div><div class="bubble err-text">${escapeHtml(msg.text || "Something went wrong.")}${
-        next ? `<div class="next-action">${escapeHtml(next)}</div>` : ""
-      }<div class="actions"><button type="button" class="primary btn-retry" id="btn-retry">Retry</button></div></div></div>`);
-    } else {
-      const src = (msg.payload && msg.payload.sources) || state.sources || [];
-      const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
-      parts.push(`<div class="msg"><div class="msg-role">Assistant</div><div class="bubble">${escapeHtml(msg.text || "")}${extra}</div></div>`);
-    }
+  }
+  if (latestIndex < 0 && ranges.length) latestIndex = ranges[0].userIndex;
+  for (const range of ranges) {
+    parts.push(renderTurn(range, range.userIndex === latestIndex));
   }
   if (busy || backgrounded) {
     const skill = runningSkillName();
@@ -1929,7 +2064,6 @@ function renderChat() {
   }
   parts.push(renderClarification());
   parts.push(renderPlanCard());
-  parts.push(renderSteps());
   host.innerHTML = parts.join("");
   const rewind = $("rewind-text");
   if (rewind) {
@@ -1938,7 +2072,7 @@ function renderChat() {
       if (ev.isComposing || ev.keyCode === 229) return;
       if (ev.ctrlKey || ev.metaKey) {
         ev.preventDefault();
-        rewindUserMessage(editingUserIndex, rewind.value, Boolean(pendingRewind));
+        submitRewindEdit(editingUserIndex, rewind.value);
       }
     });
     rewind.focus();
@@ -2058,17 +2192,13 @@ function renderSteps() {
   if (backgrounded) return "";
   const steps = (state.execution && state.execution.steps) || [];
   if (!steps.length) return "";
-  const failed = steps.some((s) => s.status === "error");
-  const retry = failed
-    ? `<div class="actions"><button type="button" class="primary btn-retry" id="btn-retry">Retry failed step</button></div>`
-    : "";
   return `<ol class="step-list" data-testid="step-list">${steps
     .map((s) => {
       const st = s.status || "pending";
       const mark = st === "done" ? "✓" : st === "error" ? "✕" : st === "running" ? "…" : "•";
       return `<li class="step ${escapeHtml(st)}">${mark} ${escapeHtml(stepTitle(s) || skillLabel(s.skill_name || s.step_id))} <small>${escapeHtml(st)}</small></li>`;
     })
-    .join("")}</ol>${retry}`;
+    .join("")}</ol>`;
 }
 
 function tableFromRows(rows) {

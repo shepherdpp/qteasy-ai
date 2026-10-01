@@ -103,7 +103,10 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn(">View Plan<", js.text)
             self.assertNotIn(">Open plan<", js.text)
             self.assertIn("text/event-stream", js.text)
-            self.assertIn("btn-retry", js.text)
+            self.assertNotIn("btn-retry", js.text)
+            self.assertNotIn("function retryLast", js.text)
+            self.assertNotIn("Retry failed step", js.text)
+            self.assertIn("Edit the blue message (pencil) and send it again.", js.text)
             self.assertIn("next_action", js.text)
             self.assertIn("persistTranscript", js.text)
             self.assertIn("btn-file-back", js.text)
@@ -379,8 +382,9 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("btn-settings", src)
             self.assertIn("statusbar", src)
             self.assertIn('title="Edit">✎</button>', src)
-            self.assertIn('id="${sendId}">Send</button>', src)
+            self.assertIn('id="btn-rewind-submit">${escapeHtml(action.label)}</button>', src)
             self.assertIn('id="btn-rewind-cancel">Cancel</button>', src)
+            self.assertIn("Discard and resend", src)
             self.assertNotIn("Resend from here", src)
             self.assertNotIn("Confirm discard and resend", src)
             prune = src.split("function pruneMissingTabs")[1].split("function openPlanFromRunId")[0]
@@ -1012,6 +1016,90 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             user_bubble = css.split(".msg.user .bubble {", 1)[1].split("}", 1)[0]
             print(" user bubble:", user_bubble.strip())
             self.assertIn("position: relative", user_bubble)
+
+    def test_turn_fold_and_rewind_confirm(self) -> None:
+        """R2：完成后过程可折叠；无 Retry；历史句要确认，最近一条按是否已执行区分。"""
+
+        print("\n[TestAiWorkbenchWeb] turn fold and rewind confirm")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            chat = _extract_js_function(src, "renderChat")
+            turn = _extract_js_function(src, "renderTurn")
+            submit = _extract_js_function(src, "submitRewindEdit")
+            action_fn = _extract_js_function(src, "userEditRewindAction")
+            print(" renderChat calls renderTurn:", "renderTurn(" in chat)
+            print(" renderTurn calls renderSteps:", "renderSteps()" in turn)
+            print(" submit gates confirm:", "action.confirm && !window.confirm(action.dialog)" in submit)
+            self.assertIn("renderTurn(", chat)
+            self.assertNotIn("renderSteps()", chat)
+            self.assertIn("renderSteps()", turn)
+            self.assertIn("Show process", src)
+            self.assertIn("process-fold", css)
+            self.assertIn("action.confirm && !window.confirm(action.dialog)", submit)
+            self.assertNotIn("window.confirm", action_fn)
+            http_src = (Path(__file__).resolve().parents[1] / "qteasy_ai" / "workbench" / "http_app.py").read_text()
+            self.assertIn(
+                '"RUN_FAILED": "Edit the blue message (pencil) and send it again."',
+                http_src,
+            )
+            dialog = (
+                "Later turns will be dropped from this session. "
+                "Files in ai/runs/ stay on disk; this session will no longer track them."
+            )
+            wrapped = f"const REWIND_LATER_TURNS = {json.dumps(dialog)};\n{action_fn}"
+
+            def decide(messages: list, index: int) -> dict:
+                call = f"userEditRewindAction({json.dumps(messages)}, {index})"
+                result = _eval_js(wrapped, call)
+                print(" rewind action", index, result)
+                return result
+
+            latest_open = decide(
+                [{"kind": "user_text", "text": "list strategies"}, {"kind": "clarify", "text": "Which?"}],
+                0,
+            )
+            self.assertEqual(latest_open["confirm"], False)
+            self.assertEqual(latest_open["discard"], False)
+            self.assertEqual(latest_open["label"], "Send")
+            latest_done = decide(
+                [
+                    {"kind": "user_text", "text": "run it"},
+                    {"kind": "result", "text": "Done", "payload": {"run_id": "run-1", "executed": True}},
+                ],
+                0,
+            )
+            self.assertEqual(latest_done["confirm"], False)
+            self.assertEqual(latest_done["discard"], True)
+            self.assertEqual(latest_done["label"], "Discard and resend")
+            history_plain = decide(
+                [
+                    {"kind": "user_text", "text": "first"},
+                    {"kind": "ask", "text": "answer"},
+                    {"kind": "user_text", "text": "second"},
+                ],
+                0,
+            )
+            self.assertEqual(history_plain["confirm"], True)
+            self.assertEqual(history_plain["discard"], False)
+            self.assertEqual(history_plain["label"], "Send")
+            self.assertIn("ai/runs/", history_plain["dialog"])
+            history_ran = decide(
+                [
+                    {"kind": "user_text", "text": "first"},
+                    {"kind": "result", "text": "Done", "payload": {"run_id": "run-9", "executed": True}},
+                    {"kind": "user_text", "text": "second"},
+                ],
+                0,
+            )
+            self.assertEqual(history_ran["confirm"], True)
+            self.assertEqual(history_ran["discard"], True)
+            self.assertIn("ai/runs/", history_ran["dialog"])
 
 
 if __name__ == "__main__":

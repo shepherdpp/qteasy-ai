@@ -60,7 +60,7 @@ _NEXT_ACTION = {
     "FILE_TOO_LARGE": "Pick a smaller file, or open it on disk under the memory root.",
     "RUN_NOT_FOUND": "Confirm a plan to create a run, then open it from this session's artifacts.",
     "ARTIFACT_NOT_FOUND": "Export only files that belong to this run_id.",
-    "RUN_FAILED": "Read the error, then press Retry. You do not need to start over.",
+    "RUN_FAILED": "Edit the blue message (pencil) and send it again.",
     "MESSAGE_INDEX_INVALID": "Pick a user message in this session, then press Edit.",
     "NOT_USER_MESSAGE": "Only user messages can be edited. Pick a You bubble.",
     "REWIND_DISCARD_REQUIRED": "Editing this message discards later executed runs. Confirm to continue.",

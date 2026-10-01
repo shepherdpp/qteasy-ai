@@ -492,6 +492,10 @@ html[data-theme="light"] .mode-notice {
 .card h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); }
 .card .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .step-list { margin: 0; padding-left: 18px; }
+.process-fold { margin: 6px 0; }
+.process-toggle { font-size: 12px; color: var(--text-muted); padding: 2px 8px; }
+.process-body { margin-top: 4px; }
+.running-steps { margin-top: 8px; }
 .step.done { color: var(--ok); }
 .step.error { color: var(--err); }
 .step.pending { color: var(--text-muted); }
