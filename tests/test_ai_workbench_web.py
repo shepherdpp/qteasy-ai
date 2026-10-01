@@ -98,7 +98,10 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("Ctrl/⌘+Enter to send", js.text)
             self.assertNotIn("Enter new line", js.text)
             print(" topbar has mode-group:", js.text.split("topbar")[1].split("layout")[0].count("mode-group"))
-            self.assertIn("btn-code-confirm", js.text)
+            self.assertNotIn("btn-code-confirm", js.text)
+            self.assertNotIn("Confirm running edited strategy", js.text)
+            self.assertIn(">View Plan<", js.text)
+            self.assertNotIn(">Open plan<", js.text)
             self.assertIn("text/event-stream", js.text)
             self.assertIn("btn-retry", js.text)
             self.assertIn("next_action", js.text)
@@ -347,6 +350,9 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" ingest calls openArtifactTab:", "openArtifactTab" in ingest)
             self.assertNotIn("openArtifactTab", ingest)
             self.assertIn("data-tab-close", src)
+            self.assertIn(">View Plan<", src)
+            self.assertNotIn(">Open plan<", src)
+            self.assertIn("click View Plan on a Plan ready card", src)
             print(" js has bindTabsWheel:", "function bindTabsWheel" in src)
             self.assertIn("function bindTabsWheel", src)
             self.assertIn("function onTabsWheel", src)
@@ -389,6 +395,25 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn(".statusbar", css)
             self.assertIn(".bubble-edit", css)
             self.assertNotIn(".msg-actions", css)
+            print(" has theme storage:", "qteasy-ai.theme" in src)
+            print(" has light theme:", 'html[data-theme="light"]' in css)
+            now_fn = src.split("function renderNow()")[1].split("function renderNowChips")[0]
+            print(" now has Environment:", "Environment" in now_fn)
+            print(" now has provider block:", "now-provider" in now_fn)
+            self.assertIn("qteasy-ai.theme", src)
+            self.assertIn("btn-theme-light", src)
+            self.assertIn("btn-theme-dark", src)
+            self.assertIn("function renderProviderForm", src)
+            self.assertIn("id=\"prov-model\"", src)
+            self.assertNotIn("Provider and environment configuration will live here", src)
+            self.assertNotIn("now-provider", now_fn)
+            self.assertNotIn("now-env", now_fn)
+            self.assertNotIn("Environment", now_fn)
+            self.assertIn("Environment", src.split("function renderStatusbar")[1].split("function openSettingsTab")[0])
+            self.assertIn('id="btn-open-settings">Open settings</button>', src)
+            self.assertIn('html[data-theme="light"]', css)
+            self.assertIn("justify-content: center", css)
+            self.assertIn(".fill-pane", css)
 
     def test_plan_artifact_renders_markdown_with_sanitize(self) -> None:
         """plan Artifact 只读渲染 md/mermaid，保留 json_wins，库缺失可降级 pre。"""
@@ -647,6 +672,19 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("rgba(46, 160, 67, 0.22)", ask_block)
             self.assertIn("rgba(201, 162, 39, 0.22)", plan_block)
             self.assertIn("#f2f2f2", agent_block)
+            light_ask = css.split('html[data-theme="light"] button.mode-badge.mode-ask', 1)[1].split("}", 1)[0]
+            light_plan = css.split('html[data-theme="light"] button.mode-badge.mode-plan', 1)[1].split("}", 1)[0]
+            light_agent = css.split('html[data-theme="light"] button.mode-badge.mode-agent', 1)[1].split("}", 1)[0]
+            print(" light ask:", light_ask.strip())
+            print(" light plan:", light_plan.strip())
+            print(" light agent:", light_agent.strip())
+            self.assertIn("#0d6b2e", light_ask)
+            self.assertIn("#6b4e00", light_plan)
+            self.assertIn("#1a1a1a", light_agent)
+            check = css.split("#mode-menu button.active::after", 1)[1].split("}", 1)[0]
+            print(" mode check:", check.strip())
+            self.assertIn('content: "✓"', check)
+            self.assertIn("#edit-mode-menu button.active::after", css)
 
     def test_tab_label_truncates_close_stays_inside(self) -> None:
         """#8：标签截断，关闭钮 flex-shrink 0，条带仍横滚。"""
@@ -897,6 +935,9 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("padding-left: 28px", indent)
             self.assertIn("#f0e6c8", plan_open)
             self.assertIn("rgba(201, 162, 39, 0.22)", plan_active)
+            light_plan_open = css.split('html[data-theme="light"] .file-tree button.file.tree-plan.is-open', 1)[1].split("}", 1)[0]
+            print(" light plan open:", light_plan_open.strip())
+            self.assertIn("#6b4e00", light_plan_open)
             self.assertIn("var(--text-muted)", css.split(".tree-artifact.is-closed", 1)[1].split("}", 1)[0])
             self.assertIn("var(--bg-active)", css.split(".tree-artifact.is-active", 1)[1].split("}", 1)[0])
             payload = {

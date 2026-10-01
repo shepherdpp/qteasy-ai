@@ -171,16 +171,29 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
             self.assertEqual(missing.status_code, 404)
             self.assertRegex(str(missing.json().get("error", {}).get("message") or ""), r"[A-Za-z]")
 
-    def test_code_run_requires_confirm_not_silent_run(self) -> None:
-        """代码 Tab Run 只出确认语义：app.js 含 Confirm run，不含静默 /v1/run。"""
+    def test_code_run_confirms_plan_not_editor_draft(self) -> None:
+        """代码窗 Run 仅在计划仍可确认时出现，并调用 confirmPlan，不提交编辑器草稿。"""
 
-        print("\n[TestAiWorkbenchArtifacts] code run confirm")
+        print("\n[TestAiWorkbenchArtifacts] code run confirms plan")
         js = (Path(__file__).resolve().parents[1] / "qteasy_ai" / "workbench" / "static" / "app.js").read_text(
             encoding="utf-8"
         )
-        print(" has confirm:", "btn-code-confirm" in js)
-        self.assertIn("requires confirm", js.lower())
-        self.assertIn("btn-code-confirm", js)
+        branch = js.split('current.type === "strategy_code"')[1].split("else if")[0]
+        click = js.split("function onArtifactClick")[1].split("function sessionDisplayName")[0]
+        print(" dead card:", "Confirm running edited strategy" in js)
+        print(" branch has Run:", "btn-code-run" in branch)
+        print(" click calls confirmPlan:", "confirmPlan()" in click)
+        self.assertNotIn("Confirm running edited strategy", js)
+        self.assertNotIn("btn-code-confirm", js)
+        self.assertNotIn("pendingCodeRun", js)
+        self.assertIn("plan_card.confirmable", branch)
+        self.assertIn("btn-code-run", branch)
+        self.assertIn("Editor text is not executed", branch)
+        run_click = click.split('t.id === "btn-code-run"')[1].split('t.id === "btn-theme-dark"')[0]
+        print(" run click:", run_click.strip())
+        self.assertIn("confirmPlan()", run_click)
+        self.assertNotIn("code-editor", run_click)
+        self.assertNotIn("/v1/run\"", run_click)
         self.assertIn("/v1/run-plan", js)
         self.assertIn("id=\"code-editor\"", js)
         self.assertIn("highlightPython", js)
@@ -199,7 +212,12 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
                     "skill_name": "qt.ai.insight.summarize_backtest",
                     "result": {
                         "ok": True,
-                        "metrics": {"annual_rtn": 0.12, "mdd": 0.25, "final_value": 112000.0},
+                        "metrics": {
+                            "annual_rtn": 0.12,
+                            "mdd": 0.25,
+                            "final_value": 112000.0,
+                            "peak_date": None,
+                        },
                         "payload": {
                             "change_hint": "Review strategy_meta parameters.",
                             "nearby_trades": [{"side": "buy", "price": 10.5}],
@@ -222,22 +240,112 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
             ],
         )
         print(" items:", json.dumps(items, ensure_ascii=False))
-        self.assertEqual([item["type"] for item in items], ["data_table", "data_table"])
+        self.assertEqual([item["type"] for item in items], ["data_table", "data_table", "data_table"])
+        self.assertEqual(items[0]["title"], "qt.ai.insight.summarize_backtest")
+        self.assertEqual(items[1]["title"], "nearby trades")
         insight_rows = items[0]["preview"]["preview_rows"]
         print(" insight rows:", insight_rows)
         annual = next(row for row in insight_rows if row.get("field") == "annual_rtn")
-        hint = next(row for row in insight_rows if row.get("field") == "change_hint")
         self.assertEqual(annual["value"], 0.12)
-        self.assertEqual(hint["value"], "Review strategy_meta parameters.")
-        self.assertEqual(insight_rows[-1], {"side": "buy", "price": 10.5})
-        opt_rows = items[1]["preview"]["preview_rows"]
+        self.assertFalse(any(row.get("field") == "change_hint" for row in insight_rows))
+        self.assertFalse(any(row.get("field") == "peak_date" for row in insight_rows))
+        self.assertNotIn("change_hint", json.dumps(items[0]))
+        trade_rows = items[1]["preview"]["preview_rows"]
+        print(" trade rows:", trade_rows)
+        self.assertEqual(trade_rows, [{"side": "buy", "price": 10.5}])
+        opt_rows = items[2]["preview"]["preview_rows"]
         print(" optimize rows:", opt_rows)
         self.assertEqual(opt_rows[0], {"index": 0, "value": 12})
         self.assertEqual(opt_rows[1], {"index": 1, "value": 26})
         self.assertEqual(opt_rows[2], {"index": 2, "value": 9})
         self.assertEqual(opt_rows[3], {"parameter": "fv", "value": 1.35})
-        self.assertEqual(items[1]["preview"]["data_summary"]["opti_method"], "montecarlo")
-        self.assertEqual(items[1]["preview"]["data_summary"]["opti_sample_count"], 32)
+        self.assertEqual(items[2]["preview"]["data_summary"]["opti_method"], "montecarlo")
+        self.assertEqual(items[2]["preview"]["data_summary"]["opti_sample_count"], 32)
+        empty = classify_artifacts(
+            "run_empty_insight",
+            [
+                {
+                    "step_id": "s_empty",
+                    "skill_name": "qt.ai.insight.summarize_backtest",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"annual_rtn": None, "mdd": ""},
+                        "payload": {"change_hint": "unused", "nearby_trades": []},
+                    },
+                }
+            ],
+        )
+        print(" empty insight:", empty)
+        self.assertEqual(empty, [])
+
+    def test_env_guide_steps_project_data_tables(self) -> None:
+        """qt.ai.env.* 把 token 与表探针投影成 data_table，不混列、不丢 False。"""
+
+        print("\n[TestAiWorkbenchArtifacts] env guide tables")
+        items = classify_artifacts(
+            "run_env",
+            [
+                {
+                    "step_id": "s_token",
+                    "skill_name": "qt.ai.env.check_tushare",
+                    "result": {
+                        "ok": True,
+                        "metrics": {"token_present": False, "token_source": "missing"},
+                        "data_summary": {"tushare": {"token_present": False, "token_source": "missing"}},
+                        "payload": {"env_probe": {"tushare": {"token_present": False}}},
+                        "artifacts": [],
+                    },
+                },
+                {
+                    "step_id": "s_tables",
+                    "skill_name": "qt.ai.env.overview_tables",
+                    "result": {
+                        "ok": True,
+                        "metrics": {
+                            "table_count": 2,
+                            "missing_count": 1,
+                            "missing_tables": ["index_daily"],
+                        },
+                        "data_summary": {
+                            "tables": {
+                                "stock_daily": {"exists": True, "rows": 10, "pk_min": None, "pk_max": None},
+                                "index_daily": {"exists": False, "rows": 0, "pk_min": None, "pk_max": None},
+                            }
+                        },
+                        "payload": {
+                            "env_probe": {
+                                "tables": {
+                                    "stock_daily": {"exists": True, "rows": 10, "pk_min": None, "pk_max": None},
+                                    "index_daily": {"exists": False, "rows": 0, "pk_min": None, "pk_max": None},
+                                }
+                            }
+                        },
+                        "artifacts": [],
+                    },
+                },
+            ],
+        )
+        print(" env items:", json.dumps(items, ensure_ascii=False))
+        self.assertEqual([item["type"] for item in items], ["data_table", "data_table"])
+        token_rows = items[0]["preview"]["preview_rows"]
+        print(" token rows:", token_rows)
+        present = next(row for row in token_rows if row.get("field") == "token_present")
+        self.assertIs(present["value"], False)
+        self.assertEqual(items[0]["preview"]["data_summary"]["token_present"], False)
+        self.assertNotIn("tushare", items[0]["preview"]["data_summary"])
+        table_rows = items[1]["preview"]["preview_rows"]
+        print(" table rows:", table_rows)
+        self.assertEqual([row["table"] for row in table_rows], ["stock_daily", "index_daily"])
+        self.assertIs(table_rows[1]["exists"], False)
+        self.assertEqual(table_rows[0]["rows"], 10)
+        self.assertNotIn("pk_min", table_rows[0])
+        self.assertNotIn("pk_max", table_rows[0])
+        cards = items[1]["preview"]["data_summary"]
+        print(" table cards:", cards)
+        self.assertEqual(cards["table_count"], 2)
+        self.assertEqual(cards["missing_count"], 1)
+        self.assertNotIn("missing_tables", cards)
+        self.assertNotIn("tables", cards)
 
     def test_project_universe_hits_become_data_table(self) -> None:
         """筛股 DAG 只把 project_universe 的 hits 投影成一张 data_table。"""
@@ -482,8 +590,14 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
                 }
             ],
         )
-        trade = items[0]["preview"]["preview_rows"][-1]
+        trade_item = next(
+            item
+            for item in items
+            if item.get("title") == "nearby trades"
+        )
+        trade = trade_item["preview"]["preview_rows"][0]
         print(" trade row:", trade)
+        self.assertFalse(any(row.get("field") == "change_hint" for item in items for row in item["preview"]["preview_rows"]))
         self.assertEqual(trade["Unnamed: 0"], "2015-12-22 15:00:00")
         self.assertIsNone(trade["add. invest"])
         self.assertIsNone(trade["value"])

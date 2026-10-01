@@ -77,24 +77,102 @@ _INSIGHT_FIELDS = (
 )
 
 
+def _is_blank_cell(value: Any) -> bool:
+    """空单元格：``None`` 与空串。``False`` 和 ``0`` 保留。"""
+
+    return value is None or value == ""
+
+
 def _insight_table(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """把 insight metrics / nearby_trades 收成 data_table 行。"""
+    """把 insight 指标收成 field/value 行。空值与 change_hint 不进表。"""
+
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    rows: List[Dict[str, Any]] = []
+    for key in _INSIGHT_FIELDS:
+        if key not in metrics:
+            continue
+        value = metrics.get(key)
+        if _is_blank_cell(value):
+            continue
+        rows.append({"field": key, "value": value})
+    summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
+    return rows, summary
+
+
+def _insight_trade_rows(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """成交预览单独成表，列只来自成交行本身。"""
+
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    trades = payload.get("nearby_trades") if isinstance(payload.get("nearby_trades"), list) else []
+    return [dict(trade) for trade in trades if isinstance(trade, dict)]
+
+
+_ENV_TABLE_COLS = ("table", "exists", "rows", "pk_min", "pk_max")
+
+
+def _drop_blank_columns(rows: List[Dict[str, Any]], columns: Tuple[str, ...]) -> List[Dict[str, Any]]:
+    """整列都空则去掉该列，避免空单元格铺开。"""
+
+    kept = [
+        col
+        for col in columns
+        if any(not _is_blank_cell(row.get(col)) for row in rows)
+    ]
+    return [{col: row.get(col) for col in kept} for row in rows]
+
+
+def _env_table_rows(tables: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """每张本地表一行。"""
+
+    raw: List[Dict[str, Any]] = []
+    for name, entry in tables.items():
+        if not isinstance(entry, dict):
+            continue
+        row: Dict[str, Any] = {"table": str(name)}
+        for key in ("exists", "rows", "pk_min", "pk_max"):
+            if key in entry:
+                row[key] = entry.get(key)
+        raw.append(row)
+    return _drop_blank_columns(raw, _ENV_TABLE_COLS)
+
+
+def _scalar_field_rows(mapping: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """标量收成 field/value。嵌套 dict/list 与空值不进同一张表。"""
+
+    rows: List[Dict[str, Any]] = []
+    for key, value in mapping.items():
+        if isinstance(value, (dict, list)):
+            continue
+        if _is_blank_cell(value):
+            continue
+        rows.append({"field": str(key), "value": value})
+    return rows
+
+
+def _env_guide_preview(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """把 guide/env 步的 metrics / payload 投影成 data_table。
+
+    表探针与标量指标分开，避免两套列混在一张表里出空列。
+    """
 
     metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
     payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
-    rows: List[Dict[str, Any]] = []
-    for key in _INSIGHT_FIELDS:
-        if key in metrics:
-            rows.append({"field": key, "value": metrics.get(key)})
-    hint = payload.get("change_hint")
-    if hint not in (None, ""):
-        rows.append({"field": "change_hint", "value": hint})
-    trades = payload.get("nearby_trades") if isinstance(payload.get("nearby_trades"), list) else []
-    for trade in trades:
-        if isinstance(trade, dict):
-            rows.append(trade)
-    summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
-    return rows, summary
+    data_summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
+    probe = payload.get("env_probe") if isinstance(payload.get("env_probe"), dict) else {}
+    tables = probe.get("tables") if isinstance(probe.get("tables"), dict) else None
+    if tables is None and isinstance(data_summary.get("tables"), dict):
+        tables = data_summary.get("tables")
+    if isinstance(tables, dict) and tables:
+        rows = _env_table_rows(tables)
+        cards = {
+            str(key): value
+            for key, value in metrics.items()
+            if not isinstance(value, (dict, list)) and not _is_blank_cell(value)
+        }
+        return rows, cards
+    rows = _scalar_field_rows(metrics)
+    cards = {str(row["field"]): row["value"] for row in rows}
+    return rows, cards
 
 
 _FACTOR_IC_FIELDS = (
@@ -185,6 +263,22 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
         result = step.get("result") if isinstance(step.get("result"), dict) else {}
         skill = str(step.get("skill_name") or result.get("skill_name") or "")
         arts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else []
+        if skill.startswith("qt.ai.env."):
+            preview_rows, summary = _env_guide_preview(result)
+            if preview_rows or summary:
+                items.append(
+                    WorkbenchArtifact(
+                        type="data_table",
+                        run_id=rid,
+                        title=skill or "environment",
+                        export_path="",
+                        preview={
+                            "data_summary": summary,
+                            "preview_rows": preview_rows,
+                        },
+                    )
+                )
+            continue
         if skill == "qt.ai.strategy_meta.list":
             payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
             strategies = payload.get("strategies") if isinstance(payload.get("strategies"), list) else []
@@ -261,18 +355,33 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
             continue
         if skill == "qt.ai.insight.summarize_backtest":
             preview_rows, summary = _insight_table(result)
-            items.append(
-                WorkbenchArtifact(
-                    type="data_table",
-                    run_id=rid,
-                    title=skill or "insight",
-                    export_path="",
-                    preview={
-                        "data_summary": summary,
-                        "preview_rows": preview_rows,
-                    },
+            if preview_rows:
+                items.append(
+                    WorkbenchArtifact(
+                        type="data_table",
+                        run_id=rid,
+                        title=skill or "insight",
+                        export_path="",
+                        preview={
+                            "data_summary": summary,
+                            "preview_rows": preview_rows,
+                        },
+                    )
                 )
-            )
+            trade_rows = _insight_trade_rows(result)
+            if trade_rows:
+                items.append(
+                    WorkbenchArtifact(
+                        type="data_table",
+                        run_id=rid,
+                        title="nearby trades",
+                        export_path="",
+                        preview={
+                            "data_summary": {},
+                            "preview_rows": trade_rows,
+                        },
+                    )
+                )
             continue
         if skill == "qt.ai.optimize.run_builtin":
             preview_rows, summary = _optimize_table(result)

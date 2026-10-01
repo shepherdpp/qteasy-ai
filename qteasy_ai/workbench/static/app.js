@@ -4,6 +4,7 @@ const STORAGE_WORKSPACE = "qteasy-ai.workspace";
 const STORAGE_TRANSCRIPTS = "qteasy-ai.transcripts";
 const STORAGE_COL_SESSION = "qteasy-ai.col-session";
 const STORAGE_COL_ARTIFACT = "qteasy-ai.col-artifact";
+const STORAGE_THEME = "qteasy-ai.theme";
 const MIN_SESSION_COL = 260;
 const MIN_ARTIFACT_COL = 280;
 
@@ -46,9 +47,9 @@ let state = emptyState();
 let transcript = [];
 let openTabs = [];
 let activeKey = "";
-let pendingCodeRun = false;
 let editingParams = false;
 let editingNowSlot = "";
+let editingProvider = false;
 let busy = false;
 let backgrounded = false;
 const STOP_CONFIRM = "Stop this run? Backtests and optimizations stop at the next step, and this run's result is discarded. A refill saves rows already fetched, then stops; that result is not applied.";
@@ -178,6 +179,26 @@ function pipelineHtml(job) {
     .map((name) => `<span class="pipe ${name === current ? "active" : ""}">${name}</span>`)
     .join("<span class=\"pipe-sep\">→</span>");
 }
+
+function readTheme() {
+  try {
+    return localStorage.getItem(STORAGE_THEME) === "light" ? "light" : "dark";
+  } catch (exc) {
+    return "dark";
+  }
+}
+
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem(STORAGE_THEME, next);
+  } catch (exc) {
+    /* 配额或隐私模式下仍保持当前页的 data-theme。 */
+  }
+}
+
+applyTheme(readTheme());
 
 function focusComposer() {
   const input = $("query-input");
@@ -1070,7 +1091,6 @@ async function sendQuery(query, { keepDraft } = {}) {
     });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
-    pendingCodeRun = false;
     filePreview = null;
     renderPanes();
     await refreshSessions();
@@ -1155,7 +1175,6 @@ async function confirmPlan() {
     }
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
-    pendingCodeRun = false;
     closePlanTabsForRun(state.run_id);
     renderPanes();
     await refreshWorkspace();
@@ -1207,7 +1226,7 @@ function retryLast() {
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
-  if (t.id === "btn-confirm" || t.id === "btn-code-confirm") confirmPlan();
+  if (t.id === "btn-confirm") confirmPlan();
   if (t.id === "btn-stop-watch") stopWatchingRun();
   if (t.id === "btn-background-run") backgroundThisRun();
   if (t.id === "btn-cancel") cancelPlan();
@@ -1316,7 +1335,6 @@ async function submitParamEdits() {
     });
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
-    pendingCodeRun = false;
     filePreview = null;
     renderPanes();
     await refreshSessions();
@@ -1349,8 +1367,8 @@ async function submitProviderChange() {
     return;
   }
   providerInfo = dto;
-  editingNowSlot = "";
-  renderNow();
+  editingProvider = false;
+  renderArtifacts();
   renderProviderBadge();
   renderStatusbar();
 }
@@ -1368,17 +1386,6 @@ function onNowClick(ev) {
     editingNowSlot = "";
     renderNow();
   }
-  if (t.id === "btn-prov-edit") {
-    editingNowSlot = "__provider__";
-    renderNow();
-    return;
-  }
-  if (t.id === "btn-prov-cancel") {
-    editingNowSlot = "";
-    renderNow();
-    return;
-  }
-  if (t.id === "btn-prov-confirm") submitProviderChange();
 }
 
 function onArtifactClick(ev) {
@@ -1395,19 +1402,30 @@ function onArtifactClick(ev) {
     const editor = $("code-editor");
     if (editor) codeCache._draft = editor.value;
     activeKey = String(tabEl.getAttribute("data-tab") || "");
-    pendingCodeRun = false;
     filePreview = null;
     renderArtifacts();
     renderWorkspace();
   }
   if (t.id === "btn-code-run") {
-    pendingCodeRun = true;
-    renderArtifacts();
-  }
-  if (t.id === "btn-code-confirm") {
-    pendingCodeRun = false;
     confirmPlan();
+    return;
   }
+  if (t.id === "btn-theme-dark" || t.id === "btn-theme-light") {
+    applyTheme(t.id === "btn-theme-light" ? "light" : "dark");
+    renderArtifacts();
+    return;
+  }
+  if (t.id === "btn-prov-edit") {
+    editingProvider = true;
+    renderArtifacts();
+    return;
+  }
+  if (t.id === "btn-prov-cancel") {
+    editingProvider = false;
+    renderArtifacts();
+    return;
+  }
+  if (t.id === "btn-prov-confirm") submitProviderChange();
   if (t.id === "btn-file-back") {
     filePreview = null;
     renderArtifacts();
@@ -1683,9 +1701,9 @@ async function createSession() {
   persistTranscript();
   clearOpenTabs();
   treeCollapsed = new Set();
-  pendingCodeRun = false;
   editingParams = false;
   editingNowSlot = "";
+  editingProvider = false;
   editingUserIndex = -1;
   pendingRewind = null;
   filePreview = null;
@@ -1857,7 +1875,7 @@ function renderChat() {
     if (msg.kind === "plan_ready") {
       const rid = (msg.payload && msg.payload.run_id) || "";
       const openBtn = rid
-        ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">Open plan</button></div>`
+        ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button></div>`
         : "";
       parts.push(`<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}</div></div>`);
       continue;
@@ -2026,7 +2044,7 @@ function renderPlanCard() {
   const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
   const rid = currentPlanRunId();
   const openBtn = rid
-    ? `<button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">Open plan</button>`
+    ? `<button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button>`
     : "";
   return `<div class="card compact" data-testid="plan-card"><h3>Plan ready</h3>
     ${jobLine}
@@ -2154,7 +2172,8 @@ function renderPlanMarkdown(md) {
 function runMermaid(root) {
   const mermaidLib = typeof window !== "undefined" ? window.mermaid : undefined;
   if (!mermaidLib || !root) return;
-  mermaidLib.initialize({ startOnLoad: false, securityLevel: "strict", theme: "dark" });
+  const themeName = document.documentElement.dataset.theme === "light" ? "default" : "dark";
+  mermaidLib.initialize({ startOnLoad: false, securityLevel: "strict", theme: themeName });
   const nodes = root.querySelectorAll(".mermaid");
   if (!nodes.length) return;
   mermaidLib.run({ nodes: Array.from(nodes) });
@@ -2166,14 +2185,34 @@ function exportLink(art, label) {
   return `<a class="export-link" href="${href}">${escapeHtml(label || "Export")}</a>`;
 }
 
-function renderSettingsBody() {
+function renderProviderForm() {
   const p = providerInfo || {};
   const model = p.model || "—";
   const modeLabel = p.mode || "rule";
-  return `<div class="settings-placeholder">
+  const key = p.api_key_present ? "key set" : "no key";
+  if (editingProvider) {
+    return `<p class="now-k">Provider</p>
+      <label>Model <input id="prov-model" value="${escapeHtml(p.model || "")}" /></label>
+      <label>Base URL <input id="prov-url" value="${escapeHtml(p.base_url || "")}" /></label>
+      <label>API key <input id="prov-key" type="password" placeholder="${p.api_key_present ? "unchanged" : ""}" /></label>
+      <div class="actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
+      <button type="button" id="btn-prov-cancel">Cancel</button></div>`;
+  }
+  return `<p class="now-k">Provider</p><p>${escapeHtml(modeLabel)} · ${escapeHtml(model)} · ${escapeHtml(key)}</p>
+    <p class="hint">${escapeHtml(p.base_url || "")}</p>
+    <button type="button" class="ghost" id="btn-prov-edit">Change provider</button>`;
+}
+
+function renderSettingsBody() {
+  const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  return `<div class="settings-panel">
     <h3>Settings</h3>
-    <p class="empty-hint">Provider and environment configuration will live here.</p>
-    <p>Provider ${escapeHtml(modeLabel)} · ${escapeHtml(model)}</p>
+    <p class="now-k">Appearance</p>
+    <div class="actions">
+      <button type="button" id="btn-theme-dark" class="${theme === "dark" ? "primary" : ""}">Dark</button>
+      <button type="button" id="btn-theme-light" class="${theme === "light" ? "primary" : ""}">Light</button>
+    </div>
+    ${renderProviderForm()}
   </div>`;
 }
 
@@ -2214,7 +2253,7 @@ function renderArtifacts() {
   if (openTabs.length === 0 && !filePreview) {
     host.innerHTML = `<div class="artifact-empty" data-testid="artifact-panel">
       <div class="artifact-empty-mark">◇</div>
-      <p class="empty-hint">Open a plan or artifact from Workspace, or click Open plan on a Plan ready card.</p>
+      <p class="empty-hint">Open a plan or artifact from Workspace, or click View Plan on a Plan ready card.</p>
     </div>`;
     return;
   }
@@ -2261,19 +2300,18 @@ function renderArtifacts() {
     const path = (current.preview && current.preview.path) || current.export_path || "";
     const loaded = (current.preview && current.preview.source) || codeCache[path] || "";
     const draft = codeCache._draft != null ? codeCache._draft : loaded;
-    body += `<div class="code-editor-wrap"><pre class="code-highlight" aria-hidden="true">${highlightPython(draft)}\n</pre><textarea id="code-editor" rows="12" spellcheck="false">${escapeHtml(draft)}</textarea></div>
-      <div class="actions"><button type="button" id="btn-code-run">Run (requires confirm)</button></div>
-      ${
-        pendingCodeRun
-          ? `<div class="card" data-testid="plan-card"><h3>Confirm running edited strategy</h3>
-              ${renderDecisionActions(`<button type="button" class="primary" id="btn-code-confirm">Confirm run</button>`)}</div>`
-          : ""
-      }`;
+    const canRun = Boolean(state.plan_card && state.plan_card.confirmable);
+    const runBtn = canRun
+      ? `<div class="actions"><button type="button" id="btn-code-run">Run</button></div>`
+      : "";
+    body += `<div class="artifact-fill"><div class="code-editor-wrap"><pre class="code-highlight" aria-hidden="true">${highlightPython(draft)}\n</pre><textarea id="code-editor" spellcheck="false">${escapeHtml(draft)}</textarea></div>
+      <p class="hint">Run confirms the current plan. Editor text is not executed.</p>
+      ${runBtn}</div>`;
     if (path && !(current.preview && current.preview.source) && codeCache[path] == null) loadCode(path);
   } else if (current.type === "backtest_report") {
     const report = (current.preview && current.preview.report) || "";
     body += report
-      ? `<pre class="report-text">${escapeHtml(report)}</pre>`
+      ? `<div class="artifact-fill"><pre class="report-text">${escapeHtml(report)}</pre></div>`
       : `<p class="warn">Backtest report text is missing.</p>`;
   } else if (current.type === "plan") {
     const markdown = (current.preview && current.preview.markdown) || "";
@@ -2283,7 +2321,8 @@ function renderArtifacts() {
       ${renderPlanMarkdown(markdown)}
       <p class="hint">JSON in runs/ is the executable source. Editing this markdown does not change what Run executes.</p>`;
   }
-  host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel">${body}</div>`;
+  const fillPane = current.type === "strategy_code" || current.type === "backtest_report";
+  host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel"${fillPane ? ' class="fill-pane"' : ""}>${body}</div>`;
   bindTabsWheel(host);
   runMermaid(host);
   const ta = $("code-editor");
@@ -2357,8 +2396,6 @@ function renderNow() {
   const slotBlock = slots.length
     ? `<div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows}</ul></div>`
     : "";
-  const env = envLine(bar.env_summary);
-  const envBlock = env === "No env_facts yet." ? "" : `<div class="now-env"><p class="now-k">Environment</p><p>${escapeHtml(env)}</p></div>`;
   const execStatus = String((state.execution && state.execution.status) || "");
   const runLine = busy || backgrounded || execStatus === "running"
     ? `<p class="now-run" id="now-run-status">${formatRunClock(backgrounded ? "Background" : "Running")}</p>`
@@ -2368,8 +2405,6 @@ function renderNow() {
     ${pipe}</div>
     ${missingLine}
     ${slotBlock}
-    ${envBlock}
-    <div class="now-provider" id="now-provider">${renderProviderBlock()}</div>
     <div class="now-audit"><p class="now-k">Audit</p>
       <p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
       <p>Run: ${escapeHtml(state.run_id || "—")}</p>
@@ -2399,24 +2434,6 @@ function renderFileTree(nodes) {
       return `<li><button type="button" class="file ${current}" data-file-path="${escapeHtml(node.path)}">${escapeHtml(node.name)}</button></li>`;
     })
     .join("")}</ul>`;
-}
-
-function renderProviderBlock() {
-  const p = providerInfo || {};
-  const model = p.model || "—";
-  const modeLabel = p.mode || "rule";
-  const key = p.api_key_present ? "key set" : "no key";
-  if (editingNowSlot === "__provider__") {
-    return `<p class="now-k">Provider</p>
-      <label>Model <input id="prov-model" value="${escapeHtml(p.model || "")}" /></label>
-      <label>Base URL <input id="prov-url" value="${escapeHtml(p.base_url || "")}" /></label>
-      <label>API key <input id="prov-key" type="password" placeholder="${p.api_key_present ? "unchanged" : ""}" /></label>
-      <div class="actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
-      <button type="button" id="btn-prov-cancel">Cancel</button></div>`;
-  }
-  return `<p class="now-k">Provider</p><p>${escapeHtml(modeLabel)} · ${escapeHtml(model)} · ${escapeHtml(key)}</p>
-    <p class="hint">${escapeHtml(p.base_url || "")}</p>
-    <button type="button" class="ghost" id="btn-prov-edit">Change provider</button>`;
 }
 
 function groupSessionArtifacts(arts, messages) {
