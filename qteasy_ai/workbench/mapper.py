@@ -97,6 +97,32 @@ def _insight_table(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[s
     return rows, summary
 
 
+_FACTOR_IC_FIELDS = (
+    "mean",
+    "std",
+    "ir",
+    "win_rate",
+    "n_periods",
+    "n_valid",
+)
+
+
+def _factor_ic_table(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """把因子 IC 汇总与 ic_preview 收成 data_table 行。"""
+
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    rows: List[Dict[str, Any]] = []
+    for key in _FACTOR_IC_FIELDS:
+        if key in metrics:
+            rows.append({"field": key, "value": metrics.get(key)})
+    preview = payload.get("ic_preview") if isinstance(payload.get("ic_preview"), list) else []
+    for index, value in enumerate(preview[:10]):
+        rows.append({"field": f"ic_{index}", "value": value})
+    summary = result.get("data_summary") if isinstance(result.get("data_summary"), dict) else {}
+    return rows, summary
+
+
 def _optimize_table(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """把 best_pars / fv 收成 data_table 行。"""
 
@@ -255,6 +281,23 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                     type="data_table",
                     run_id=rid,
                     title=skill or "optimize",
+                    export_path="",
+                    preview={
+                        "data_summary": summary,
+                        "preview_rows": preview_rows,
+                    },
+                )
+            )
+            continue
+        if skill == "qt.ai.research.factor_ic_summary":
+            if result.get("ok") is False:
+                continue
+            preview_rows, summary = _factor_ic_table(result)
+            items.append(
+                WorkbenchArtifact(
+                    type="data_table",
+                    run_id=rid,
+                    title=skill or "factor IC summary",
                     export_path="",
                     preview={
                         "data_summary": summary,

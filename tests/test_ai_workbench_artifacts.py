@@ -341,6 +341,86 @@ class TestAiWorkbenchArtifacts(unittest.TestCase):
         self.assertEqual(empty[0]["preview"]["preview_rows"], [])
         self.assertEqual(empty[0]["preview"]["data_summary"]["hit_count"], 0)
 
+    def test_factor_ic_summary_projects_data_table(self) -> None:
+        """因子 IC 成功步投影 data_table；失败步不造空表。"""
+
+        print("\n[TestAiWorkbenchArtifacts] factor IC summary table")
+        metrics = {
+            "mean": 0.12,
+            "std": 0.34,
+            "ir": 0.35,
+            "win_rate": 0.6,
+            "n_periods": 20,
+            "n_valid": 18,
+        }
+        ic_preview = [0.2, None, -0.1]
+        items = classify_artifacts(
+            "run_ic",
+            [
+                {
+                    "step_id": "s_ic",
+                    "skill_name": "qt.ai.research.factor_ic_summary",
+                    "result": {
+                        "ok": True,
+                        "metrics": metrics,
+                        "data_summary": {
+                            "factor_htype": "close",
+                            "return_htype": "volume",
+                            "method": "spearman",
+                            "ic_index_start": "2024-01-02",
+                            "ic_index_end": "2024-01-31",
+                        },
+                        "payload": {"ic_preview": ic_preview},
+                        "artifacts": [],
+                    },
+                }
+            ],
+        )
+        print(" items:", json.dumps(items, ensure_ascii=False))
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["type"], "data_table")
+        self.assertEqual(items[0]["title"], "qt.ai.research.factor_ic_summary")
+        self.assertEqual(items[0]["run_id"], "run_ic")
+        rows = items[0]["preview"]["preview_rows"]
+        print(" rows:", rows)
+        print(" summary:", items[0]["preview"]["data_summary"])
+        by_field = {row["field"]: row["value"] for row in rows}
+        self.assertEqual(
+            [row["field"] for row in rows],
+            ["mean", "std", "ir", "win_rate", "n_periods", "n_valid", "ic_0", "ic_1", "ic_2"],
+        )
+        self.assertEqual(by_field["mean"], 0.12)
+        self.assertEqual(by_field["std"], 0.34)
+        self.assertEqual(by_field["ir"], 0.35)
+        self.assertEqual(by_field["win_rate"], 0.6)
+        self.assertEqual(by_field["n_periods"], 20)
+        self.assertEqual(by_field["n_valid"], 18)
+        self.assertEqual(by_field["ic_0"], ic_preview[0])
+        self.assertIsNone(by_field["ic_1"])
+        self.assertEqual(by_field["ic_2"], ic_preview[2])
+        self.assertEqual(items[0]["preview"]["data_summary"]["method"], "spearman")
+        self.assertEqual(items[0]["preview"]["data_summary"]["factor_htype"], "close")
+
+        failed = classify_artifacts(
+            "run_ic_fail",
+            [
+                {
+                    "step_id": "s_fail",
+                    "skill_name": "qt.ai.research.factor_ic_summary",
+                    "result": {
+                        "ok": False,
+                        "metrics": {},
+                        "error": {
+                            "code": "FACTOR_IC_SUMMARY_FAILED",
+                            "message": "Failed to compute factor IC summary: no local history.",
+                        },
+                    },
+                }
+            ],
+        )
+        print(" failed items:", failed)
+        self.assertEqual(failed, [])
+
     def test_backtest_report_text_not_metrics_card(self) -> None:
         """回测 Artifact 正文是 report_result 文本，不用 metrics 卡片冒充。"""
 
