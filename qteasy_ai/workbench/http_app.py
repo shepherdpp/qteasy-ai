@@ -43,7 +43,7 @@ from ..session import (
     note_cancelled_task,
     request_live_cancel,
 )
-from ..plan_markdown import plan_artifact_title
+from ..plan_markdown import plan_artifact_title, run_group_title
 from .mapper import classify_artifacts, map_assistant_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -244,6 +244,7 @@ class WorkbenchHttp:
         某个 run 自身是 dry-run 且 ``{run_id}.plan.md`` 在盘上则列入 ``type=plan``。
         不因最新 execute 为 success/running 而扣掉已落盘的审阅文档；
         success/running 的 execute run 没有 plan.md，不会另造 plan 项。
+        每项带 run 文件 ``mtime`` 与 ``run_title``（第一步人话 + 短 hex），供树排序，不改点击目标。
         """
 
         sid = str(getattr(conv, "session_id", "") or "")
@@ -261,8 +262,18 @@ class WorkbenchHttp:
             steps = []
             if isinstance(run.get("execution"), dict):
                 steps = list(run["execution"].get("steps") or [])
+            plan_blob = run.get("plan") if isinstance(run.get("plan"), dict) else {}
+            title_steps = steps or list(plan_blob.get("steps") or [])
+            run_title = run_group_title(rid, title_steps)
+            run_path = self.assistant.memory_store.runs_dir / f"{rid}.json"
+            try:
+                mtime = float(run_path.stat().st_mtime) if run_path.is_file() else 0.0
+            except OSError:
+                mtime = 0.0
             for art in classify_artifacts(rid, steps):
                 art["session_id"] = sid
+                art["mtime"] = mtime
+                art["run_title"] = run_title
                 items.append(art)
             status = str((run.get("execution") or {}).get("status") or "")
             md_path = self.assistant.memory_store.runs_dir / f"{rid}.plan.md"
@@ -272,7 +283,6 @@ class WorkbenchHttp:
                     markdown = md_path.read_text(encoding="utf-8")[:200000]
                 except OSError:
                     markdown = ""
-                plan_blob = run.get("plan") if isinstance(run.get("plan"), dict) else {}
                 items.append(
                     {
                         "type": "plan",
@@ -285,6 +295,8 @@ class WorkbenchHttp:
                         "preview": {"markdown": markdown, "path": str(md_path)},
                         "warnings": [],
                         "session_id": sid,
+                        "mtime": mtime,
+                        "run_title": run_title,
                     }
                 )
         return items

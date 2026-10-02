@@ -6,6 +6,7 @@
   --bg-hover: #2a2d2e;
   --bg-active: #04395e;
   --bg-user: #0e4d7b;
+  --text-on-user: #fff;
   --bg-card: #252526;
   --border: #2b2b2b;
   --text: #cccccc;
@@ -31,7 +32,8 @@ html[data-theme="light"] {
   --bg-input: #ffffff;
   --bg-hover: #e8e8e8;
   --bg-active: #d6e8f8;
-  --bg-user: #0e4d7b;
+  --bg-user: #c5e4fb;
+  --text-on-user: #1a1a1a;
   --bg-card: #ffffff;
   --border: #d0d0d0;
   --text: #242424;
@@ -417,6 +419,15 @@ html[data-theme="light"] .mode-notice {
   font-size: 11px;
   text-transform: uppercase;
 }
+.time-group { padding-left: 0; }
+.time-bucket {
+  margin: 8px 8px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.time-group > ul.time-group-body {
+  padding-left: 28px;
+}
 .file-tree button.file.current-run { color: var(--accent); }
 
 .chat-log { flex: 1; overflow: auto; padding: 12px; }
@@ -430,7 +441,7 @@ html[data-theme="light"] .mode-notice {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.msg.user .bubble { background: var(--bg-user); color: #fff; position: relative; padding-right: 28px; }
+.msg.user .bubble { background: var(--bg-user); color: var(--text-on-user); position: relative; padding-right: 28px; }
 .msg-role { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
 .bubble-edit {
   display: none;
@@ -438,7 +449,7 @@ html[data-theme="light"] .mode-notice {
   right: 6px;
   top: 50%;
   transform: translateY(-50%);
-  color: #fff;
+  color: var(--text-on-user);
   padding: 0 4px;
   line-height: 16px;
 }

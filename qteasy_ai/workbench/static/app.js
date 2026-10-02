@@ -366,8 +366,9 @@ function providerLabel() {
 
 function renderProviderBadge() {
   const label = providerLabel();
+  const model = String((providerInfo && providerInfo.model) || "").trim();
   const btn = $("composer-provider-btn");
-  if (btn) btn.textContent = `${label} ▾`;
+  if (btn) btn.textContent = `${model || "Not configured"} ▾`;
   const current = $("provider-current");
   if (current) current.textContent = label;
 }
@@ -721,9 +722,24 @@ function runningSkillName() {
   return SKILL_TITLES[name] || name;
 }
 
+function runWatchActive() {
+  const status = String((state.execution && state.execution.status) || "");
+  return backgrounded || status === "running";
+}
+
+function planningWait() {
+  return busy && !runWatchActive() && mode !== "agent" && mode !== "run";
+}
+
 function updateBusyElapsedDom() {
   const label = $("busy-elapsed");
-  if (label) label.textContent = backgrounded ? formatRunClock("Background") : formatRunClock("Working");
+  if (label) {
+    label.textContent = planningWait()
+      ? "Planning…"
+      : backgrounded
+        ? formatRunClock("Background")
+        : formatRunClock("Working");
+  }
   const now = $("now-run-status");
   if (now) now.textContent = backgrounded ? formatRunClock("Background") : formatRunClock("Running");
 }
@@ -1431,6 +1447,15 @@ function onSessionListDblClick(ev) {
 function onSessionListClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
+  const toggle = t.closest("[data-tree-toggle]");
+  if (toggle) {
+    ev.stopPropagation();
+    const key = toggle.getAttribute("data-tree-toggle") || "";
+    if (treeCollapsed.has(key)) treeCollapsed.delete(key);
+    else treeCollapsed.add(key);
+    renderSessionList();
+    return;
+  }
   const item = t.closest("[data-session-id]");
   if (!item) return;
   const id = item.getAttribute("data-session-id");
@@ -1512,8 +1537,21 @@ async function deleteSession(id) {
 async function rewindUserMessage(index, text, confirmDiscard) {
   const query = String(text || "").trim();
   if (!query || busy || index < 0) return;
+  const snapshot = transcript.slice();
+  const savedCard = state.plan_card;
+  const savedExec = state.execution;
+  const savedRun = state.run_id;
+  const row = transcript[index];
+  if (row && row.kind === "user_text") row.text = query;
+  editingUserIndex = -1;
+  transcript = transcript.slice(0, index + 1);
+  persistTranscript();
+  state.plan_card = null;
+  state.run_id = "";
+  state.execution = Object.assign({}, state.execution || {}, { status: "", steps: [] });
   setBusy(true);
   let retryDiscard = false;
+  let restore = false;
   try {
     const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/rewind`, {
       method: "POST",
@@ -1526,7 +1564,11 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       }),
     });
     if (dto && dto.needs_confirm) {
-      if (confirmDiscard || !window.confirm(REWIND_LATER_TURNS)) return;
+      if (confirmDiscard) return;
+      if (!window.confirm(REWIND_LATER_TURNS)) {
+        restore = true;
+        return;
+      }
       retryDiscard = true;
       return;
     }
@@ -1539,7 +1581,6 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       renderChat();
       return;
     }
-    editingUserIndex = -1;
     ingestDto(dto, { appendUser: false });
     applyServerTranscript(dto);
     filePreview = null;
@@ -1547,8 +1588,16 @@ async function rewindUserMessage(index, text, confirmDiscard) {
     await refreshSessions();
     await refreshWorkspace();
   } finally {
+    if (restore) {
+      transcript = snapshot;
+      persistTranscript();
+      state.plan_card = savedCard;
+      state.execution = savedExec;
+      state.run_id = savedRun;
+      editingUserIndex = index;
+    }
     setBusy(false);
-    if (!retryDiscard) focusComposer();
+    if (!retryDiscard && !restore) focusComposer();
   }
   if (retryDiscard) await rewindUserMessage(index, query, true);
 }
@@ -1761,27 +1810,66 @@ async function refreshProvider() {
   renderStatusbar();
 }
 
+function timeBucketLabel(mtimeSeconds, nowMs) {
+  const mtime = Number(mtimeSeconds);
+  if (!Number.isFinite(mtime) || mtime <= 0) return "OLDER";
+  const now = nowMs == null ? new Date() : new Date(nowMs);
+  const then = new Date(mtime * 1000);
+  const utcThen = Date.UTC(then.getFullYear(), then.getMonth(), then.getDate());
+  const utcNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const ageDays = Math.round((utcNow - utcThen) / 86400000);
+  if (ageDays <= 0) return "TODAY";
+  if (ageDays === 1) return "YESTERDAY";
+  if (ageDays <= 6) return "LAST WEEK";
+  if (ageDays <= 29) return "LAST MONTH";
+  return "OLDER";
+}
+
+function bucketedNodes(nodes, nowMs) {
+  const buckets = [];
+  const index = {};
+  (nodes || []).forEach((node) => {
+    const label = timeBucketLabel(node && node.mtime, nowMs);
+    if (!index[label]) {
+      index[label] = { label, nodes: [] };
+      buckets.push(index[label]);
+    }
+    index[label].nodes.push(node);
+  });
+  return buckets;
+}
+
 function renderSessionList() {
   const host = $("session-list");
   if (!host) return;
-  host.innerHTML = sessions
-    .map((row) => {
-      const active = row.session_id === sessionId ? "active" : "";
-      const name = sessionDisplayName(row);
-      const last = String(row.last_user || "").trim();
-      const editing = renamingSessionId === row.session_id;
-      const nameBlock = editing
-        ? `<input class="session-rename" value="${escapeHtml(name)}" aria-label="Rename session" />`
-        : `<span class="sid">${escapeHtml(name)}</span>`;
-      const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
-      const runTag = row.running ? `<span class="meta running-tag">Running</span>` : "";
-      return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
+  host.innerHTML = bucketedNodes(sessions)
+    .map((bucket) => {
+      const key = `session:${bucket.label}`;
+      const open = !treeCollapsed.has(key);
+      const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+      const rows = open
+        ? (bucket.nodes || [])
+        .map((row) => {
+          const active = row.session_id === sessionId ? "active" : "";
+          const name = sessionDisplayName(row);
+          const last = String(row.last_user || "").trim();
+          const editing = renamingSessionId === row.session_id;
+          const nameBlock = editing
+            ? `<input class="session-rename" value="${escapeHtml(name)}" aria-label="Rename session" />`
+            : `<span class="sid">${escapeHtml(name)}</span>`;
+          const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
+          const runTag = row.running ? `<span class="meta running-tag">Running</span>` : "";
+          return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
         <div class="session-main">${nameBlock}${meta}${runTag}</div>
         <div class="session-actions">
           <button type="button" class="icon-btn ghost" data-session-rename title="Rename">✎</button>
           <button type="button" class="icon-btn ghost" data-session-delete title="Delete">🗑</button>
         </div>
       </div>`;
+        })
+        .join("")
+        : "";
+      return `<div class="time-group">${twist}<span class="time-bucket">${escapeHtml(bucket.label)}</span>${rows}</div>`;
     })
     .join("");
   const current = sessions.find((row) => row.session_id === sessionId);
@@ -1907,7 +1995,7 @@ function turnHasTerminal(start, end) {
 function latestTurnOwnsSteps(start, end) {
   const steps = (state.execution && state.execution.steps) || [];
   if (!steps.length) return false;
-  if (busy || backgrounded) return true;
+  if (runWatchActive()) return true;
   for (let i = start; i < end; i += 1) {
     const msg = transcript[i];
     if (!msg) continue;
@@ -2055,12 +2143,16 @@ function renderChat() {
     parts.push(renderTurn(range, range.userIndex === latestIndex));
   }
   if (busy || backgrounded) {
-    const skill = runningSkillName();
-    const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
-    const backgroundBtn = backgrounded
-      ? ""
-      : `<button type="button" class="ghost" id="btn-background-run">Background</button>`;
-    parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock(backgrounded ? "Background" : "Working")}</span>${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
+    if (planningWait()) {
+      parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">Planning…</span></div></div>`);
+    } else {
+      const skill = runningSkillName();
+      const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
+      const backgroundBtn = backgrounded
+        ? ""
+        : `<button type="button" class="ghost" id="btn-background-run">Background</button>`;
+      parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock(backgrounded ? "Background" : "Working")}</span>${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
+    }
   }
   parts.push(renderClarification());
   parts.push(renderPlanCard());
@@ -2526,8 +2618,7 @@ function renderNow() {
   const slotBlock = slots.length
     ? `<div class="now-slots"><p class="now-k">Slots</p><ul>${slotRows}</ul></div>`
     : "";
-  const execStatus = String((state.execution && state.execution.status) || "");
-  const runLine = busy || backgrounded || execStatus === "running"
+  const runLine = runWatchActive()
     ? `<p class="now-run" id="now-run-status">${formatRunClock(backgrounded ? "Background" : "Running")}</p>`
     : "";
   host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
@@ -2564,6 +2655,30 @@ function renderFileTree(nodes) {
       return `<li><button type="button" class="file ${current}" data-file-path="${escapeHtml(node.path)}">${escapeHtml(node.name)}</button></li>`;
     })
     .join("")}</ul>`;
+}
+
+function artifactMtime(art) {
+  const value = Number(art && art.mtime);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function maxArtifactMtime(list, indexes) {
+  let best = 0;
+  (indexes || []).forEach((index) => {
+    const value = artifactMtime(list[index]);
+    if (value > best) best = value;
+  });
+  return best;
+}
+
+function orphanRunLabel(list, kids, rid) {
+  const titled = (kids || [])
+    .map((kid) => String((list[kid.art_index] && list[kid.art_index].run_title) || "").trim())
+    .find(Boolean);
+  if (titled) return titled;
+  const raw = String(rid || "");
+  const hex = raw.toLowerCase().startsWith("run_") ? raw.slice(4) : raw;
+  return `Run · ${(hex || "run").slice(0, 8)}`;
 }
 
 function groupSessionArtifacts(arts, messages) {
@@ -2612,6 +2727,7 @@ function groupSessionArtifacts(arts, messages) {
       label: String(art.title || "plan"),
       run_id: rid,
       art_index: index,
+      mtime: maxArtifactMtime(list, [index].concat(kids.map((kid) => kid.art_index))),
       children: kids,
     });
   });
@@ -2633,13 +2749,16 @@ function groupSessionArtifacts(arts, messages) {
     });
   });
   orphanOrder.forEach((rid) => {
+    const kids = orphanKids[rid];
     children.push({
       kind: "run",
-      label: `Run ${rid.slice(0, 8)}`,
+      label: orphanRunLabel(list, kids, rid),
       run_id: rid,
-      children: orphanKids[rid],
+      mtime: maxArtifactMtime(list, kids.map((kid) => kid.art_index)),
+      children: kids,
     });
   });
+  children.sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0));
   return { label: "This session", children };
 }
 
@@ -2663,26 +2782,37 @@ function renderWorkspace() {
   }
   const tree = groupSessionArtifacts(arts, transcript);
   const sessionOpen = !treeCollapsed.has("session");
-  const nodes = (tree.children || [])
-    .map((node) => {
-      const key = `${node.kind}::${node.run_id || ""}`;
-      const open = !treeCollapsed.has(key);
-      const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
-      const head = node.kind === "plan"
-        ? `<button type="button" class="${workspaceTreeClass(arts[node.art_index])}" data-art-index="${node.art_index}">${escapeHtml(node.label || "plan")}</button>`
-        : `<span class="dir-name">${escapeHtml(node.label || "Run")}</span>`;
-      const kids = (node.children || [])
-        .map((child) => {
-          const label = `${child.type || "artifact"} · ${child.title || child.run_id || ""}`;
-          return `<li><button type="button" class="${workspaceTreeClass(arts[child.art_index])}" data-art-index="${child.art_index}">${escapeHtml(label)}</button></li>`;
+  const nodes = bucketedNodes(tree.children || [])
+    .map((bucket) => {
+      const groupKey = `workspace:${bucket.label}`;
+      const groupOpen = !treeCollapsed.has(groupKey);
+      const groupTwist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(groupKey)}" aria-expanded="${groupOpen ? "true" : "false"}">${groupOpen ? "▾" : "▸"}</button>`;
+      const body = groupOpen
+        ? (bucket.nodes || [])
+        .map((node) => {
+          const key = `${node.kind}::${node.run_id || ""}`;
+          const open = !treeCollapsed.has(key);
+          const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+          const head = node.kind === "plan"
+            ? `<button type="button" class="${workspaceTreeClass(arts[node.art_index])}" data-art-index="${node.art_index}">${escapeHtml(node.label || "plan")}</button>`
+            : `<span class="dir-name">${escapeHtml(node.label || "Run")}</span>`;
+          const kids = (node.children || [])
+            .map((child) => {
+              const label = `${child.type || "artifact"} · ${child.title || child.run_id || ""}`;
+              return `<li><button type="button" class="${workspaceTreeClass(arts[child.art_index])}" data-art-index="${child.art_index}">${escapeHtml(label)}</button></li>`;
+            })
+            .join("");
+          return `<li class="tree-node">${twist}${head}${open ? `<ul>${kids}</ul>` : ""}</li>`;
         })
-        .join("");
-      return `<li class="tree-node">${twist}${head}${open ? `<ul>${kids}</ul>` : ""}</li>`;
+        .join("")
+        : "";
+      const list = body ? `<ul class="file-tree time-group-body">${body}</ul>` : "";
+      return `<div class="time-group">${groupTwist}<span class="time-bucket">${escapeHtml(bucket.label)}</span>${list}</div>`;
     })
     .join("");
   const sessionTwist = `<button type="button" class="tree-twist" data-tree-toggle="session" aria-expanded="${sessionOpen ? "true" : "false"}">${sessionOpen ? "▾" : "▸"}</button>`;
-  host.innerHTML = `<div class="tree-node">${sessionTwist}<span class="files-k">This session</span>${
-    sessionOpen ? `<ul class="file-tree">${nodes}</ul>` : ""
+  host.innerHTML = `<div class="workspace-tree"><div class="tree-node">${sessionTwist}<span class="files-k">This session</span></div>${
+    sessionOpen ? nodes : ""
   }</div>`;
 }
 

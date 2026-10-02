@@ -234,6 +234,60 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(loaded.session_id, "web-demo")
             self.assertTrue(any(m.get("kind") == "user_text" for m in loaded.messages))
 
+    def test_workspace_orphan_run_has_human_title_and_mtime(self) -> None:
+        """无 plan.md 的 run 在 workspace 上带人话 run_title 与文件 mtime，且不造 plan 项。"""
+
+        print("\n[TestAiWorkbenchHttp] orphan run title and mtime")
+        from qteasy_ai.session import ConversationState, SessionStore
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            rid = "run_5632abcd1234"
+            store.save_run(
+                rid,
+                {
+                    "execution": {
+                        "status": "success",
+                        "steps": [
+                            {
+                                "step_id": "s1",
+                                "skill_name": "qt.ai.data.read",
+                                "result": {
+                                    "ok": True,
+                                    "skill_name": "qt.ai.data.read",
+                                    "data_summary": {"channel": "history"},
+                                    "payload": {"preview": [{"close": 1.0}]},
+                                },
+                            }
+                        ],
+                    },
+                },
+            )
+            conv = ConversationState.empty("orphan-sess")
+            conv.append_messages(
+                [
+                    {
+                        "kind": "result",
+                        "text": "Read market data.",
+                        "payload": {"run_id": rid, "executed": True},
+                    }
+                ]
+            )
+            SessionStore(store).save(conv)
+            body = client.get("/v1/workspace", params={"session_id": "orphan-sess"}).json()
+            arts = body.get("artifacts") or []
+            print(" artifacts:", arts)
+            self.assertTrue(arts)
+            self.assertFalse(any(item.get("type") == "plan" for item in arts))
+            row = arts[0]
+            print(" run_title:", row.get("run_title"), "mtime:", row.get("mtime"))
+            self.assertEqual(
+                row.get("run_title"),
+                "Read market data (history / reference / static) · 5632abcd",
+            )
+            self.assertGreater(float(row.get("mtime") or 0), 0)
+            self.assertFalse((store.runs_dir / f"{rid}.plan.md").is_file())
+
     def test_get_session_restores_plan_from_plan_id(self) -> None:
         """GET /v1/session 按 current_plan_id 回填 plan_card / execution。"""
 

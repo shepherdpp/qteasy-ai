@@ -908,7 +908,15 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             client = TestClient(app)
             src = client.get("/static/app.js").text
             css = client.get("/static/app.css").text
-            fn = _extract_js_function(src, "groupSessionArtifacts")
+            fn = "\n".join([
+                _extract_js_function(src, name)
+                for name in (
+                    "artifactMtime",
+                    "maxArtifactMtime",
+                    "orphanRunLabel",
+                    "groupSessionArtifacts",
+                )
+            ])
             render_ws = _extract_js_function(src, "renderWorkspace")
             tree_cls = _extract_js_function(src, "workspaceTreeClass")
             print(" renderWorkspace uses groupSessionArtifacts:", "groupSessionArtifacts" in render_ws)
@@ -973,9 +981,143 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertEqual([row["art_index"] for row in plan_node["children"]], [1, 2])
             self.assertEqual([row["run_id"] for row in plan_node["children"]], ["run-plan-aaa", "run-exec-bbb"])
             self.assertEqual(run_node["kind"], "run")
-            self.assertEqual(run_node["label"], "Run run-agen")
+            self.assertEqual(run_node["label"], "Run · run-agen")
             self.assertEqual(run_node["run_id"], "run-agent-ccc")
             self.assertEqual([row["art_index"] for row in run_node["children"]], [3])
+
+    def test_artifact_tree_orders_by_mtime_and_buckets(self) -> None:
+        """R3：新组在前；今天执行的旧 plan 归 Today；Sessions 复用分组且不重排。"""
+
+        print("\n[TestAiWorkbenchWeb] artifact tree mtime buckets")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            fn = "\n".join([
+                _extract_js_function(src, name)
+                for name in (
+                    "artifactMtime",
+                    "maxArtifactMtime",
+                    "orphanRunLabel",
+                    "groupSessionArtifacts",
+                    "timeBucketLabel",
+                    "bucketedNodes",
+                )
+            ])
+            session_fn = _extract_js_function(src, "renderSessionList")
+            render_ws = _extract_js_function(src, "renderWorkspace")
+            print(" session uses bucketedNodes:", "bucketedNodes" in session_fn)
+            print(" session sorts:", "sessions.sort" in session_fn)
+            print(" workspace uses bucketedNodes:", "bucketedNodes" in render_ws)
+            self.assertIn("bucketedNodes", session_fn)
+            self.assertNotIn("sessions.sort", session_fn)
+            self.assertIn("bucketedNodes", render_ws)
+            self.assertIn('class="time-bucket"', render_ws)
+            self.assertIn('class="time-bucket"', session_fn)
+            self.assertIn("data-art-index", render_ws)
+            bucket_css = css.split(".time-bucket {", 1)[1].split("}", 1)[0]
+            print(" time-bucket css:", bucket_css.strip())
+            self.assertIn("font-size: 11px", bucket_css)
+            self.assertNotIn("text-transform", bucket_css)
+            print(" session toggle:", "session:" in session_fn, "data-tree-toggle" in session_fn)
+            print(" workspace group:", "workspace:" in render_ws, "time-group" in render_ws)
+            self.assertIn("session:", session_fn)
+            self.assertIn("data-tree-toggle", session_fn)
+            self.assertIn("workspace:", render_ws)
+            self.assertIn('class="time-group"', render_ws)
+            self.assertIn("workspace-tree", render_ws)
+            self.assertNotIn("tree-bucket", render_ws)
+            group_css = css.split(".time-group {", 1)[1].split("}", 1)[0]
+            body_css = css.split(".time-group > ul.time-group-body {", 1)[1].split("}", 1)[0]
+            print(" time-group:", group_css.strip(), "body:", body_css.strip())
+            self.assertIn("padding-left: 0", group_css)
+            self.assertIn("padding-left: 28px", body_css)
+            click_fn = _extract_js_function(src, "onSessionListClick")
+            toggle_at = click_fn.find("data-tree-toggle")
+            switch_at = click_fn.find("switchSession")
+            print(" session click toggle before switch:", toggle_at, switch_at)
+            self.assertGreater(toggle_at, 0)
+            self.assertLess(toggle_at, switch_at)
+            call = """
+            (function () {
+              const now = new Date(2026, 9, 2, 12, 0, 0);
+              const nowMs = now.getTime();
+              const at = (month, day) => new Date(2026, month, day, 12, 0, 0).getTime() / 1000;
+              const newer = groupSessionArtifacts([
+                {type: "plan", run_id: "run_oldplan01aaaa", title: "Old plan", mtime: at(9, 1)},
+                {type: "data_table", run_id: "run_5632abcd1234", title: "bars", mtime: at(9, 2),
+                 run_title: "Read market data (history / reference / static) · 5632abcd"}
+              ], [
+                {kind: "plan_ready", payload: {plan_id: "p-old", run_id: "run_oldplan01aaaa"}},
+                {kind: "result", payload: {run_id: "run_5632abcd1234", executed: true}}
+              ]);
+              const lifted = groupSessionArtifacts([
+                {type: "plan", run_id: "run_aaa11111bbbb", title: "List built-in strategies · aaa11111", mtime: at(8, 1)},
+                {type: "data_table", run_id: "run_exec9999eeee", title: "bars", mtime: at(9, 2)},
+                {type: "chart", run_id: "run_cccc3333dddd", title: "agent chart", mtime: at(9, 1),
+                 run_title: "Export a k-line chart · cccc3333"}
+              ], [
+                {kind: "plan_ready", payload: {plan_id: "p1", run_id: "run_aaa11111bbbb"}},
+                {kind: "result", payload: {plan_id: "p1", run_id: "run_exec9999eeee", executed: true}},
+                {kind: "result", payload: {run_id: "run_cccc3333dddd", executed: true}}
+              ]);
+              const pack = (tree) => ({
+                kinds: tree.children.map((node) => node.kind),
+                label: tree.children[0].label,
+                buckets: bucketedNodes(tree.children, nowMs).map((bucket) => ({
+                  label: bucket.label,
+                  kinds: bucket.nodes.map((node) => node.kind)
+                }))
+              });
+              return {
+                labels: {
+                  today: timeBucketLabel(at(9, 2), nowMs),
+                  yesterday: timeBucketLabel(at(9, 1), nowMs),
+                  week: timeBucketLabel(at(8, 26), nowMs),
+                  monthEdge: timeBucketLabel(at(8, 25), nowMs),
+                  month: timeBucketLabel(at(8, 3), nowMs),
+                  older: timeBucketLabel(at(8, 2), nowMs),
+                  missing: timeBucketLabel(0, nowMs)
+                },
+                newer: pack(newer),
+                lifted: pack(lifted)
+              };
+            })()
+            """
+            got = _eval_js(fn, call)
+            print(" buckets:", json.dumps(got, ensure_ascii=False))
+            self.assertEqual(got["labels"]["today"], "TODAY")
+            self.assertEqual(got["labels"]["yesterday"], "YESTERDAY")
+            self.assertEqual(got["labels"]["week"], "LAST WEEK")
+            self.assertEqual(got["labels"]["monthEdge"], "LAST MONTH")
+            self.assertEqual(got["labels"]["month"], "LAST MONTH")
+            self.assertEqual(got["labels"]["older"], "OLDER")
+            self.assertEqual(got["labels"]["missing"], "OLDER")
+            self.assertEqual(got["newer"]["kinds"], ["run", "plan"])
+            self.assertEqual(
+                got["newer"]["label"],
+                "Read market data (history / reference / static) · 5632abcd",
+            )
+            self.assertEqual(
+                got["newer"]["buckets"],
+                [
+                    {"label": "TODAY", "kinds": ["run"]},
+                    {"label": "YESTERDAY", "kinds": ["plan"]},
+                ],
+            )
+            self.assertEqual(got["lifted"]["kinds"], ["plan", "run"])
+            self.assertEqual(got["lifted"]["label"], "List built-in strategies · aaa11111")
+            self.assertEqual(
+                got["lifted"]["buckets"],
+                [
+                    {"label": "TODAY", "kinds": ["plan"]},
+                    {"label": "YESTERDAY", "kinds": ["run"]},
+                ],
+            )
 
     def test_user_edit_pencil_inside_bubble(self) -> None:
         """#19：铅笔在用户气泡内最右侧，不占用 You 旁空间。"""
@@ -1033,6 +1175,21 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             turn = _extract_js_function(src, "renderTurn")
             submit = _extract_js_function(src, "submitRewindEdit")
             action_fn = _extract_js_function(src, "userEditRewindAction")
+            rewind = _extract_js_function(src, "rewindUserMessage")
+            owns = _extract_js_function(src, "latestTurnOwnsSteps")
+            edit_at = rewind.find("editingUserIndex = -1")
+            slice_at = rewind.find("transcript.slice(0, index + 1)")
+            busy_at = rewind.find("setBusy(true)")
+            print(" rewind order edit/slice/busy:", edit_at, slice_at, busy_at)
+            self.assertGreater(edit_at, 0)
+            self.assertGreater(slice_at, edit_at)
+            self.assertGreater(busy_at, slice_at)
+            self.assertLess(rewind.find("steps: []"), busy_at)
+            self.assertIn("state.plan_card = null", rewind)
+            self.assertNotIn("if (busy || backgrounded) return true", owns)
+            self.assertIn("runWatchActive()", owns)
+            self.assertIn("Planning…", chat)
+            self.assertIn('data-testid="planning-wait"', chat)
             print(" renderChat calls renderTurn:", "renderTurn(" in chat)
             print(" renderTurn calls renderSteps:", "renderSteps()" in turn)
             print(" submit gates confirm:", "action.confirm && !window.confirm(action.dialog)" in submit)

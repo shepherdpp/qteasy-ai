@@ -14,7 +14,7 @@ import unittest
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.plan_markdown import plan_artifact_title, tool_plan_to_markdown
+from qteasy_ai.plan_markdown import plan_artifact_title, run_group_title, tool_plan_to_markdown
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 
@@ -208,6 +208,27 @@ class TestAiPlanMarkdown(unittest.TestCase):
         print(" empty steps:", empty)
         self.assertTrue(empty.startswith("Plan ·"))
         self.assertIn("ab12cd34", empty)
+
+    def test_run_group_title_uses_first_skill_and_hex(self) -> None:
+        """孤儿 run 显示名用人话第一步 + run 短 hex；字典 summary 不覆盖标题。"""
+
+        print("\n[TestAiPlanMarkdown] orphan run group title")
+        rid = "run_5632abcd1234"
+        titled = run_group_title(
+            rid,
+            steps=[{
+                "skill_name": "qt.ai.data.read",
+                "summary": {"message": "not a title"},
+            }],
+        )
+        print(" titled:", titled)
+        self.assertEqual(
+            titled,
+            "Read market data (history / reference / static) · 5632abcd",
+        )
+        empty = run_group_title("run_ab12cd34ef56", steps=[])
+        print(" empty steps:", empty)
+        self.assertEqual(empty, "Run · ab12cd34")
 
     def test_optimize_plan_states_date_source_and_ai_defaults(self) -> None:
         """优化计划写明日期来源，以及 AI 默认 opti_method / opti_sample_count。"""

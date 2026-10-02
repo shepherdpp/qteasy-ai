@@ -155,6 +155,46 @@ def plan_artifact_title(plan_id: str, steps: Optional[Sequence[Any]] = None) -> 
     return f"{label} · {short}"
 
 
+def run_group_title(run_id: str, steps: Optional[Sequence[Any]] = None) -> str:
+    """孤儿 run 显示名：第一步人话标题 + run_id 短 hex。
+
+    Parameters
+    ----------
+    run_id : str
+        ``run_`` + hex。不是文件名。
+    steps : sequence, optional
+        执行步骤或计划步骤。只认字符串 ``summary``，字典汇总不覆盖人话标题。
+
+    Returns
+    -------
+    str
+        如 ``Read market data (history / reference / static) · 5632abcd``；
+        无步骤时 ``Run · <hex>``。
+    """
+
+    raw_id = str(run_id or "").strip()
+    hex_part = raw_id[4:] if raw_id.lower().startswith("run_") else raw_id
+    short = (hex_part or "run")[:8]
+    first_skill = ""
+    first_raw: Optional[Dict[str, Any]] = None
+    for step in steps or []:
+        if isinstance(step, dict):
+            first_skill = str(step.get("skill_name") or "").strip()
+            summary = step.get("summary")
+            first_raw = {"summary": summary} if isinstance(summary, str) and summary.strip() else None
+            break
+        first_skill = str(getattr(step, "skill_name", "") or "").strip()
+        summary = getattr(step, "summary", "")
+        summary_text = summary.strip() if isinstance(summary, str) else ""
+        first_raw = {"summary": summary_text} if summary_text else None
+        if first_skill:
+            break
+    label = skill_step_title(first_skill, first_raw) if first_skill else "Run"
+    if not str(label or "").strip():
+        label = "Run"
+    return f"{label} · {short}"
+
+
 def _side_effects_label(side_effects: Any) -> str:
     """将副作用结构压缩为一行标签。"""
 
