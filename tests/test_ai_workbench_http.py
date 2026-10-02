@@ -389,6 +389,70 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertIn("elapsed_s", text)
             self.assertIn("event: state", text)
 
+    def test_stream_execute_nan_step_stays_valid_sse(self) -> None:
+        """step 载荷里的 NaN 写成 null，流以 state 或 error 收尾。"""
+
+        print("\n[TestAiWorkbenchHttp] sse NaN step stays JSON")
+        import json
+
+        from qteasy_ai.workbench.http_app import WorkbenchHttp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            assistant = QteasyAssistant(memory_store=store, registry=build_default_registry())
+            http = WorkbenchHttp(assistant)
+
+            class _Rec:
+                step_id = "s1"
+                skill_name = "qt.ai.strategy_meta.list"
+                result = {"ok": float("nan")}
+
+            def runner(on_step, on_step_start=None, on_progress=None):
+                on_step(_Rec())
+                return {"ok": True, "execution": {"status": "success", "steps": []}}
+
+            chunks = list(http._stream_execute(runner, query="", session_id=""))
+            text = "".join(chunks)
+            print(" sse has step:", "event: step_status" in text)
+            print(" sse has state:", "event: state" in text)
+            print(" sse has error:", "event: error" in text)
+            self.assertIn("event: step_status", text)
+            self.assertTrue("event: state" in text or "event: error" in text)
+            step_payload = None
+            for block in text.split("\n\n"):
+                if not block.startswith("event: step_status"):
+                    continue
+                step_payload = json.loads(block.split("data: ", 1)[1])
+            print(" step ok:", None if step_payload is None else step_payload.get("ok"))
+            self.assertIsNotNone(step_payload)
+            self.assertIsNone(step_payload.get("ok"))
+
+    def test_stream_execute_dto_failure_emits_error_event(self) -> None:
+        """装配最终 state 失败时发出 error 事件，生成器不抛。"""
+
+        print("\n[TestAiWorkbenchHttp] sse dto failure emits error")
+
+        from qteasy_ai.workbench.http_app import WorkbenchHttp
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            assistant = QteasyAssistant(memory_store=store, registry=build_default_registry())
+            http = WorkbenchHttp(assistant)
+
+            def runner(_on_step, on_step_start=None, on_progress=None):
+                return {"ok": True, "execution": {"status": "success", "steps": []}}
+
+            def boom(*_args, **_kwargs):
+                raise RuntimeError("dto broke")
+
+            http._to_dto = boom
+            chunks = list(http._stream_execute(runner, query="", session_id="s-dto"))
+            text = "".join(chunks)
+            print(" sse error text:", text[-240:])
+            self.assertIn("event: error", text)
+            self.assertIn("dto broke", text)
+            self.assertNotIn("event: state", text)
+
     def test_confirm_list_strategies_persists_artifact(self) -> None:
         """两次同文案 Plan 后 Confirm：messages 含 Finished，Artifacts 含策略表。"""
 
@@ -424,6 +488,10 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" transcript:", body.get("transcript"))
             self.assertEqual(ran.status_code, 200)
             self.assertEqual((body.get("execution") or {}).get("status"), "success")
+            from qteasy_ai.session import is_live_running
+
+            print(" live still registered:", is_live_running(sid))
+            self.assertFalse(is_live_running(sid))
             arts = body.get("artifacts") or []
             self.assertTrue(arts)
             table = next((item for item in arts if item.get("type") == "data_table"), None)

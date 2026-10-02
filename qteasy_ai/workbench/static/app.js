@@ -728,7 +728,7 @@ function runWatchActive() {
 }
 
 function planningWait() {
-  return busy && !runWatchActive() && mode !== "agent" && mode !== "run";
+  return busy && !runWatchActive() && !executeSseOpen && mode !== "agent" && mode !== "run";
 }
 
 function updateBusyElapsedDom() {
@@ -1108,12 +1108,14 @@ async function sendQuery(query, { keepDraft } = {}) {
       body,
       signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
     });
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    filePreview = null;
-    renderPanes();
-    await refreshSessions();
-    await refreshWorkspace();
+    if (!adoptServerResult(dto)) {
+      renderChat();
+    } else {
+      filePreview = null;
+      renderPanes();
+      await refreshSessions();
+      await refreshWorkspace();
+    }
   } catch (exc) {
     if (!isAbortError(exc)) {
       transcript.push({
@@ -1139,9 +1141,8 @@ async function sendControlPatches(patches) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, patches }),
     });
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    renderPanes();
+    if (!adoptServerResult(dto)) renderChat();
+    else renderPanes();
     return dto;
   } finally {
     setBusy(false);
@@ -1157,9 +1158,8 @@ async function sendControlSkip() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, skip: true }),
     });
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    renderPanes();
+    if (!adoptServerResult(dto)) renderChat();
+    else renderPanes();
     return dto;
   } finally {
     setBusy(false);
@@ -1187,13 +1187,15 @@ async function confirmPlan() {
       signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
     });
     if (keepWatch && isDeferredNotice(dto)) {
-      if (dto && dto.transcript) applyServerTranscript(dto);
+      if (dto && Array.isArray(dto.transcript)) applyServerTranscript(dto);
       renderChat();
       renderNow();
       return;
     }
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
+    if (!adoptServerResult(dto)) {
+      renderChat();
+      return;
+    }
     closePlanTabsForRun(state.run_id);
     renderPanes();
     await refreshWorkspace();
@@ -1335,12 +1337,14 @@ async function submitParamEdits() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, patches }),
     });
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    filePreview = null;
-    renderPanes();
-    await refreshSessions();
-    await refreshWorkspace();
+    if (!adoptServerResult(dto)) {
+      renderChat();
+    } else {
+      filePreview = null;
+      renderPanes();
+      await refreshSessions();
+      await refreshWorkspace();
+    }
   } catch (exc) {
     transcript.push({
       kind: "error",
@@ -1602,8 +1606,29 @@ async function rewindUserMessage(index, text, confirmDiscard) {
   if (retryDiscard) await rewindUserMessage(index, query, true);
 }
 
+function appendDtoError(dto) {
+  const err = (dto && dto.error) || { message: "Request failed." };
+  transcript.push({
+    kind: "error",
+    text: err.message || "Request failed.",
+    payload: err,
+  });
+  persistTranscript();
+}
+
+function adoptServerResult(dto) {
+  if (dto && Array.isArray(dto.transcript)) {
+    ingestDto(dto, { appendUser: false });
+    applyServerTranscript(dto);
+    return true;
+  }
+  if (dto && dto.error) appendDtoError(dto);
+  return false;
+}
+
 function applyServerTranscript(dto) {
-  const server = Array.isArray(dto && dto.transcript) ? dto.transcript : [];
+  if (!dto || !Array.isArray(dto.transcript)) return;
+  const server = dto.transcript;
   transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
   persistTranscript();
 }

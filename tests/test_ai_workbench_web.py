@@ -122,6 +122,13 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("/v1/provider", js.text)
             self.assertIn("btn-prov-confirm", js.text)
             self.assertIn("applyServerTranscript", js.text)
+            self.assertIn("if (!dto || !Array.isArray(dto.transcript)) return;", js.text)
+            self.assertIn(
+                'return busy && !runWatchActive() && !executeSseOpen && mode !== "agent" && mode !== "run";',
+                js.text,
+            )
+            self.assertIn("function adoptServerResult", js.text)
+            print(" js keeps transcript when dto has no transcript:", "Array.isArray(dto.transcript)" in js.text)
             self.assertIn("No artifacts in this session", js.text)
             self.assertIn("This session", js.text)
             self.assertIn("btn-clarify-skip", js.text)

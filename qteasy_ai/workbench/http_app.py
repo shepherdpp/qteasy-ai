@@ -29,7 +29,7 @@ from starlette.staticfiles import StaticFiles
 from ..config import build_provider_from_overlay, ensure_mplbackend_agg, provider_diagnostics
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
-from ..memory_store import MemoryStore
+from ..memory_store import MemoryStore, _json_safe
 from ..session import (
     BACKGROUND_RUN_NOTICE,
     CANCEL_RUN_NOTICE,
@@ -110,15 +110,28 @@ def _wants_stream(request: Request) -> bool:
     return "text/event-stream" in accept
 
 
+def _sse_error_payload(exc: BaseException) -> Dict[str, Any]:
+    """SSE ``error`` 事件体。序列化或装配失败时用，避免生成器裸抛。"""
+
+    return {
+        "ok": False,
+        "error": {
+            "code": "RUN_FAILED",
+            "message": str(exc) or "Run failed.",
+            "next_action": _NEXT_ACTION["RUN_FAILED"],
+        },
+    }
+
+
 def _sse_line(event: str, data: Any) -> str:
-    """一条 SSE 记录。
+    """一条 SSE 记录。写出前走 ``_json_safe``，非有限浮点变成 null。
 
     Parameters
     ----------
     event : str
         事件名。
     data : Any
-        JSON 可序列化载荷。
+        事件载荷。非 JSON 原生类型会先规范化。
 
     Returns
     -------
@@ -126,7 +139,7 @@ def _sse_line(event: str, data: Any) -> str:
         SSE 文本块。
     """
 
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"event: {event}\ndata: {json.dumps(_json_safe(data), ensure_ascii=False)}\n\n"
 
 
 class WorkbenchHttp:
@@ -417,16 +430,21 @@ class WorkbenchHttp:
                 },
             )
             return
-        dto = self._to_dto(
-            box.get("payload") or {},
-            query=query,
-            session_id=session_id,
-            persist_transcript=True,
-        )
-        run_id = str(dto.get("run_id") or "")
-        if run_id:
-            self.events[run_id] = list(bucket)
-        yield _sse_line("state", dto)
+        try:
+            dto = self._to_dto(
+                box.get("payload") or {},
+                query=query,
+                session_id=session_id,
+                persist_transcript=True,
+            )
+            run_id = str(dto.get("run_id") or "")
+            if run_id:
+                self.events[run_id] = list(bucket)
+            line = _sse_line("state", dto)
+        except Exception as exc:
+            yield _sse_line("error", _sse_error_payload(exc))
+            return
+        yield line
 
     def _sse_response(self, iterator: Iterator[str]) -> StreamingResponse:
         """SSE 响应头。

@@ -748,9 +748,12 @@ class QteasyAssistant:
             progress_token = bind_progress_callback(_on_progress)
             event = live_cancel_event(live_sid)
             if event is not None:
-                from qteasy.cancel_check import bind_cancel_check
-
-                cancel_token = bind_cancel_check(event.is_set)
+                try:
+                    from qteasy.cancel_check import bind_cancel_check
+                except ImportError:
+                    bind_cancel_check = None
+                if bind_cancel_check is not None:
+                    cancel_token = bind_cancel_check(event.is_set)
         try:
             try:
                 payload = self.executor.execute(
@@ -762,9 +765,13 @@ class QteasyAssistant:
                     run_id=reuse_run_id,
                 )
             except Exception as exc:
-                from qteasy.cancel_check import RunCancelled
-
-                if isinstance(exc, RunCancelled):
+                try:
+                    from qteasy.cancel_check import RunCancelled
+                except ImportError:
+                    is_cancelled = False
+                else:
+                    is_cancelled = isinstance(exc, RunCancelled)
+                if is_cancelled:
                     payload = {
                         "execution": {"status": "cancelled", "steps": []},
                         "run_id": "",
@@ -778,9 +785,12 @@ class QteasyAssistant:
             if progress_token is not None:
                 reset_progress_callback(progress_token)
             if cancel_token is not None:
-                from qteasy.cancel_check import reset_cancel_check
-
-                reset_cancel_check(cancel_token)
+                try:
+                    from qteasy.cancel_check import reset_cancel_check
+                except ImportError:
+                    reset_cancel_check = None
+                if reset_cancel_check is not None:
+                    reset_cancel_check(cancel_token)
         start_deferred = False
         try:
             result = self._persist_after_execute(
