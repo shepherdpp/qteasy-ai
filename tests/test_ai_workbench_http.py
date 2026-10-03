@@ -1384,6 +1384,44 @@ class TestAiWorkbenchHttp(unittest.TestCase):
         self.assertTrue(result.get("ok"))
         self.assertEqual(called["n"], 1)
 
+    def test_shutdown_requires_serve_and_confirm(self) -> None:
+        """退出只在 serve 打开，且必须 confirm=true；测试里不真的发 SIGINT。"""
+
+        print("\n[TestAiWorkbenchHttp] shutdown gate")
+        from starlette.testclient import TestClient
+
+        import qteasy_ai.workbench.http_app as http_app
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            blocked = client.post("/v1/server/shutdown", json={"confirm": True})
+            print(" disabled:", blocked.status_code, blocked.json().get("error"))
+            self.assertEqual(blocked.status_code, 403)
+            self.assertEqual(blocked.json()["error"]["code"], "QUIT_DISABLED")
+
+            app = client.app
+            app.state.allow_quit = True
+            unconfirmed = TestClient(app).post("/v1/server/shutdown", json={})
+            print(" unconfirmed:", unconfirmed.status_code, unconfirmed.json().get("error"))
+            self.assertEqual(unconfirmed.status_code, 400)
+            self.assertEqual(unconfirmed.json()["error"]["code"], "QUIT_CONFIRM_REQUIRED")
+
+            calls = {"n": 0}
+
+            def _fake_stop() -> None:
+                calls["n"] += 1
+
+            original = http_app.request_process_stop
+            http_app.request_process_stop = _fake_stop
+            try:
+                stopped = TestClient(app).post("/v1/server/shutdown", json={"confirm": True})
+            finally:
+                http_app.request_process_stop = original
+            print(" stopped:", stopped.status_code, stopped.json(), "calls:", calls["n"])
+            self.assertEqual(stopped.status_code, 200)
+            self.assertTrue(stopped.json().get("ok"))
+            self.assertEqual(calls["n"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

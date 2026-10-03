@@ -1432,6 +1432,10 @@ function onArtifactClick(ev) {
     return;
   }
   if (t.id === "btn-prov-confirm") submitProviderChange();
+  if (t.id === "btn-quit-server") {
+    quitServer();
+    return;
+  }
   if (t.id === "btn-file-back") {
     filePreview = null;
     renderArtifacts();
@@ -2460,7 +2464,33 @@ function renderSettingsBody() {
       <button type="button" id="btn-theme-light" class="${theme === "light" ? "primary" : ""}">Light</button>
     </div>
     ${renderProviderForm()}
+    <p class="now-k">Server</p>
+    <p class="hint">Stops this workbench process and frees its port.</p>
+    <div class="actions"><button type="button" class="danger" id="btn-quit-server">Quit</button></div>
   </div>`;
+}
+
+async function quitServer() {
+  if (!window.confirm("Quit qteasy-ai? This stops the workbench server on this machine.")) return;
+  let data = null;
+  try {
+    data = await api("/v1/server/shutdown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+  } catch (exc) {
+    data = null;
+  }
+  if (data && data.error) {
+    window.alert(data.error.message || "Quit did not complete.");
+    return;
+  }
+  document.body.replaceChildren();
+  const note = document.createElement("p");
+  note.className = "empty-hint";
+  note.textContent = "Workbench server has stopped. You can close this tab.";
+  document.body.appendChild(note);
 }
 
 function onTabsWheel(ev) {

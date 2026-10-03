@@ -357,6 +357,7 @@ def main() -> int:
         from .workbench.serve_log import build_serve_log_config, configure_qteasy_console_for_serve
 
         app = create_app(assistant=assistant)
+        app.state.allow_quit = True
         configure_qteasy_console_for_serve()
         uvicorn.run(
             app,

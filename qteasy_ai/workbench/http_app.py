@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import signal
 import threading
 import time
 from pathlib import Path
@@ -68,7 +70,15 @@ _NEXT_ACTION = {
     "CONFIRM_REQUIRED": "Set confirm=true after reviewing the note, then retry the write.",
     "KB_WRITE_NOT_PENDING": "Lock the FactorSpec first (save this note), then confirm the write.",
     "RUN_IN_PROGRESS": "Wait for the current run to finish, or open that session and watch it.",
+    "QUIT_DISABLED": "Quit is available from Settings when this page was opened with qteasy-ai serve.",
+    "QUIT_CONFIRM_REQUIRED": "Confirm quit in the dialog, then try again.",
 }
+
+
+def request_process_stop() -> None:
+    """在响应发出后对本进程发 SIGINT，让 ``uvicorn.run`` 按 Ctrl+C 退出。"""
+
+    threading.Timer(0.25, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
 
 
 def _error(code: str, message: str, status: int) -> JSONResponse:
@@ -826,6 +836,17 @@ class WorkbenchHttp:
             self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
         )
 
+    async def shutdown_server(self, request: Request) -> JSONResponse:
+        """POST /v1/server/shutdown：确认后停止 ``qteasy-ai serve``。"""
+
+        if not getattr(request.app.state, "allow_quit", False):
+            return _error("QUIT_DISABLED", "Quit is only available on qteasy-ai serve.", 403)
+        body = await self._read_json(request)
+        if body.get("confirm") is not True:
+            return _error("QUIT_CONFIRM_REQUIRED", "Confirm quit before stopping the server.", 400)
+        request_process_stop()
+        return JSONResponse({"ok": True, "message": "Workbench server is stopping."})
+
     async def get_provider(self, request: Request) -> JSONResponse:
         """GET /v1/provider：provider-check 投影，不含 raw api_key。"""
 
@@ -1027,6 +1048,7 @@ def create_app(
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
         Route("/v1/session/{session_id}", api.patch_session, methods=["PATCH"]),
         Route("/v1/session/{session_id}", api.delete_session, methods=["DELETE"]),
+        Route("/v1/server/shutdown", api.shutdown_server, methods=["POST"]),
         Route("/v1/provider", api.get_provider, methods=["GET"]),
         Route("/v1/provider", api.post_provider, methods=["POST"]),
         Route("/v1/workspace/file", api.get_workspace_file, methods=["GET"]),
