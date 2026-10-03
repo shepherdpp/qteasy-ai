@@ -2133,11 +2133,16 @@ function renderVisibleMessage(msg, index) {
     return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg"><div class="msg-role">Result</div><div class="bubble">${escapeHtml(msg.text || "")}${resultArtifactButtons(msg)}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);
     return `<div class="msg"><div class="msg-role">Error</div><div class="bubble err-text">${escapeHtml(msg.text || "Something went wrong.")}<div class="next-action">${escapeHtml(next)}</div></div></div>`;
+  }
+  if (msg.kind === "ask" || msg.kind === "ask_text") {
+    const src = (msg.payload && msg.payload.sources) || state.sources || [];
+    const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
+    return `<div class="msg prose"><div class="msg-role">Assistant</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${extra}</div></div>`;
   }
   const src = (msg.payload && msg.payload.sources) || state.sources || [];
   const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
@@ -2429,6 +2434,18 @@ function metricsCards(metrics) {
       return `<div class="metric"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(shown)}</div></div>`;
     })
     .join("")}</div>`;
+}
+
+function renderChatMarkdown(text) {
+  const raw = String(text || "");
+  if (!raw) return "";
+  const markedLib = typeof window !== "undefined" ? window.marked : undefined;
+  const purify = typeof window !== "undefined" ? window.DOMPurify : undefined;
+  if (!markedLib || !purify || typeof markedLib.parse !== "function") {
+    return `<div class="chat-md">${escapeHtml(raw)}</div>`;
+  }
+  const html = markedLib.parse(raw, { breaks: true });
+  return `<div class="chat-md">${purify.sanitize(html)}</div>`;
 }
 
 function renderPlanMarkdown(md) {
