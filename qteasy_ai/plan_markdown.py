@@ -54,14 +54,6 @@ _SOURCE_LABEL = {
     "kernel": "kernel",
     "ai_default": "AI default",
 }
-_STEP_EXPECT = {
-    "qt.ai.data.read": "a data-table artifact",
-    "qt.ai.data.summary_kline": "a k-line summary artifact",
-    "qt.ai.visual.export_kline": "a chart-file artifact",
-    "qt.ai.backtest.run_builtin": "a backtest report artifact; return and drawdown are unknown until the run",
-    "qt.ai.optimize.run_builtin": "an optimization artifact; best parameters are unknown until the run",
-    "qt.ai.env.check_tushare": "an environment-check artifact",
-}
 _SKILL_RE = re.compile(r"qt\.ai\.[a-zA-Z0-9_.]+")
 _WHY_HEADING_RE = re.compile(r"^#{1,3}\s*Why this plan\s*", re.IGNORECASE)
 
@@ -443,6 +435,88 @@ def _optimize_lines(step: Dict[str, Any], sources: Dict[str, str]) -> List[str]:
     return lines
 
 
+def _lookup_skill_meta(skill_name: str, registry: Any = None) -> Any:
+    """从 registry 取技能元数据；没有注册表或未注册时返回 None。"""
+
+    if registry is None or not str(skill_name or "").strip():
+        return None
+    try:
+        return registry.get_metadata(skill_name)
+    except (KeyError, AttributeError, TypeError):
+        return None
+
+
+def _side_effect_flags(side_effects: Any) -> Tuple[bool, bool, bool, str]:
+    """抽出网络、写文件、本地状态与说明。"""
+
+    if isinstance(side_effects, dict):
+        network = bool(side_effects.get("network", False))
+        filesystem_write = bool(side_effects.get("filesystem_write", False))
+        local_change = bool(side_effects.get("local_state_change", False))
+        description = str(side_effects.get("description") or "").strip()
+    else:
+        network = bool(getattr(side_effects, "network", False))
+        filesystem_write = bool(getattr(side_effects, "filesystem_write", False))
+        local_change = bool(getattr(side_effects, "local_state_change", False))
+        description = str(getattr(side_effects, "description", "") or "").strip()
+    return network, filesystem_write, local_change, description
+
+
+def _reads_writes_line(skill: str, side_effects: Any, registry: Any = None) -> str:
+    """人话读写：入口名，以及下载或写文件。"""
+
+    meta = _lookup_skill_meta(skill, registry)
+    entries: List[str] = []
+    if meta is not None:
+        raw_entries = getattr(meta, "qteasy_entrypoints", None) or []
+        entries = [str(item).strip() for item in raw_entries if str(item).strip()]
+    network, filesystem_write, local_change, description = _side_effect_flags(side_effects)
+    bits: List[str] = []
+    if entries:
+        named = ", ".join(f"`{item}`" for item in entries)
+        if network or filesystem_write or local_change:
+            bits.append(f"uses {named}")
+        else:
+            bits.append(f"reads {named}")
+    if network:
+        bits.append("downloads data")
+    if filesystem_write:
+        bits.append("writes files")
+    elif local_change:
+        bits.append("changes local data")
+    generic = description.lower() in {"", "readonly", "readonly insight"}
+    if description and not generic:
+        bits.append(description)
+    elif not bits:
+        bits.append(description or "read-only")
+    return "; ".join(bits)
+
+
+def _expected_output(skill: str, registry: Any = None) -> str:
+    """预期产物句。
+
+    优先 ``expected_artifact``。字段为空时用 summary 与第一个入口名合成。
+    没有 registry 时只写 ``Calls {skill}.``，不用通用空话。
+    """
+
+    meta = _lookup_skill_meta(skill, registry)
+    name = str(skill or "").strip()
+    if meta is None:
+        if name:
+            return f"Calls {name}."
+        return "Calls this step."
+    text = str(getattr(meta, "expected_artifact", "") or "").strip()
+    if text:
+        return text
+    summary = str(getattr(meta, "summary", "") or "").strip()
+    raw_entries = getattr(meta, "qteasy_entrypoints", None) or []
+    entries = [str(item).strip() for item in raw_entries if str(item).strip()]
+    entry = entries[0] if entries else (name or "this step")
+    if summary:
+        return f"{summary} Calls {entry}."
+    return f"Calls {entry}."
+
+
 def _mode_r_body(
     *,
     plan_id: str,
@@ -469,6 +543,7 @@ def _mode_r_body(
         lines.append(f"Job: {job}")
     lines.append(f"Risk: {risk}.")
     lines.extend(["", "## What will run", ""])
+    inventory: List[str] = []
     if not steps:
         lines.append("_No steps._")
         lines.append("")
@@ -481,9 +556,18 @@ def _mode_r_body(
             lines.append(f"{index}. {title}")
         label = _side_effects_label(step.get("side_effects"))
         lines.append(f"   - Side effects: {label}")
-        lines.append(f"   - Reads as: {title}.")
-        expect = _STEP_EXPECT.get(skill, "a result artifact; performance figures are unknown until the run")
+        if skill:
+            lines.append(f"   - Calls: `{skill}`")
+        else:
+            lines.append("   - Calls: this step")
+        reads = _reads_writes_line(skill, step.get("side_effects"), registry)
+        lines.append(f"   - Reads / writes: {reads}")
+        expect = _expected_output(skill, registry)
         lines.append(f"   - Expected output: {expect}")
+        if skill:
+            inventory.append(f"- {title} (`{skill}`): {expect}")
+        else:
+            inventory.append(f"- {title}: {expect}")
         step_slots = _collect_slots({}, [step], extra=declared)
         if step_slots:
             shown = ", ".join(f"{key}={value}" for key, value in step_slots)
@@ -502,17 +586,18 @@ def _mode_r_body(
             if hint:
                 lines.append(f"  {hint}")
         lines.append("")
+    lines.extend(["## Expected result", ""])
+    if inventory:
+        lines.extend(inventory)
+        lines.append("")
+    else:
+        lines.extend(["_No step artifacts._", ""])
     lines.extend(
         [
-            "## Expected result",
-            "",
-            "After confirm, the run writes the step artifacts above. "
-            "This file states artifact types only.",
-            "",
             "## Confirm",
             "",
-            "High side effects wait for an explicit confirm. "
-            "JSON wins; editing this markdown does not change the plan.",
+            "Nothing runs until you confirm. "
+            "Editing this description does not change the plan that will run.",
             "",
         ]
     )
@@ -643,7 +728,7 @@ def tool_plan_to_markdown(
     provider : object, optional
         实现 ``chat(prompt, system_prompt=...)`` 的 LLM Provider。
     registry : object, optional
-        可用 ``get_metadata(skill_name)`` 补人话标题。
+        可用 ``get_metadata(skill_name)`` 补人话标题、读写入口与 ``expected_artifact``。
 
     Returns
     -------

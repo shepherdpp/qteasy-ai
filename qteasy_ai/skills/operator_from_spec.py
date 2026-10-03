@@ -66,6 +66,10 @@ def build_operator_from_spec_skill(
         required_capabilities=[],
         qteasy_entrypoints=["qteasy.Operator"],
         skill_kind="api",
+        expected_artifact=(
+            "An in-memory operator assembled in the run record. "
+            "Artifacts does not open a separate view for this step."
+        ),
     )
 
     def handler(

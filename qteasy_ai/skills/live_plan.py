@@ -51,6 +51,10 @@ def build_live_trade_plan_only_skill() -> tuple[SkillMetadata, Callable[..., dic
         required_capabilities=[],
         qteasy_entrypoints=[],
         skill_kind="api",
+        expected_artifact=(
+            "A readiness checklist in the run record. "
+            "This step never sends orders and does not open an Artifacts panel."
+        ),
     )
 
     def handler(

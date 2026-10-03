@@ -168,6 +168,7 @@ def build_strategy_codegen_hybrid_skill(
         required_capabilities=[],
         qteasy_entrypoints=["qteasy.RuleIterator", "qteasy.Parameter", "qteasy.StgData"],
         skill_kind="api",
+        expected_artifact="Strategy source in the code artifact under Artifacts.",
     )
 
     def handler(

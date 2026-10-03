@@ -88,6 +88,9 @@ def build_data_summary_skill(
         side_effects=SkillSideEffects(description="readonly"),
         required_capabilities=[],
         qteasy_entrypoints=["qteasy.get_kline", "qteasy.HistoryPanel.returns"],
+        expected_artifact=(
+            "A data table in Artifacts with k-line statistics such as trading-day counts and ranges."
+        ),
     )
 
     def handler(

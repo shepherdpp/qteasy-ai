@@ -213,6 +213,10 @@ def build_research_screen_skill(
         required_capabilities=["local_datasource"],
         qteasy_entrypoints=["qteasy.filter_stocks", "qteasy.get_history_data"],
         skill_kind="api",
+        expected_artifact=(
+            "Screen matches stay in the run record for the next step. "
+            "Artifacts does not open a separate view for this step."
+        ),
     )
 
     def handler(
@@ -477,6 +481,10 @@ def build_universe_filter_skill(
         required_capabilities=["local_datasource"],
         qteasy_entrypoints=["qteasy.filter_stocks"],
         skill_kind="api",
+        expected_artifact=(
+            "A filtered symbol list in the run record for the next step. "
+            "Artifacts does not open a separate view for this step."
+        ),
     )
 
     def handler(industry: str = "", **kwargs) -> dict:
@@ -559,6 +567,10 @@ def build_price_predicate_skill(
         required_capabilities=["local_datasource"],
         qteasy_entrypoints=["qteasy.get_history_data"],
         skill_kind="api",
+        expected_artifact=(
+            "A filtered symbol list in the run record for the next step. "
+            "Artifacts does not open a separate view for this step."
+        ),
     )
 
     def handler(
@@ -679,6 +691,7 @@ def build_project_universe_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         required_capabilities=[],
         qteasy_entrypoints=[],
         skill_kind="api",
+        expected_artifact="A data table in Artifacts listing the matching symbols.",
     )
 
     def handler(

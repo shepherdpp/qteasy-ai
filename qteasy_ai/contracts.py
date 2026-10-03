@@ -70,7 +70,8 @@ class SkillMetadata:
     - 需要什么输入（inputs_schema）；
     - 返回什么输出（outputs_schema）；
     - 风险与依赖（side_effects / required_capabilities）；
-    - 对应 qteasy 的确定性入口（qteasy_entrypoints）。
+    - 对应 qteasy 的确定性入口（qteasy_entrypoints）；
+    - 人读预期产物（expected_artifact），供 plan.md 投影。
     """
 
     name: str
@@ -83,6 +84,8 @@ class SkillMetadata:
     qteasy_entrypoints: List[str] = field(default_factory=list)
     skill_kind: str = "api"
     """技能子标签：``api``（默认 L1 原子）、``guide``（环境引导）、``insight``（只读归因）。"""
+    expected_artifact: str = ""
+    """plan.md 人读预期：产物形态与 Artifacts 位置。空串时由渲染器用 summary 与入口名合成。"""
 
 
 @dataclass

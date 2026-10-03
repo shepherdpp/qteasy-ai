@@ -142,6 +142,10 @@ def build_optimize_run_skill(
         required_capabilities=["local_datasource"],
         qteasy_entrypoints=["qteasy.Operator", "qteasy.run"],
         skill_kind="api",
+        expected_artifact=(
+            "A data table in Artifacts with the optimization sample. "
+            "Chosen parameters appear only after the run."
+        ),
     )
 
     def handler(

@@ -73,6 +73,10 @@ def build_data_refill_skill(
         required_capabilities=["tushare_token", "local_datasource"],
         qteasy_entrypoints=["qteasy.core.refill_data_source"],
         skill_kind="api",
+        expected_artifact=(
+            "Daily bars written into the local datasource. "
+            "The step result stays in the run record; Artifacts does not open a separate view."
+        ),
     )
 
     def handler(

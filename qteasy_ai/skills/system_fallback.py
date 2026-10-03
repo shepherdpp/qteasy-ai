@@ -37,6 +37,10 @@ def build_system_fallback_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         side_effects=SkillSideEffects(description="readonly"),
         required_capabilities=[],
         qteasy_entrypoints=[],
+        expected_artifact=(
+            "A structured message in the run record explaining that the request is not supported. "
+            "Artifacts does not open a separate view."
+        ),
     )
 
     def handler(

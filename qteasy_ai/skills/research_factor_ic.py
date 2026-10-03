@@ -159,6 +159,7 @@ def build_factor_ic_summary_skill(
         required_capabilities=["qteasy.research"],
         qteasy_entrypoints=["qteasy.research.factor_ic", "qteasy.research.factor_ic_summary"],
         skill_kind="api",
+        expected_artifact="A data table in Artifacts with the factor IC summary.",
     )
 
     def handler(

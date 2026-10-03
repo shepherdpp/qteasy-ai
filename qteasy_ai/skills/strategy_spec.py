@@ -289,6 +289,10 @@ def build_strategy_spec_from_nl_skill(
         required_capabilities=[],
         qteasy_entrypoints=[],
         skill_kind="api",
+        expected_artifact=(
+            "A machine-readable strategy spec in the run record. "
+            "Artifacts does not open a separate view for this step."
+        ),
     )
     _reserved_llm = llm_func  # 阶段 D 规则金句优先；保留注入点供后续切片
 

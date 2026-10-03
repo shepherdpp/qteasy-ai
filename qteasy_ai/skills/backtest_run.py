@@ -197,6 +197,10 @@ def build_backtest_run_skill(
         required_capabilities=["local_datasource"],
         qteasy_entrypoints=["qteasy.Operator", "qteasy.run"],
         skill_kind="api",
+        expected_artifact=(
+            "A backtest report in Artifacts, plus a chart when the run writes one. "
+            "Values are filled when the run finishes."
+        ),
     )
 
     def handler(

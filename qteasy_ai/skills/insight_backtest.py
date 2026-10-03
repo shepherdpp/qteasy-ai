@@ -169,6 +169,10 @@ def build_insight_backtest_skill(
         required_capabilities=[],
         qteasy_entrypoints=[],
         skill_kind="insight",
+        expected_artifact=(
+            "Two data tables in Artifacts: a stored-backtest summary and nearby trades. "
+            "Figures come from the existing run file, not from this plan."
+        ),
     )
 
     def handler(

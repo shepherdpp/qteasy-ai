@@ -66,6 +66,9 @@ def build_data_read_skill(
             "qteasy.get_static_data",
         ],
         skill_kind="api",
+        expected_artifact=(
+            "A data table in Artifacts with the requested history, reference, or static rows."
+        ),
     )
 
     def handler(

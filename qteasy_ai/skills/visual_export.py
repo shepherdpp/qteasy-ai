@@ -57,6 +57,7 @@ def build_visual_export_skill(
         side_effects=SkillSideEffects(filesystem_write=True, description="export image file"),
         required_capabilities=["matplotlib"],
         qteasy_entrypoints=["qteasy.get_kline"],
+        expected_artifact="A chart image in Artifacts.",
     )
 
     def handler(

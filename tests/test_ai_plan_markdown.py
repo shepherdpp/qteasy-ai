@@ -347,6 +347,118 @@ class TestAiPlanMarkdown(unittest.TestCase):
         )
         self.assertNotIn("method", md)
 
+    def _one_step(self, skill: str) -> ToolPlan:
+        """单步计划，用来抽查某个 skill 的人读投影。"""
+
+        return ToolPlan(
+            plan_id=new_plan_id(),
+            user_query=f"run {skill}",
+            mode="plan",
+            execution_mode="dry_run",
+            steps=[
+                ToolStep(
+                    step_id="step_1",
+                    skill_name=skill,
+                    inputs={},
+                    side_effects=SkillSideEffects(description="readonly"),
+                ),
+            ],
+        )
+
+    def test_skill_expected_artifact_projects_into_plan_md(self) -> None:
+        """原先走兜底的三个 skill，plan.md 写出产物句与入口或读写。"""
+
+        print("\n[TestAiPlanMarkdown] skill expected artifact projection")
+        registry = build_default_registry()
+        skills = (
+            "qt.ai.strategy_meta.list",
+            "qt.ai.env.overview_tables",
+            "qt.ai.insight.summarize_backtest",
+        )
+        for skill in skills:
+            meta = registry.get_metadata(skill)
+            expect = str(meta.expected_artifact or "").strip()
+            plan = self._one_step(skill)
+            md = tool_plan_to_markdown(plan, registry=registry)
+            print(" skill:", skill)
+            print(" expect:", expect)
+            print(" entrypoints:", list(meta.qteasy_entrypoints or []))
+            print(" plan_md:\n", md)
+            self.assertTrue(expect)
+            self.assertIn(expect, md)
+            self.assertIn(f"Calls: `{skill}`", md)
+            self.assertIn("Reads / writes:", md)
+            result_section = md.split("## Expected result", 1)[1]
+            print(" expected result section:\n", result_section)
+            self.assertIn(expect, result_section)
+            entries = [str(item) for item in (meta.qteasy_entrypoints or []) if str(item).strip()]
+            if entries:
+                self.assertIn(entries[0], md)
+            self.assertNotIn("performance figures are unknown", md)
+            self.assertNotIn("JSON wins", md)
+            self.assertNotIn("High side effects", md)
+            self.assertNotIn("Reads as:", md)
+            self.assertIn("Nothing runs until you confirm.", md)
+
+    def test_every_builtin_skill_declares_expected_artifact(self) -> None:
+        """每个内置 skill 都有人读预期句，且不含指标词与通用空话。"""
+
+        print("\n[TestAiPlanMarkdown] every skill expected_artifact")
+        registry = build_default_registry()
+        metas = registry.list_skills()
+        print(" count:", len(metas))
+        self.assertGreaterEqual(len(metas), 20)
+        banned = (
+            "performance figures are unknown",
+            "drawdown",
+            "hit_count",
+            "sharpe",
+            "回撤",
+        )
+        for meta in metas:
+            text = str(meta.expected_artifact or "").strip()
+            print(" ", meta.name, ":", text)
+            self.assertTrue(text, meta.name)
+            lowered = text.lower()
+            for word in banned:
+                self.assertNotIn(word, lowered, meta.name)
+
+    def test_missing_registry_skips_generic_fallback(self) -> None:
+        """没有 registry 时只写 Calls，不用通用空话。"""
+
+        print("\n[TestAiPlanMarkdown] no registry fallback")
+        plan = self._one_step("qt.ai.env.overview_tables")
+        md = tool_plan_to_markdown(plan)
+        print(" plan_md:\n", md)
+        self.assertIn("Calls qt.ai.env.overview_tables.", md)
+        self.assertNotIn("performance figures are unknown", md)
+        self.assertNotIn("JSON wins", md)
+        self.assertNotIn("High side effects", md)
+        self.assertNotIn("Reads as:", md)
+
+    def test_empty_expected_artifact_synthesizes_summary_and_entrypoint(self) -> None:
+        """字段为空时用 summary 与第一个入口名合成。"""
+
+        class _Meta:
+            """缺 expected_artifact 的假元数据。"""
+
+            summary = "List things."
+            qteasy_entrypoints = ["qteasy.built_in_list"]
+            expected_artifact = ""
+
+        class _Registry:
+            """只返回上面那条假元数据。"""
+
+            def get_metadata(self, skill_name: str) -> _Meta:
+                return _Meta()
+
+        print("\n[TestAiPlanMarkdown] synthesize empty expected_artifact")
+        plan = self._one_step("qt.ai.strategy_meta.list")
+        md = tool_plan_to_markdown(plan, registry=_Registry())
+        print(" plan_md:\n", md)
+        self.assertIn("List things. Calls qteasy.built_in_list.", md)
+        self.assertIn("reads `qteasy.built_in_list`", md)
+
 
 if __name__ == "__main__":
     unittest.main()

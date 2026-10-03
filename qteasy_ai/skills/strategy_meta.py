@@ -36,6 +36,7 @@ def build_strategy_meta_list_skill(
         side_effects=SkillSideEffects(description="readonly"),
         required_capabilities=[],
         qteasy_entrypoints=["qteasy.built_in_list"],
+        expected_artifact="A data table in Artifacts listing built-in strategy names.",
     )
 
     def handler(**kwargs) -> dict:
@@ -99,6 +100,9 @@ def build_strategy_meta_get_skill(
         side_effects=SkillSideEffects(description="readonly"),
         required_capabilities=[],
         qteasy_entrypoints=["qteasy.built_in_doc", "qteasy.get_built_in_strategy"],
+        expected_artifact=(
+            "A data table in Artifacts with the strategy type and documentation lines."
+        ),
     )
 
     def handler(strategy_id: str, **kwargs) -> dict:

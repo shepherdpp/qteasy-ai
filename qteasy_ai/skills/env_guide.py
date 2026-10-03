@@ -103,6 +103,9 @@ def build_check_tushare_skill(
         required_capabilities=["qteasy_config"],
         qteasy_entrypoints=["qteasy.QT_CONFIG"],
         skill_kind="guide",
+        expected_artifact=(
+            "A data table in Artifacts showing whether a Tushare token is configured."
+        ),
     )
 
     def handler(**kwargs) -> dict:
@@ -187,6 +190,9 @@ def build_overview_tables_skill(
         required_capabilities=["local_datasource"],
         qteasy_entrypoints=["qteasy.DataSource.get_table_info"],
         skill_kind="guide",
+        expected_artifact=(
+            "A data table in Artifacts listing which core local tables exist and their row counts."
+        ),
     )
 
     def handler(tables: Optional[Sequence[str]] = None, **kwargs) -> dict:

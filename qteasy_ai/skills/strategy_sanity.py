@@ -234,6 +234,10 @@ def build_strategy_sanity_check_skill(
         required_capabilities=[],
         qteasy_entrypoints=["qteasy.RuleIterator"],
         skill_kind="api",
+        expected_artifact=(
+            "A static-check result in the run record. "
+            "Artifacts does not open a separate view for this step."
+        ),
     )
     _unused_run_func = run_func  # 静态检查禁止调用 qt.run；保留注入点供单测证明未回测
 
