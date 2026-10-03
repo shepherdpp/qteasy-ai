@@ -34,7 +34,7 @@ from .ask_engine import AskEngine, AskResponse
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .contracts import ToolPlan, new_plan_id
 from .executor import PlanExecutor
-from .human_card import infer_effective_kind, project_human_cards
+from .human_card import infer_effective_kind, polish_human_cards, project_human_cards
 from .knowledge_base import KnowledgeBase
 from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
@@ -1400,6 +1400,11 @@ class QteasyAssistant:
             query=query,
             registry=self.registry,
             include_user_text=include_user_text,
+        )
+        cards = polish_human_cards(
+            cards,
+            provider=getattr(self.planner, "provider", None),
+            query=query,
         )
         payload["human_cards"] = cards
         if session is None:

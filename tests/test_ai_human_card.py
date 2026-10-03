@@ -20,10 +20,12 @@ from qteasy_ai.human_card import (
     HUMAN_CARD_KINDS,
     format_human_cards,
     infer_effective_kind,
+    polish_human_cards,
     project_human_cards,
     revision_notice_text,
     usage_notice_card,
 )
+from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState, SessionStore
 from qteasy_ai.workbench.human import format_human_from_payload
@@ -244,9 +246,9 @@ class TestAiHumanCardProjector(unittest.TestCase):
         cards = project_human_cards(payload, requested_mode="run", query="factor ic")
         result = next(item for item in cards if item["kind"] == "result")
         print(" result:", result["text"])
-        self.assertIn("hit_count=3", result["text"])
-        self.assertIn("ic_mean=0.05", result["text"])
-        self.assertNotIn("hit_count=99", result["text"])
+        self.assertIn("hit_count = 3", result["text"])
+        self.assertIn("ic_mean = 0.05", result["text"])
+        self.assertNotIn("hit_count = 99", result["text"])
 
 
 class TestAiHumanCardSessionWrite(unittest.TestCase):
@@ -1021,8 +1023,8 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             ran = asst.run("list built-in strategies", response_style="raw")
             result = next(item for item in (ran.get("human_cards") or []) if item["kind"] == "result")
             print(" result:", result["text"])
-            self.assertIn("Status: success", result["text"])
-            self.assertIn("items", result["text"])
+            self.assertIn("**Run succeeded.**", result["text"])
+            self.assertIn("data table", result["text"])
             self.assertNotIn("# ToolPlan", result["text"])
             names = (((ran.get("execution") or {}).get("steps") or [{}])[0].get("result") or {}).get("payload") or {}
             strategies = list(names.get("strategies") or [])
@@ -1052,6 +1054,319 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertEqual(status, "success")
             self.assertEqual(before, after)
             self.assertFalse(str(payload.get("plan_md_file") or "").strip())
+
+
+class TestAiHumanCardPolish(unittest.TestCase):
+    """R5：确定性 Markdown 结果卡，以及中文问句下的可选润色。"""
+
+    def _success_payload(self) -> dict:
+        return {
+            "run_id": "run_demo",
+            "plan": {"plan_id": "plan_demo", "steps": []},
+            "execution": {
+                "status": "success",
+                "steps": [
+                    {
+                        "result": {
+                            "ok": True,
+                            "metrics": {"count": 2},
+                            "payload": {"strategies": ["macd", "dma"]},
+                        }
+                    }
+                ],
+            },
+        }
+
+    def test_result_card_is_markdown_without_new_metrics(self) -> None:
+        """无 Provider 时 result 是 Markdown，数字与 status 保持原值。"""
+
+        print("\n[TestAiHumanCardPolish] result markdown")
+        cards = project_human_cards(
+            self._success_payload(),
+            requested_mode="run",
+            query="list strategies",
+            include_user_text=False,
+        )
+        result = next(item for item in cards if item["kind"] == "result")
+        print(" result:\n", result["text"])
+        self.assertIn("**Run succeeded.**", result["text"])
+        self.assertIn("count = 2", result["text"])
+        self.assertIn("2 items", result["text"])
+        self.assertNotIn("rows", result["text"])
+        self.assertIn("Next: start a new topic", result["text"])
+        self.assertNotIn("回撤", result["text"])
+        self.assertNotIn("sharpe", result["text"].lower())
+        empty = project_human_cards(
+            {
+                "run_id": "run_empty",
+                "plan": {"plan_id": "plan_empty", "steps": []},
+                "execution": {
+                    "status": "success",
+                    "steps": [{"result": {"ok": True, "metrics": {}, "payload": {}}}],
+                },
+            },
+            requested_mode="run",
+            query="list strategies",
+            include_user_text=False,
+        )
+        blank = next(item for item in empty if item["kind"] == "result")
+        print(" empty result:\n", blank["text"])
+        self.assertIn("No rows or metrics in the result.", blank["text"])
+        self.assertNotIn("rows", blank["text"].replace("No rows or metrics in the result.", ""))
+
+    def test_table_says_rows_and_chart_does_not(self) -> None:
+        """数据表用 expected_artifact 和行数；图表不说 rows，但留下已有标量。"""
+
+        print("\n[TestAiHumanCardPolish] table vs chart sentence")
+        registry = build_default_registry()
+        table = project_human_cards(
+            {
+                "run_id": "run_table",
+                "plan": {"plan_id": "plan_table", "steps": []},
+                "execution": {
+                    "status": "success",
+                    "steps": [
+                        {
+                            "skill_name": "qt.ai.data.read",
+                            "result": {
+                                "ok": True,
+                                "metrics": {"n_rows": 23, "close_min": 1.0},
+                                "payload": {},
+                            },
+                        }
+                    ],
+                },
+            },
+            requested_mode="run",
+            query="read history",
+            registry=registry,
+            include_user_text=False,
+        )
+        table_text = next(item for item in table if item["kind"] == "result")["text"]
+        print(" table:\n", table_text)
+        self.assertIn("data table", table_text)
+        self.assertIn("with 23 rows", table_text)
+        self.assertIn("close_min = 1", table_text)
+        self.assertNotIn("n_rows = 23", table_text)
+        chart = project_human_cards(
+            {
+                "run_id": "run_chart",
+                "plan": {"plan_id": "plan_chart", "steps": []},
+                "execution": {
+                    "status": "success",
+                    "steps": [
+                        {
+                            "skill_name": "qt.ai.visual.export_kline",
+                            "result": {
+                                "ok": True,
+                                "metrics": {"close_min": 1.0},
+                                "payload": {},
+                            },
+                        }
+                    ],
+                },
+            },
+            requested_mode="run",
+            query="export chart",
+            registry=registry,
+            include_user_text=False,
+        )
+        chart_text = next(item for item in chart if item["kind"] == "result")["text"]
+        print(" chart:\n", chart_text)
+        self.assertIn("chart image", chart_text)
+        self.assertIn("close_min = 1", chart_text)
+        self.assertNotIn("rows", chart_text)
+
+    def test_failed_result_quotes_error_message(self) -> None:
+        """失败 result 打印错误原文和一句解读，不编新数字。"""
+
+        print("\n[TestAiHumanCardPolish] failed result quote")
+        message = "Failed to get strategy details: unknown id."
+        cards = project_human_cards(
+            {
+                "run_id": "run_bad",
+                "plan": {"plan_id": "plan_bad", "steps": []},
+                "execution": {
+                    "status": "partial_failed",
+                    "steps": [
+                        {
+                            "skill_name": "qt.ai.strategy_meta.get",
+                            "result": {
+                                "ok": False,
+                                "error": {"code": "STRATEGY_GET_FAILED", "message": message},
+                            },
+                        }
+                    ],
+                },
+            },
+            requested_mode="run",
+            query="get unknown",
+            include_user_text=False,
+        )
+        result = next(item for item in cards if item["kind"] == "result")
+        print(" result:\n", result["text"])
+        self.assertIn("**Run did not finish.**", result["text"])
+        self.assertIn(f"Error: {message}", result["text"])
+        self.assertIn("Check the name, then edit the blue message and send it again.", result["text"])
+        self.assertNotIn("99", result["text"])
+        self.assertNotIn("rows", result["text"])
+
+    def test_english_query_does_not_call_provider(self) -> None:
+        """英文问句即使有 Provider 也不润色。"""
+
+        print("\n[TestAiHumanCardPolish] english query skips chat")
+        cards = project_human_cards(
+            self._success_payload(),
+            requested_mode="run",
+            query="list strategies",
+            include_user_text=False,
+        )
+        provider = FakeLLMProvider(replies=["不应被调用"])
+        polished = polish_human_cards(cards, provider=provider, query="list strategies")
+        result = next(item for item in polished if item["kind"] == "result")
+        print(" prompts:", provider.prompts)
+        print(" text:", result["text"])
+        self.assertEqual(provider.prompts, [])
+        self.assertIn("**Run succeeded.**", result["text"])
+
+    def test_chinese_rewrite_keeps_payload_and_skips_ask(self) -> None:
+        """中文问句只改 result 正文，不把 ask / executing 送进模型。"""
+
+        print("\n[TestAiHumanCardPolish] chinese rewrite")
+        cards = project_human_cards(
+            self._success_payload(),
+            requested_mode="run",
+            query="列出策略",
+            include_user_text=False,
+        )
+        result = next(item for item in cards if item["kind"] == "result")
+        executing = next(item for item in cards if item["kind"] == "executing")
+        zh = result["text"].replace("**Run succeeded.**", "**执行成功。**").replace("Next:", "下一步：")
+        provider = FakeLLMProvider(replies=[zh])
+        mixed = [
+            {"kind": "ask", "text": "qteasy is a library.", "payload": {"sources": ["kb"]}},
+            executing,
+            result,
+        ]
+        polished = polish_human_cards(mixed, provider=provider, query="列出策略")
+        out = next(item for item in polished if item["kind"] == "result")
+        ask = next(item for item in polished if item["kind"] == "ask")
+        print(" prompts:", provider.prompts)
+        print(" result:\n", out["text"])
+        print(" payload:", out["payload"])
+        self.assertEqual(len(provider.prompts), 1)
+        self.assertNotIn("Running steps.", provider.prompts[0])
+        self.assertNotIn("qteasy is a library.", provider.prompts[0])
+        self.assertIn("**执行成功。**", out["text"])
+        self.assertIn("count = 2", out["text"])
+        self.assertIn("2 items", out["text"])
+        self.assertEqual(ask["text"], "qteasy is a library.")
+        self.assertEqual(out["payload"], result["payload"])
+        self.assertEqual(out["kind"], "result")
+
+    def test_bad_rewrite_falls_back_to_english(self) -> None:
+        """新数字、丢掉 plan_id、拆掉列表或模型报错时回到英文。"""
+
+        print("\n[TestAiHumanCardPolish] fallback")
+        cards = project_human_cards(
+            self._success_payload(),
+            requested_mode="run",
+            query="列出策略",
+            include_user_text=False,
+        )
+        result = next(item for item in cards if item["kind"] == "result")
+        prose = FakeLLMProvider(replies=["执行成功，夏普为 1.5。"])
+        kept = polish_human_cards(cards, provider=prose, query="列出策略")
+        kept_text = next(item for item in kept if item["kind"] == "result")["text"]
+        print(" prose fallback:\n", kept_text)
+        self.assertEqual(kept_text, result["text"])
+        self.assertNotIn("1.5", kept_text)
+
+        ready_payload = {
+            "run_id": "run_demo",
+            "plan": {
+                "plan_id": "plan_demo",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "skill_name": "qt.ai.strategy_meta.list",
+                        "side_effects": {"description": "readonly"},
+                    }
+                ],
+            },
+            "execution": {"status": "dry_run", "steps": []},
+        }
+        ready_cards = project_human_cards(
+            ready_payload,
+            requested_mode="plan",
+            query="列出策略",
+            include_user_text=False,
+        )
+        ready = next(item for item in ready_cards if item["kind"] == "plan_ready")
+        dropped = ready["text"].replace("plan_demo", "plan_other")
+        provider = FakeLLMProvider(replies=[dropped])
+        polished = polish_human_cards(ready_cards, provider=provider, query="列出策略")
+        out = next(item for item in polished if item["kind"] == "plan_ready")
+        print(" dropped plan_id fallback:", "plan_demo" in out["text"], "plan_other" in out["text"])
+        self.assertIn("plan_demo", out["text"])
+        self.assertNotIn("plan_other", out["text"])
+
+        class BoomProvider:
+            def chat(self, prompt: str, system_prompt: str = "") -> str:
+                raise RuntimeError("provider down")
+
+        blown = polish_human_cards(cards, provider=BoomProvider(), query="列出策略")
+        blown_text = next(item for item in blown if item["kind"] == "result")["text"]
+        print(" exception fallback matches:", blown_text == result["text"])
+        self.assertEqual(blown_text, result["text"])
+
+    def test_attach_human_cards_stores_chinese_plan_ready(self) -> None:
+        """装配层把通过校验的中文 plan_ready 写入 session。"""
+
+        print("\n[TestAiHumanCardPolish] attach wiring")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = FakeLLMProvider(replies=["placeholder"])
+            asst = QteasyAssistant(
+                provider=provider,
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            payload = {
+                "run_id": "run_demo",
+                "plan": {
+                    "plan_id": "plan_demo",
+                    "user_query": "列出内置策略",
+                    "steps": [
+                        {
+                            "step_id": "s1",
+                            "skill_name": "qt.ai.strategy_meta.list",
+                            "inputs": {},
+                            "side_effects": {"description": "readonly"},
+                        }
+                    ],
+                },
+                "execution": {"status": "dry_run", "steps": []},
+            }
+            preview = project_human_cards(
+                payload,
+                requested_mode="plan",
+                query="列出内置策略",
+                registry=asst.registry,
+            )
+            ready = next(item for item in preview if item["kind"] == "plan_ready")
+            provider.replies = [ready["text"].replace("Plan ready.", "计划已就绪。")]
+            session = ConversationState.empty("s-polish")
+            asst._attach_human_cards(
+                payload,
+                query="列出内置策略",
+                requested_mode="plan",
+                session=session,
+            )
+            stored = asst.session_store.load("s-polish")
+            text = next(item["text"] for item in stored.messages if item["kind"] == "plan_ready")
+            print(" stored plan_ready:\n", text)
+            self.assertIn("计划已就绪。", text)
+            self.assertIn("plan_demo", text)
 
 
 if __name__ == "__main__":

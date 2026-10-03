@@ -1265,6 +1265,34 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertEqual(history_ran["discard"], True)
             self.assertIn("ai/runs/", history_ran["dialog"])
 
+    def test_result_card_opens_artifact_by_title(self) -> None:
+        """结果卡按 run_id 列产物按钮；同 run 两张表的页签键含 title。"""
+
+        print("\n[TestAiWorkbenchWeb] result artifact buttons")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            key_fn = src.split("function artifactKey")[1].split("function openArtifactTab")[0]
+            open_fn = src.split("function openArtifactTab")[1].split("function closeArtifactTab")[0]
+            buttons = src.split("function resultArtifactButtons")[1].split("function renderVisibleMessage")[0]
+            click = src.split("const artBtn = t.closest")[1].split("if (t.dataset.example)")[0]
+            print(" key fn:\n", key_fn)
+            print(" buttons head:", buttons[:400])
+            print(" click uses title:", "data-open-artifact-title" in click)
+            self.assertIn('type === "plan" || type === "settings"', key_fn)
+            self.assertIn("art.title", key_fn)
+            self.assertIn("title: String(art.title", open_fn)
+            self.assertIn('!== "plan"', buttons)
+            self.assertIn("data-open-artifact-title", buttons)
+            self.assertIn("if (!rows.length) return", buttons)
+            self.assertNotIn("not ready", buttons.lower())
+            self.assertIn("data-open-artifact-title", click)
+            self.assertIn("openArtifactTab(art)", click)
+
 
 if __name__ == "__main__":
     unittest.main()

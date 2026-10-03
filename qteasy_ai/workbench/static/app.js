@@ -1292,6 +1292,18 @@ function onChatClick(ev) {
     openPlanFromRunId(t.dataset.openPlan);
     return;
   }
+  const artBtn = t.closest("[data-open-artifact]");
+  if (artBtn) {
+    const art = catalogArtifacts().find(
+      (row) =>
+        row &&
+        String(row.type || "") === String(artBtn.getAttribute("data-open-artifact") || "") &&
+        String(row.run_id || "") === String(artBtn.getAttribute("data-open-artifact-run") || "") &&
+        String(row.title || "") === String(artBtn.getAttribute("data-open-artifact-title") || "")
+    );
+    if (art) openArtifactTab(art);
+    return;
+  }
   if (t.dataset.example) {
     const ex = EXAMPLES[Number(t.dataset.example)];
     if (ex) {
@@ -1662,14 +1674,18 @@ function absorbPlanArtifacts(arts) {
 
 function artifactKey(art) {
   if (!art) return "";
-  return `${String(art.type || "")}::${String(art.run_id || "")}`;
+  const type = String(art.type || "");
+  const rid = String(art.run_id || "");
+  if (type === "plan" || type === "settings") return `${type}::${rid}`;
+  return `${type}::${rid}::${String(art.title || "")}`;
 }
 
 function openArtifactTab(art) {
   if (!art || !art.type || !art.run_id) return;
-  const key = artifactKey(art);
+  const tab = { type: art.type, run_id: art.run_id, title: String(art.title || "") };
+  const key = artifactKey(tab);
   if (!openTabs.some((row) => artifactKey(row) === key)) {
-    openTabs = openTabs.concat([{ type: art.type, run_id: art.run_id }]);
+    openTabs = openTabs.concat([tab]);
   }
   activeKey = key;
   filePreview = null;
@@ -2075,6 +2091,22 @@ function renderProcessMessage(msg, stepsHtml) {
   return "";
 }
 
+function resultArtifactButtons(msg) {
+  const rid = String((msg.payload && msg.payload.run_id) || "");
+  if (!rid) return "";
+  const rows = catalogArtifacts().filter(
+    (art) => art && String(art.run_id || "") === rid && String(art.type || "") !== "plan"
+  );
+  if (!rows.length) return "";
+  const buttons = rows
+    .map((art) => {
+      const title = String(art.title || art.type || "artifact");
+      return `<button type="button" class="ghost" data-open-artifact="${escapeHtml(art.type || "")}" data-open-artifact-run="${escapeHtml(art.run_id || "")}" data-open-artifact-title="${escapeHtml(art.title || "")}">${escapeHtml(title)}</button>`;
+    })
+    .join("");
+  return `<div class="actions result-artifacts">${buttons}</div>`;
+}
+
 function renderVisibleMessage(msg, index) {
   if (msg.kind === "user_text") {
     if (editingUserIndex === index) {
@@ -2101,7 +2133,7 @@ function renderVisibleMessage(msg, index) {
     return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg"><div class="msg-role">Result</div><div class="bubble">${escapeHtml(msg.text || "")}</div></div>`;
+    return `<div class="msg"><div class="msg-role">Result</div><div class="bubble">${escapeHtml(msg.text || "")}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);

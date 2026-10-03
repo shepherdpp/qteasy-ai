@@ -12,7 +12,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+import re
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
@@ -366,7 +367,7 @@ def project_human_cards(
                 {"plan_id": plan_id, "run_id": run_id, "steps": _step_ticks(exec_steps)},
             )
         )
-        brief = _slim_result_lines(plan=plan, execution=execution)
+        brief = _slim_result_lines(plan=plan, execution=execution, registry=registry)
         result_text = "\n".join(brief)
         if not str(result_text or "").strip():
             result_text = "No rows or metrics in the result."
@@ -413,6 +414,129 @@ def project_human_cards(
     if not any(item.get("kind") != "user_text" for item in cards):
         cards.append(make_card("ask", "No output.", {}))
     return cards
+
+
+_POLISH_KINDS = frozenset({"clarify", "plan_ready", "error", "result"})
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_SKILL_RE = re.compile(r"qt\.ai\.[a-zA-Z0-9_.]+")
+_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_PLAN_ID_VALUE_RE = re.compile(r"\bplan_[A-Za-z0-9]+\b")
+_ERROR_CODE_RE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b")
+_METRIC_RE = re.compile(
+    r"(\b(sharpe|drawdown|hit_count|max_drawdown|annual(?:ized)?\s+return|hit count)\b|回撤|夏普)",
+    re.IGNORECASE,
+)
+_FENCE_RE = re.compile(r"^```[a-zA-Z]*\n([\s\S]*?)\n```$")
+_CARD_SYSTEM_PROMPT = (
+    "Rewrite this qteasy-ai card into Simplified Chinese. "
+    "Change only tone and language. "
+    "Keep every qt.ai skill id, plan_id, error code, parameter, and number exactly as written. "
+    "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
+    "Output the rewritten card text only."
+)
+_RESULT_SYSTEM_PROMPT = (
+    "Rewrite this qteasy-ai result card into Simplified Chinese. "
+    "Keep the sentences. Translate the wording, not the facts. "
+    "Keep every number and every error message exactly as written. "
+    "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
+    "Output the rewritten text only."
+)
+
+
+def polish_human_cards(
+    cards: Sequence[Dict[str, Any]],
+    *,
+    provider: Any = None,
+    query: str = "",
+) -> List[Dict[str, Any]]:
+    """在确定性英文卡之上按语气改写。未配置模型或问句不含中文时原样返回。
+
+    只改 ``clarify`` / ``plan_ready`` / ``error`` / ``result`` 的 ``text``。
+    校验失败、模型报错或空回复时保留该卡英文。``payload`` 不改。
+
+    Parameters
+    ----------
+    cards : sequence of dict
+        ``project_human_cards`` 的结果。
+    provider : object, optional
+        实现 ``chat(prompt, system_prompt=...)`` 的 LLM Provider。
+    query : str, optional
+        本轮用户句。含中文且 Provider 可用时才润色。
+
+    Returns
+    -------
+    list of dict
+        人读卡。未润色的项与输入为同一对象。
+    """
+
+    rows = [item for item in (cards or [])]
+    if provider is None or not hasattr(provider, "chat"):
+        return rows
+    if not _CJK_RE.search(str(query or "")):
+        return rows
+    out: List[Dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        kind = normalize_card_kind(item.get("kind"))
+        text = str(item.get("text") or "")
+        if kind not in _POLISH_KINDS or not text.strip():
+            out.append(item)
+            continue
+        rewritten = _rewrite_card_text(provider, text, kind=kind)
+        if rewritten and _card_rewrite_ok(text, rewritten, kind=kind):
+            cloned = dict(item)
+            payload = item.get("payload")
+            cloned["payload"] = dict(payload) if isinstance(payload, dict) else {}
+            cloned["text"] = rewritten
+            out.append(cloned)
+            continue
+        out.append(item)
+    return out
+
+
+def _rewrite_card_text(provider: Any, text: str, *, kind: str) -> str:
+    """调用 Provider 改写一张卡。失败返回空串。"""
+
+    prompt = _RESULT_SYSTEM_PROMPT if kind == "result" else _CARD_SYSTEM_PROMPT
+    try:
+        raw = provider.chat(text, system_prompt=prompt)
+    except Exception:
+        return ""
+    body = str(raw or "").strip()
+    fenced = _FENCE_RE.match(body)
+    if fenced:
+        body = str(fenced.group(1) or "").strip()
+    return body
+
+
+def _card_rewrite_ok(source: str, rewritten: str, *, kind: str) -> bool:
+    """改写必须留下标识、数字和错误原文。"""
+
+    body = str(rewritten or "").strip()
+    if not body:
+        return False
+    src_skills = set(_SKILL_RE.findall(source))
+    if set(_SKILL_RE.findall(body)) != src_skills:
+        return False
+    src_plans = set(_PLAN_ID_VALUE_RE.findall(source))
+    dst_plans = set(_PLAN_ID_VALUE_RE.findall(body))
+    if not src_plans <= dst_plans or not dst_plans <= src_plans:
+        return False
+    if set(_ERROR_CODE_RE.findall(body)) != set(_ERROR_CODE_RE.findall(source)):
+        return False
+    if set(_NUMBER_RE.findall(body)) != set(_NUMBER_RE.findall(source)):
+        return False
+    if not _METRIC_RE.search(source) and _METRIC_RE.search(body):
+        return False
+    if kind == "result":
+        for line in str(source or "").splitlines():
+            if not line.startswith("Error:"):
+                continue
+            message = line[len("Error:") :].strip()
+            if message and message not in body:
+                return False
+    return True
 
 
 def format_human_cards(
@@ -814,47 +938,147 @@ def _slim_plan_ready_lines(
     return lines
 
 
-def _slim_result_lines(*, plan: Dict[str, Any], execution: Dict[str, Any]) -> List[str]:
-    """result 短摘要：status、少数 JSON 标量、计数、下一步。"""
+def _slim_result_lines(
+    *,
+    plan: Dict[str, Any],
+    execution: Dict[str, Any],
+    registry: Any = None,
+) -> List[str]:
+    """result 人读句：按 expected_artifact 说明产物，并保留已有标量。"""
 
     status = str(execution.get("status") or "").strip() or "unknown"
-    lines = [f"Status: {status}"]
-    scalars: List[str] = []
-    counts: List[str] = []
-    saw_body = False
-    for item in execution.get("steps") or []:
-        if not isinstance(item, dict):
-            continue
-        result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
-        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
-        if result.get("ok") is False:
-            continue
-        for key, value in metrics.items():
-            text = _scalar_text(value)
-            if text is not None:
-                scalars.append(f"{key}={text}")
-                saw_body = True
-        for key, value in payload.items():
-            if str(key) in _SKIP_INPUT_KEYS:
-                continue
-            if isinstance(value, list):
-                counts.append(f"{len(value)} items")
-                saw_body = True
-                continue
-            text = _scalar_text(value)
-            if text is not None:
-                scalars.append(f"{key}={text}")
-                saw_body = True
-    for item in scalars[:3]:
-        lines.append(item)
-    for item in counts[:2]:
-        lines.append(item)
-    if not saw_body and status == "success":
-        lines.append("No rows or metrics in the result.")
+    sentences = [
+        sentence
+        for sentence in (
+            _result_step_sentence(item, registry)
+            for item in (execution.get("steps") or [])
+            if isinstance(item, dict)
+        )
+        if sentence
+    ]
+    lines: List[str] = []
+    if status == "success":
+        if sentences:
+            for sentence in sentences:
+                lines.append(f"**Run succeeded.** {sentence}")
+                lines.append("")
+        else:
+            lines.extend(["**Run succeeded.**", "", "No rows or metrics in the result.", ""])
+    else:
+        lines.extend(["**Run did not finish.**", ""])
+        for sentence in sentences:
+            lines.append(sentence)
+            lines.append("")
+        err = _execution_error_message(execution)
+        if err:
+            lines.extend([f"Error: {err[0]}", "", err[1], ""])
     lines.append("Next: start a new topic, or say run this plan if a plan_id is still current.")
     del plan
     return lines
+
+
+def _execution_error_message(execution: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """失败步的原文和一句固定解读。没有 message 时不编错误。"""
+
+    for raw in execution.get("steps") or []:
+        if not isinstance(raw, dict):
+            continue
+        result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
+        err = result.get("error") if isinstance(result.get("error"), dict) else None
+        message = str((err or {}).get("message") or "").strip()
+        if not message:
+            continue
+        return message, _failure_hint(err or {})
+    return None
+
+
+def _failure_hint(err: Dict[str, Any]) -> str:
+    """按错误码或原文关键词选一句英文解读。"""
+
+    code = str(err.get("code") or "")
+    message = str(err.get("message") or "").lower()
+    if code.endswith("NOT_FOUND") or "not found" in message or "unknown" in message:
+        return "Check the name, then edit the blue message and send it again."
+    if "token" in message:
+        return "Set the Tushare token, then edit the blue message and send it again."
+    if code == "ALLOW_GATE_BLOCKED" or "allow_" in message:
+        return "Confirm the plan manually, or enable the matching allow flag, then edit the blue message and send it again."
+    return "Edit the blue message (pencil) and send it again."
+
+
+def _result_step_sentence(step: Dict[str, Any], registry: Any) -> str:
+    """一步成功结果的一句话。失败步或没有事实时为空。"""
+
+    result = step.get("result") if isinstance(step.get("result"), dict) else {}
+    if result.get("ok") is False:
+        return ""
+    skill = str(step.get("skill_name") or result.get("skill_name") or "").strip()
+    shown_scalars, shown_counts, row_count = _shown_result_facts(result, _is_data_table(registry, skill))
+    description = _artifact_phrase(registry, skill)
+    if not description and not shown_scalars and not shown_counts and row_count is None:
+        return ""
+    if not description:
+        description = "A result artifact"
+    sentence = description.rstrip(".")
+    if row_count is not None:
+        sentence = f"{sentence}, with {row_count} rows"
+    extras = [f"{key} = {value}" for key, value in shown_scalars]
+    extras.extend(f"{count} items" for count in shown_counts)
+    if extras:
+        return f"{sentence}. {', '.join(extras)}."
+    return f"{sentence}."
+
+
+def _is_data_table(registry: Any, skill_name: str) -> bool:
+    """expected_artifact 写明 data table 时才把计数说成 rows。"""
+
+    text = _artifact_phrase(registry, skill_name).lower()
+    return "data table" in text
+
+
+def _artifact_phrase(registry: Any, skill_name: str) -> str:
+    """Skill 上的 expected_artifact。没有则空串，不猜类型。"""
+
+    meta = _lookup_meta(registry, skill_name)
+    return str(getattr(meta, "expected_artifact", "") or "").strip()
+
+
+def _shown_result_facts(
+    result: Dict[str, Any],
+    is_table: bool,
+) -> Tuple[List[Tuple[str, str]], List[str], Optional[str]]:
+    """最多 3 个标量和 2 个计数。表的 n_rows 或列表长度改说成 rows，不重复。"""
+
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    scalars: List[tuple] = []
+    counts: List[str] = []
+    for key, value in metrics.items():
+        text = _scalar_text(value)
+        if text is not None:
+            scalars.append((str(key), text))
+    for key, value in payload.items():
+        if str(key) in _SKIP_INPUT_KEYS:
+            continue
+        if isinstance(value, list):
+            counts.append(str(len(value)))
+            continue
+        text = _scalar_text(value)
+        if text is not None:
+            scalars.append((str(key), text))
+    shown_scalars = scalars[:3]
+    shown_counts = counts[:2]
+    row_count = None
+    if is_table:
+        for key, text in shown_scalars:
+            if key == "n_rows":
+                row_count = text
+                shown_scalars = [item for item in shown_scalars if item[0] != "n_rows"]
+                break
+        if row_count is None and shown_counts:
+            row_count = shown_counts[0]
+            shown_counts = shown_counts[1:]
+    return shown_scalars, shown_counts, row_count
 
 
 def _format_result_lines(skill_name: str, result: Dict[str, Any], *, skipped: bool) -> List[str]:
