@@ -1394,6 +1394,14 @@ async function submitProviderChange() {
 function onNowClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
+  const toggle = t.closest("[data-tree-toggle]");
+  if (toggle) {
+    const key = toggle.getAttribute("data-tree-toggle") || "";
+    if (treeCollapsed.has(key)) treeCollapsed.delete(key);
+    else treeCollapsed.add(key);
+    renderNow();
+    return;
+  }
   if (t.dataset.nowEdit) {
     editingNowSlot = t.dataset.nowEdit;
     renderNow();
@@ -1409,6 +1417,14 @@ function onNowClick(ev) {
 function onArtifactClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
+  const toggle = t.closest("[data-tree-toggle]");
+  if (toggle) {
+    const key = toggle.getAttribute("data-tree-toggle") || "";
+    if (treeCollapsed.has(key)) treeCollapsed.delete(key);
+    else treeCollapsed.add(key);
+    renderArtifacts();
+    return;
+  }
   const closer = t.closest("[data-tab-close]");
   if (closer) {
     ev.stopPropagation();
@@ -1884,6 +1900,11 @@ function bucketedNodes(nodes, nowMs) {
   return buckets;
 }
 
+function renderTimeGroupHead(key, label, open) {
+  const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+  return `<div class="time-group-head">${twist}<span class="time-bucket">${escapeHtml(label)}</span></div>`;
+}
+
 function renderSessionList() {
   const host = $("session-list");
   if (!host) return;
@@ -1891,7 +1912,6 @@ function renderSessionList() {
     .map((bucket) => {
       const key = `session:${bucket.label}`;
       const open = !treeCollapsed.has(key);
-      const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
       const rows = open
         ? (bucket.nodes || [])
         .map((row) => {
@@ -1914,7 +1934,7 @@ function renderSessionList() {
         })
         .join("")
         : "";
-      return `<div class="time-group">${twist}<span class="time-bucket">${escapeHtml(bucket.label)}</span>${rows}</div>`;
+      return `<div class="time-group">${renderTimeGroupHead(key, bucket.label, open)}${rows}</div>`;
     })
     .join("");
   const current = sessions.find((row) => row.session_id === sessionId);
@@ -2491,31 +2511,38 @@ function renderProviderForm() {
   const modeLabel = p.mode || "rule";
   const key = p.api_key_present ? "key set" : "no key";
   if (editingProvider) {
-    return `<p class="now-k">Provider</p>
-      <label>Model <input id="prov-model" value="${escapeHtml(p.model || "")}" /></label>
+    return `<label>Model <input id="prov-model" value="${escapeHtml(p.model || "")}" /></label>
       <label>Base URL <input id="prov-url" value="${escapeHtml(p.base_url || "")}" /></label>
       <label>API key <input id="prov-key" type="password" placeholder="${p.api_key_present ? "unchanged" : ""}" /></label>
       <div class="actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
       <button type="button" id="btn-prov-cancel">Cancel</button></div>`;
   }
-  return `<p class="now-k">Provider</p><p>${escapeHtml(modeLabel)} · ${escapeHtml(model)} · ${escapeHtml(key)}</p>
+  return `<p>${escapeHtml(modeLabel)} · ${escapeHtml(model)} · ${escapeHtml(key)}</p>
     <p class="hint">${escapeHtml(p.base_url || "")}</p>
     <button type="button" class="ghost" id="btn-prov-edit">Change provider</button>`;
 }
 
 function renderSettingsBody() {
   const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-  return `<div class="settings-panel">
-    <h3>Settings</h3>
-    <p class="now-k">Appearance</p>
-    <div class="actions">
+  const serverOpen = !treeCollapsed.has("settings:server");
+  const appearanceOpen = !treeCollapsed.has("settings:appearance");
+  const providersOpen = !treeCollapsed.has("settings:providers");
+  const serverBody = serverOpen
+    ? `<p class="hint">Stops this workbench process and frees its port.</p>
+    <div class="actions"><button type="button" class="danger" id="btn-quit-server">Quit</button></div>`
+    : "";
+  const appearanceBody = appearanceOpen
+    ? `<div class="actions">
       <button type="button" id="btn-theme-dark" class="${theme === "dark" ? "primary" : ""}">Dark</button>
       <button type="button" id="btn-theme-light" class="${theme === "light" ? "primary" : ""}">Light</button>
-    </div>
-    ${renderProviderForm()}
-    <p class="now-k">Server</p>
-    <p class="hint">Stops this workbench process and frees its port.</p>
-    <div class="actions"><button type="button" class="danger" id="btn-quit-server">Quit</button></div>
+    </div>`
+    : "";
+  const providersBody = providersOpen ? renderProviderForm() : "";
+  return `<div class="settings-panel">
+    <h3>Settings</h3>
+    <div class="time-group">${renderTimeGroupHead("settings:server", "SERVER", serverOpen)}${serverBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:appearance", "APPEARANCE", appearanceOpen)}${appearanceBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:providers", "PROVIDERS", providersOpen)}${providersBody}</div>
   </div>`;
 }
 
@@ -2725,15 +2752,21 @@ function renderNow() {
   const runLine = runWatchActive()
     ? `<p class="now-run" id="now-run-status">${formatRunClock(backgrounded ? "Background" : "Running")}</p>`
     : "";
-  host.innerHTML = `<div class="now-job"><p class="now-k">Now</p><p class="now-v">Job: ${escapeHtml(job)}</p>
+  const nowOpen = !treeCollapsed.has("workspace:now");
+  const auditOpen = !treeCollapsed.has("workspace:audit");
+  const nowBody = nowOpen
+    ? `<div class="now-job"><p class="now-v">Job: ${escapeHtml(job)}</p>
     ${runLine}
     ${pipe}</div>
     ${missingLine}
-    ${slotBlock}
-    <div class="now-audit"><p class="now-k">Audit</p>
-      <p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
-      <p>Run: ${escapeHtml(state.run_id || "—")}</p>
-    </div>`;
+    ${slotBlock}`
+    : "";
+  const auditBody = auditOpen
+    ? `<p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
+      <p>Run: ${escapeHtml(state.run_id || "—")}</p>`
+    : "";
+  host.innerHTML = `<div class="time-group">${renderTimeGroupHead("workspace:now", "NOW", nowOpen)}${nowBody}</div>
+    <div class="time-group">${renderTimeGroupHead("workspace:audit", "AUDIT", auditOpen)}${auditBody}</div>`;
   renderNowChips();
 }
 
@@ -2880,17 +2913,18 @@ function renderWorkspace() {
   const host = $("workspace-files");
   if (!host) return;
   const arts = catalogArtifacts();
+  const sessionOpen = !treeCollapsed.has("session");
+  const sessionHead = renderTimeGroupHead("session", "THIS SESSION", sessionOpen);
   if (!arts.length) {
-    host.innerHTML = `<p class="files-k">This session</p><p class="empty-hint">No artifacts in this session yet.</p>`;
+    const empty = sessionOpen ? `<p class="empty-hint">No artifacts in this session yet.</p>` : "";
+    host.innerHTML = `<div class="workspace-tree"><div class="time-group">${sessionHead}${empty}</div></div>`;
     return;
   }
   const tree = groupSessionArtifacts(arts, transcript);
-  const sessionOpen = !treeCollapsed.has("session");
   const nodes = bucketedNodes(tree.children || [])
     .map((bucket) => {
       const groupKey = `workspace:${bucket.label}`;
       const groupOpen = !treeCollapsed.has(groupKey);
-      const groupTwist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(groupKey)}" aria-expanded="${groupOpen ? "true" : "false"}">${groupOpen ? "▾" : "▸"}</button>`;
       const body = groupOpen
         ? (bucket.nodes || [])
         .map((node) => {
@@ -2911,13 +2945,12 @@ function renderWorkspace() {
         .join("")
         : "";
       const list = body ? `<ul class="file-tree time-group-body">${body}</ul>` : "";
-      return `<div class="time-group">${groupTwist}<span class="time-bucket">${escapeHtml(bucket.label)}</span>${list}</div>`;
+      return `<div class="time-group">${renderTimeGroupHead(groupKey, bucket.label, groupOpen)}${list}</div>`;
     })
     .join("");
-  const sessionTwist = `<button type="button" class="tree-twist" data-tree-toggle="session" aria-expanded="${sessionOpen ? "true" : "false"}">${sessionOpen ? "▾" : "▸"}</button>`;
-  host.innerHTML = `<div class="workspace-tree"><div class="tree-node">${sessionTwist}<span class="files-k">This session</span></div>${
+  host.innerHTML = `<div class="workspace-tree"><div class="time-group">${sessionHead}${
     sessionOpen ? nodes : ""
-  }</div>`;
+  }</div></div>`;
 }
 
 function renderPanes() {
