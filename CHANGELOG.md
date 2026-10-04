@@ -3,31 +3,20 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
-## Unreleased
-
-### Fixed
-
-- `qt.ai.visual.export_kline` uses the Agg backend so Workbench SSE threads no longer crash on macOS (`NSWindow` / Abort trap 6).
-- Loading a session after a process abort heals a stale `running` task back to `ready` (same `plan_id`; Confirm again). No step resume.
-
-### Changed
-
-- Default LLM Provider timeout is **120 seconds** (was 30). Override with `QTEASY_AI_TIMEOUT` or `ai_timeout`.
-- Hybrid Plan: when the LLM skill sequence and the rule recipe are contiguous subsequences of each other, the plan is replaced by the rule recipe (`assumptions.recipe_slots_from=rule`). Extra LLM wrapper steps are dropped. `candidate_source` stays `llm`. Fallback-only recipes still do not overwrite, except when the query hits StrategyBuilder keywords (incomplete dual-MA → `clarify_required`).
-- Hybrid Plan: Mode-D `planner_trace.llm_skill_sequence` records the skill names **before** recipe overwrite (not persisted for rule-only plans). Full prompts are not stored.
-
-### Breaking
-
-- **`ask()` target state (Q-AI.3)**: `assistant.ask()` / `qteasy-ai ask` no longer returns an empty-step ToolPlan dry-run. It answers via KnowledgeBase (+ optional LLM) and does not call skills or PlanExecutor. Use `preview()` / `qteasy-ai preview` / `plan --preview` to inspect a dry-run ToolPlan.
+## 0.2.0 (2026-10-05)
 
 ### Added
 
-- KnowledgeBase (`qteasy_ai/kb/*.json`) and `AskEngine` (Offline when no Provider).
-- `assistant.preview()`, CLI `preview`, `plan --preview`.
-- `explanation_depth`: `brief` / `standard` / `deep` (`--depth`).
-- Hybrid Planner LLM candidate generation; RuleValidator and `env_facts` gates still apply. Unknown skills / invalid JSON fall back to the rule router. Candidate prompt includes each skill's one-line `summary`.
-- User guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md). Demo: `examples/ai_shell_stage_c_ask_demo.py`.
-- **StrategyBuilder (Q-AI.4)**: `qt.ai.strategy.spec_from_nl` / `codegen_hybrid` / `sanity_check` / `qt.ai.operator.build_from_spec`; generated source under `.qteasy/ai/strategies/`; reuses `backtest.run_builtin` (optional `strategy_path`). Live: `qt.ai.pipeline.live_trade_plan_only`. Demo: `examples/ai_shell_stage_d_strategybuilder_demo.py`. Handbook: [docs/LIVE_FIRE_DRILL_QAI4.md](docs/LIVE_FIRE_DRILL_QAI4.md) (live-fire closed 2026-08-31).
+- `qteasy-ai ask` only answers. It no longer returns an empty dry-run plan. `plan` shows the steps first; after you confirm, it can read data, backtest, or optimize. This works without a configured model.
+- Desktop workbench via `qteasy-ai serve`: conversation, artifacts, and the current task. Open the plan in the artifact pane. Stop a run, or leave it in the background.
+- Official jobs: environment check, bounded data refill, read and summarize, built-in backtest and optimization, a short read of the last backtest, and a dual-moving-average strategy draft. Live trade stays plan-only.
+- Continue in the same session: add a date or symbol, or revise the previous plan. Clarification offers a choice; skip ends that turn.
+
+### Changed
+
+- Save several providers in Settings and switch among them. Lists never show raw API keys. Without a model, Ask uses the built-in notes and Plan follows the built-in rules. The default model wait is 120 seconds (`QTEASY_AI_TIMEOUT`).
+- Reopening a session after a process stop lets you confirm the same plan again. It does not resume the interrupted step.
+- Exporting a k-line chart from the workbench no longer takes the server down with the plot window.
 
 ## 0.1.0 (2026-08-06)
 
