@@ -1520,8 +1520,9 @@ function onArtifactClick(ev) {
     confirmPlan();
     return;
   }
-  if (t.id === "btn-theme-dark" || t.id === "btn-theme-light") {
-    applyTheme(t.id === "btn-theme-light" ? "light" : "dark");
+  const themeChoice = t.closest("#btn-theme-dark, #btn-theme-light");
+  if (themeChoice) {
+    applyTheme(themeChoice.id === "btn-theme-light" ? "light" : "dark");
     renderArtifacts();
     return;
   }
@@ -1534,6 +1535,11 @@ function onArtifactClick(ev) {
   if (providerEdit) {
     providerEditor = { mode: "edit", id: providerEdit.getAttribute("data-provider-edit") };
     renderArtifacts();
+    return;
+  }
+  const providerUse = t.closest("[data-provider-use]");
+  if (providerUse) {
+    useProvider(providerUse.getAttribute("data-provider-use"));
     return;
   }
   if (t.id === "btn-prov-add") {
@@ -2592,6 +2598,12 @@ function exportLink(art, label) {
   return `<a class="export-link" href="${href}">${escapeHtml(label || "Export")}</a>`;
 }
 
+function themeThumb(kind) {
+  const tone = kind === "light" ? "theme-thumb-light" : "theme-thumb-dark";
+  const bars = `<span class="theme-bar"></span><span class="theme-bar"></span><span class="theme-bar short"></span>`;
+  return `<span class="theme-thumb ${tone}" aria-hidden="true"><span class="theme-rail">${bars}</span><span class="theme-chat"><span class="theme-user"></span><span class="theme-reply"></span></span><span class="theme-arts">${bars}</span></span>`;
+}
+
 function renderProviderForm() {
   const editor = providerEditor;
   const rows = ((providerInfo && providerInfo.providers) || []).filter((row) => row && row.id);
@@ -2600,23 +2612,34 @@ function renderProviderForm() {
   }
   if (editor && (editor.mode === "add" || editor.mode === "edit")) {
     const current = editor.mode === "edit" ? (rows.find((row) => row.id === editor.id) || {}) : {};
-    return `<label>Name <input id="prov-name" value="${escapeHtml(current.name || "")}" /></label>
-      <label>Model <input id="prov-model" value="${escapeHtml(current.model || "")}" /></label>
-      <label>Base URL <input id="prov-url" value="${escapeHtml(current.base_url || "")}" /></label>
-      <label>API key <input id="prov-key" type="password" placeholder="${current.api_key_present ? "unchanged" : ""}" /></label>
-      <label>Timeout <input id="prov-timeout" value="${escapeHtml(current.timeout == null ? "" : String(current.timeout))}" /></label>
-      <div class="actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
-      <button type="button" id="btn-prov-cancel">Cancel</button></div>`;
+    return `<div class="settings-form">
+      <label><span>Name</span><input id="prov-name" value="${escapeHtml(current.name || "")}" /></label>
+      <label><span>Model</span><input id="prov-model" value="${escapeHtml(current.model || "")}" /></label>
+      <label><span>Base URL</span><input id="prov-url" value="${escapeHtml(current.base_url || "")}" /></label>
+      <label><span>API key</span><input id="prov-key" type="password" placeholder="${current.api_key_present ? "unchanged" : ""}" /></label>
+      <label><span>Timeout</span><input id="prov-timeout" value="${escapeHtml(current.timeout == null ? "" : String(current.timeout))}" /></label>
+      <div class="settings-form-actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
+      <button type="button" id="btn-prov-cancel">Cancel</button></div>
+    </div>`;
   }
+  const activeId = (providerInfo && providerInfo.active_id) || "mode-r";
   const list = rows.map((row) => {
     const model = String(row.model || "").trim();
     const detail = row.builtin ? "built-in" : (row.api_key_present ? "key set" : "no key");
+    const active = row.id === activeId;
     const tools = !row.builtin
-      ? `<button type="button" class="ghost" data-provider-edit="${escapeHtml(row.id)}">Edit</button><button type="button" class="ghost" data-provider-delete="${escapeHtml(row.id)}">Delete</button>`
+      ? `<div class="provider-actions"><button type="button" class="icon-btn ghost" data-provider-edit="${escapeHtml(row.id)}" title="Edit">✎</button><button type="button" class="icon-btn ghost provider-delete" data-provider-delete="${escapeHtml(row.id)}" title="Delete">🗑</button></div>`
       : "";
-    return `<div class="provider-row" data-provider-id="${escapeHtml(row.id)}"><span>${escapeHtml(row.name || row.id)}${model ? ` · ${model}` : ""} · ${detail}</span>${tools}</div>`;
+    const meta = `${model ? `${escapeHtml(model)} · ` : ""}${detail}`;
+    return `<div class="provider-row${active ? " is-active" : ""}" data-provider-id="${escapeHtml(row.id)}">
+      <label class="provider-pick" data-provider-use="${escapeHtml(row.id)}">
+        <input type="radio" name="provider-active" ${active ? "checked" : ""} />
+        <span class="provider-main"><span class="provider-name">${escapeHtml(row.name || row.id)}</span><span class="provider-meta">${meta}</span></span>
+      </label>
+      ${tools}
+    </div>`;
   }).join("");
-  return `${list}<div class="actions"><button type="button" class="ghost" id="btn-prov-add">Add provider</button></div>`;
+  return `<div class="provider-list">${list}</div><div class="settings-add-row"><button type="button" class="icon-btn ghost" id="btn-prov-add" title="Add provider" aria-label="Add provider">+</button></div>`;
 }
 
 function renderSettingsBody() {
@@ -2625,16 +2648,29 @@ function renderSettingsBody() {
   const appearanceOpen = !treeCollapsed.has("settings:appearance");
   const providersOpen = !treeCollapsed.has("settings:providers");
   const serverBody = serverOpen
-    ? `<p class="hint">Stops this workbench process and frees its port.</p>
-    <div class="actions"><button type="button" class="danger" id="btn-quit-server">Quit</button></div>`
-    : "";
-  const appearanceBody = appearanceOpen
-    ? `<div class="actions">
-      <button type="button" id="btn-theme-dark" class="${theme === "dark" ? "primary" : ""}">Dark</button>
-      <button type="button" id="btn-theme-light" class="${theme === "light" ? "primary" : ""}">Light</button>
+    ? `<div class="settings-group-body">
+      <p class="settings-item-title">Workbench</p>
+      <div class="settings-quit-row">
+        <button type="button" class="danger" id="btn-quit-server" title="Stops this workbench process and frees its port.">Quit</button>
+        <span class="settings-quit-hint">Stops this workbench process and frees its port.</span>
+      </div>
     </div>`
     : "";
-  const providersBody = providersOpen ? renderProviderForm() : "";
+  const appearanceBody = appearanceOpen
+    ? `<div class="settings-group-body"><div class="theme-choices" role="radiogroup" aria-label="Appearance">
+      <label class="theme-choice${theme === "dark" ? " is-selected" : ""}" id="btn-theme-dark">
+        <input type="radio" name="appearance" value="dark" ${theme === "dark" ? "checked" : ""} />
+        ${themeThumb("dark")}
+        <span class="theme-choice-label">Dark</span>
+      </label>
+      <label class="theme-choice${theme === "light" ? " is-selected" : ""}" id="btn-theme-light">
+        <input type="radio" name="appearance" value="light" ${theme === "light" ? "checked" : ""} />
+        ${themeThumb("light")}
+        <span class="theme-choice-label">Light</span>
+      </label>
+    </div></div>`
+    : "";
+  const providersBody = providersOpen ? `<div class="settings-group-body">${renderProviderForm()}</div>` : "";
   return `<div class="settings-panel">
     <h3>Settings</h3>
     <div class="time-group">${renderTimeGroupHead("settings:server", "SERVER", serverOpen)}${serverBody}</div>

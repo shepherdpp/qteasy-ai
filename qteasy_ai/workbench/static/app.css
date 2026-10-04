@@ -170,12 +170,14 @@ html[data-theme="light"] button.mode-badge.mode-agent {
 .mode-menu button { text-align: left; width: 100%; }
 .mode-menu button.active { background: var(--bg-active); border-color: #1177bb; color: #fff; }
 #mode-menu,
-#edit-mode-menu {
+#edit-mode-menu,
+#provider-menu {
   gap: 0;
   min-width: 140px;
 }
 #mode-menu button,
-#edit-mode-menu button {
+#edit-mode-menu button,
+#provider-menu button {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -191,20 +193,29 @@ html[data-theme="light"] button.mode-badge.mode-agent {
   text-align: left;
 }
 #mode-menu button:hover:not(:disabled),
-#edit-mode-menu button:hover:not(:disabled) {
+#edit-mode-menu button:hover:not(:disabled),
+#provider-menu button:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 #mode-menu button.active,
-#edit-mode-menu button.active {
+#edit-mode-menu button.active,
+#provider-menu button.active {
   background: transparent;
   border: 0;
   color: var(--text-bright);
 }
 #mode-menu button.active::after,
-#edit-mode-menu button.active::after {
+#edit-mode-menu button.active::after,
+#provider-menu button.active::after {
   content: "✓";
   color: var(--text-muted);
   font-size: 12px;
+}
+#provider-menu #btn-open-settings {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
 }
 .composer-row .mode-menu,
 .composer-row .provider-menu,
@@ -218,7 +229,6 @@ html[data-theme="light"] button.mode-badge.mode-agent {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 14rem;
-  overflow: hidden;
 }
 button.provider-badge {
   box-sizing: border-box;
@@ -809,5 +819,163 @@ html[data-theme="light"] .file-tree button.file.tree-plan.is-active {
 .status-sep { color: var(--border); }
 .settings-panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); }
 .settings-panel p { margin: 6px 0; }
-.settings-panel label { display: block; margin: 8px 0; color: var(--text-muted); font-size: 12px; }
-.settings-panel input { display: block; width: 100%; margin-top: 4px; }
+.settings-panel .settings-group-body { padding: 10px 12px 14px; }
+.settings-panel .settings-item-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+.settings-quit-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding-left: 16px;
+}
+.settings-quit-hint {
+  flex: 1;
+  min-width: 12em;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.theme-choices { display: flex; gap: 16px; flex-wrap: wrap; }
+.settings-panel label.theme-choice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 112px;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.theme-choice input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.theme-thumb {
+  display: flex;
+  width: 104px;
+  height: 72px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+.theme-choice.is-selected .theme-thumb,
+.theme-choice:focus-within .theme-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-thumb-dark { background: #1e1e1e; border-color: #2b2b2b; }
+.theme-thumb-light { background: #f5f5f5; border-color: #d0d0d0; }
+.theme-rail, .theme-arts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 22px;
+  padding: 6px 4px;
+  flex-shrink: 0;
+}
+.theme-thumb-dark .theme-rail,
+.theme-thumb-dark .theme-arts { background: #181818; }
+.theme-thumb-light .theme-rail,
+.theme-thumb-light .theme-arts { background: #ffffff; }
+.theme-bar {
+  display: block;
+  height: 4px;
+  width: 100%;
+  border-radius: 2px;
+}
+.theme-bar.short { width: 70%; }
+.theme-thumb-dark .theme-bar { background: #3c3c3c; }
+.theme-thumb-light .theme-bar { background: #d0d0d0; }
+.theme-chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 4px;
+}
+.theme-user, .theme-reply { display: block; border-radius: 3px; }
+.theme-user { align-self: flex-end; width: 70%; height: 10px; }
+.theme-reply { align-self: flex-start; width: 84%; height: 14px; }
+.theme-thumb-dark .theme-user { background: #0e4d7b; }
+.theme-thumb-dark .theme-reply { background: #5c5c5c; }
+.theme-thumb-light .theme-user { background: #c5e4fb; }
+.theme-thumb-light .theme-reply { background: #e4e4e4; }
+.theme-choice-label { color: var(--text); font-size: 12px; }
+.provider-list { display: flex; flex-direction: column; gap: 2px; }
+.provider-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.provider-row.is-active { background: var(--bg-active); color: var(--text-on-active); }
+.settings-panel label.provider-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+.provider-pick input { width: auto; margin: 3px 0 0; flex-shrink: 0; }
+.provider-main { min-width: 0; }
+.provider-name {
+  display: block;
+  font-size: 12px;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.provider-row.is-active .provider-name,
+.provider-row.is-active .provider-meta { color: var(--text-on-active); }
+.provider-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.provider-actions { display: none; flex-shrink: 0; gap: 6px; }
+.provider-row:hover .provider-actions,
+.provider-row:focus-within .provider-actions { display: flex; }
+.provider-actions .icon-btn { padding: 0 4px; font-size: 11px; line-height: 16px; opacity: 0.75; border: 0; }
+.provider-actions .icon-btn:hover { opacity: 1; }
+.provider-actions .provider-delete { color: var(--err); }
+.settings-add-row { margin-top: 8px; }
+.settings-add-row .icon-btn { padding: 0 8px; font-size: 16px; line-height: 22px; }
+.settings-panel .settings-form label {
+  display: block;
+  margin: 8px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.settings-form label span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-bright);
+  font-size: 12px;
+  font-weight: 600;
+}
+.settings-panel .settings-form input { display: block; width: 100%; margin-top: 0; }
+.settings-form-actions { display: flex; gap: 10px; margin-top: 12px; }
