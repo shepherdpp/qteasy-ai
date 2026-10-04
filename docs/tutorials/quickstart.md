@@ -2,7 +2,7 @@
 
 本教程展示 qteasy-ai 的最小闭环：Ask 问答、plan 生成、确认执行、结构化结果查看。
 
-更完整的模式与安全说明见 [USER_GUIDE.md](../USER_GUIDE.md)。
+更完整的模式、安全边界和工作台用法见 [USER_GUIDE.md](../USER_GUIDE.md)。工作台在用户指南的「工作台」一节。
 
 ## 1. 准备环境
 

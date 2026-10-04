@@ -1,4 +1,4 @@
-# 1.0 发版前实弹结果（空白）
+# 0.2.0 发版前实弹结果（空白）
 
 **手续真源：** [`LIVE_FIRE_DRILL_1.0.md`](LIVE_FIRE_DRILL_1.0.md)。本文件只记结果，不改步骤。
 
@@ -9,7 +9,7 @@
 | 记录人 | |
 | 备注 | |
 
-任一 FAIL 不得打 `1.0.0`。David 不改 semver。
+任一 FAIL 不得打 `0.2.0`。David 不改 semver。
 
 ## Status
 

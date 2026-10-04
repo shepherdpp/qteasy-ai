@@ -82,10 +82,10 @@
 
 ---
 
-## 4. 不要用 / 不进 1.0
+## 4. 不要用 / 不进 0.2.0
 
 - **不要用**：`qt.ai.research.screen_stocks`（选股已拆 L1 DAG）。
-- **不进 1.0 承诺**：申万 / PE DSL、无界下载、HP 2.6+ 深 skill、导入任意 `.py`、多模板 codegen 族、场景三、长文本 ingest、全文档 KB 镜像。
+- **不进 0.2.0**：申万 / PE DSL、无界下载、HP 2.6+ 深 skill、导入任意 `.py`、多模板 codegen 族、场景三、长文本 ingest、全文档 KB 镜像。
 - **Beginner 不做**：`live.plan_only`、`unsafe`、`not_supported`、`open`、无阈值枚举筛股（见 QAI5 `E-SCR-EN`）、Mode-D 改写（E.8 语料）。
 
 G.5 对照本表与 Registry，无 P0 空洞即可签字。

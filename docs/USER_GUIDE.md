@@ -1,157 +1,137 @@
-# qteasy-ai 用户指南（Ask / Plan / Agent）
+# qteasy-ai 使用说明
 
-面向使用者的模式、安全边界与副作用说明。契约定义以 qteasy 仓产品顶层计划 §四 为准。
+qteasy-ai 是 [qteasy](https://github.com/shepherdpp/qteasy) 的对话外壳。你用短句提问、出计划、确认后再取数、回测或优化，结果留在本机，方便以后查看。它不改 qteasy 的回测和交易规则。
 
-## 1. 三种模式（必须可见）
+本说明对应即将发布的 **0.2.0**。PyPI 上已有的 0.1.0 只包含最早的命令行骨架。
 
-| 模式 | API / CLI | 会不会执行 skill | 典型用途 |
-|------|-----------|------------------|----------|
-| **Ask** | `assistant.ask()` / `qteasy-ai ask` | **否**。不调用 PlanExecutor，不写 `runs/` | 学习 qteasy：PT/PS/VS、`run_freq`、常见错误 |
-| **Plan** | `assistant.plan()` / `qteasy-ai plan` | 否（dry-run）。只生成 ToolPlan | 审阅步骤、side-effects、假设 |
-| **preview** | `assistant.preview()` / `qteasy-ai preview` / `plan --preview` | 与 Plan 相同 | 原 `ask()` 的「只看 plan 不执行」迁移入口 |
-| **Agent（run）** | `assistant.run()` / `qteasy-ai run`；已审阅图用 `run --plan-id` | **是**（CLI 视为一次人在回路确认） | 下载/回测/优化等已确认任务 |
+## 1. 本版能做什么
 
-Notebook：`%%qtai --mode ask|plan|preview|run`。`run` 仍须 `%%qtai --confirm <plan_id>` 才真正执行。默认 **display 为 human**（对话区文本）；`--pretty` 为三通道卡片；`--raw` 为 JSON。
+- 用 Ask 询问 qteasy 的概念和常见错误。Ask 不会下载数据，也不会跑回测。
+- 用 Plan 把一件事拆成步骤，给你看完再决定是否执行。
+- 确认之后再取数、看摘要、回测、优化，或按双均线模板写一份策略草稿。
+- 在工作台里打开表格、图和计划说明。
 
-## 1.1 输出档位（CLI / Notebook）
+## 2. 本版不做什么
 
-| 档位 | CLI | Notebook | 内容 |
-|------|-----|----------|------|
-| **human（默认）** | `qteasy-ai plan "..."` | `%%qtai --mode plan` | 装配层人读卡：Ask 答案 / 澄清 / 英文错误 / `plan_ready` 短通知 / **run 结果卡**。数字只来自 JSON。 |
-| **pretty** | `--pretty` | `--pretty` | 结构化 `narrative` + `python_code` + `result_preview`（JSON 或三通道 Markdown） |
-| **raw** | `--raw` | `--raw` | 装配层 payload，供脚本与实弹 |
+- 不会自动下单。提到实盘时，只给出一份计划清单。
+- 不会读论文或长篇附件。
+- 不会盯盘、推送提醒。
+- 官方问答覆盖的是入门问题，不是整站文档的镜像。
 
-槽齐不会自动执行。`--human` **只打印内核已写好的卡**，三端禁止反解析卡或 `plan.md`。Plan dry-run 对话区是一句 `plan_ready` 短通知（已创建、`plan_id`、风险一句、Artifact 路径、两条模式缺口）；完整 `plan.md` 是工作台 Artifact（`type=plan`）：英文叙事 + 由 JSON DAG 生成的 mermaid 框图（有 Provider 时可能多一段 Why；失败则只有 Mode-R）。JSON 才是执行金标准（**json_wins**：改磁盘 md 不会改变 `run --plan-id`）。**`run` / Agent 不创建、不展示 `plan.md`**；ToolPlan JSON 仍进 `runs/{run_id}.json`。磁盘文件名是 **`run_<id>.json`**（Plan 另有 **`run_<id>.plan.md`**），不是 `plan_<id>`。`plan_id` 只写在 JSON 里。无子命令时打印用法卡（`ask` / `plan` / `run --plan-id`），**不会**自动 `run`。概念题在 `plan`/`run` 里会降级为 Ask，并带 `mode_notice`。
+## 3. 安装
 
-Plan 成功即本句完成（保留当前 `plan_id`）。Workbench Confirm 是可选快捷，不阻塞输入。两条须先写在卡上的缺口：说「本次只讨论 / just discuss」→ Ask；在 Plan 里说「执行上面的计划 / 请运行计划 plan_xxx」→ 执行该计划。澄清中 `skip` / `跳过` 结束本句（失败），不会猜缺省槽。
-
-## 2. Ask 目标态（Q-AI.3）
-
-Ask 只走 **LLMClient + KnowledgeBase**：
-
-- 无 Provider 时用离线 KB 检索 + **英文**模板答案（仍可用）。
-- 有 Provider 时用检索片段接地再合成：`answer` **跟随你的问句语言**（中文问中文答、英文问英文答）。代码、skill 名、`python_code` 保持英文/原文。
-- KB 未命中不会空库瞎编，返回英文 `NOT_FOUND` 并建议改用 Plan（此路径不调用 LLM，故即使用中文提问也是英文提示）。
-- 「列出策略 / 下载 / 回测 / 优化 / 导出」等执行型请求会提示改用 Plan（同样是英文罐头、不调 LLM），**不**生成可执行 steps。
-
-**Breaking（相对阶段 A）**：`ask()` 不再返回空步 `ToolPlan` dry-run。若你需要审阅 steps，请改用 `preview()` / `plan()`。
+先有 qteasy，再装带工作台的 qteasy-ai：
 
 ```bash
-qteasy-ai ask "explain PT vs PS"
-qteasy-ai ask "explain PT vs PS" --depth brief
-qteasy-ai preview "list built-in strategies"
-```
-
-```python
-from qteasy_ai.app import QteasyAssistant
-
-assistant = QteasyAssistant()
-ask_out = assistant.ask("explain PT vs PS", response_style="raw")
-assert ask_out["mode"] == "ask"
-assert "execution" not in ask_out
-preview = assistant.preview("list built-in strategies", response_style="raw", persist="none")
-print(preview["plan"]["steps"][0]["skill_name"])
-```
-
-解释层深度 `explanation_depth`：`brief`（无 python_code）/ `standard`（默认，三通道）/ `deep`（追加风险/假设）。Ask 与 Plan `--pretty` 共用同一套模板。
-
-## 3. 安全边界与 side-effects
-
-用户可见错误与警告为**英文**。
-
-- 高副作用（网络下载、写库、回测、优化、改策略文件）必须先出现在 Plan 的 `side_effects` 中，确认后再 `run`。
-- **实盘**走 `qt.ai.pipeline.live_trade_plan_only`：只出前置清单，`execution_forbidden`，永不 auto-execute。
-- StrategyBuilder（阶段 D）：自然语言 → StrategySpec → 模板骨架写入 `.qteasy/ai/strategies/` → 静态校验 → 复用 `backtest.run_builtin`。Ask 不写策略文件。
-- 无日期或超长区间的全市场 refill：Plan 会 `clarify_required` / `date_range`，禁止无界下载。
-- 无匹配 skill 时返回 `clarify_required` / `not_supported_yet`，**禁止**静默落到 `summary_kline`。
-- Hybrid Planner（方案 H′）：分类只出 **Job ID**（`planner_trace.intent_job` / `source` / `rationale`）；已知 Job 由代码菜谱出图。配置了 Provider 时，0 命中或冲突表未覆盖才让 LLM 选 Job；非法 JSON / 未知 id → `clarify`，禁止降级回扁平 skill 菜单。未配置 Provider 且 0 命中 → `clarify`。
-- `profile.agent.allow_*` 只门控 session 内 `agent_auto`。一次性 `run "<query>"` 仍视为一次确认。
-
-## 4. Provider
-
-未设置 `QTEASY_AI_MODEL` 时：
-
-- Ask：Offline KnowledgeBase。
-- Plan：规则路由（不调用 LLM）。
-
-设置 `QTEASY_AI_MODEL` / `QTEASY_AI_API_KEY` / `QTEASY_AI_BASE_URL` 后：Ask 可走 LLM 合成；Plan 可走 LLM 候选 + 规则门禁。默认请求超时 **120 秒**（`QTEASY_AI_TIMEOUT` / `ai_timeout` 可覆盖）。
-
-```bash
-qteasy-ai provider-check
-```
-
-## 5. Multi-turn session（Q-AI.6）
-
-Use the same `session_id` on CLI and Notebook so a follow-up **revises** the last closed ToolPlan instead of starting a new one-shot classify.
-
-```bash
-qteasy-ai plan "帮我下载日线" --session-id demo
-qteasy-ai plan "20240101 到 20241231" --session-id demo
-qteasy-ai plan "请列出所有内置交易策略" --session-id demo
-qteasy-ai plan "请执行上面的计划" --session-id demo
-qteasy-ai run --plan-id plan_xxxxxxxxxxxx
-qteasy-ai ask "what is qteasy"
-qteasy-ai ask "explain PT vs PS" --session-id demo
-```
-
-```python
-from qteasy_ai.app import QteasyAssistant
-
-assistant = QteasyAssistant()
-assistant.plan("帮我下载日线", session_id="demo", response_style="raw")
-filled = assistant.plan("20240101 到 20241231", session_id="demo", response_style="raw")
-assert filled["plan"]["planner_trace"]["source"] == "session"
-```
-
-Rules (user-facing):
-
-- Always pass **`--session-id`** (full flag name) on every follow-up. Without it, each sentence is independent. Prefer `--session-id` over a shortened `--session`.
-- Fill or change a slot: same Job, no new classify. Switching topic skips the previous closed job (`Previous topic skipped.`) without an abandon card. Session id and history stay. Open-loop abandon (trial / whole open job) is unchanged.
-- Clarification pauses the turn. Reply with the missing field (next sentence fills the slot). `skip` / `跳过` ends this request as a failure. After 3 rounds on the same intent the response stays `clarify`.
-- A successful Plan dry-run is complete; the current `plan_id` remains the artifact. To execute it, stay on the same `--session-id` and say so in **Plan** mode (`请执行上面的计划` / `run this plan`), or `qteasy-ai run --plan-id <id>`. A one-shot `run "<new query>"` still builds a **new** plan (mode B). `--human` prints the slim kernel card (`N items`), not the full id dump.
-- Optional `profile.defaults` (shares / start / end / freq) may fill **optional** slots only. They show as defaults and stay unconfirmed until you say yes.
-- `allow_refill` / `allow_backtest` / `allow_optimize` apply only to unattended `agent_auto`. A one-shot `run "<query>"` is still one human confirmation. Live trade is never auto.
-- First init creates `user_kb/` (rules / raw / compiled + English README). Ask does **not** search it.
-
-Notebook: `%%qtai --mode plan --session-id demo`.
-
-## 6. Workbench Web / TUI（Q-AI.7）
-
-Desktop three-pane Web and a minimal TUI wrap the same `QteasyAssistant` as CLI/Notebook. They share `runs/`. Completing slots still only shows a Plan card; Confirm is optional and does not block the composer. Cancel dismisses the card (it does not abandon a closed job). Chat panes **only render** kernel cards (`ask` / `plan_ready` / `clarify` / `result` / `error` / `mode_notice`). Web reviews `plan.md` as an Artifact (`type=plan`); the TUI still confirms from the DTO `plan_card` (no Artifact column). JSON wins over markdown.
-
-```bash
+pip install "qteasy>=2.6.0"
 pip install "qteasy-ai[workbench]"
+```
+
+本地两仓一起改时：
+
+```bash
+pip install -e /path/to/qteasy
+pip install -e /path/to/qteasy-ai
+```
+
+记忆、计划和运行记录默认在当前目录的 `.qteasy/ai/`。换目录可设置环境变量 `QTEASY_AI_HOME`。
+
+## 4. 三种模式
+
+界面上始终能看到当前模式。槽位填完不会自动变成执行。
+
+| 模式 | 会做什么 |
+|------|----------|
+| **Ask** | 只回答。不调用技能，不写运行记录。 |
+| **Plan** | 只生成计划，不执行。 |
+| **Agent** | 执行你已经确认的计划。命令行里对应 `run`。 |
+
+高副作用的步骤（下载、写库、回测、优化、写策略文件）必须先出现在计划里。你确认之后才会执行。
+
+没有配置模型时仍然可用：Ask 用内置的英文知识库回答；Plan 按规则生成计划。错误和警告是英文，并会写下一步可以做什么。
+
+## 5. 工作台
+
+安装可选组件后启动：
+
+```bash
 qteasy-ai serve --host 127.0.0.1 --port 8765
+```
+
+浏览器打开 `http://127.0.0.1:8765`。
+
+从左到右三栏：会话与对话、产物、工作区。工作区里能看到当前任务、本会话的产物索引。折叠左侧只改变对话栏宽度；折叠右侧只改变产物栏宽度。
+
+Enter 换行。Ctrl 或 ⌘ 加 Enter 发送。下面的图来自浅色主题的本地工作台；右上角齿轮可切回暗色。
+
+![工作台三栏与模式徽章](img/workbench-shell.png)
+
+在 Ask 里问概念，回答出现在对话区：
+
+![Ask 回答](img/workbench-ask.png)
+
+在 Plan 里说一件要做的事。成功后对话里是一句短通知；完整计划在中间栏打开，里面有步骤和预期产物类型。改这份说明不会改变真正执行的内容。
+
+![计划短通知与打开的计划](img/workbench-plan.png)
+
+确认之后，对话里出现结果卡，产物栏里可以打开表或图。确认不是必须立刻点的，它不会锁住输入框。
+
+![确认后的结果与产物](img/workbench-result.png)
+
+运行中可以点 **Stop** 或 **Background**：
+
+- **Stop**：在下一步边界停下，本次结果丢弃。已经写入数据源的行不会回滚。
+- **Background**：任务继续跑，你可以接着提问或再出一份计划。新的执行会等当前任务结束后再跑，等待中的下一次执行只保留最后一条。
+
+最小文本界面没有产物栏，确认仍在对话里完成：
+
+```bash
 qteasy-ai tui --session-id demo
 ```
 
-Details: [WORKBENCH.md](WORKBENCH.md). Hand-off checklist: [LIVE_FIRE_DRILL_QAI7.md](LIVE_FIRE_DRILL_QAI7.md).
+## 6. 模型（可以不配）
 
-## 7. StrategyBuilder（Q-AI.4）
+不配模型时，Ask 与 Plan 仍按上一节工作。
 
-自然语言写策略走 **Plan**，不是 Ask。本阶段只支持 **RuleIterator 双均线择时** 模板（如 20/60 金叉死叉）。生成源码写入 `.qteasy/ai/strategies/`，不写 qteasy 安装包、默认不写 `examples/`。
+要让回答跟随你的语言、或让计划多一段说明，可以任选一种方式：
+
+- 环境变量：`QTEASY_AI_MODEL`、`QTEASY_AI_API_KEY`、`QTEASY_AI_BASE_URL`。默认请求超时 120 秒，可用 `QTEASY_AI_TIMEOUT` 覆盖。
+- 工作台 Settings 的 **PROVIDERS**：添加、修改、删除和切换。无模型的内置项不能删除。列表和诊断不会显示原始密钥。
+
+![Settings 中的外观与 Provider 池](img/workbench-settings.png)
+
+命令行：
 
 ```bash
-qteasy-ai plan "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测" --raw
+qteasy-ai provider list
+qteasy-ai provider-check
 ```
 
-实盘：
+`provider` 还有 `add`、`update`、`remove`、`use`。看参数用 `qteasy-ai provider add --help`。
+
+## 7. 命令行最短路径
+
+更完整的命令和 Notebook 写法见 [快速上手](tutorials/quickstart.md)。
 
 ```bash
-qteasy-ai plan "start live trade now" --raw
+qteasy-ai ask "what is qteasy"
+qteasy-ai plan "show kline summary of 000300.SH"
+qteasy-ai run --plan-id plan_xxxxxxxxxxxx
 ```
 
-期望 skill：`qt.ai.pipeline.live_trade_plan_only`（只出计划）。
+同一件事要分几句说完时，每句都带同一个 `--session-id`。计划生成之后，在 Plan 里说「请执行上面的计划」，或使用上面的 `run --plan-id`。
 
-演示脚本：`examples/ai_shell_stage_d_strategybuilder_demo.py`。
+澄清时直接回答所缺的内容。`skip` 或「跳过」会结束这一句，不会替你猜。
 
-## 8. 更多
+## 8. 请留意
 
-- 快速上手：[tutorials/quickstart.md](tutorials/quickstart.md)
-- 阶段 A 设计备忘（含现状 vs 目标态）：[design/11-ai-shell-stage-a.md](design/11-ai-shell-stage-a.md)
-- 阶段 D 手测：[LIVE_FIRE_DRILL_QAI4.md](LIVE_FIRE_DRILL_QAI4.md)
-- 阶段 E 手测：[LIVE_FIRE_DRILL_QAI5.md](LIVE_FIRE_DRILL_QAI5.md)（Mode-R 全清单 + Mode-D 抽测；入口 `qteasy-ai plan "<q>" --raw`）
-- 阶段 F 手测：[LIVE_FIRE_DRILL_QAI6.md](LIVE_FIRE_DRILL_QAI6.md)（**已关单 2026-09-07**；session / Ask「什么是 qteasy」/ user_kb 骨架）
-- 阶段 G 工作台：[WORKBENCH.md](WORKBENCH.md)；手测 [LIVE_FIRE_DRILL_QAI7.md](LIVE_FIRE_DRILL_QAI7.md)（编码完成；1.0 标签待 Jackie）；人读卡审阅 [LIVE_FIRE_DRILL_QAI7_HUMAN.md](LIVE_FIRE_DRILL_QAI7_HUMAN.md)
-- 官方 KB 目录：[KB_TIER1.md](KB_TIER1.md)
-- 示例：`examples/ai_shell_stage_c_ask_demo.py`、`examples/ai_shell_stage_d_strategybuilder_demo.py`、`examples/ai_shell_stage_g_workbench_demo.py`
+- 实盘请求只会生成计划，不会自动下单。
+- 没有日期或区间过长的全市场下载会被拦住，需要你补上范围。
+- 首次使用会在 `.qteasy/ai/user_kb/` 放好研究笔记的空目录。Ask 不搜索这个目录。
+- 用自然语言写策略时走 Plan。当前模板是双均线择时，生成的源码在 `.qteasy/ai/strategies/`，不会改 qteasy 安装目录。
+
+## 9. 延伸阅读
+
+- 命令与 Notebook：[tutorials/quickstart.md](tutorials/quickstart.md)
+- 官方能力目录：[OFFICIAL_SKILL_CATALOG.md](OFFICIAL_SKILL_CATALOG.md)
+- 文档地图：[USER_DOCS_INDEX.md](USER_DOCS_INDEX.md)
