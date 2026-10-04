@@ -154,7 +154,7 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             planner._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.visual.export_kline",
-                inputs=planner._market_inputs(query),
+                inputs=planner._export_kline_inputs(query),
             )
         ]
     if job == "data.refill":

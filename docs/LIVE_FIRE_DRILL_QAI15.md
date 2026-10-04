@@ -139,7 +139,7 @@ qteasy-ai run "帮我看 Tushare 是否配好、本地缺哪些表" --raw
 ## G6 已知非目标（点到即可，勿记成新 bug）
 
 - Ask「什么是 PT」仍无知识（目标态 Ask → Q-AI.2）
-- `export_kline` 仍为 matplotlib 折线，非 `HistoryPanel.plot`
+- `export_kline` 默认是 HistoryPanel 静态蜡烛图 PNG，折线仅在明确要求 close 曲线时
 - 配置 Provider 后 **路由应不变**（可选抽 A1 / B2 / E1 / B-F2）
 
 ---

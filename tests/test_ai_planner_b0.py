@@ -37,6 +37,34 @@ class TestAiPlannerB0(unittest.TestCase):
         for step in plan.steps:
             self.assertEqual(step.depends_on, [])
 
+    def test_export_kline_line_only_when_close_curve_requested(self) -> None:
+        """普通导出不传 plot_type；明确收盘曲线才是 line。"""
+
+        print("\n[TestAiPlannerB0] export plot_type")
+        planner = Planner(self.registry, env_facts={})
+        candle = planner.build_plan("export kline of 000300.SH to png", mode="plan")
+        line = planner.build_plan("export close curve of 000300.SH", mode="plan")
+        legacy_candle = planner._infer_steps(
+            query="export kline of 000300.SH to png",
+            q_lower="export kline of 000300.SH to png",
+        )
+        legacy_line = planner._infer_steps(
+            query="导出 000300.SH 折线",
+            q_lower="导出 000300.SH 折线",
+        )
+        print(" candle inputs:", candle.steps[0].inputs)
+        print(" line inputs:", line.steps[0].inputs)
+        print(" legacy candle:", legacy_candle[0].inputs)
+        print(" legacy line:", legacy_line[0].inputs)
+
+        self.assertEqual(candle.steps[0].skill_name, "qt.ai.visual.export_kline")
+        self.assertNotIn("plot_type", candle.steps[0].inputs)
+        self.assertEqual(line.steps[0].skill_name, "qt.ai.visual.export_kline")
+        self.assertEqual(line.steps[0].inputs.get("plot_type"), "line")
+        self.assertNotIn("plot_type", legacy_candle[0].inputs)
+        self.assertEqual(legacy_line[0].skill_name, "qt.ai.visual.export_kline")
+        self.assertEqual(legacy_line[0].inputs.get("plot_type"), "line")
+
     def test_kline_summary_routes_to_summary_not_export(self) -> None:
         """kline summary 优先路由到 summary_kline（修误路由）。"""
 

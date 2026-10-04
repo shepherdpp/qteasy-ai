@@ -23,6 +23,38 @@ from qteasy_ai.skills import (
 )
 
 
+def _red_pixel_count(path: str) -> int:
+    """统计 PNG 里接近纯红的像素，用来区分上涨蜡烛实体和蓝色折线。"""
+
+    import matplotlib.image as mpimg
+
+    image = mpimg.imread(path)
+    arr = np.asarray(image[..., :3], dtype=float)
+    if arr.size and float(np.nanmax(arr)) > 1.0:
+        arr = arr / 255.0
+    red = (arr[..., 0] > 0.75) & (arr[..., 1] < 0.25) & (arr[..., 2] < 0.25)
+    count = int(np.count_nonzero(red))
+    print(" png:", path, "shape:", image.shape, "red_pixels:", count)
+    return count
+
+
+def _right_axes_margin_frac(path: str) -> float:
+    """白轴右缘到图像右缘的比例。默认 subplot 空白约为 0.10。"""
+
+    import matplotlib.image as mpimg
+
+    image = mpimg.imread(path)
+    arr = np.asarray(image[..., :3], dtype=float)
+    if arr.size and float(np.nanmax(arr)) > 1.0:
+        arr = arr / 255.0
+    white = (arr[..., 0] > 0.97) & (arr[..., 1] > 0.97) & (arr[..., 2] > 0.97)
+    columns = np.where(white.any(axis=0))[0]
+    width = int(arr.shape[1])
+    frac = 1.0 if len(columns) == 0 else (width - 1 - int(columns.max())) / float(width)
+    print(" right margin frac:", frac, "width:", width)
+    return frac
+
+
 class TestAiReadonlySkills(unittest.TestCase):
     """测试阶段A只读技能输出契约。"""
 
@@ -99,14 +131,61 @@ class TestAiReadonlySkills(unittest.TestCase):
             import matplotlib
 
             backend = str(matplotlib.get_backend() or "")
+            candle_red = _red_pixel_count(output_file) if os.path.isfile(output_file) else 0
+            right_margin = _right_axes_margin_frac(output_file) if os.path.isfile(output_file) else 1.0
             print(" export skill:", export_meta.name, export_result["artifacts"])
             print(" matplotlib backend:", backend)
             print(" png exists:", os.path.isfile(output_file))
+            print(" candle red pixels:", candle_red)
+            print(" right axes margin:", right_margin)
 
             self.assertTrue(export_result["ok"])
             self.assertTrue(export_result["artifacts"][0]["path"].endswith(".png"))
             self.assertTrue(os.path.isfile(output_file))
             self.assertIn("agg", backend.lower())
+            self.assertGreater(candle_red, 30)
+            self.assertLess(right_margin, 0.06)
+
+            line_file = f"{temp_dir}/close_line.png"
+            line_result = export_handler(shares="000300.SH", output_path=line_file, plot_type="line")
+            line_red = _red_pixel_count(line_file)
+            print(" line export ok:", line_result["ok"], "red pixels:", line_red)
+            self.assertTrue(line_result["ok"])
+            self.assertLess(line_red, 5)
+
+            close_alias = export_handler(
+                shares="000300.SH",
+                output_path=f"{temp_dir}/close_alias.png",
+                plot_type="close",
+            )
+            print(" close alias ok:", close_alias["ok"], "plot_type:", close_alias["inputs_echo"]["plot_type"])
+            self.assertTrue(close_alias["ok"])
+
+            from qteasy.history import stack_dataframes
+
+            panel = stack_dataframes({"000300.SH": frame.copy()}, dataframe_as="shares")
+            _, panel_handler = build_visual_export_skill(get_kline_func=lambda **_: panel)
+            panel_file = f"{temp_dir}/panel_kline.png"
+            panel_result = panel_handler(shares="000300.SH", output_path=panel_file)
+            panel_red = _red_pixel_count(panel_file)
+            print(" panel export ok:", panel_result["ok"], "red pixels:", panel_red)
+            self.assertTrue(panel_result["ok"])
+            self.assertGreater(panel_red, 30)
+
+            thin = frame.drop(columns=["open"])
+            _, thin_handler = build_visual_export_skill(get_kline_func=lambda **_: thin.copy())
+            thin_result = thin_handler(shares="000300.SH", output_path=f"{temp_dir}/no_open.png")
+            print(" missing open:", thin_result["error"])
+            self.assertFalse(thin_result["ok"])
+            self.assertEqual(thin_result["error"]["code"], "KLINE_EXPORT_FAILED")
+            self.assertIn("OHLC", thin_result["error"]["message"])
+            self.assertTrue(thin_result["error"]["message"].isascii())
+
+            bad_type = export_handler(shares="000300.SH", output_path=f"{temp_dir}/bad.png", plot_type="renko")
+            print(" bad plot_type:", bad_type["error"])
+            self.assertFalse(bad_type["ok"])
+            self.assertEqual(bad_type["error"]["code"], "KLINE_EXPORT_FAILED")
+            self.assertIn("Unsupported plot_type", bad_type["error"]["message"])
 
     def test_data_summary_empty_data_english_error(self) -> None:
         """空数据失败且 error.message 为英文。"""

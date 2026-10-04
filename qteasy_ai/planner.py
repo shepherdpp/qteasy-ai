@@ -400,6 +400,22 @@ class Planner:
 
         return self._extract_market_inputs(query, overrides=getattr(self, "_market_overrides", None))
 
+    @staticmethod
+    def _query_wants_close_curve(query: str) -> bool:
+        """问句是否明确要收盘曲线，而不是蜡烛图。"""
+
+        text = str(query or "").lower()
+        phrases = ("close curve", "close line", "line chart", "收盘曲线", "折线")
+        return any(phrase in text for phrase in phrases)
+
+    def _export_kline_inputs(self, query: str) -> Dict[str, Any]:
+        """K 线导出槽。未点名收盘曲线时不传 plot_type，技能默认蜡烛图。"""
+
+        inputs = dict(self._market_inputs(query))
+        if self._query_wants_close_curve(query):
+            inputs["plot_type"] = "line"
+        return inputs
+
     def _overlay_session_slots(self, steps: List[ToolStep], session: Any) -> List[ToolStep]:
         """用 session 槽覆盖步骤输入；补齐后可把 refill 澄清换成真步骤。"""
 
@@ -1089,7 +1105,7 @@ class Planner:
             primary = self._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.visual.export_kline",
-                inputs=self._market_inputs(query),
+                inputs=self._export_kline_inputs(query),
             )
             return [primary]
 
