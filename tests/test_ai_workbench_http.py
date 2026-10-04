@@ -672,18 +672,145 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertNotIn("api_key", prov.json())
             self.assertIn("api_key_present", prov.json())
             self.assertIn("configured", prov.json())
-            denied = client.post("/v1/provider", json={"model": "x", "confirmed": False})
+            self.assertEqual(prov.json().get("active_id"), "mode-r")
+            self.assertFalse(prov.json().get("configured"))
+            denied = client.post(
+                "/v1/provider",
+                json={
+                    "action": "add",
+                    "name": "Demo",
+                    "model": "x",
+                    "base_url": "http://127.0.0.1:9",
+                    "confirmed": False,
+                },
+            )
             print(" provider deny:", denied.status_code, denied.json())
             self.assertEqual(denied.status_code, 400)
+            self.assertEqual((denied.json().get("error") or {}).get("code"), "PROVIDER_CONFIRM_REQUIRED")
             ok_prov = client.post(
                 "/v1/provider",
-                json={"model": "demo-model", "base_url": "http://127.0.0.1:9", "api_key": "sk-test", "confirmed": True},
+                json={
+                    "action": "add",
+                    "name": "Demo",
+                    "model": "demo-model",
+                    "base_url": "http://127.0.0.1:9",
+                    "api_key": "sk-test",
+                    "confirmed": True,
+                },
             )
             print(" provider save:", ok_prov.status_code, ok_prov.json())
             self.assertEqual(ok_prov.status_code, 200)
             self.assertNotIn("api_key", ok_prov.json())
-            self.assertTrue(ok_prov.json().get("api_key_present"))
-            self.assertEqual(ok_prov.json().get("mode"), "local_llm")
+            self.assertNotIn("sk-test", json.dumps(ok_prov.json()))
+            self.assertEqual(ok_prov.json().get("active_id"), "mode-r")
+            provider_id = ok_prov.json().get("id")
+            self.assertTrue(provider_id)
+            used = client.post("/v1/provider", json={"action": "use", "id": provider_id})
+            print(" provider use:", used.status_code, used.json())
+            self.assertEqual(used.status_code, 200)
+            self.assertNotIn("sk-test", json.dumps(used.json()))
+            self.assertTrue(used.json().get("api_key_present"))
+            self.assertEqual(used.json().get("mode"), "local_llm")
+
+    def test_provider_pool_http_rejects_common_failures(self) -> None:
+        """未确认、Mode-R、未知 id、缺 model 都拒绝，且不写坏池。"""
+
+        print("\n[TestAiWorkbenchHttp] provider pool failures")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, assistant = self._client(temp_dir)
+            path = store.provider_overlay_path
+
+            def disk_text() -> str:
+                if not path.exists():
+                    return ""
+                return path.read_text(encoding="utf-8")
+
+            before = disk_text()
+            for action, body in (
+                ("add", {"action": "add", "name": "A", "model": "m", "base_url": "http://127.0.0.1:9"}),
+                ("update", {"action": "update", "id": "mode-r", "model": "gpt-4"}),
+                ("remove", {"action": "remove", "id": "mode-r"}),
+            ):
+                denied = client.post("/v1/provider", json={**body, "confirmed": False})
+                print(" unconfirmed", action, denied.status_code, denied.json())
+                err = denied.json().get("error") or {}
+                self.assertEqual(denied.status_code, 400)
+                self.assertEqual(err.get("code"), "PROVIDER_CONFIRM_REQUIRED")
+                self.assertEqual(disk_text(), before)
+
+            locked = client.post(
+                "/v1/provider",
+                json={"action": "remove", "id": "mode-r", "confirmed": True},
+            )
+            edited = client.post(
+                "/v1/provider",
+                json={"action": "update", "id": "mode-r", "model": "gpt-4", "confirmed": True},
+            )
+            print(" remove mode-r:", locked.status_code, locked.json())
+            print(" update mode-r:", edited.status_code, edited.json())
+            self.assertEqual(locked.status_code, 400)
+            self.assertEqual((locked.json().get("error") or {}).get("code"), "PROVIDER_BUILTIN_LOCKED")
+            self.assertEqual(
+                (locked.json().get("error") or {}).get("message"),
+                "Mode-R cannot be edited or removed.",
+            )
+            self.assertEqual(edited.status_code, 400)
+            self.assertEqual((edited.json().get("error") or {}).get("code"), "PROVIDER_BUILTIN_LOCKED")
+            self.assertEqual(client.get("/v1/provider").json().get("active_id"), "mode-r")
+
+            missing_model = client.post(
+                "/v1/provider",
+                json={"action": "add", "name": "Local", "model": "  ", "base_url": "http://127.0.0.1:9", "confirmed": True},
+            )
+            print(" missing model:", missing_model.status_code, missing_model.json())
+            self.assertEqual(missing_model.status_code, 400)
+            self.assertEqual((missing_model.json().get("error") or {}).get("code"), "PROVIDER_FIELDS_REQUIRED")
+            self.assertEqual(
+                [row.get("id") for row in client.get("/v1/provider").json().get("providers") or []],
+                ["mode-r"],
+            )
+
+            unknown = client.post("/v1/provider", json={"action": "use", "id": "missing-id"})
+            print(" unknown use:", unknown.status_code, unknown.json())
+            self.assertEqual(unknown.status_code, 404)
+            self.assertEqual((unknown.json().get("error") or {}).get("code"), "PROVIDER_NOT_FOUND")
+            self.assertEqual(client.get("/v1/provider").json().get("active_id"), "mode-r")
+
+            added = client.post(
+                "/v1/provider",
+                json={
+                    "action": "add",
+                    "name": "Local",
+                    "model": "demo-model",
+                    "base_url": "http://127.0.0.1:9",
+                    "api_key": "sk-pool",
+                    "confirmed": True,
+                },
+            )
+            print(" added:", added.status_code, added.json())
+            self.assertEqual(added.status_code, 200)
+            provider_id = added.json().get("id")
+            self.assertTrue(provider_id)
+            self.assertNotIn("sk-pool", json.dumps(added.json()))
+            self.assertEqual(added.json().get("active_id"), "mode-r")
+            used = client.post("/v1/provider", json={"action": "use", "id": provider_id})
+            print(" used mode:", used.json().get("mode"), "model:", used.json().get("model"))
+            self.assertEqual(used.status_code, 200)
+            self.assertEqual(used.json().get("mode"), "local_llm")
+            self.assertEqual(used.json().get("model"), "demo-model")
+            self.assertTrue(used.json().get("configured"))
+            self.assertEqual(assistant.planner.provider.model, "demo-model")
+            removed = client.post(
+                "/v1/provider",
+                json={"action": "remove", "id": provider_id, "confirmed": True},
+            )
+            after = client.get("/v1/provider").json()
+            print(" removed active:", after.get("active_id"), "provider:", assistant.planner.provider)
+            self.assertEqual(removed.status_code, 200)
+            self.assertEqual(after.get("active_id"), "mode-r")
+            self.assertEqual(after.get("mode"), "rule")
+            self.assertFalse(after.get("configured"))
+            self.assertIsNone(assistant.planner.provider)
 
     def test_workspace_artifacts_stay_on_own_session(self) -> None:
         """Session A 的 run 产物不得出现在 Session B 的 workspace。"""

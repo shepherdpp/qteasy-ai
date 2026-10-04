@@ -28,7 +28,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from ..config import build_provider_from_overlay, ensure_mplbackend_agg, provider_diagnostics
+from ..config import ensure_mplbackend_agg
 from ..app import QteasyAssistant
 from ..contracts import PlanStepRecord
 from ..memory_store import MemoryStore, _json_safe
@@ -67,6 +67,9 @@ _NEXT_ACTION = {
     "NOT_USER_MESSAGE": "Only user messages can be edited. Pick a You bubble.",
     "REWIND_DISCARD_REQUIRED": "Editing this message discards later executed runs. Confirm to continue.",
     "PROVIDER_CONFIRM_REQUIRED": "Review the new provider settings, then press Confirm.",
+    "PROVIDER_BUILTIN_LOCKED": "Mode-R stays in the list. Add another provider, or switch to one.",
+    "PROVIDER_FIELDS_REQUIRED": "Enter a name and a model, then press Confirm.",
+    "PROVIDER_NOT_FOUND": "Pick a provider from the list, or add one in Settings.",
     "CONFIRM_REQUIRED": "Set confirm=true after reviewing the note, then retry the write.",
     "KB_WRITE_NOT_PENDING": "Lock the FactorSpec first (save this note), then confirm the write.",
     "RUN_IN_PROGRESS": "Wait for the current run to finish, or open that session and watch it.",
@@ -97,6 +100,14 @@ def _error(code: str, message: str, status: int) -> JSONResponse:
         },
         status_code=status,
     )
+
+
+def _provider_timeout(value: Any) -> Optional[int]:
+    """把请求里的 timeout 收成整数；空值表示不改。"""
+
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def _wants_stream(request: Request) -> bool:
@@ -848,40 +859,69 @@ class WorkbenchHttp:
         return JSONResponse({"ok": True, "message": "Workbench server is stopping."})
 
     async def get_provider(self, request: Request) -> JSONResponse:
-        """GET /v1/provider：provider-check 投影，不含 raw api_key。"""
+        """GET /v1/provider：当前项诊断与池列表，不含 raw api_key。"""
 
         del request
-        overlay = self.assistant.memory_store.load_provider_overlay()
-        body = provider_diagnostics(overlay)
-        configured = bool(body.get("ok"))
-        body["ok"] = True
-        body["configured"] = configured
-        return JSONResponse(body)
+        return JSONResponse(self._provider_dto())
 
     async def post_provider(self, request: Request) -> JSONResponse:
-        """POST /v1/provider：确认后写入覆盖层并热替换 Provider。"""
+        """POST /v1/provider：确认后增删改，或直接切换当前项。"""
 
         body = await self._read_json(request)
-        if not bool(body.get("confirmed") or body.get("confirm")):
+        action = str(body.get("action") or "").strip()
+        confirmed = bool(body.get("confirmed") or body.get("confirm"))
+        if action in {"add", "update", "remove"} and not confirmed:
             return _error(
                 "PROVIDER_CONFIRM_REQUIRED",
                 "Changing provider requires confirm.",
                 400,
             )
-        overlay = {
-            "model": str(body.get("model") or "").strip(),
-            "base_url": str(body.get("base_url") or "").strip(),
-            "api_key": str(body.get("api_key") or "").strip(),
-            "timeout": body.get("timeout"),
-        }
-        self.assistant.memory_store.save_provider_overlay(overlay)
-        saved = self.assistant.memory_store.load_provider_overlay()
-        self.assistant.apply_provider(build_provider_from_overlay(saved))
-        diag = provider_diagnostics(saved)
-        configured = bool(diag.get("ok"))
-        diag["ok"] = True
-        diag["configured"] = configured
-        return JSONResponse(diag)
+        store = self.assistant.memory_store
+        if action == "add":
+            result = store.add_provider(
+                name=str(body.get("name") or ""),
+                model=str(body.get("model") or ""),
+                base_url=str(body.get("base_url") or ""),
+                api_key=str(body.get("api_key") or ""),
+                timeout=_provider_timeout(body.get("timeout")),
+            )
+        elif action == "update":
+            result = store.update_provider(
+                str(body.get("id") or ""),
+                name=body.get("name") if "name" in body else None,
+                model=body.get("model") if "model" in body else None,
+                base_url=body.get("base_url") if "base_url" in body else None,
+                api_key=body.get("api_key") if "api_key" in body else None,
+                timeout=_provider_timeout(body.get("timeout")) if "timeout" in body else None,
+            )
+        elif action == "remove":
+            result = store.remove_provider(str(body.get("id") or ""))
+        elif action == "use":
+            result = store.use_provider(str(body.get("id") or ""))
+        else:
+            return _error(
+                "PROVIDER_FIELDS_REQUIRED",
+                "Name and model are required.",
+                400,
+            )
+        if not result.get("ok"):
+            code = str(result.get("error") or "PROVIDER_NOT_FOUND")
+            status = 404 if code == "PROVIDER_NOT_FOUND" else 400
+            return _error(code, str(result.get("message") or "Provider update failed."), status)
+        self.assistant.apply_provider(store.build_active_provider())
+        dto = self._provider_dto()
+        if action == "add" and result.get("id"):
+            dto["id"] = result["id"]
+        return JSONResponse(dto)
+
+    def _provider_dto(self) -> Dict[str, Any]:
+        """当前项诊断。请求本身成功时 ok 为真，configured 表示是否有模型。"""
+
+        body = self.assistant.memory_store.active_diagnostics()
+        body["configured"] = bool(body.get("configured"))
+        body["ok"] = True
+        body.pop("api_key", None)
+        return body
 
     async def get_workspace(self, request: Request) -> JSONResponse:
         """GET /v1/workspace：本 Session 产物索引。"""
@@ -1030,9 +1070,7 @@ def create_app(
 
     ensure_mplbackend_agg()
     helper = assistant or QteasyAssistant(memory_store=memory_store or MemoryStore())
-    overlay = helper.memory_store.load_provider_overlay()
-    if overlay.get("model"):
-        helper.apply_provider(build_provider_from_overlay(overlay))
+    helper.apply_provider(helper.memory_store.build_active_provider())
     api = WorkbenchHttp(helper)
     routes = [
         Route("/", api.index, methods=["GET"]),

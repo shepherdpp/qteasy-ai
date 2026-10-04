@@ -6,7 +6,7 @@
 # Created: 2026-04-15
 # Desc:
 # qteasy AI 外壳命令行入口，支持
-# ask/plan/run/provider-check 子命令。
+# ask/plan/run/provider 子命令。
 # ======================================
 
 """qteasy AI 外壳 CLI 入口。"""
@@ -18,34 +18,10 @@ import json
 from typing import Any, Dict
 
 from .app import QteasyAssistant
-from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter, ensure_mplbackend_agg, provider_diagnostics
+from .config import ensure_mplbackend_agg
 from .memory_store import MemoryStore
-from .provider import OpenAICompatProvider
 from .workbench.human import format_human_error, format_human_from_payload
 from .human_card import format_human_cards, usage_notice_card
-
-
-def _build_provider_from_config() -> OpenAICompatProvider | None:
-    """从 ConfigCenter 构建 Provider。"""
-
-    config_center = ConfigCenter()
-    provider_cfg = config_center.resolve_provider_config()
-    model = str(provider_cfg.get("model", "")).strip()
-    if not model:
-        return None
-    return OpenAICompatProvider(
-        model=model,
-        api_key=str(provider_cfg.get("api_key", "")),
-        base_url=str(provider_cfg.get("base_url", "https://api.openai.com/v1")),
-        timeout=int(provider_cfg.get("timeout", DEFAULT_PROVIDER_TIMEOUT)),
-        config_center=config_center,
-    )
-
-
-def _provider_check_payload() -> Dict[str, Any]:
-    """生成 provider-check 的可诊断信息。"""
-
-    return provider_diagnostics()
 
 
 def _print_json(payload: Dict[str, Any]) -> None:
@@ -210,7 +186,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session unattended mode; allow_* gates high-side-effect steps.",
     )
 
-    sub.add_parser("provider-check", help="Check provider settings.")
+    sub.add_parser("provider-check", help="Check the active provider.")
+    provider_parser = sub.add_parser("provider", help="Manage the provider pool.")
+    provider_sub = provider_parser.add_subparsers(dest="provider_command")
+    provider_sub.add_parser("list", help="List providers without raw API keys.")
+    add_parser = provider_sub.add_parser("add", help="Add a provider without switching to it.")
+    add_parser.add_argument("--name", required=True, help="Display name.")
+    add_parser.add_argument("--model", required=True, help="Model id.")
+    add_parser.add_argument("--base-url", dest="base_url", required=True, help="API base URL.")
+    add_parser.add_argument("--api-key", dest="api_key", default="", help="API key. Stored locally.")
+    add_parser.add_argument("--timeout", type=int, default=None, help="Request timeout in seconds.")
+    update_parser = provider_sub.add_parser("update", help="Update a provider. A blank API key is kept.")
+    update_parser.add_argument("provider_id", help="Provider id.")
+    update_parser.add_argument("--name", default=None, help="Display name.")
+    update_parser.add_argument("--model", default=None, help="Model id.")
+    update_parser.add_argument("--base-url", dest="base_url", default=None, help="API base URL.")
+    update_parser.add_argument("--api-key", dest="api_key", default=None, help="API key. Blank keeps the saved key.")
+    update_parser.add_argument("--timeout", type=int, default=None, help="Request timeout in seconds.")
+    remove_parser = provider_sub.add_parser("remove", help="Remove a provider. Mode-R cannot be removed.")
+    remove_parser.add_argument("provider_id", help="Provider id.")
+    use_parser = provider_sub.add_parser("use", help="Switch the active provider.")
+    use_parser.add_argument("provider_id", help="Provider id.")
 
     serve_parser = sub.add_parser("serve", help="Start the workbench HTTP server (Ask/Plan/run-plan).")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host.")
@@ -219,6 +215,44 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser = sub.add_parser("tui", help="Start the minimal workbench TUI.")
     tui_parser.add_argument("--session-id", dest="session_id", default="tui", help="Conversation session id.")
     return parser
+
+
+def _run_provider_command(memory_store: MemoryStore, args: Any) -> int:
+    """执行 provider list/add/update/remove/use。失败时非零退出。"""
+
+    action = str(getattr(args, "provider_command", "") or "")
+    if action == "list":
+        _print_json(memory_store.list_providers())
+        return 0
+    if action == "add":
+        result = memory_store.add_provider(
+            name=str(getattr(args, "name", "") or ""),
+            model=str(getattr(args, "model", "") or ""),
+            base_url=str(getattr(args, "base_url", "") or ""),
+            api_key=str(getattr(args, "api_key", "") or ""),
+            timeout=getattr(args, "timeout", None),
+        )
+    elif action == "update":
+        result = memory_store.update_provider(
+            str(getattr(args, "provider_id", "") or ""),
+            name=getattr(args, "name", None),
+            model=getattr(args, "model", None),
+            base_url=getattr(args, "base_url", None),
+            api_key=getattr(args, "api_key", None),
+            timeout=getattr(args, "timeout", None),
+        )
+    elif action == "remove":
+        result = memory_store.remove_provider(str(getattr(args, "provider_id", "") or ""))
+    elif action == "use":
+        result = memory_store.use_provider(str(getattr(args, "provider_id", "") or ""))
+    else:
+        result = {
+            "ok": False,
+            "error": "PROVIDER_FIELDS_REQUIRED",
+            "message": "Name and model are required.",
+        }
+    _print_json(result)
+    return 0 if result.get("ok") else 1
 
 
 def main() -> int:
@@ -233,7 +267,7 @@ def main() -> int:
         return 0
 
     memory_store = MemoryStore()
-    provider = _build_provider_from_config()
+    provider = memory_store.build_active_provider()
     assistant = QteasyAssistant(provider=provider, memory_store=memory_store)
     output_format = str(getattr(args, "output_format", "human") or "human")
     response_style = _response_style_for(output_format)
@@ -337,8 +371,10 @@ def main() -> int:
         )
         return 0
     if args.command == "provider-check":
-        _print_json(_provider_check_payload())
+        _print_json(memory_store.active_diagnostics())
         return 0
+    if args.command == "provider":
+        return _run_provider_command(memory_store, args)
     if args.command == "serve":
         try:
             import uvicorn

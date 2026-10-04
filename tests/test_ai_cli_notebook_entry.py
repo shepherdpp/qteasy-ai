@@ -95,62 +95,109 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         self.assertIn("PS", completed.stdout)
         self.assertNotIn("Confirm: qteasy-ai run --plan-id", completed.stdout)
 
-    def test_cli_provider_check_diagnostics(self) -> None:
-        """验证 provider-check 返回配置诊断信息。"""
+    def _provider_home_env(self, temp_dir: str) -> dict:
+        """临时 HOME，并清掉进程里的模型环境变量。"""
 
         env = dict(os.environ)
-        env["QTEASY_AI_MODEL"] = "deepseek-chat"
-        env["QTEASY_AI_API_KEY"] = "test_key"
-        env["QTEASY_AI_BASE_URL"] = "https://api.deepseek.com/v1"
-        env["QTEASY_AI_TIMEOUT"] = "42"
-
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "provider-check"]
-        completed = subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
-        payload = json.loads(completed.stdout)
-
-        print("\n[TestAiCliNotebookEntry] provider-check:", payload)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["provider"], "openai_compatible")
-        self.assertEqual(payload["mode"], "cloud_llm")
-        self.assertEqual(payload["model"], "deepseek-chat")
-        self.assertEqual(payload["base_url"], "https://api.deepseek.com/v1")
-        self.assertEqual(payload["timeout"], 42)
-        self.assertTrue(payload["api_key_present"])
-        self.assertIn("config_sources", payload)
-
-    def test_cli_provider_check_rule_mode(self) -> None:
-        """验证 provider-check 在无模型配置时为规则模式。"""
-
-        env = dict(os.environ)
+        env["QTEASY_AI_HOME"] = temp_dir
         env.pop("QTEASY_AI_MODEL", None)
         env.pop("QTEASY_AI_API_KEY", None)
         env.pop("QTEASY_AI_BASE_URL", None)
         env.pop("QTEASY_AI_TIMEOUT", None)
+        return env
 
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "provider-check"]
-        completed = subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
-        payload = json.loads(completed.stdout)
+    def _cli(self, args: list, env: dict) -> subprocess.CompletedProcess:
+        """跑一条 CLI。"""
 
-        print("\n[TestAiCliNotebookEntry] provider-check rule mode:", payload)
-        self.assertFalse(payload["ok"])
-        self.assertEqual(payload["mode"], "rule")
+        return subprocess.run(
+            [sys.executable, "-m", "qteasy_ai.cli", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_cli_provider_check_diagnostics(self) -> None:
+        """当前用户项的 provider-check 返回云端诊断，且不含 raw key。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = self._provider_home_env(temp_dir)
+            added = self._cli(
+                [
+                    "provider", "add",
+                    "--name", "DeepSeek",
+                    "--model", "deepseek-chat",
+                    "--base-url", "https://api.deepseek.com/v1",
+                    "--api-key", "test_key",
+                    "--timeout", "42",
+                ],
+                env,
+            )
+            created = json.loads(added.stdout)
+            used = self._cli(["provider", "use", created["id"]], env)
+            completed = self._cli(["provider-check"], env)
+            payload = json.loads(completed.stdout)
+
+            print("\n[TestAiCliNotebookEntry] provider-check:", payload)
+            print(" add/use:", added.returncode, used.returncode)
+            self.assertEqual(added.returncode, 0)
+            self.assertEqual(used.returncode, 0)
+            self.assertEqual(completed.returncode, 0)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["provider"], "openai_compatible")
+            self.assertEqual(payload["mode"], "cloud_llm")
+            self.assertEqual(payload["model"], "deepseek-chat")
+            self.assertEqual(payload["base_url"], "https://api.deepseek.com/v1")
+            self.assertEqual(payload["timeout"], 42)
+            self.assertTrue(payload["api_key_present"])
+            self.assertIn("config_sources", payload)
+            self.assertNotIn("test_key", completed.stdout)
+
+    def test_cli_provider_check_rule_mode(self) -> None:
+        """空池时 provider-check 为规则模式，环境变量里的模型不算已配置。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = self._provider_home_env(temp_dir)
+            env["QTEASY_AI_MODEL"] = "deepseek-chat"
+            env["QTEASY_AI_API_KEY"] = "env-rule-secret"
+            env["QTEASY_AI_BASE_URL"] = "https://api.deepseek.com/v1"
+            completed = self._cli(["provider-check"], env)
+            payload = json.loads(completed.stdout)
+
+            print("\n[TestAiCliNotebookEntry] provider-check rule mode:", payload)
+            self.assertEqual(completed.returncode, 0)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["mode"], "rule")
+            self.assertEqual(payload["model"], "")
+            self.assertNotIn("env-rule-secret", completed.stdout)
 
     def test_cli_provider_check_local_mode(self) -> None:
-        """验证 provider-check 在本地地址时识别 local_llm。"""
+        """当前用户项的本地地址识别为 local_llm。"""
 
-        env = dict(os.environ)
-        env["QTEASY_AI_MODEL"] = "llama3.1:8b"
-        env["QTEASY_AI_API_KEY"] = "ollama"
-        env["QTEASY_AI_BASE_URL"] = "http://127.0.0.1:11434/v1"
-        env["QTEASY_AI_TIMEOUT"] = "30"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = self._provider_home_env(temp_dir)
+            added = self._cli(
+                [
+                    "provider", "add",
+                    "--name", "Ollama",
+                    "--model", "llama3.1:8b",
+                    "--base-url", "http://127.0.0.1:11434/v1",
+                    "--api-key", "ollama",
+                    "--timeout", "30",
+                ],
+                env,
+            )
+            created = json.loads(added.stdout)
+            self._cli(["provider", "use", created["id"]], env)
+            completed = self._cli(["provider-check"], env)
+            payload = json.loads(completed.stdout)
 
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "provider-check"]
-        completed = subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
-        payload = json.loads(completed.stdout)
-
-        print("\n[TestAiCliNotebookEntry] provider-check local mode:", payload)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["mode"], "local_llm")
+            print("\n[TestAiCliNotebookEntry] provider-check local mode:", payload)
+            self.assertEqual(completed.returncode, 0)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["mode"], "local_llm")
+            self.assertEqual(payload["model"], "llama3.1:8b")
+            self.assertNotIn("ollama", completed.stdout)
 
     def test_cli_ask_command_target_state(self) -> None:
         """验证 CLI ask 返回 Ask 目标态，不含 execution。"""

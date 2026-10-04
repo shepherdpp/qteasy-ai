@@ -49,7 +49,7 @@ let openTabs = [];
 let activeKey = "";
 let editingParams = false;
 let editingNowSlot = "";
-let editingProvider = false;
+let providerEditor = null;
 let busy = false;
 let backgrounded = false;
 const STOP_CONFIRM = "Stop this run? Backtests and optimizations stop at the next step, and this run's result is discarded. A refill saves rows already fetched, then stops; that result is not applied.";
@@ -357,20 +357,32 @@ function toggleProviderMenu() {
   if (badge) badge.setAttribute("aria-expanded", nextHidden ? "false" : "true");
 }
 
-function providerLabel() {
-  const p = providerInfo || {};
-  const model = String(p.model || "").trim();
-  if (!model) return "Not configured";
-  return `${p.mode || "rule"} · ${model}`;
+function providerMenuRows() {
+  const rows = ((providerInfo && providerInfo.providers) || []).filter((row) => row && row.id);
+  if (!rows.some((row) => row.id === "mode-r")) {
+    rows.unshift({ id: "mode-r", name: "Mode-R", builtin: true, model: "" });
+  }
+  return rows;
+}
+
+function providerBadgeText(row) {
+  if (!row || row.id === "mode-r") return "Mode-R";
+  return String(row.model || "").trim() || row.name || "Not configured";
 }
 
 function renderProviderBadge() {
-  const label = providerLabel();
-  const model = String((providerInfo && providerInfo.model) || "").trim();
+  const rows = providerMenuRows();
+  const activeId = (providerInfo && providerInfo.active_id) || "mode-r";
+  const active = rows.find((row) => row.id === activeId) || rows[0];
   const btn = $("composer-provider-btn");
-  if (btn) btn.textContent = `${model || "Not configured"} ▾`;
-  const current = $("provider-current");
-  if (current) current.textContent = label;
+  if (btn) btn.textContent = `${providerBadgeText(active)} ▾`;
+  const menu = $("provider-menu");
+  if (!menu) return;
+  const items = rows.map((row) => {
+    const cls = row.id === activeId ? "active" : "";
+    return `<button type="button" class="${cls}" data-provider-id="${escapeHtml(row.id)}">${escapeHtml(providerBadgeText(row))}</button>`;
+  }).join("");
+  menu.innerHTML = `${items}<button type="button" id="btn-open-settings">Open settings</button>`;
 }
 
 function renderStatusbar() {
@@ -409,8 +421,19 @@ function bindShell() {
       toggleProviderMenu();
     };
   }
-  const openSettings = $("btn-open-settings");
-  if (openSettings) openSettings.onclick = () => openSettingsTab();
+  const providerMenu = $("provider-menu");
+  if (providerMenu) {
+    providerMenu.onclick = (ev) => {
+      const item = ev.target && ev.target.closest && ev.target.closest("[data-provider-id]");
+      if (item) {
+        ev.stopPropagation();
+        useProvider(item.getAttribute("data-provider-id"));
+        return;
+      }
+      const openSettings = ev.target && ev.target.closest && ev.target.closest("#btn-open-settings");
+      if (openSettings) openSettingsTab();
+    };
+  }
   const settingsBtn = $("btn-settings");
   if (settingsBtn) settingsBtn.onclick = () => openSettingsTab();
   document.addEventListener("click", (ev) => {
@@ -1370,22 +1393,75 @@ async function submitParamEdits() {
   }
 }
 
-async function submitProviderChange() {
-  const model = ($("prov-model") && $("prov-model").value) || "";
-  const baseUrl = ($("prov-url") && $("prov-url").value) || "";
-  const apiKey = ($("prov-key") && $("prov-key").value) || "";
+async function useProvider(id) {
   const dto = await api("/v1/provider", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey, confirmed: true }),
+    body: JSON.stringify({ action: "use", id }),
   });
   if (dto && dto.error) {
-    transcript.push({ kind: "error", text: dto.error.message || "Provider update failed.", payload: dto.error });
+    transcript.push({ kind: "error", text: dto.error.message || "Provider switch failed.", payload: dto.error });
+    persistTranscript();
     renderChat();
     return;
   }
   providerInfo = dto;
-  editingProvider = false;
+  closeProviderMenu();
+  renderProviderBadge();
+  renderStatusbar();
+  if (openTabs.some((tab) => tab.type === "settings")) renderArtifacts();
+}
+
+async function deleteProvider(id) {
+  if (!window.confirm("Delete this provider?")) return;
+  const dto = await api("/v1/provider", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "remove", id, confirmed: true }),
+  });
+  if (dto && dto.error) {
+    transcript.push({ kind: "error", text: dto.error.message || "Provider delete failed.", payload: dto.error });
+    persistTranscript();
+    renderChat();
+    return;
+  }
+  providerInfo = dto;
+  providerEditor = null;
+  renderArtifacts();
+  renderProviderBadge();
+  renderStatusbar();
+}
+
+async function submitProviderChange() {
+  const editor = providerEditor || { mode: "add" };
+  const name = ($("prov-name") && $("prov-name").value) || "";
+  const model = ($("prov-model") && $("prov-model").value) || "";
+  const baseUrl = ($("prov-url") && $("prov-url").value) || "";
+  const apiKey = ($("prov-key") && $("prov-key").value) || "";
+  const timeoutRaw = ($("prov-timeout") && $("prov-timeout").value) || "";
+  const body = {
+    action: editor.mode === "edit" ? "update" : "add",
+    name,
+    model,
+    base_url: baseUrl,
+    api_key: apiKey,
+    confirmed: true,
+  };
+  if (editor.mode === "edit") body.id = editor.id;
+  if (String(timeoutRaw).trim()) body.timeout = Number(timeoutRaw);
+  const dto = await api("/v1/provider", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (dto && dto.error) {
+    transcript.push({ kind: "error", text: dto.error.message || "Provider update failed.", payload: dto.error });
+    persistTranscript();
+    renderChat();
+    return;
+  }
+  providerInfo = dto;
+  providerEditor = null;
   renderArtifacts();
   renderProviderBadge();
   renderStatusbar();
@@ -1449,13 +1525,24 @@ function onArtifactClick(ev) {
     renderArtifacts();
     return;
   }
-  if (t.id === "btn-prov-edit") {
-    editingProvider = true;
+  const providerDelete = t.closest("[data-provider-delete]");
+  if (providerDelete) {
+    deleteProvider(providerDelete.getAttribute("data-provider-delete"));
+    return;
+  }
+  const providerEdit = t.closest("[data-provider-edit]");
+  if (providerEdit) {
+    providerEditor = { mode: "edit", id: providerEdit.getAttribute("data-provider-edit") };
+    renderArtifacts();
+    return;
+  }
+  if (t.id === "btn-prov-add") {
+    providerEditor = { mode: "add" };
     renderArtifacts();
     return;
   }
   if (t.id === "btn-prov-cancel") {
-    editingProvider = false;
+    providerEditor = null;
     renderArtifacts();
     return;
   }
@@ -1801,7 +1888,7 @@ async function createSession() {
   openProcessTurns = new Set();
   editingParams = false;
   editingNowSlot = "";
-  editingProvider = false;
+  providerEditor = null;
   editingUserIndex = -1;
   filePreview = null;
   workspace = { artifacts: [] };
@@ -2506,20 +2593,30 @@ function exportLink(art, label) {
 }
 
 function renderProviderForm() {
-  const p = providerInfo || {};
-  const model = p.model || "—";
-  const modeLabel = p.mode || "rule";
-  const key = p.api_key_present ? "key set" : "no key";
-  if (editingProvider) {
-    return `<label>Model <input id="prov-model" value="${escapeHtml(p.model || "")}" /></label>
-      <label>Base URL <input id="prov-url" value="${escapeHtml(p.base_url || "")}" /></label>
-      <label>API key <input id="prov-key" type="password" placeholder="${p.api_key_present ? "unchanged" : ""}" /></label>
+  const editor = providerEditor;
+  const rows = ((providerInfo && providerInfo.providers) || []).filter((row) => row && row.id);
+  if (!rows.some((row) => row.id === "mode-r")) {
+    rows.unshift({ id: "mode-r", name: "Mode-R", builtin: true });
+  }
+  if (editor && (editor.mode === "add" || editor.mode === "edit")) {
+    const current = editor.mode === "edit" ? (rows.find((row) => row.id === editor.id) || {}) : {};
+    return `<label>Name <input id="prov-name" value="${escapeHtml(current.name || "")}" /></label>
+      <label>Model <input id="prov-model" value="${escapeHtml(current.model || "")}" /></label>
+      <label>Base URL <input id="prov-url" value="${escapeHtml(current.base_url || "")}" /></label>
+      <label>API key <input id="prov-key" type="password" placeholder="${current.api_key_present ? "unchanged" : ""}" /></label>
+      <label>Timeout <input id="prov-timeout" value="${escapeHtml(current.timeout == null ? "" : String(current.timeout))}" /></label>
       <div class="actions"><button type="button" class="primary" id="btn-prov-confirm">Confirm change</button>
       <button type="button" id="btn-prov-cancel">Cancel</button></div>`;
   }
-  return `<p>${escapeHtml(modeLabel)} · ${escapeHtml(model)} · ${escapeHtml(key)}</p>
-    <p class="hint">${escapeHtml(p.base_url || "")}</p>
-    <button type="button" class="ghost" id="btn-prov-edit">Change provider</button>`;
+  const list = rows.map((row) => {
+    const model = String(row.model || "").trim();
+    const detail = row.builtin ? "built-in" : (row.api_key_present ? "key set" : "no key");
+    const tools = !row.builtin
+      ? `<button type="button" class="ghost" data-provider-edit="${escapeHtml(row.id)}">Edit</button><button type="button" class="ghost" data-provider-delete="${escapeHtml(row.id)}">Delete</button>`
+      : "";
+    return `<div class="provider-row" data-provider-id="${escapeHtml(row.id)}"><span>${escapeHtml(row.name || row.id)}${model ? ` · ${model}` : ""} · ${detail}</span>${tools}</div>`;
+  }).join("");
+  return `${list}<div class="actions"><button type="button" class="ghost" id="btn-prov-add">Add provider</button></div>`;
 }
 
 function renderSettingsBody() {

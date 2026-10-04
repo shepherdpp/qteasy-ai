@@ -30,11 +30,17 @@ import math
 import shutil
 import os
 import re
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import ConfigCenter
+from .config import (
+    DEFAULT_PROVIDER_TIMEOUT,
+    ConfigCenter,
+    build_provider_from_overlay,
+    provider_diagnostics,
+)
 
 # 阶段 B 预留 Agent 授权 schema；默认全 false。CLI / assistant.run 本阶段不消费这些开关。
 DEFAULT_PROFILE: Dict[str, Any] = {
@@ -47,6 +53,10 @@ DEFAULT_PROFILE: Dict[str, Any] = {
 }
 
 USER_KB_RAW_PARTS = ("research", "trades", "factors", "strategies")
+MODE_R_ID = "mode-r"
+_PROVIDER_BUILTIN_MESSAGE = "Mode-R cannot be edited or removed."
+_PROVIDER_FIELDS_MESSAGE = "Name and model are required."
+_PROVIDER_NOT_FOUND_MESSAGE = "Provider not found."
 USER_KB_README = """# user_kb (local research notes)
 
 This directory is YOUR knowledge workspace. It is created on first MemoryStore init.
@@ -166,6 +176,119 @@ def merge_env_facts(old: Dict[str, Any], probe: Dict[str, Any]) -> Dict[str, Any
     return merged
 
 
+def _provider_error(code: str, message: str) -> Dict[str, Any]:
+    """池操作失败结果。"""
+
+    return {"ok": False, "error": code, "message": message}
+
+
+def _mode_r_provider() -> Dict[str, Any]:
+    """内置 Mode-R 项：无模型、无 key。"""
+
+    return {"id": MODE_R_ID, "name": "Mode-R", "builtin": True}
+
+
+def _default_provider_pool() -> Dict[str, Any]:
+    """缺文件时的内存默认池。"""
+
+    return {"active_id": MODE_R_ID, "providers": [_mode_r_provider()]}
+
+
+def _public_provider(item: Dict[str, Any]) -> Dict[str, Any]:
+    """去掉 raw api_key 的列表项。"""
+
+    timeout = item.get("timeout")
+    if timeout in ("", None):
+        timeout_out: Any = None
+    else:
+        timeout_out = int(timeout)
+    return {
+        "id": str(item.get("id") or ""),
+        "name": str(item.get("name") or ""),
+        "builtin": bool(item.get("builtin") or item.get("id") == MODE_R_ID),
+        "model": str(item.get("model") or "").strip(),
+        "base_url": str(item.get("base_url") or "").strip(),
+        "timeout": timeout_out,
+        "api_key_present": bool(str(item.get("api_key") or "").strip()),
+    }
+
+
+def _find_provider(pool: Dict[str, Any], provider_id: str) -> Optional[Dict[str, Any]]:
+    """按 id 查找池内项。"""
+
+    for item in pool.get("providers") or []:
+        if isinstance(item, dict) and str(item.get("id") or "") == provider_id:
+            return item
+    return None
+
+
+def _new_provider_id(pool: Dict[str, Any]) -> str:
+    """生成不与现有项冲突的用户 id。"""
+
+    existing = {str(item.get("id") or "") for item in pool.get("providers") or []}
+    while True:
+        candidate = "p-" + uuid.uuid4().hex[:8]
+        if candidate not in existing and candidate != MODE_R_ID:
+            return candidate
+
+
+def _migrate_legacy_provider(blob: Dict[str, Any]) -> Dict[str, Any]:
+    """把单份覆盖层迁成池。空 model 不造用户项。"""
+
+    pool = _default_provider_pool()
+    model = str(blob.get("model") or "").strip()
+    if not model:
+        return pool
+    item: Dict[str, Any] = {
+        "id": _new_provider_id(pool),
+        "name": model,
+        "model": model,
+        "base_url": str(blob.get("base_url") or "").strip(),
+    }
+    if blob.get("timeout") not in (None, ""):
+        item["timeout"] = int(blob["timeout"])
+    key = str(blob.get("api_key") or "").strip()
+    if key:
+        item["api_key"] = key
+        pool["active_id"] = item["id"]
+    pool["providers"].append(item)
+    return pool
+
+
+def _normalize_provider_pool(blob: Dict[str, Any]) -> tuple:
+    """保证 mode-r 在池内，并修正无效 active_id。"""
+
+    changed = False
+    providers: List[Dict[str, Any]] = []
+    seen = set()
+    for raw in blob.get("providers") or []:
+        if not isinstance(raw, dict):
+            changed = True
+            continue
+        item_id = str(raw.get("id") or "").strip()
+        if not item_id or item_id in seen:
+            changed = True
+            continue
+        seen.add(item_id)
+        if item_id == MODE_R_ID or raw.get("builtin"):
+            if raw.get("model") or raw.get("api_key") or raw.get("base_url") or not raw.get("builtin"):
+                changed = True
+            providers.append(_mode_r_provider())
+            continue
+        providers.append(dict(raw))
+    if MODE_R_ID not in seen:
+        providers.insert(0, _mode_r_provider())
+        changed = True
+    else:
+        providers.sort(key=lambda row: 0 if row.get("id") == MODE_R_ID else 1)
+    active_id = str(blob.get("active_id") or MODE_R_ID)
+    ids = {str(row.get("id") or "") for row in providers}
+    if active_id not in ids:
+        active_id = MODE_R_ID
+        changed = True
+    return {"active_id": active_id, "providers": providers}, changed
+
+
 class MemoryStore:
     """管理 profile/env_facts/runs 的最小落盘。
 
@@ -239,6 +362,201 @@ class MemoryStore:
             if old.get("api_key"):
                 payload["api_key"] = old["api_key"]
         self._write_json(self.provider_overlay_path, payload)
+
+    def list_providers(self) -> Dict[str, Any]:
+        """返回池的公开视图，不含 raw api_key。"""
+
+        pool = self.load_provider_pool()
+        return {
+            "ok": True,
+            "active_id": pool["active_id"],
+            "providers": [_public_provider(item) for item in pool["providers"]],
+        }
+
+    def load_provider_pool(self) -> Dict[str, Any]:
+        """读取并规范化 Provider 池。缺文件时不写盘。"""
+
+        path = self.provider_overlay_path
+        if not path.exists():
+            return _default_provider_pool()
+        blob = self._read_json(path, default={})
+        if not isinstance(blob, dict):
+            blob = {}
+        if "providers" not in blob:
+            pool = _migrate_legacy_provider(blob)
+            self._write_provider_pool(pool)
+            return pool
+        pool, changed = _normalize_provider_pool(blob)
+        if changed:
+            self._write_provider_pool(pool)
+        return pool
+
+    def add_provider(
+        self,
+        *,
+        name: str,
+        model: str,
+        base_url: str = "",
+        api_key: str = "",
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """添加用户项，不切换当前项。"""
+
+        clean_name = str(name or "").strip()
+        clean_model = str(model or "").strip()
+        if not clean_name or not clean_model:
+            return _provider_error("PROVIDER_FIELDS_REQUIRED", _PROVIDER_FIELDS_MESSAGE)
+        pool = self.load_provider_pool()
+        item: Dict[str, Any] = {
+            "id": _new_provider_id(pool),
+            "name": clean_name,
+            "model": clean_model,
+            "base_url": str(base_url or "").strip(),
+        }
+        if timeout not in (None, ""):
+            item["timeout"] = int(timeout)
+        key = str(api_key or "").strip()
+        if key:
+            item["api_key"] = key
+        pool["providers"].append(item)
+        self._write_provider_pool(pool)
+        view = self.list_providers()
+        view["id"] = item["id"]
+        return view
+
+    def update_provider(
+        self,
+        provider_id: str,
+        *,
+        name: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """修改用户项。api_key 为空表示保留原 key。"""
+
+        target = str(provider_id or "").strip()
+        if target == MODE_R_ID:
+            return _provider_error("PROVIDER_BUILTIN_LOCKED", _PROVIDER_BUILTIN_MESSAGE)
+        pool = self.load_provider_pool()
+        item = _find_provider(pool, target)
+        if item is None or item.get("builtin"):
+            return _provider_error("PROVIDER_NOT_FOUND", _PROVIDER_NOT_FOUND_MESSAGE)
+        if name is not None and str(name).strip():
+            item["name"] = str(name).strip()
+        if model is not None and str(model).strip():
+            item["model"] = str(model).strip()
+        if base_url is not None:
+            item["base_url"] = str(base_url).strip()
+        if timeout is not None:
+            item["timeout"] = int(timeout)
+        if api_key is not None and str(api_key).strip():
+            item["api_key"] = str(api_key).strip()
+        self._write_provider_pool(pool)
+        return self.list_providers()
+
+    def remove_provider(self, provider_id: str) -> Dict[str, Any]:
+        """删除用户项。删掉当前项时回到 mode-r。"""
+
+        target = str(provider_id or "").strip()
+        if target == MODE_R_ID:
+            return _provider_error("PROVIDER_BUILTIN_LOCKED", _PROVIDER_BUILTIN_MESSAGE)
+        pool = self.load_provider_pool()
+        item = _find_provider(pool, target)
+        if item is None or item.get("builtin"):
+            return _provider_error("PROVIDER_NOT_FOUND", _PROVIDER_NOT_FOUND_MESSAGE)
+        pool["providers"] = [row for row in pool["providers"] if row.get("id") != target]
+        if pool.get("active_id") == target:
+            pool["active_id"] = MODE_R_ID
+        self._write_provider_pool(pool)
+        return self.list_providers()
+
+    def use_provider(self, provider_id: str) -> Dict[str, Any]:
+        """切换当前项。mode-r 始终可选。"""
+
+        target = str(provider_id or "").strip()
+        pool = self.load_provider_pool()
+        if _find_provider(pool, target) is None:
+            return _provider_error("PROVIDER_NOT_FOUND", _PROVIDER_NOT_FOUND_MESSAGE)
+        pool["active_id"] = target
+        self._write_provider_pool(pool)
+        return self.list_providers()
+
+    def build_active_provider(self, *, env: Optional[Dict[str, str]] = None) -> Any:
+        """按当前项构建 Provider。mode-r 返回 None，不合并环境变量。"""
+
+        item = self._active_provider_item()
+        if item is None or item.get("id") == MODE_R_ID or item.get("builtin"):
+            return None
+        return build_provider_from_overlay(item, env=env)
+
+    def active_diagnostics(self, *, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """当前项诊断。mode-r 固定为 rule，且不含 raw api_key。"""
+
+        view = self.list_providers()
+        item = self._active_provider_item()
+        if item is None or item.get("id") == MODE_R_ID or item.get("builtin"):
+            return {
+                "ok": False,
+                "configured": False,
+                "provider": "none",
+                "mode": "rule",
+                "model": "",
+                "base_url": "",
+                "timeout": DEFAULT_PROVIDER_TIMEOUT,
+                "api_key_present": False,
+                "message": "Provider not configured.",
+                "config_sources": {},
+                "active_id": MODE_R_ID,
+                "providers": view["providers"],
+            }
+        diag = provider_diagnostics(item, env=env)
+        diag["configured"] = bool(diag.get("ok"))
+        diag["active_id"] = item.get("id")
+        diag["providers"] = view["providers"]
+        diag.pop("api_key", None)
+        return diag
+
+    def _active_provider_item(self) -> Optional[Dict[str, Any]]:
+        """当前项的落盘记录；无效时视为 mode-r。"""
+
+        pool = self.load_provider_pool()
+        return _find_provider(pool, str(pool.get("active_id") or "")) or _mode_r_provider()
+
+    def _write_provider_pool(self, pool: Dict[str, Any]) -> None:
+        """把规范化后的池写入 provider.json。"""
+
+        providers: List[Dict[str, Any]] = []
+        for item in pool.get("providers") or []:
+            if item.get("id") == MODE_R_ID or item.get("builtin"):
+                providers.append(_mode_r_provider())
+                continue
+            stored: Dict[str, Any] = {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "model": str(item.get("model") or "").strip(),
+                "base_url": str(item.get("base_url") or "").strip(),
+            }
+            if item.get("timeout") not in (None, ""):
+                stored["timeout"] = int(item["timeout"])
+            key = str(item.get("api_key") or "").strip()
+            if key:
+                stored["api_key"] = key
+            providers.append(stored)
+        if not any(row.get("id") == MODE_R_ID for row in providers):
+            providers.insert(0, _mode_r_provider())
+        active_id = str(pool.get("active_id") or MODE_R_ID)
+        if active_id not in {row["id"] for row in providers}:
+            active_id = MODE_R_ID
+        self._write_json(
+            self.provider_overlay_path,
+            {
+                "active_id": active_id,
+                "providers": providers,
+                "updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            },
+        )
 
     def _read_json(self, path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
         """读取 JSON 文件，不存在或损坏时返回默认值。
