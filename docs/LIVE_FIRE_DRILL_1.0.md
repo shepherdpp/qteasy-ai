@@ -1,6 +1,6 @@
 # 1.0 发版前测试手册（G.5 + G.6）
 
-**状态：手册已冻结（2026-09-24）。2026-10-01：第一轮 Part B 修错 backlog（0–19）已清 → 进入第二轮全量测试。Part A 历史结果仍记下方 Status（A3 3 条 Ask 未命中待政策）。Part B 未签。任一重大 FAIL 不得打** `0.1`** 产品标签（文件名历史 `1.0`）。David 不改 semver。**
+**状态：手册已冻结（2026-09-24）。2026-10-01：第一轮 Part B 修错 backlog（0–19）已清。2026-10-04：二轮修错 R1–R6 已关；#12/#13 与 #19 指标补全 / #20 解读已记录后置，不单列 0.1 硬门槛。下一动作仍是 Part A/B 全量测试。Part A 历史结果仍记下方 Status（A3 3 条 Ask 未命中待政策）。Part B 未签。任一重大 FAIL 不得打** `0.1`** 产品标签（文件名历史 `1.0`）。David 不改 semver。**
 
 基线：qteasy-ai 工作台 extra · qteasy **>=2.6** · Python **py39** · **Mode-R**（可不配 Provider）
 
@@ -27,12 +27,14 @@
 | **B0** Workbench 可用性壳     | —          | PENDING（第二轮）                                                                                    | Jackie |
 | **B1** Workbench 18 KB    | —          | PENDING（第二轮）                                                                                    | Jackie |
 | **B2** Workbench 22 skill | —          | PENDING（第二轮）                                                                                    | Jackie |
-| **关单** G.6 + 能力边界         | —          | 未签；修错 backlog 已清，待第二轮 Part A/B                                                                | Jackie |
+| **关单** G.6 + 能力边界         | —          | 未签；第一轮与二轮修错清单已关，待 Part A/B                                                                   | Jackie |
 
 
 **关闸顺序：** A1+A2+A3 全绿（或合法 SKIP）→ Jackie 做 B0–B2 → 两项签字成立 → Jackie 可打 `0.1` 线产品标签（手册历史文件名仍含 `1.0`；semver 政策见 qteasy 顶层：产品闸门 **0.1**）。
 
-**0.1 修错 backlog（2026-09-26 开立；2026-10-01 组 A–G 全部关单）：** Jackie 第一轮 Part B 手测缺陷 0–19 **已清**。清单：qteasy 仓 [`.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md`](https://github.com/shepherdpp/qteasy/blob/main/.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md)；关单记忆 [`knowledge/runlog/qteasy-ai-0.1-fix-backlog-complete-2026-10`](https://github.com/shepherdpp/qteasy/blob/main/knowledge/runlog/qteasy-ai-0.1-fix-backlog-complete-2026-10.md)。**下一动作 = 第二轮**：重跑 Part A（处理或 SKIP A3）+ Jackie 全勾 Part B。第二轮重大新缺陷另开修错切片，**不**静默塞进已关清单。**修错已清 ≠ G.6 已签 ≠ 已打 0.1。**
+**0.1 修错 backlog（2026-09-26 开立；2026-10-01 组 A–G 全部关单）：** Jackie 第一轮 Part B 手测缺陷 0–19 **已清**。清单：qteasy 仓 [`.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md`](https://github.com/shepherdpp/qteasy/blob/main/.cursor/plans/qteasy_ai_0.1_release_fix_backlog.plan.md)；关单记忆 [`knowledge/runlog/qteasy-ai-0.1-fix-backlog-complete-2026-10`](https://github.com/shepherdpp/qteasy/blob/main/knowledge/runlog/qteasy-ai-0.1-fix-backlog-complete-2026-10.md)。
+
+**二轮修错（2026-10-04 关单）：** R1–R6 已落地。#12/#13（dtype 槽位与静默认 `close`）和 #19 指标补全 / #20 回测解读已记入执行层后置，手测再碰到时按已记录后置处理，除非 Jackie 升成发版阻断。关单记忆 [`knowledge/runlog/qteasy-ai-0.1-round2-fix-close-2026-10`](https://github.com/shepherdpp/qteasy/blob/main/knowledge/runlog/qteasy-ai-0.1-round2-fix-close-2026-10.md)。**下一动作**：重跑 Part A（处理或 SKIP A3）+ Jackie 全勾 Part B。新缺陷另开切片，**不**静默塞进已关清单。**修错清单已关 ≠ G.6 已签 ≠ 已打 0.1。**
 
 **A 记录（2026-09-24，Mode-R，隔离** `QTEASY_AI_HOME`**）：**
 
@@ -244,7 +246,7 @@ Jackie 签两项均成立：
 1. **可用性**：不看内部开发手册，能在 Workbench 走完闭合 Beginner 体验（G.6）。
 2. **能力边界**：B1 全部 18 KB + B2 全部 22 skill 勾选完成（FAIL 清零或已记录可接受 SKIP）。
 
-然后 Jackie 可打 **0.1** 线产品标签 + CHANGELOG（手册文件名历史保留 `1.0`）。David **不**改 semver。**Part B 手测缺陷 0–19 须先按修错清单清零。**
+然后 Jackie 可打 **0.1** 线产品标签 + CHANGELOG（手册文件名历史保留 `1.0`）。David **不**改 semver。第一轮缺陷 0–19 与二轮 R1–R6 均已按清单清完。#12/#13 与 #19/#20 保持后置，不在本句里当成未清缺陷。
 
 ---
 

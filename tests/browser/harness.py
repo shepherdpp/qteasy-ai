@@ -369,15 +369,44 @@ class WorkbenchBrowserCase(unittest.TestCase):
         assert box is not None
         return float(box["x"]) + float(box["width"])
 
-    def _stop_if_running(self) -> None:
-        """忙或后台运行时先 Stop，否则删除会被页面拒绝。"""
+    def _stop_button_visible(self) -> bool:
+        """Stop 还在页面上。重绘拆掉节点时按不在处理。"""
 
         stop = self.page.locator("#btn-stop-watch")
-        if stop.count() == 0 or not stop.is_visible():
+        try:
+            return stop.count() > 0 and stop.is_visible()
+        except Exception:
+            return False
+
+    def _stop_if_running(self) -> None:
+        """忙或后台运行时先 Stop，否则删除会被页面拒绝。
+
+        聊天重绘会拆掉 Stop 再挂上。运行自己结束时按钮消失，这时不再点。
+        """
+
+        if not self._stop_button_visible():
             return
         self.dialog_mode = "accept"
-        stop.click()
-        self.page.locator("#btn-stop-watch").wait_for(state="hidden", timeout=15000)
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            if not self._stop_button_visible():
+                print(" teardown stop: already gone")
+                return
+            try:
+                self.page.locator("#btn-stop-watch").click(timeout=1000, force=True)
+            except Exception as exc:
+                print(" teardown stop retry:", type(exc).__name__)
+                continue
+            try:
+                self.page.locator("#btn-stop-watch").wait_for(state="hidden", timeout=2000)
+                print(" teardown stop: hidden")
+                return
+            except Exception:
+                continue
+        if not self._stop_button_visible():
+            print(" teardown stop: gone after retries")
+            return
+        self.fail("Stop button stayed visible")
 
     def _delete_current_session(self) -> None:
         """点删除。已落盘的会话必须变成 404。"""

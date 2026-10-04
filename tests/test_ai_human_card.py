@@ -1093,7 +1093,9 @@ class TestAiHumanCardPolish(unittest.TestCase):
         self.assertIn("count = 2", result["text"])
         self.assertIn("2 items", result["text"])
         self.assertNotIn("rows", result["text"])
-        self.assertIn("Next: start a new topic", result["text"])
+        self.assertIn("Next: say what you want to do with this result.", result["text"])
+        self.assertEqual(result["payload"].get("next_mode"), "open")
+        self.assertNotIn("run this plan", result["text"])
         self.assertNotIn("回撤", result["text"])
         self.assertNotIn("sharpe", result["text"].lower())
         empty = project_human_cards(
@@ -1208,8 +1210,105 @@ class TestAiHumanCardPolish(unittest.TestCase):
         self.assertIn("**Run did not finish.**", result["text"])
         self.assertIn(f"Error: {message}", result["text"])
         self.assertIn("Check the name, then edit the blue message and send it again.", result["text"])
+        self.assertNotIn("run this plan", result["text"])
+        self.assertNotIn("Next:", result["text"])
+        self.assertNotIn("next_mode", result["payload"])
         self.assertNotIn("99", result["text"])
         self.assertNotIn("rows", result["text"])
+
+    def test_backtest_builtin_next_names_insight_or_optimize(self) -> None:
+        """官方 Job backtest.builtin 的末句是解读或优化，不是重跑当前 plan。"""
+
+        print("\n[TestAiHumanCardPolish] backtest.builtin next")
+        cards = project_human_cards(
+            {
+                "run_id": "run_bt",
+                "plan": {
+                    "plan_id": "plan_bt",
+                    "planner_trace": {"intent_job": "backtest.builtin"},
+                    "steps": [],
+                },
+                "execution": {
+                    "status": "success",
+                    "steps": [
+                        {
+                            "skill_name": "qt.ai.backtest.run_builtin",
+                            "result": {"ok": True, "metrics": {}, "payload": {}},
+                        }
+                    ],
+                },
+            },
+            requested_mode="run",
+            query="run a backtest",
+            include_user_text=False,
+        )
+        result = next(item for item in cards if item["kind"] == "result")
+        print(" result:\n", result["text"])
+        print(" next_mode:", result["payload"].get("next_mode"))
+        expected = "Next: read the insight for this backtest, or optimize parameters of the same strategy."
+        self.assertTrue(result["text"].rstrip().endswith(expected))
+        self.assertIn("insight", result["text"])
+        self.assertIn("optimize", result["text"])
+        self.assertEqual(result["payload"].get("next_mode"), "job")
+        self.assertNotIn("run this plan", result["text"])
+
+    def test_open_polish_rewrites_only_last_line_and_rejects_new_number(self) -> None:
+        """非官方 Job：假 Provider 可改最后一句；新数字整卡回到英文。"""
+
+        print("\n[TestAiHumanCardPolish] open next polish")
+        cards = project_human_cards(
+            {
+                "run_id": "run_open",
+                "plan": {
+                    "plan_id": "plan_open",
+                    "planner_trace": {"intent_job": "open"},
+                    "steps": [],
+                },
+                "execution": {
+                    "status": "success",
+                    "steps": [
+                        {
+                            "result": {
+                                "ok": True,
+                                "metrics": {"count": 2},
+                                "payload": {"strategies": ["macd", "dma"]},
+                            }
+                        }
+                    ],
+                },
+            },
+            requested_mode="run",
+            query="看看这个结果",
+            include_user_text=False,
+        )
+        result = next(item for item in cards if item["kind"] == "result")
+        print(" english:\n", result["text"])
+        print(" next_mode:", result["payload"].get("next_mode"))
+        self.assertEqual(result["payload"].get("next_mode"), "open")
+        self.assertTrue(result["text"].rstrip().endswith("Next: say what you want to do with this result."))
+        prefix, _, _ = result["text"].rpartition("\n")
+        accepted = prefix + "\n下一步：把这份结果导出成图。"
+        rejected = prefix + "\n下一步：预期收益 99%。"
+        provider = FakeLLMProvider(replies=[accepted, rejected])
+        polished = polish_human_cards(cards, provider=provider, query="看看这个结果")
+        out = next(item for item in polished if item["kind"] == "result")
+        print(" accepted:\n", out["text"])
+        print(" system prompt:", provider.system_prompts[0])
+        print(" payload:", out["payload"])
+        self.assertEqual(out["text"], accepted)
+        self.assertIn("count = 2", out["text"])
+        self.assertIn("2 items", out["text"])
+        self.assertNotIn("99", out["text"])
+        self.assertIn("only the last sentence", provider.system_prompts[0])
+        self.assertNotIn("Keep the sentences.", provider.system_prompts[0])
+        self.assertEqual(out["payload"], result["payload"])
+        fallen = polish_human_cards(cards, provider=provider, query="看看这个结果")
+        fallen_text = next(item for item in fallen if item["kind"] == "result")["text"]
+        print(" rejected fallback:\n", fallen_text)
+        print(" second prompt:", provider.system_prompts[1])
+        self.assertEqual(fallen_text, result["text"])
+        self.assertNotIn("99", fallen_text)
+        self.assertIn("only the last sentence", provider.system_prompts[1])
 
     def test_english_query_does_not_call_provider(self) -> None:
         """英文问句即使有 Provider 也不润色。"""

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .side_effects import step_needs_confirm as _step_needs_confirm
@@ -367,7 +368,7 @@ def project_human_cards(
                 {"plan_id": plan_id, "run_id": run_id, "steps": _step_ticks(exec_steps)},
             )
         )
-        brief = _slim_result_lines(plan=plan, execution=execution, registry=registry)
+        brief, next_mode = _slim_result_lines(plan=plan, execution=execution, registry=registry)
         result_text = "\n".join(brief)
         if not str(result_text or "").strip():
             result_text = "No rows or metrics in the result."
@@ -377,6 +378,8 @@ def project_human_cards(
             "executed": True,
             "status": status,
         }
+        if next_mode:
+            result_payload["next_mode"] = next_mode
         cards.append(make_card("result", result_text, result_payload))
         if err and status != "success":
             cards.append(make_card("error", _error_card_text(err), dict(err)))
@@ -441,6 +444,34 @@ _RESULT_SYSTEM_PROMPT = (
     "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
     "Output the rewritten text only."
 )
+_RESULT_OPEN_NEXT_PROMPT = (
+    "Rewrite this qteasy-ai result card into Simplified Chinese. "
+    "Translate the body as written. "
+    "You may rewrite only the last sentence that starts with Next, into one concrete next step. "
+    "Keep every number, skill id, plan_id, and error message exactly as written. "
+    "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
+    "Output the rewritten text only."
+)
+_OPEN_RESULT_NEXT = "Next: say what you want to do with this result."
+_OFFICIAL_JOB_NEXT = {
+    "env.ready": "Next: read or summarize the local data; if a table is missing, refill that table.",
+    "data.summary": "Next: export a chart for the same symbols, or read the series as a table.",
+    "data.export": "Next: open this chart in Workspace, or read the same symbols as a table.",
+    "data.refill": "Next: summarize or read the symbols just downloaded.",
+    "data.read": "Next: summarize this series, export a chart, or screen this range.",
+    "research.factor_ic": (
+        "Next: rerun IC with another factor or return column, "
+        "or backtest this pool with a built-in strategy."
+    ),
+    "research.factor_explore": "Next: run one closed IC on the draft factor, or revise the factor description.",
+    "research.screen": "Next: read prices for the screened symbols, or backtest this list with a built-in strategy.",
+    "strategy.meta": "Next: open one strategy's details, or run a built-in backtest.",
+    "backtest.builtin": "Next: read the insight for this backtest, or optimize parameters of the same strategy.",
+    "optimize.builtin": "Next: backtest again with the suggested parameters, or read the last backtest insight.",
+    "strategy.builder": "Next: review the generated operator, or backtest it.",
+    "insight.last_backtest": "Next: optimize the parameters, or backtest a different strategy.",
+    "live.plan_only": "Next: review the checklist; this step does not place a live order.",
+}
 
 
 def polish_human_cards(
@@ -453,6 +484,7 @@ def polish_human_cards(
 
     只改 ``clarify`` / ``plan_ready`` / ``error`` / ``result`` 的 ``text``。
     校验失败、模型报错或空回复时保留该卡英文。``payload`` 不改。
+    result 只读 ``payload.next_mode``：``open`` 时允许改写最后一句 Next，``job`` 只翻译。
 
     Parameters
     ----------
@@ -483,11 +515,16 @@ def polish_human_cards(
         if kind not in _POLISH_KINDS or not text.strip():
             out.append(item)
             continue
-        rewritten = _rewrite_card_text(provider, text, kind=kind)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        rewritten = _rewrite_card_text(
+            provider,
+            text,
+            kind=kind,
+            next_mode=str(payload.get("next_mode") or ""),
+        )
         if rewritten and _card_rewrite_ok(text, rewritten, kind=kind):
             cloned = dict(item)
-            payload = item.get("payload")
-            cloned["payload"] = dict(payload) if isinstance(payload, dict) else {}
+            cloned["payload"] = dict(payload)
             cloned["text"] = rewritten
             out.append(cloned)
             continue
@@ -495,10 +532,15 @@ def polish_human_cards(
     return out
 
 
-def _rewrite_card_text(provider: Any, text: str, *, kind: str) -> str:
+def _rewrite_card_text(provider: Any, text: str, *, kind: str, next_mode: str = "") -> str:
     """调用 Provider 改写一张卡。失败返回空串。"""
 
-    prompt = _RESULT_SYSTEM_PROMPT if kind == "result" else _CARD_SYSTEM_PROMPT
+    if kind == "result" and next_mode == "open":
+        prompt = _RESULT_OPEN_NEXT_PROMPT
+    elif kind == "result":
+        prompt = _RESULT_SYSTEM_PROMPT
+    else:
+        prompt = _CARD_SYSTEM_PROMPT
     try:
         raw = provider.chat(text, system_prompt=prompt)
     except Exception:
@@ -938,12 +980,34 @@ def _slim_plan_ready_lines(
     return lines
 
 
+@lru_cache(maxsize=1)
+def _official_job_ids() -> frozenset:
+    """``jobs.json`` 的 official id。读目录，不改目录。"""
+
+    from .intents import IntentCatalog
+
+    return frozenset(IntentCatalog().official_ids)
+
+
+def _result_next(plan: Dict[str, Any], status: str) -> Tuple[Optional[str], Optional[str]]:
+    """成功卡末句与 ``next_mode``。未成功时两者皆空。"""
+
+    if status != "success":
+        return None, None
+    job = _job_name(plan)
+    if job in _official_job_ids():
+        sentence = _OFFICIAL_JOB_NEXT.get(job)
+        if sentence:
+            return sentence, "job"
+    return _OPEN_RESULT_NEXT, "open"
+
+
 def _slim_result_lines(
     *,
     plan: Dict[str, Any],
     execution: Dict[str, Any],
     registry: Any = None,
-) -> List[str]:
+) -> Tuple[List[str], Optional[str]]:
     """result 人读句：按 expected_artifact 说明产物，并保留已有标量。"""
 
     status = str(execution.get("status") or "").strip() or "unknown"
@@ -972,9 +1036,10 @@ def _slim_result_lines(
         err = _execution_error_message(execution)
         if err:
             lines.extend([f"Error: {err[0]}", "", err[1], ""])
-    lines.append("Next: start a new topic, or say run this plan if a plan_id is still current.")
-    del plan
-    return lines
+    sentence, next_mode = _result_next(plan, status)
+    if sentence:
+        lines.append(sentence)
+    return lines, next_mode
 
 
 def _execution_error_message(execution: Dict[str, Any]) -> Optional[Tuple[str, str]]:
