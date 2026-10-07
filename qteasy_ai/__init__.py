@@ -11,7 +11,19 @@
 
 """qteasy AI 外壳模块（S1.4 阶段A，独立包 qteasy_ai）。"""
 
-__version__ = '0.2.0'
+from argparse import Namespace
+
+__version__ = '0.2.1'
+version_info = Namespace(
+    major=0,
+    minor=2,
+    patch=1,
+    short=(0, 2),
+    full=(0, 2, 1),
+    string='0.2.1',
+    tuple=('0', '2', '1'),
+    releaselevel='beta',
+)
 
 from .contracts import (
     PlanExecutionRecord,
@@ -40,6 +52,8 @@ from .run_policy import RunStorePolicy
 from .runtime import SkillRuntime
 
 __all__ = [
+    "__version__",
+    "version_info",
     "SkillMetadata",
     "SkillSideEffects",
     "ToolStep",
