@@ -17,5 +17,8 @@
   "summary": "qteasy reads data through history, reference, and static channels — not a single catch-all API.",
   "narrative": "qteasy exposes three read-only data entries:\n\n- history: time-series bars via get_history_data (OHLCV and related htypes).\n- reference: auxiliary series via get_reference_data.\n- static: snapshot / classification tables via get_static_data (industry, name, etc.).\n\nAsk names the three doors. Plan `data.read` picks a channel from your wording. Do not invent a fourth mega-API.",
   "python_code": "import qteasy as qt\n# history / reference / static are separate entries.\nprint('history', hasattr(qt, 'get_history_data'))\nprint('reference', hasattr(qt, 'get_reference_data'))\nprint('static', hasattr(qt, 'get_static_data'))",
-  "risk_notes": "Mixing channels in one call is not supported. Download/refill is a different Job from read."
+  "risk_notes": "Mixing channels in one call is not supported. Download/refill is a different Job from read.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/01. overview.md",
+  "relations": []
 }

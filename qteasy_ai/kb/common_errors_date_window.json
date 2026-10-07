@@ -13,5 +13,8 @@
   "summary": "get_history_data requires at least one of start or end; rows alone is not enough.",
   "narrative": "get_history_data requires at least one of start or end. Passing only rows raises: at least one of start or end should be given. For 'last six months' screens, resolve the latest local trading day first, then compute lookback.",
   "python_code": "import qteasy as qt\n# Need a date window — rows alone is not enough:\ndata = qt.get_history_data('close', shares='000300.SH', start='20240101', end='20241231')\nprint(data.shape)",
-  "risk_notes": "Ask explains this error; it does not call get_history_data."
+  "risk_notes": "Ask explains this error; it does not call get_history_data.",
+  "type": "trap",
+  "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
+  "relations": []
 }

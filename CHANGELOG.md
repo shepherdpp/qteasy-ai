@@ -3,6 +3,17 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
+## 0.2.1 (2026-10-07)
+
+### Added
+
+- `qteasy_ai.version_info` exposes major / minor / patch fields, matching `qteasy.version_info`.
+
+### Changed
+
+- Ask stays on one topic. Questions about errors or live-trade limits no longer mix in an intro explanation.
+- A bare mention of "strategy" no longer brings up the built-in strategy list. Naming a strategy (such as macd defaults) or asking to list built-in strategies still returns live metadata. A bare "what is a strategy" with no matching topic stops and suggests Plan.
+
 ## 0.2.0 (2026-10-05)
 
 ### Added
