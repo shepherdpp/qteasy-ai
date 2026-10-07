@@ -96,9 +96,14 @@ class TestAiKnowledgeBase(unittest.TestCase):
         print("\n[TestAiKnowledgeBase] retrieve safety")
         hits = self.kb.retrieve("will Agent auto execute live trade")
         ids = [item.id for item in hits]
+        types = [item.type for item in hits]
         print(" hit ids:", ids)
+        print(" hit types:", types)
         self.assertIn("side_effects_safety", ids)
         self.assertIn("live", hits[0].narrative.lower())
+        self.assertNotIn("ask_plan_agent", ids)
+        self.assertTrue(types)
+        self.assertTrue(all(item_type == "boundary" for item_type in types))
 
     def test_retrieve_strategy_meta_live_source(self) -> None:
         """策略问答走内置 API 数据源，不经 skill。"""
@@ -129,6 +134,24 @@ class TestAiKnowledgeBase(unittest.TestCase):
         self.assertIn("(12, 26, 9)", meta.narrative)
         self.assertNotIn("择时策略类", meta.narrative)
         self.assertIn("择时策略类", meta.kernel_doc_zh)
+
+    def test_generic_strategy_word_does_not_outrank_concept(self) -> None:
+        """泛词「策略」不注入 strategy_meta；列出内置策略仍注入。"""
+
+        print("\n[TestAiKnowledgeBase] 泛词策略不压过 concept")
+        hits = self.kb.retrieve("帮我写一个双均线策略")
+        ids = [item.id for item in hits]
+        print(" 双均线 ids:", ids)
+        print(" scores:", [(item.id, item.score) for item in hits])
+        self.assertTrue(ids)
+        self.assertEqual(ids[0], "strategy_builder_intro")
+        self.assertNotIn("strategy_meta", ids)
+
+        for query in ("list built-in strategies", "列出内置策略"):
+            listed = self.kb.retrieve(query)
+            listed_ids = [item.id for item in listed]
+            print(" list query:", query, "ids:", listed_ids)
+            self.assertIn("strategy_meta", listed_ids)
 
     def test_retrieve_miss_returns_empty(self) -> None:
         """无关问法不应硬凑命中。"""

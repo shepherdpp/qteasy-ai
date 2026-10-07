@@ -5,8 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-08-28
 # Desc:
-# qteasy-ai 策展 KnowledgeBase：关键词/tag
-# 检索，供 Ask 目标态主消费。
+# qteasy-ai 策展 KnowledgeBase：按 type 桶
+# 关键词/tag 检索，供 Ask 目标态主消费。
 # ======================================
 
 """qteasy 专用结构化知识库（Ask 目标态主消费方）。
@@ -26,18 +26,21 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _KB_DIR = Path(__file__).resolve().parent / "kb"
 
-_STRATEGY_QUERY_HINTS = (
-    "strategy",
-    "macd",
-    "dma",
-    "built-in",
-    "builtin",
-    "built in",
-    "策略",
-    "参数",
-)
-
 _WORD_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
+_LIST_BUILTINS_RE = re.compile(
+    r"list\s+(?:the\s+)?built[\s-]?in\s+strateg(?:y|ies)"
+    r"|列出内置策略"
+    r"|有哪些内置策略"
+    r"|内置策略列表",
+    re.IGNORECASE,
+)
+# 同分时更具体的抽屉优先，避免 trap/boundary 被 concept 并列挤掉。
+_TYPE_TIE_RANK = {
+    "trap": 0,
+    "boundary": 1,
+    "pointer": 2,
+    "concept": 3,
+}
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _KB_ENTRY_TYPES = frozenset({"concept", "trap", "boundary", "pointer"})
 _KB_RELATION_RELS = frozenset({
@@ -144,7 +147,7 @@ class KbEntry:
 
 
 class KnowledgeBase:
-    """从 ``qteasy_ai/kb/*.json`` 加载策展条目并按关键词打分检索。
+    """从 ``qteasy_ai/kb/*.json`` 加载策展条目，并在胜出的 type 桶内检索。
 
     Parameters
     ----------
@@ -197,7 +200,11 @@ class KnowledgeBase:
         return entries
 
     def retrieve(self, query: str, *, limit: int = 3) -> List[KbEntry]:
-        """按关键词与 tag 重叠检索条目。
+        """在胜出的 type 桶内按关键词与 tag 检索。
+
+        各 type 桶分别打分，只保留最高分桶；同分时 trap、boundary、pointer、concept
+        依次优先。半高分地板与 ``limit`` 作用在该桶上。``strategy_meta`` 不占 type
+        桶，仅在抽出具体策略 id 或问句明确列出内置策略时并入，再一起套地板。
 
         Parameters
         ----------
@@ -236,6 +243,11 @@ class KnowledgeBase:
                 kernel_doc_zh=entry.kernel_doc_zh,
             )
             scored.append(hit)
+        winner = self._winning_type(scored)
+        if winner is None:
+            scored = []
+        else:
+            scored = [item for item in scored if item.type == winner]
         strategy_hit = self._maybe_strategy_meta(q)
         if strategy_hit is not None:
             scored.append(strategy_hit)
@@ -245,6 +257,22 @@ class KnowledgeBase:
             floor = top_score * 0.5
             scored = [item for item in scored if item.score >= floor]
         return scored[: max(1, int(limit))] if scored else []
+
+    @staticmethod
+    def _winning_type(scored: List[KbEntry]) -> Optional[str]:
+        """取得分最高的 type。同分时 trap 优先于 boundary、pointer、concept。"""
+
+        best: Dict[str, float] = {}
+        for item in scored:
+            previous = best.get(item.type)
+            if previous is None or item.score > previous:
+                best[item.type] = item.score
+        if not best:
+            return None
+        return min(
+            best,
+            key=lambda entry_type: (-best[entry_type], _TYPE_TIE_RANK.get(entry_type, 9)),
+        )
 
     @staticmethod
     def _tokenize(text: str) -> List[str]:
@@ -288,12 +316,16 @@ class KnowledgeBase:
         score += 1.0 * len(q_tokens & id_tokens)
         return score
 
-    def _maybe_strategy_meta(self, query: str) -> Optional[KbEntry]:
-        """策略问答时从内置 API 组装一条 strategy_meta 条目。"""
+    @staticmethod
+    def _is_list_builtins(query: str) -> bool:
+        """问句是否明确要求列出内置策略。泛词「策略」不算。"""
 
-        q_lower = query.lower()
-        if not any(hint in q_lower for hint in _STRATEGY_QUERY_HINTS):
-            return None
+        return bool(_LIST_BUILTINS_RE.search(query or ""))
+
+    def _maybe_strategy_meta(self, query: str) -> Optional[KbEntry]:
+        """抽出具体策略 id，或问句明确列出内置策略时，从内置 API 组装条目。"""
+
+        list_requested = self._is_list_builtins(query)
         list_func = self._resolve_list_func()
         doc_func = self._resolve_doc_func()
         if list_func is None:
@@ -303,6 +335,8 @@ class KnowledgeBase:
         except Exception:
             return None
         strategy_id = self._extract_strategy_id(query=query, names=names)
+        if not strategy_id and not list_requested:
+            return None
         narrative_parts = [
             "Built-in strategy metadata is read from qteasy APIs (not via a skill handler).",
         ]
@@ -391,11 +425,15 @@ class KnowledgeBase:
 
     @staticmethod
     def _extract_strategy_id(*, query: str, names: List[str]) -> str:
-        """从问句中匹配已知策略 ID。"""
+        """按词边界抽出已知策略 ID，避免短 id 嵌进别的单词。"""
 
         q_lower = query.lower()
         for name in sorted(names, key=len, reverse=True):
-            if name.lower() in q_lower:
+            key = name.lower()
+            if not key:
+                continue
+            pattern = r"(?<![a-z0-9_])" + re.escape(key) + r"(?![a-z0-9_])"
+            if re.search(pattern, q_lower):
                 return name
         return ""
 
