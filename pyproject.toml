@@ -50,4 +50,4 @@ where = ["."]
 include = ["qteasy_ai*"]
 
 [tool.setuptools.package-data]
-qteasy_ai = ["kb/*.json", "intents/*.json", "workbench/static/*"]
+qteasy_ai = ["kb/*.json", "kb/_generated/*.json", "intents/*.json", "workbench/static/*"]

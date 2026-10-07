@@ -5,8 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-08-28
 # Desc:
-# qteasy-ai 策展 KnowledgeBase：按 type 桶
-# 关键词/tag 检索，供 Ask 目标态主消费。
+# qteasy-ai 策展 KnowledgeBase：问句目录定条，
+# 未命中再按 type 桶关键词/tag 检索。
 # ======================================
 
 """qteasy 专用结构化知识库（Ask 目标态主消费方）。
@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from qteasy_ai.kb_catalog import normalize_question
 
 _KB_DIR = Path(__file__).resolve().parent / "kb"
 
@@ -49,6 +51,8 @@ _KB_RELATION_RELS = frozenset({
     "contrasts_with",
     "plan_handoff",
 })
+# 目录命中是定条，分数只用于和关键词命中区分，不参与桶内打分。
+_CATALOG_HIT_SCORE = 100.0
 
 
 def _require_entry_type(entry_id: str, payload: Dict[str, Any]) -> str:
@@ -147,7 +151,9 @@ class KbEntry:
 
 
 class KnowledgeBase:
-    """从 ``qteasy_ai/kb/*.json`` 加载策展条目，并在胜出的 type 桶内检索。
+    """从 ``qteasy_ai/kb/*.json`` 加载策展条目。
+
+    检索先查 compile 问句目录，命中则定条；未命中再在胜出的 type 桶内检索。
 
     Parameters
     ----------
@@ -170,6 +176,8 @@ class KnowledgeBase:
         self._list_func = list_func
         self._doc_func = doc_func
         self._entries: List[KbEntry] = self._load_entries()
+        self._by_id: Dict[str, KbEntry] = {entry.id: entry for entry in self._entries}
+        self._question_catalog: Dict[str, str] = self._load_question_catalog()
 
     def _load_entries(self) -> List[KbEntry]:
         """加载目录中全部 JSON 条目。"""
@@ -199,12 +207,51 @@ class KnowledgeBase:
             )
         return entries
 
-    def retrieve(self, query: str, *, limit: int = 3) -> List[KbEntry]:
-        """在胜出的 type 桶内按关键词与 tag 检索。
+    def _load_question_catalog(self) -> Dict[str, str]:
+        """加载 compile 生成的问句目录。文件不存在时目录为空。"""
 
-        各 type 桶分别打分，只保留最高分桶；同分时 trap、boundary、pointer、concept
-        依次优先。半高分地板与 ``limit`` 作用在该桶上。``strategy_meta`` 不占 type
-        桶，仅在抽出具体策略 id 或问句明确列出内置策略时并入，再一起套地板。
+        path = self.kb_dir / "_generated" / "question_catalog.json"
+        if not path.is_file():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = payload.get("questions", {})
+        if not isinstance(raw, dict):
+            raise ValueError("KB question catalog 'questions' must be an object")
+        catalog: Dict[str, str] = {}
+        for key, entry_id in raw.items():
+            if not isinstance(key, str) or not isinstance(entry_id, str) or not entry_id:
+                raise ValueError("KB question catalog has an invalid question mapping")
+            catalog[key] = entry_id
+        return catalog
+
+    @staticmethod
+    def _clone_scored(entry: KbEntry, score: float) -> KbEntry:
+        """复制一条命中并写上分数。"""
+
+        return KbEntry(
+            id=entry.id,
+            title=entry.title,
+            summary=entry.summary,
+            narrative=entry.narrative,
+            python_code=entry.python_code,
+            risk_notes=entry.risk_notes,
+            tags=list(entry.tags),
+            keywords=list(entry.keywords),
+            type=entry.type,
+            manual_anchor=entry.manual_anchor,
+            relations=[dict(item) for item in entry.relations],
+            score=score,
+            kernel_doc_zh=entry.kernel_doc_zh,
+        )
+
+    def retrieve(self, query: str, *, limit: int = 3) -> List[KbEntry]:
+        """先查问句目录，未命中再在胜出的 type 桶内按关键词与 tag 检索。
+
+        规范化问句若在 compile 目录中，只返回该条，不再打分，也不并入
+        ``strategy_meta``。未命中时，各 type 桶分别打分，只保留最高分桶；
+        同分时 trap、boundary、pointer、concept 依次优先。半高分地板与
+        ``limit`` 作用在该桶上。``strategy_meta`` 不占 type 桶，仅在抽出
+        具体策略 id 或问句明确列出内置策略时并入，再一起套地板。
 
         Parameters
         ----------
@@ -222,6 +269,11 @@ class KnowledgeBase:
         q = (query or "").strip()
         if not q:
             return []
+        catalog_id = self._question_catalog.get(normalize_question(q))
+        if catalog_id:
+            catalog_entry = self._by_id.get(catalog_id)
+            if catalog_entry is not None:
+                return [self._clone_scored(catalog_entry, _CATALOG_HIT_SCORE)]
         scored: List[KbEntry] = []
         for entry in self._entries:
             score = self._score(query=q, entry=entry)
