@@ -39,11 +39,75 @@ _STRATEGY_QUERY_HINTS = (
 
 _WORD_RE = re.compile(r"[a-z0-9_]+", re.IGNORECASE)
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_KB_ENTRY_TYPES = frozenset({"concept", "trap", "boundary", "pointer"})
+_KB_RELATION_RELS = frozenset({
+    "see_also",
+    "next_topic",
+    "contrasts_with",
+    "plan_handoff",
+})
+
+
+def _require_entry_type(entry_id: str, payload: Dict[str, Any]) -> str:
+    """校验 JSON 条目的 type。适配器内存条目不走这里。"""
+
+    if "type" not in payload or payload.get("type") in (None, ""):
+        raise ValueError(f"KB entry {entry_id!r} is missing type")
+    entry_type = payload["type"]
+    if not isinstance(entry_type, str) or entry_type not in _KB_ENTRY_TYPES:
+        raise ValueError(
+            f"KB entry {entry_id!r} has invalid type {entry_type!r}; "
+            "expected one of concept, trap, boundary, pointer"
+        )
+    return entry_type
+
+
+def _parse_manual_anchor(entry_id: str, payload: Dict[str, Any]) -> str:
+    """读取手册锚。空字符串允许；非空必须是 docs/source/ 相对路径。"""
+
+    raw = payload.get("manual_anchor", "")
+    if raw is None:
+        raw = ""
+    if not isinstance(raw, str):
+        raise ValueError(f"KB entry {entry_id!r} manual_anchor must be a string")
+    anchor = raw.strip()
+    if anchor and not anchor.startswith("docs/source/"):
+        raise ValueError(
+            f"KB entry {entry_id!r} manual_anchor must start with 'docs/source/'"
+        )
+    return anchor
+
+
+def _parse_relations(entry_id: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    """读取 relations。缺省为空列表；rel 必须落在冻结枚举内。"""
+
+    raw = payload.get("relations", [])
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ValueError(f"KB entry {entry_id!r} relations must be a list")
+    parsed: List[Dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"KB entry {entry_id!r} relation must be an object")
+        rel = item.get("rel")
+        target = item.get("to")
+        if not isinstance(rel, str) or rel not in _KB_RELATION_RELS:
+            raise ValueError(f"KB entry {entry_id!r} has invalid relation rel {rel!r}")
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(f"KB entry {entry_id!r} relation is missing a non-empty 'to'")
+        parsed.append({"rel": rel, "to": target})
+    return parsed
 
 
 @dataclass
 class KbEntry:
-    """一条机器可读知识条目。"""
+    """一条机器可读知识条目。
+
+    ``type`` 只要求 JSON 策展条目（concept / trap / boundary / pointer）。
+    适配器内存条目（如 strategy_meta）保持空字符串，不落 JSON。
+    ``manual_anchor`` 不参与打分。
+    """
 
     id: str
     title: str
@@ -53,6 +117,9 @@ class KbEntry:
     risk_notes: str = ""
     tags: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
+    type: str = ""
+    manual_anchor: str = ""
+    relations: List[Dict[str, str]] = field(default_factory=list)
     score: float = 0.0
     kernel_doc_zh: str = ""
 
@@ -68,6 +135,9 @@ class KbEntry:
             "risk_notes": self.risk_notes,
             "tags": list(self.tags),
             "keywords": list(self.keywords),
+            "type": self.type,
+            "manual_anchor": self.manual_anchor,
+            "relations": [dict(item) for item in self.relations],
             "score": self.score,
             "kernel_doc_zh": self.kernel_doc_zh,
         }
@@ -108,9 +178,10 @@ class KnowledgeBase:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or not payload.get("id"):
                 continue
+            entry_id = str(payload["id"])
             entries.append(
                 KbEntry(
-                    id=str(payload["id"]),
+                    id=entry_id,
                     title=str(payload.get("title", "")),
                     summary=str(payload.get("summary", "")),
                     narrative=str(payload.get("narrative", "")),
@@ -118,6 +189,9 @@ class KnowledgeBase:
                     risk_notes=str(payload.get("risk_notes", "")),
                     tags=[str(item) for item in payload.get("tags", [])],
                     keywords=[str(item) for item in payload.get("keywords", [])],
+                    type=_require_entry_type(entry_id, payload),
+                    manual_anchor=_parse_manual_anchor(entry_id, payload),
+                    relations=_parse_relations(entry_id, payload),
                 )
             )
         return entries
@@ -155,6 +229,9 @@ class KnowledgeBase:
                 risk_notes=entry.risk_notes,
                 tags=list(entry.tags),
                 keywords=list(entry.keywords),
+                type=entry.type,
+                manual_anchor=entry.manual_anchor,
+                relations=[dict(item) for item in entry.relations],
                 score=score,
                 kernel_doc_zh=entry.kernel_doc_zh,
             )
@@ -262,6 +339,9 @@ class KnowledgeBase:
             risk_notes="Ask answers metadata only. Use Plan to execute qt.ai.strategy_meta.* skills.",
             tags=["strategy", "meta"],
             keywords=["strategy", "macd", "dma"],
+            type="",
+            manual_anchor="",
+            relations=[],
             score=8.0 if strategy_id else 4.0,
             kernel_doc_zh=kernel_zh,
         )

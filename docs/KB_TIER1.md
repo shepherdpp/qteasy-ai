@@ -1,37 +1,36 @@
 # Official KB Pack (F.5 / tier-1)
 
-Frozen catalog of official Ask pages in `qteasy_ai/kb/*.json`.
+F.5 tier-1 is a **subset** of the official Ask pack in `qteasy_ai/kb/*.json`.
+These 18 ids (7 carried + 11 new) must remain present. From 0.3 the pack may grow past the old 15–25 cap.
 Do **not** put user research notes here. Ask never reads `user_kb/`.
-
-Target size: 15–25. This pack: **18** (7 carried + 11 new).
 
 ## Carried from stage C (do not rewrite unless drifted)
 
-| id | topic |
-|----|--------|
-| `pt_ps_vs` | PT / PS / VS |
-| `operator_run_freq` | run_freq belongs on Operator |
-| `ask_plan_agent` | Ask vs Plan vs run |
-| `side_effects_safety` | side-effects / confirm |
-| `common_errors_nan` | NaN prices |
-| `common_errors_run_freq` | run_freq mistakes |
-| `common_errors_date_window` | missing date window |
+| id | type | topic |
+|----|------|--------|
+| `pt_ps_vs` | concept | PT / PS / VS |
+| `operator_run_freq` | concept | run_freq belongs on Operator |
+| `ask_plan_agent` | concept | Ask vs Plan vs run |
+| `side_effects_safety` | boundary | side-effects / confirm |
+| `common_errors_nan` | trap | NaN prices |
+| `common_errors_run_freq` | trap | run_freq mistakes |
+| `common_errors_date_window` | trap | missing date window |
 
 ## New in F.5
 
-| id | topic |
-|----|--------|
-| `what_is_qteasy` | Product intro; hits 什么是qteasy / 什么是 qteasy / what is qteasy |
-| `getting_started` | First steps |
-| `data_three_entries` | history / reference / static |
-| `backtest_intro` | Built-in backtest |
-| `optimize_intro` | Built-in optimize |
-| `refill_bounded` | Dated download only |
-| `strategy_builder_intro` | Dual-MA StrategyBuilder |
-| `env_ready` | Tushare / tables |
-| `notebook_cli` | CLI / %%qtai / session-id |
-| `live_plan_only` | Live never auto |
-| `official_vs_user_kb` | Official KB vs user_kb scaffold |
+| id | type | topic |
+|----|------|--------|
+| `what_is_qteasy` | concept | Product intro; hits 什么是qteasy / 什么是 qteasy / what is qteasy |
+| `getting_started` | concept | First steps |
+| `data_three_entries` | concept | history / reference / static |
+| `backtest_intro` | concept | Built-in backtest |
+| `optimize_intro` | concept | Built-in optimize |
+| `refill_bounded` | concept | Dated download only |
+| `strategy_builder_intro` | concept | Dual-MA StrategyBuilder |
+| `env_ready` | concept | Tushare / tables |
+| `notebook_cli` | concept | CLI / %%qtai / session-id |
+| `live_plan_only` | boundary | Live never auto |
+| `official_vs_user_kb` | concept | Official KB vs user_kb scaffold |
 
 ## Must-hit queries (Mode-R Ask, zero skill)
 

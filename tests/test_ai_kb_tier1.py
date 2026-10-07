@@ -8,6 +8,8 @@
 # Unittest for official KB Pack tier-1 (F.5)
 # ======================================
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -48,23 +50,74 @@ _WHAT_QUERIES = (
     "qteasy 是什么",
 )
 
+_F5_IDS = _CARRIED | _NEW
+_LEGAL_TYPES = {"concept", "trap", "boundary", "pointer"}
+
+
+def _write_probe(directory: str, payload: dict) -> None:
+    """在临时目录写一条探针 JSON。"""
+
+    path = Path(directory) / f"{payload['id']}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
 
 class TestAiKbTier1(unittest.TestCase):
-    """官方 KB 规模与产品入门命中。"""
+    """官方 KB 子集与产品入门命中。"""
 
     def test_pack_size_and_ids(self) -> None:
-        """15–25 条；C 的 7 条保留；新产品入门存在。"""
+        """F.5 十八 id 仍为官方库子集；总条数可超过原 15–25。"""
 
-        print("\n[TestAiKbTier1] pack size")
+        print("\n[TestAiKbTier1] F.5 ids remain a subset")
         ids = sorted(path.stem for path in _KB_DIR.glob("*.json"))
         print(" ids:", ids)
         print(" count:", len(ids))
-        self.assertGreaterEqual(len(ids), 15)
-        self.assertLessEqual(len(ids), 25)
-        self.assertTrue(_CARRIED.issubset(set(ids)))
-        self.assertTrue(_NEW.issubset(set(ids)))
+        print(" f5 missing:", sorted(_F5_IDS - set(ids)))
+        self.assertTrue(_F5_IDS.issubset(set(ids)))
         self.assertIn("what_is_qteasy", ids)
-        self.assertEqual(len(ids), 18)
+
+    def test_loaded_entries_have_legal_type(self) -> None:
+        """实库每条 type 属于 concept|trap|boundary|pointer。"""
+
+        print("\n[TestAiKbTier1] loaded entry types")
+        kb = KnowledgeBase()
+        rows = [(entry.id, entry.type) for entry in kb._entries]
+        print(" types:", rows)
+        self.assertTrue(rows)
+        for entry_id, entry_type in rows:
+            self.assertIn(entry_type, _LEGAL_TYPES, msg=entry_id)
+
+    def test_loader_rejects_illegal_type_and_relation(self) -> None:
+        """未知 type、缺 type、非法 rel 失败；pointer 可加载。"""
+
+        print("\n[TestAiKbTier1] loader type and relation checks")
+        base = {
+            "title": "Probe",
+            "summary": "probe",
+            "narrative": "probe",
+        }
+        rejected = (
+            {"id": "probe_live", "type": "live", **base},
+            {"id": "probe_missing", **base},
+            {
+                "id": "probe_rel",
+                "type": "concept",
+                "relations": [{"rel": "parent", "to": "what_is_qteasy"}],
+                **base,
+            },
+        )
+        for payload in rejected:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                _write_probe(temp_dir, payload)
+                with self.assertRaises(ValueError) as ctx:
+                    KnowledgeBase(kb_dir=temp_dir)
+                print(" rejected:", payload["id"], ctx.exception)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_probe(temp_dir, {"id": "probe_pointer", "type": "pointer", **base})
+            kb = KnowledgeBase(kb_dir=temp_dir)
+            loaded = [(entry.id, entry.type) for entry in kb._entries]
+            print(" pointer load:", loaded)
+            self.assertEqual(loaded, [("probe_pointer", "pointer")])
 
     def test_what_is_qteasy_ask_hits(self) -> None:
         """Mode-R Ask 产品入门不再 NOT_FOUND；零 skill。"""
