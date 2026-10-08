@@ -3,6 +3,13 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
+## 0.2.2 (2026-10-08)
+
+### Changed
+
+- Without a model, a curated question returns that one answer. A space between Chinese and Latin does not change it: "如何用qteasy回测" and "如何用 qteasy 回测" both explain backtesting, not "what is qteasy".
+- With a model, a paraphrase stays on the same topic. "如何用qteasy进行回测" explains backtesting instead of the product introduction. If the topic is uncertain or no card fits, Ask stops and suggests Plan.
+
 ## 0.2.1 (2026-10-07)
 
 ### Added
