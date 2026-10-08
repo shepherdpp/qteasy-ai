@@ -13,15 +13,15 @@
 
 from argparse import Namespace
 
-__version__ = '0.2.1'
+__version__ = '0.2.2'
 version_info = Namespace(
     major=0,
     minor=2,
-    patch=1,
+    patch=2,
     short=(0, 2),
-    full=(0, 2, 1),
-    string='0.2.1',
-    tuple=('0', '2', '1'),
+    full=(0, 2, 2),
+    string='0.2.2',
+    tuple=('0', '2', '2'),
     releaselevel='beta',
 )
 

@@ -1,0 +1,31 @@
+{
+  "_do_not_edit": true,
+  "_generated": "scripts/compile_kb_catalog.py",
+  "by_type": {
+    "boundary": [
+      "live_plan_only",
+      "side_effects_safety"
+    ],
+    "concept": [
+      "ask_plan_agent",
+      "backtest_intro",
+      "data_three_entries",
+      "env_ready",
+      "getting_started",
+      "notebook_cli",
+      "official_vs_user_kb",
+      "operator_run_freq",
+      "optimize_intro",
+      "pt_ps_vs",
+      "refill_bounded",
+      "strategy_builder_intro",
+      "what_is_qteasy"
+    ],
+    "pointer": [],
+    "trap": [
+      "common_errors_date_window",
+      "common_errors_nan",
+      "common_errors_run_freq"
+    ]
+  }
+}

@@ -14,7 +14,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qteasy-ai"
-version = "0.2.1"
+version = "0.2.2"
 description = "AI orchestration shell for qteasy — natural language plans over qteasy APIs"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -50,4 +50,4 @@ where = ["."]
 include = ["qteasy_ai*"]
 
 [tool.setuptools.package-data]
-qteasy_ai = ["kb/*.json", "intents/*.json", "workbench/static/*"]
+qteasy_ai = ["kb/*.json", "kb/_generated/*.json", "intents/*.json", "workbench/static/*"]

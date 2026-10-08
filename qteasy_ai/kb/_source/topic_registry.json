@@ -1,0 +1,42 @@
+{
+  "topics": [
+    {
+      "id": "capability",
+      "scope": "能力地图、Ask/Plan/Agent 分工",
+      "map_item": 1
+    },
+    {
+      "id": "onboarding",
+      "scope": "安装、快速开始、help / FAQ"
+    },
+    {
+      "id": "data-downloading",
+      "scope": "DataSource、数据通道、DataTable、有界下载/补数的解释",
+      "map_item": 2
+    },
+    {
+      "id": "data-analysis",
+      "scope": "三入口、DataType、HistoryPanel 的解释",
+      "map_item": 2
+    },
+    {
+      "id": "strategy",
+      "scope": "策略、信号、Operator"
+    },
+    {
+      "id": "backtest",
+      "scope": "回测解释",
+      "map_item": 3
+    },
+    {
+      "id": "optimize",
+      "scope": "优化解释",
+      "map_item": 4
+    },
+    {
+      "id": "live_boundary",
+      "scope": "实盘边界",
+      "map_item": 5
+    }
+  ]
+}

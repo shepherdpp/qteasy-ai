@@ -15,5 +15,6 @@
   "risk_notes": "Backtest is high-side-effect (heavy compute). Live trade is never auto-executed.",
   "type": "concept",
   "manual_anchor": "docs/source/back_testing/1. overview.md",
+  "topics": ["backtest"],
   "relations": []
 }

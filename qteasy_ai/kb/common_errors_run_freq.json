@@ -14,5 +14,6 @@
   "risk_notes": "Ask explains this error; it does not call qt.run.",
   "type": "trap",
   "manual_anchor": "docs/source/manage_strategies/2. operator.md",
+  "topics": ["strategy"],
   "relations": []
 }

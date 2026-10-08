@@ -1,0 +1,264 @@
+{
+  "entries": [
+    {
+      "id": "ask_plan_agent",
+      "type": "concept",
+      "topics": [
+        "capability"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "run mode",
+        "问答"
+      ],
+      "relations": []
+    },
+    {
+      "id": "backtest_intro",
+      "type": "concept",
+      "topics": [
+        "backtest"
+      ],
+      "manual_anchor": "docs/source/back_testing/1. overview.md",
+      "questions": [
+        "如何用 qteasy 回测",
+        "怎么回测",
+        "how to backtest",
+        "回测入门",
+        "backtest intro",
+        "run backtest"
+      ],
+      "relations": []
+    },
+    {
+      "id": "common_errors_date_window",
+      "type": "trap",
+      "topics": [
+        "data-analysis"
+      ],
+      "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
+      "questions": [
+        "date window",
+        "at least one of start",
+        "start and end"
+      ],
+      "relations": []
+    },
+    {
+      "id": "common_errors_nan",
+      "type": "trap",
+      "topics": [
+        "backtest"
+      ],
+      "manual_anchor": "docs/source/back_testing/1. overview.md",
+      "questions": [
+        "missing bar",
+        "trade price",
+        "停牌"
+      ],
+      "relations": []
+    },
+    {
+      "id": "common_errors_run_freq",
+      "type": "trap",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/2. operator.md",
+      "questions": [
+        "built-in parameter key",
+        "not a built-in parameter"
+      ],
+      "relations": []
+    },
+    {
+      "id": "data_three_entries",
+      "type": "concept",
+      "topics": [
+        "data-analysis"
+      ],
+      "manual_anchor": "docs/source/manage_data/01. overview.md",
+      "questions": [
+        "三入口",
+        "历史数据",
+        "参考数据",
+        "静态数据"
+      ],
+      "relations": []
+    },
+    {
+      "id": "env_ready",
+      "type": "concept",
+      "topics": [
+        "data-downloading"
+      ],
+      "manual_anchor": "docs/source/manage_data/03. datasource.md",
+      "questions": [
+        "local data table",
+        "check table",
+        "缺表"
+      ],
+      "relations": []
+    },
+    {
+      "id": "getting_started",
+      "type": "concept",
+      "topics": [
+        "onboarding"
+      ],
+      "manual_anchor": "docs/source/tutorials/1-get-started.md",
+      "questions": [
+        "getting started",
+        "how to start",
+        "快速开始",
+        "first steps"
+      ],
+      "relations": []
+    },
+    {
+      "id": "live_plan_only",
+      "type": "boundary",
+      "topics": [
+        "live_boundary"
+      ],
+      "manual_anchor": "docs/source/tutorials/8-live-trade-risk-and-broker-walkthrough.md",
+      "questions": [
+        "live trade",
+        "live plan",
+        "never auto"
+      ],
+      "relations": []
+    },
+    {
+      "id": "notebook_cli",
+      "type": "concept",
+      "topics": [
+        "onboarding"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "qteasy-ai cli",
+        "notebook magic",
+        "命令行"
+      ],
+      "relations": []
+    },
+    {
+      "id": "official_vs_user_kb",
+      "type": "concept",
+      "topics": [
+        "capability"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "user kb",
+        "official kb",
+        "用户知识库",
+        "官方知识库"
+      ],
+      "relations": []
+    },
+    {
+      "id": "operator_run_freq",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/2. operator.md",
+      "questions": [
+        "run timing",
+        "运行频率"
+      ],
+      "relations": []
+    },
+    {
+      "id": "optimize_intro",
+      "type": "concept",
+      "topics": [
+        "optimize"
+      ],
+      "manual_anchor": "docs/source/optimization/1. overview.md",
+      "questions": [
+        "优化入门",
+        "how to optimize",
+        "参数优化",
+        "optimize intro",
+        "parameter optimize"
+      ],
+      "relations": []
+    },
+    {
+      "id": "pt_ps_vs",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/5. strategy_bases.md",
+      "questions": [
+        "signal type",
+        "position target",
+        "value signal"
+      ],
+      "relations": []
+    },
+    {
+      "id": "refill_bounded",
+      "type": "concept",
+      "topics": [
+        "data-downloading"
+      ],
+      "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
+      "questions": [
+        "download daily",
+        "下载日线",
+        "灌数据"
+      ],
+      "relations": []
+    },
+    {
+      "id": "side_effects_safety",
+      "type": "boundary",
+      "topics": [
+        "capability",
+        "live_boundary"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "side effect",
+        "auto execute"
+      ],
+      "relations": []
+    },
+    {
+      "id": "strategy_builder_intro",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/6. custom_strategy.md",
+      "questions": [
+        "generate a strategy",
+        "写策略",
+        "双均线",
+        "金叉"
+      ],
+      "relations": []
+    },
+    {
+      "id": "what_is_qteasy",
+      "type": "concept",
+      "topics": [
+        "capability"
+      ],
+      "manual_anchor": "docs/source/tutorials/1-get-started.md",
+      "questions": [
+        "what is qteasy",
+        "什么是 qteasy",
+        "什么是qteasy",
+        "qteasy是什么",
+        "qteasy 是什么"
+      ],
+      "relations": []
+    }
+  ]
+}

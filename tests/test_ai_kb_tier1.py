@@ -55,10 +55,15 @@ _LEGAL_TYPES = {"concept", "trap", "boundary", "pointer"}
 
 
 def _write_probe(directory: str, payload: dict) -> None:
-    """在临时目录写一条探针 JSON。"""
+    """在临时目录写一条探针 JSON，并放一份只含 capability 的注册表。"""
 
-    path = Path(directory) / f"{payload['id']}.json"
+    root = Path(directory)
+    path = root / f"{payload['id']}.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
+    source = root / "_source"
+    source.mkdir(parents=True, exist_ok=True)
+    registry = {"topics": [{"id": "capability", "scope": "probe scope"}]}
+    (source / "topic_registry.json").write_text(json.dumps(registry), encoding="utf-8")
 
 
 class TestAiKbTier1(unittest.TestCase):
@@ -94,6 +99,7 @@ class TestAiKbTier1(unittest.TestCase):
             "title": "Probe",
             "summary": "probe",
             "narrative": "probe",
+            "topics": ["capability"],
         }
         rejected = (
             {"id": "probe_live", "type": "live", **base},

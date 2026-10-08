@@ -18,5 +18,6 @@
   "risk_notes": "Mis-routing freq into qt.run is a known qteasy-ai skill trap; Ask only explains, it does not call qt.run.",
   "type": "concept",
   "manual_anchor": "docs/source/manage_strategies/2. operator.md",
+  "topics": ["strategy"],
   "relations": []
 }

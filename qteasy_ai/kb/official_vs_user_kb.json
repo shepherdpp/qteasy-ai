@@ -15,5 +15,6 @@
   "risk_notes": "Do not paste research notes into official kb/. Ask will ignore user_kb even if files exist.",
   "type": "concept",
   "manual_anchor": "",
+  "topics": ["capability"],
   "relations": []
 }

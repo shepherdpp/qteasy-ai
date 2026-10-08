@@ -16,5 +16,6 @@
   "risk_notes": "Ask explains this error; it does not call get_history_data.",
   "type": "trap",
   "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
+  "topics": ["data-analysis"],
   "relations": []
 }

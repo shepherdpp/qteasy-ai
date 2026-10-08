@@ -5,8 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-08-28
 # Desc:
-# qteasy-ai Ask 目标态引擎：LLMClient +
-# KnowledgeBase，不调用 skill / Executor。
+# qteasy-ai Ask 目标态引擎：无模型走目录检索；
+# 有 Provider 时定主题、点卡，再让作家只读选中正文。
 # ======================================
 
 """Ask 目标态问答引擎。
@@ -17,8 +17,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .knowledge_base import KbEntry, KnowledgeBase
 from .provider import BaseLLMProvider
@@ -30,6 +31,33 @@ _ASK_SYSTEM_PROMPT = (
     "Keep qteasy identifiers, skill names, and code unchanged. "
     "If the snippets are insufficient, say so and suggest Plan mode."
 )
+
+_TOPIC_SYSTEM_PROMPT = (
+    "You select topics for a qteasy Ask question. "
+    "Reply with one JSON object and no other text. "
+    "Use only topic ids from the registry in the user message."
+)
+
+_CARD_SYSTEM_PROMPT = (
+    "You select knowledge cards for a qteasy Ask question. "
+    "Reply with one JSON object and no other text. "
+    "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select."
+)
+
+
+def _json_object(raw: str) -> Optional[Dict[str, Any]]:
+    """整段文本必须是一个 JSON 对象。围栏或散文算非法。"""
+
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 
 @dataclass
@@ -111,8 +139,12 @@ class AskEngine:
         *,
         explanation_depth: str = "standard",
         session_context: str = "",
+        ask_focus: Optional[Mapping[str, Any]] = None,
     ) -> AskResponse:
         """回答用户问题，不走 plan / skill。
+
+        无 Provider 时先查问句目录，再按 type 桶检索。有 Provider 时不把目录当第一跳：
+        定主题、在主题菜单里点卡，作家只读通过校验的正文。
 
         Parameters
         ----------
@@ -120,6 +152,10 @@ class AskEngine:
             自然语言问题。
         explanation_depth : {'brief', 'standard', 'deep'}, default 'standard'
             解释层深度；C1 先生成完整通道，深度裁剪由 explanation_template 负责。
+        session_context : str, optional
+            已确认的 session 槽位文本，只附在作家 prompt 上。
+        ask_focus : mapping, optional
+            调用方显式传入的焦点。缺省不读 session，也不解析「第二项」。
 
         Returns
         -------
@@ -129,7 +165,12 @@ class AskEngine:
 
         text = (query or "").strip()
         depth = explanation_depth if explanation_depth in {"brief", "standard", "deep"} else "standard"
-        hits = self.knowledge_base.retrieve(text)
+        if not text:
+            return self._not_found(query=text, depth=depth)
+        if self.provider is None:
+            hits = self.knowledge_base.retrieve(text)
+        else:
+            hits = self._select_with_provider(text, ask_focus)
         if not hits:
             return self._not_found(query=text, depth=depth)
 
@@ -151,6 +192,112 @@ class AskEngine:
             error=None,
             extra_raw=extra,
         )
+
+    def _select_with_provider(
+            self,
+            query: str,
+            ask_focus: Optional[Mapping[str, Any]],
+    ) -> List[KbEntry]:
+        """定主题、点卡、校验。失败时不调用作家。"""
+
+        topic_raw = self.provider.chat(
+            self._topic_user_prompt(query, ask_focus),
+            system_prompt=_TOPIC_SYSTEM_PROMPT,
+        )
+        topic_ids = self._parse_topics_reply(str(topic_raw))
+        if not topic_ids:
+            return []
+        menu = self.knowledge_base.menu_for_topics(topic_ids)
+        if not menu:
+            return []
+        card_raw = self.provider.chat(
+            self._card_user_prompt(query, menu),
+            system_prompt=_CARD_SYSTEM_PROMPT,
+        )
+        raw_ids = self._parse_ids_reply(str(card_raw))
+        if raw_ids is None:
+            return []
+        chosen = self.knowledge_base.prefer_exclusive(
+            self.knowledge_base.validate_card_ids(menu, raw_ids)
+        )
+        if not chosen:
+            return []
+        meta = self.knowledge_base._maybe_strategy_meta(query)
+        if meta is not None:
+            chosen = list(chosen) + [meta]
+        return chosen
+
+    def _topic_user_prompt(self, query: str, ask_focus: Optional[Mapping[str, Any]]) -> str:
+        """定主题提示：注册表一句话，加上显式传入的 ask_focus。不含卡片正文。"""
+
+        lines = ["Topic registry:"]
+        for spec in self.knowledge_base.topic_specs():
+            lines.append(f"- {spec.id}: {spec.scope}")
+        if ask_focus:
+            lines.append(
+                "Current ask_focus: "
+                + json.dumps(dict(ask_focus), ensure_ascii=False, sort_keys=True)
+            )
+        lines.append(f"Question: {query}")
+        lines.append(
+            'Reply with JSON only: {"topics": ["<id>"]} using 1 or 2 registry ids, '
+            'or {"uncertain": true}.'
+        )
+        return "\n".join(lines)
+
+    def _card_user_prompt(self, query: str, menu: Sequence[KbEntry]) -> str:
+        """点卡提示：菜单内 id、标题、摘要，以及边上的 rel / 对方 id / 标题。"""
+
+        lines = ["Cards in the selected topics:"]
+        for entry in menu:
+            lines.append(f"- {entry.id}: {entry.title}. {entry.summary}")
+            for relation in entry.relations:
+                other = self.knowledge_base._by_id.get(relation["to"])
+                other_title = other.title if other is not None else ""
+                lines.append(
+                    f"  edge {relation['rel']} -> {relation['to']}: {other_title}"
+                )
+        lines.append(f"Question: {query}")
+        lines.append(
+            'Reply with JSON only: {"ids": ["<id>"]} using 1 to 3 ids from this menu '
+            "or a depth-1 neighbor of a selected menu card, "
+            'or {"uncertain": true}.'
+        )
+        return "\n".join(lines)
+
+    def _parse_topics_reply(self, raw: str) -> Optional[List[str]]:
+        """解析定主题 JSON。未知主题丢掉；丢掉后为空则失败。"""
+
+        payload = _json_object(raw)
+        if payload is None or payload.get("uncertain") is True:
+            return None
+        topics = payload.get("topics")
+        if not isinstance(topics, list) or not 1 <= len(topics) <= 2:
+            return None
+        if not all(isinstance(item, str) and item.strip() for item in topics):
+            return None
+        registered = {spec.id for spec in self.knowledge_base.topic_specs()}
+        kept: List[str] = []
+        for item in topics:
+            topic = item.strip()
+            if topic in registered and topic not in kept:
+                kept.append(topic)
+        if not kept:
+            return None
+        return kept
+
+    def _parse_ids_reply(self, raw: str) -> Optional[List[str]]:
+        """解析点卡 JSON。原始列表必须是 1～3 个非空字符串。"""
+
+        payload = _json_object(raw)
+        if payload is None or payload.get("uncertain") is True:
+            return None
+        raw_ids = payload.get("ids")
+        if not isinstance(raw_ids, list) or not 1 <= len(raw_ids) <= 3:
+            return None
+        if not all(isinstance(item, str) and item.strip() for item in raw_ids):
+            return None
+        return [item.strip() for item in raw_ids]
 
     def _not_found(self, *, query: str, depth: str) -> AskResponse:
         """KB 未命中：英文 not_found，建议 Plan，不调用 LLM。"""

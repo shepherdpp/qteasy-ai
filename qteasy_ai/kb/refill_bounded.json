@@ -15,5 +15,6 @@
   "risk_notes": "Never run unbounded refill. Confirm before execute. allow_refill only gates agent_auto.",
   "type": "concept",
   "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
+  "topics": ["data-downloading"],
   "relations": []
 }
