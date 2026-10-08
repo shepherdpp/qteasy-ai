@@ -18,8 +18,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .knowledge_base import KbEntry, KnowledgeBase
 from .provider import BaseLLMProvider
@@ -43,6 +44,52 @@ _CARD_SYSTEM_PROMPT = (
     "Reply with one JSON object and no other text. "
     "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select."
 )
+
+# 整句能力地图序号。后面只允许「再解释一下」或语气词，不解析其它指代。
+_MENU_ORDINAL_RE = re.compile(
+    r"^\s*第\s*([1-5一二三四五])\s*项"
+    r"(?:\s*(?:再)?解释一下|呢|吧|[。！!?])?\s*$"
+)
+_ORDINAL_VALUE = {
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+}
+
+
+def menu_ordinal(query: str) -> Optional[int]:
+    """整句「第N项」对应的能力地图编号。其它说法返回 None。
+
+    Parameters
+    ----------
+    query : str
+        用户原句。
+
+    Returns
+    -------
+    int or None
+        1–5。不是整句序号时为 ``None``。
+    """
+
+    match = _MENU_ORDINAL_RE.match(query or "")
+    if match is None:
+        return None
+    return _ORDINAL_VALUE.get(match.group(1))
+
+
+def _topic_value(topic_ids: Sequence[str]) -> Any:
+    """一个主题写成字符串，多个主题保持注册表顺序的列表。"""
+
+    if len(topic_ids) == 1:
+        return topic_ids[0]
+    return list(topic_ids)
 
 
 def _json_object(raw: str) -> Optional[Dict[str, Any]]:
@@ -140,6 +187,7 @@ class AskEngine:
         explanation_depth: str = "standard",
         session_context: str = "",
         ask_focus: Optional[Mapping[str, Any]] = None,
+        resolve_menu_ordinal: bool = False,
     ) -> AskResponse:
         """回答用户问题，不走 plan / skill。
 
@@ -155,22 +203,31 @@ class AskEngine:
         session_context : str, optional
             已确认的 session 槽位文本，只附在作家 prompt 上。
         ask_focus : mapping, optional
-            调用方显式传入的焦点。缺省不读 session，也不解析「第二项」。
+            上一轮焦点。只进入定主题提示。本方法不读 session。
+        resolve_menu_ordinal : bool, default False
+            为真时，整句「第N项」按注册表 ``map_item`` 定主题，不调用定主题模型。
+            无 session 的调用方必须保持 False。
 
         Returns
         -------
         AskResponse
-            模式为 ask 的结构化答案。
+            模式为 ask 的结构化答案。有 Provider 且选题成功时，``raw['ask_focus']``
+            含本轮 ``topic`` / ``menu_item`` / ``sources``。
         """
 
         text = (query or "").strip()
         depth = explanation_depth if explanation_depth in {"brief", "standard", "deep"} else "standard"
         if not text:
             return self._not_found(query=text, depth=depth)
+        topic_ids: List[str] = []
         if self.provider is None:
             hits = self.knowledge_base.retrieve(text)
         else:
-            hits = self._select_with_provider(text, ask_focus)
+            hits, topic_ids = self._select_with_provider(
+                text,
+                ask_focus,
+                resolve_menu_ordinal=resolve_menu_ordinal,
+            )
         if not hits:
             return self._not_found(query=text, depth=depth)
 
@@ -181,7 +238,11 @@ class AskEngine:
             answer = self._offline_answer(hits)
             if session_context:
                 answer = f"{answer}\n\nSession slots: {session_context}"
-        extra = {"session_context": session_context} if session_context else None
+        extra: Dict[str, Any] = {}
+        if session_context:
+            extra["session_context"] = session_context
+        if topic_ids:
+            extra["ask_focus"] = self._ask_focus_payload(topic_ids, sources)
         return self._pack(
             query=text,
             answer=answer,
@@ -190,42 +251,121 @@ class AskEngine:
             depth=depth,
             ok=True,
             error=None,
-            extra_raw=extra,
+            extra_raw=extra or None,
         )
 
     def _select_with_provider(
             self,
             query: str,
             ask_focus: Optional[Mapping[str, Any]],
-    ) -> List[KbEntry]:
-        """定主题、点卡、校验。失败时不调用作家。"""
+            *,
+            resolve_menu_ordinal: bool = False,
+    ) -> Tuple[List[KbEntry], List[str]]:
+        """定主题、点卡、校验。失败时不调用作家。
 
-        topic_raw = self.provider.chat(
-            self._topic_user_prompt(query, ask_focus),
-            system_prompt=_TOPIC_SYSTEM_PROMPT,
+        Returns
+        -------
+        tuple
+            选中的条目，以及本轮主题 id。失败时两者都空。
+        """
+
+        topic_ids, resolved = self._resolve_topics(
+            query,
+            ask_focus,
+            resolve_menu_ordinal=resolve_menu_ordinal,
         )
-        topic_ids = self._parse_topics_reply(str(topic_raw))
         if not topic_ids:
-            return []
+            return [], []
         menu = self.knowledge_base.menu_for_topics(topic_ids)
         if not menu:
-            return []
+            return [], []
         card_raw = self.provider.chat(
-            self._card_user_prompt(query, menu),
+            self._card_user_prompt(query, menu, resolved_focus=resolved),
             system_prompt=_CARD_SYSTEM_PROMPT,
         )
         raw_ids = self._parse_ids_reply(str(card_raw))
         if raw_ids is None:
-            return []
+            return [], []
         chosen = self.knowledge_base.prefer_exclusive(
             self.knowledge_base.validate_card_ids(menu, raw_ids)
         )
         if not chosen:
-            return []
+            return [], []
         meta = self.knowledge_base._maybe_strategy_meta(query)
         if meta is not None:
             chosen = list(chosen) + [meta]
-        return chosen
+        return chosen, topic_ids
+
+    def _resolve_topics(
+            self,
+            query: str,
+            ask_focus: Optional[Mapping[str, Any]],
+            *,
+            resolve_menu_ordinal: bool,
+    ) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+        """定主题。整句序号命中注册表时不调用模型。
+
+        Returns
+        -------
+        tuple
+            主题 id，以及序号解析出的焦点。未走序号时焦点为 ``None``。
+        """
+
+        if resolve_menu_ordinal:
+            menu_item = menu_ordinal(query)
+            if menu_item is not None:
+                topic_ids = self.knowledge_base.topics_for_map_item(menu_item)
+                if topic_ids:
+                    return topic_ids, {
+                        "topic": _topic_value(topic_ids),
+                        "menu_item": menu_item,
+                    }
+        topic_raw = self.provider.chat(
+            self._topic_user_prompt(query, ask_focus),
+            system_prompt=_TOPIC_SYSTEM_PROMPT,
+        )
+        parsed = self._parse_topics_reply(str(topic_raw))
+        if not parsed:
+            return [], None
+        return parsed, None
+
+    def _ask_focus_payload(self, topic_ids: Sequence[str], sources: Sequence[str]) -> Dict[str, Any]:
+        """本轮焦点。多个主题不合并成单一 ``data``。
+
+        Parameters
+        ----------
+        topic_ids : sequence of str
+            本轮选定的主题。
+        sources : sequence of str
+            本轮 Ask sources。
+
+        Returns
+        -------
+        dict
+            ``topic`` / ``menu_item`` / ``sources``。主题没有共用编号时 ``menu_item`` 为 ``None``。
+        """
+
+        return {
+            "topic": _topic_value(topic_ids),
+            "menu_item": self._shared_menu_item(topic_ids),
+            "sources": list(sources),
+        }
+
+    def _shared_menu_item(self, topic_ids: Sequence[str]) -> Optional[int]:
+        """这些主题若共用同一个 ``map_item``，返回该编号。"""
+
+        specs = {spec.id: spec.map_item for spec in self.knowledge_base.topic_specs()}
+        items: List[int] = []
+        for topic_id in topic_ids:
+            if topic_id not in specs:
+                return None
+            item = specs[topic_id]
+            if not isinstance(item, int):
+                return None
+            items.append(item)
+        if items and all(item == items[0] for item in items):
+            return items[0]
+        return None
 
     def _topic_user_prompt(self, query: str, ask_focus: Optional[Mapping[str, Any]]) -> str:
         """定主题提示：注册表一句话，加上显式传入的 ask_focus。不含卡片正文。"""
@@ -245,8 +385,23 @@ class AskEngine:
         )
         return "\n".join(lines)
 
-    def _card_user_prompt(self, query: str, menu: Sequence[KbEntry]) -> str:
-        """点卡提示：菜单内 id、标题、摘要，以及边上的 rel / 对方 id / 标题。"""
+    def _card_user_prompt(
+            self,
+            query: str,
+            menu: Sequence[KbEntry],
+            resolved_focus: Optional[Mapping[str, Any]] = None,
+    ) -> str:
+        """点卡提示：菜单内 id、标题、摘要，以及边上的 rel / 对方 id / 标题。
+
+        Parameters
+        ----------
+        query : str
+            用户原句。
+        menu : sequence of KbEntry
+            当前主题菜单。
+        resolved_focus : mapping, optional
+            序号已经解析出的焦点。只在这条路径写入提示。
+        """
 
         lines = ["Cards in the selected topics:"]
         for entry in menu:
@@ -257,6 +412,11 @@ class AskEngine:
                 lines.append(
                     f"  edge {relation['rel']} -> {relation['to']}: {other_title}"
                 )
+        if resolved_focus:
+            lines.append(
+                "Resolved ask_focus: "
+                + json.dumps(dict(resolved_focus), ensure_ascii=False, sort_keys=True)
+            )
         lines.append(f"Question: {query}")
         lines.append(
             'Reply with JSON only: {"ids": ["<id>"]} using 1 to 3 ids from this menu '

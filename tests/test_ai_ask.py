@@ -434,6 +434,196 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertNotIn("ask_focus", plain.prompts[0])
         self.assertNotIn("data-downloading", plain.prompts[1])
 
+    def test_session_second_item_opens_data_topics(self) -> None:
+        """同一 session 先问能力再问「第二项」，点卡菜单只含两个数据主题。"""
+
+        print("\n[TestAiAskEngine] session 第二项打开数据主题")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+        from qteasy_ai.session import latest_ask_focus
+
+        data_topics = ["data-downloading", "data-analysis"]
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["capability"]}',
+            '{"ids":["what_is_qteasy"]}',
+            "qteasy 可以回答概念、取数、回测和优化。",
+            '{"ids":["data_three_entries"]}',
+            "历史、参考和静态是三条数据入口。",
+            '{"uncertain": true}',
+            '{"topics":["backtest"]}',
+            '{"ids":["backtest_intro"]}',
+            "回测需要明确的 strategy_id 和日期窗口。",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask(
+                "你能帮我做什么",
+                response_style="raw",
+                session_id="a4-focus",
+            )
+            first_focus = (first.get("raw") or {}).get("ask_focus") or {}
+            print(" first sources:", first.get("sources"))
+            print(" first focus:", first_focus)
+            self._assert_no_plan_execution(first)
+            self.assertEqual(first.get("sources"), ["what_is_qteasy"])
+            self.assertEqual(first_focus.get("topic"), "capability")
+            self.assertEqual(first_focus.get("menu_item"), 1)
+            self.assertIsNone(assistant.session_store.load("a4-focus").task)
+
+            before_second = len(fake.prompts)
+            second = assistant.ask("第二项", response_style="raw", session_id="a4-focus")
+            card_prompt = fake.prompts[before_second]
+            menu_ids = _menu_line_ids(card_prompt)
+            kb = assistant.ask_engine.knowledge_base
+            menu = kb.menu_for_topics(data_topics)
+            allowed = {entry.id for entry in menu} | kb._depth1_neighbor_ids([entry.id for entry in menu])
+            second_focus = (second.get("raw") or {}).get("ask_focus") or {}
+            stored = latest_ask_focus(assistant.session_store.load("a4-focus"))
+            print(" second prompts added:", len(fake.prompts) - before_second)
+            print(" card prompt:", card_prompt)
+            print(" menu ids:", menu_ids)
+            print(" allowed:", sorted(allowed))
+            print(" second sources:", second.get("sources"))
+            print(" second focus:", second_focus)
+            print(" stored focus:", stored)
+            self._assert_no_plan_execution(second)
+            self.assertTrue(card_prompt.startswith("Cards in the selected topics:"))
+            self.assertIn("Resolved ask_focus:", card_prompt)
+            self.assertEqual(len(fake.prompts) - before_second, 2)
+            self.assertTrue(menu_ids)
+            self.assertTrue(set(menu_ids) <= allowed)
+            for entry in menu:
+                self.assertIn(entry.id, menu_ids)
+            self.assertNotIn("what_is_qteasy", menu_ids)
+            self.assertEqual(second.get("sources"), ["data_three_entries"])
+            for source_id in second.get("sources") or []:
+                topics = set(kb._by_id[source_id].topics)
+                print(" source topics:", source_id, sorted(topics))
+                self.assertTrue(topics & set(data_topics))
+            self.assertEqual(second_focus.get("topic"), data_topics)
+            self.assertEqual(second_focus.get("menu_item"), 2)
+            self.assertNotEqual(second_focus.get("topic"), "data")
+            self.assertEqual(stored, second_focus)
+            self.assertIsNone(assistant.session_store.load("a4-focus").task)
+            self.assertNotIn("plan_id", second.get("answer") or "")
+
+            before_miss = len(fake.prompts)
+            missed = assistant.ask("do not change the topic", response_style="raw", session_id="a4-focus")
+            print(" miss code:", (missed.get("error") or {}).get("code"))
+            print(" miss topic prompt has focus:", "Current ask_focus:" in fake.prompts[before_miss])
+            print(" focus after miss:", latest_ask_focus(assistant.session_store.load("a4-focus")))
+            self.assertFalse(missed.get("ok"))
+            self.assertEqual((missed.get("error") or {}).get("code"), "NOT_FOUND")
+            self.assertIn("Current ask_focus:", fake.prompts[before_miss])
+            self.assertIn("data-downloading", fake.prompts[before_miss])
+            self.assertEqual(
+                latest_ask_focus(assistant.session_store.load("a4-focus")),
+                second_focus,
+            )
+
+            before_third = len(fake.prompts)
+            third = assistant.ask(
+                "如何用qteasy回测",
+                response_style="raw",
+                session_id="a4-focus",
+            )
+            third_focus = (third.get("raw") or {}).get("ask_focus") or {}
+            print(" follow-up topic prompt:", fake.prompts[before_third])
+            print(" third sources:", third.get("sources"))
+            print(" third focus:", third_focus)
+            self.assertTrue(fake.prompts[before_third].startswith("Topic registry:"))
+            self.assertIn("Current ask_focus:", fake.prompts[before_third])
+            self.assertIn("data-downloading", fake.prompts[before_third])
+            self.assertIn("data-analysis", fake.prompts[before_third])
+            self.assertEqual(third.get("sources"), ["backtest_intro"])
+            self.assertEqual(third_focus.get("topic"), "backtest")
+            self.assertEqual(third_focus.get("menu_item"), 3)
+            self.assertEqual(latest_ask_focus(assistant.session_store.load("a4-focus")), third_focus)
+            self.assertIsNone(assistant.session_store.load("a4-focus").task)
+
+    def test_ordinal_suffix_skips_topic_model(self) -> None:
+        """「第三项再解释一下」按 map_item 定主题，不调用定主题模型。"""
+
+        print("\n[TestAiAskEngine] 序号后缀跳过定主题")
+        fake = FakeLLMProvider(replies=[
+            '{"ids":["backtest_intro"]}',
+            "回测解释对应能力地图第三项。",
+        ])
+        engine = AskEngine(knowledge_base=self.kb, provider=fake)
+        payload = engine.ask("第三项再解释一下", resolve_menu_ordinal=True).to_dict()
+        focus = (payload.get("raw") or {}).get("ask_focus") or {}
+        print(" prompts:", len(fake.prompts))
+        print(" card prompt:", fake.prompts[0])
+        print(" sources:", payload.get("sources"))
+        print(" focus:", focus)
+        self._assert_no_plan_execution(payload)
+        self.assertEqual(len(fake.prompts), 2)
+        self.assertTrue(fake.prompts[0].startswith("Cards in the selected topics:"))
+        self.assertIn("Resolved ask_focus:", fake.prompts[0])
+        self.assertIn("backtest_intro", fake.prompts[0])
+        self.assertNotIn("data_three_entries", fake.prompts[0])
+        self.assertEqual(payload.get("sources"), ["backtest_intro"])
+        self.assertEqual(focus.get("topic"), "backtest")
+        self.assertEqual(focus.get("menu_item"), 3)
+
+    def test_no_session_ordinal_is_not_parsed(self) -> None:
+        """没有 session_id 时「第二项」不展开成两个数据主题。"""
+
+        print("\n[TestAiAskEngine] 无 session 不解析第二项")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+
+        fake = self._protocol(["backtest"], ["backtest_intro"], answer="回测需要明确的日期窗口。")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            payload = assistant.ask("第二项", response_style="raw")
+            focus = (payload.get("raw") or {}).get("ask_focus") or {}
+            print(" topic prompt:", fake.prompts[0])
+            print(" card prompt:", fake.prompts[1])
+            print(" sources:", payload.get("sources"))
+            print(" focus:", focus)
+            self._assert_no_plan_execution(payload)
+            self.assertTrue(fake.prompts[0].startswith("Topic registry:"))
+            self.assertNotIn("Current ask_focus:", fake.prompts[0])
+            self.assertNotIn("Resolved ask_focus:", fake.prompts[1])
+            self.assertIn("backtest_intro", fake.prompts[1])
+            self.assertNotIn("data_three_entries", fake.prompts[1])
+            self.assertNotIn("env_ready", fake.prompts[1])
+            self.assertEqual(payload.get("sources"), ["backtest_intro"])
+            self.assertNotEqual(focus.get("topic"), ["data-downloading", "data-analysis"])
+            self.assertNotEqual(focus.get("menu_item"), 2)
+            self.assertNotIn("session", payload)
+
+    def test_session_without_provider_does_not_parse_ordinal(self) -> None:
+        """无 Provider 的 session 仍走目录，不把「第二项」写成数据焦点。"""
+
+        print("\n[TestAiAskEngine] 无 Provider 不解析第二项")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.session import latest_ask_focus
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(memory_store=MemoryStore(base_dir=temp_dir))
+            payload = assistant.ask("第二项", response_style="raw", session_id="a4-offline")
+            state = assistant.session_store.load("a4-offline")
+            print(" ok:", payload.get("ok"), "code:", (payload.get("error") or {}).get("code"))
+            print(" sources:", payload.get("sources"))
+            print(" stored focus:", latest_ask_focus(state))
+            print(" task:", state.task)
+            self.assertFalse(payload.get("ok"))
+            self.assertEqual((payload.get("error") or {}).get("code"), "NOT_FOUND")
+            self.assertEqual(payload.get("sources"), [])
+            self.assertNotIn("ask_focus", payload.get("raw") or {})
+            self.assertIsNone(latest_ask_focus(state))
+            self.assertIsNone(state.task)
+
     def test_provider_depth1_neighbor_is_allowed_only_with_menu_card(self) -> None:
         """深度 1 邻居可与菜单卡一起入选；只点邻居则 NOT_FOUND。"""
 
@@ -470,6 +660,17 @@ class TestAiAskEngine(unittest.TestCase):
             incoming_payload = AskEngine(knowledge_base=kb, provider=incoming).ask("入边邻居").to_dict()
             print(" incoming sources:", incoming_payload.get("sources"))
             self.assertEqual(incoming_payload["sources"], ["menu_card", "incoming_card"])
+
+
+def _menu_line_ids(prompt: str) -> list:
+    """点卡提示里以「- id:」开头的菜单 id，不含边行。"""
+
+    found = []
+    for line in str(prompt or "").splitlines():
+        if not line.startswith("- ") or ":" not in line:
+            continue
+        found.append(line[2:].split(":", 1)[0].strip())
+    return found
 
 
 def _write_neighbor_kb(root: Path) -> Path:

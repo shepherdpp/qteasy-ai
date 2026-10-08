@@ -59,6 +59,7 @@ from .session import (
     mark_live_progress,
     mark_live_step_end,
     mark_live_step_start,
+    latest_ask_focus,
     pop_deferred_run,
     register_live_running,
     set_deferred_run,
@@ -340,6 +341,8 @@ class QteasyAssistant:
         """Ask 目标态：LLMClient + KnowledgeBase 问答，不执行 skill。
 
         不调用 PlanExecutor，不写入 ``runs/``。``persist`` / ``keep`` 被忽略。
+        有 ``session_id`` 时读取上一张成功 Ask 卡的 ``ask_focus``，答完写回；
+        整句「第N项」按主题注册表展开。不建 Task。
         若仍需审阅可执行步骤，请使用 ``preview()`` 或 ``plan()``。
 
         Parameters
@@ -380,6 +383,8 @@ class QteasyAssistant:
             query,
             explanation_depth=explanation_depth,
             session_context=session_context,
+            ask_focus=latest_ask_focus(session) if session is not None else None,
+            resolve_menu_ordinal=session is not None,
         )
         payload = result.to_dict()
         if session is not None:
