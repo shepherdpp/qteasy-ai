@@ -15,5 +15,6 @@
   "risk_notes": "PT+VS in one sentence clarifies. Generated code lands under .qteasy/ai/strategies/.",
   "type": "concept",
   "manual_anchor": "docs/source/manage_strategies/6. custom_strategy.md",
+  "topics": ["strategy"],
   "relations": []
 }

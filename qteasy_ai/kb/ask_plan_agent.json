@@ -17,5 +17,6 @@
   "risk_notes": "Mode must be visible in every response so users can predict side effects.",
   "type": "concept",
   "manual_anchor": "",
+  "topics": ["capability"],
   "relations": []
 }

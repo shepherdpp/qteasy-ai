@@ -20,5 +20,6 @@
   "risk_notes": "Mixing channels in one call is not supported. Download/refill is a different Job from read.",
   "type": "concept",
   "manual_anchor": "docs/source/manage_data/01. overview.md",
+  "topics": ["data-analysis"],
   "relations": []
 }

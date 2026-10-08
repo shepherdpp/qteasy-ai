@@ -15,5 +15,6 @@
   "risk_notes": "Optimization is heavy compute. Do not confuse it with a single backtest.",
   "type": "concept",
   "manual_anchor": "docs/source/optimization/1. overview.md",
+  "topics": ["optimize"],
   "relations": []
 }

@@ -16,5 +16,6 @@
   "risk_notes": "Ask never downloads data or runs a backtest. Use Plan, then confirm, before high-side-effect work.",
   "type": "concept",
   "manual_anchor": "docs/source/tutorials/1-get-started.md",
+  "topics": ["capability"],
   "relations": []
 }

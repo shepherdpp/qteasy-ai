@@ -8,7 +8,10 @@
 # Unittest for qteasy-ai AskEngine target state
 # ======================================
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from qteasy_ai.ask_engine import AskEngine
 from qteasy_ai.knowledge_base import KnowledgeBase
@@ -100,20 +103,25 @@ class TestAiAskEngine(unittest.TestCase):
 
         print("\n[TestAiAskEngine] FakeLLM grounds on KB")
         fake = FakeLLMProvider(
-            replies=["PT is Position Target. PS is a proportional order signal. Grounded on KB."]
+            replies=[
+                '{"topics":["strategy"]}',
+                '{"ids":["pt_ps_vs"]}',
+                "PT is Position Target. PS is a proportional order signal. Grounded on KB.",
+            ]
         )
         engine = AskEngine(knowledge_base=self.kb, provider=fake)
         result = engine.ask("explain PT vs PS")
         payload = result.to_dict()
-        print(" prompts:", fake.prompts)
+        print(" prompts:", [len(item) for item in fake.prompts])
         print(" system:", fake.system_prompts)
         print(" answer:", payload["answer"])
         print(" sources:", payload["sources"])
-        self.assertEqual(len(fake.prompts), 1)
-        self.assertIn("Position Target", fake.prompts[0])
-        self.assertIn("pt_ps_vs", fake.prompts[0])
-        self.assertIn("same language", fake.system_prompts[0].lower())
-        self.assertIn("same language as the Question", fake.prompts[0])
+        self.assertEqual(len(fake.prompts), 3)
+        self.assertNotIn("Position Target", fake.prompts[0])
+        self.assertIn("Position Target", fake.prompts[2])
+        self.assertIn("pt_ps_vs", fake.prompts[2])
+        self.assertIn("same language", fake.system_prompts[2].lower())
+        self.assertIn("same language as the Question", fake.prompts[2])
         self.assertIn("PT", payload["answer"])
         self.assertIn("pt_ps_vs", payload["sources"])
         self.assertEqual(self.executor.execute_calls, 0)
@@ -134,7 +142,9 @@ class TestAiAskEngine(unittest.TestCase):
         error = payload.get("error") or {}
         self.assertEqual(error.get("code"), "NOT_FOUND")
         self.assertIn("plan", payload["answer"].lower())
-        self.assertEqual(fake.prompts, [])
+        self.assertEqual(len(fake.prompts), 1)
+        self.assertNotIn("Knowledge snippets", fake.prompts[0])
+        self.assertNotIn("I made this up", payload["answer"])
         self._assert_no_plan_execution(payload)
 
     def test_executable_phrasing_still_zero_skill(self) -> None:
@@ -271,6 +281,249 @@ class TestAiAskEngine(unittest.TestCase):
                 preview_payload["plan"]["steps"][0]["skill_name"],
                 "qt.ai.strategy_meta.list",
             )
+
+    def _protocol(
+            self,
+            topics: list,
+            ids: list,
+            answer: str = "回测需要明确的 strategy_id 和日期窗口。",
+    ) -> FakeLLMProvider:
+        """替身按定主题、点卡、作家的顺序返回协议 JSON。"""
+
+        replies = [json.dumps({"topics": topics}, ensure_ascii=False)]
+        if ids is not None:
+            replies.append(json.dumps({"ids": ids}, ensure_ascii=False))
+            replies.append(answer)
+        return FakeLLMProvider(replies=replies)
+
+    def test_provider_backtest_paraphrases_start_with_backtest_intro(self) -> None:
+        """不带空格的回测问法走主题点卡，sources 以 backtest_intro 开头。"""
+
+        print("\n[TestAiAskEngine] 有模型回测同义句")
+        narrative = "A built-in backtest Job needs"
+        for query in ("如何用qteasy回测", "如何用qteasy进行回测"):
+            fake = self._protocol(["backtest"], ["backtest_intro"])
+            engine = AskEngine(knowledge_base=self.kb, provider=fake)
+            payload = engine.ask(query).to_dict()
+            print(" query:", query)
+            print(" sources:", payload.get("sources"))
+            print(" topic prompt has narrative:", narrative in fake.prompts[0])
+            print(" card prompt has narrative:", narrative in fake.prompts[1])
+            print(" writer prompt has narrative:", narrative in fake.prompts[2])
+            self._assert_no_plan_execution(payload)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["sources"][0], "backtest_intro")
+            self.assertNotIn("what_is_qteasy", payload["sources"])
+            self.assertIn("回测解释", fake.prompts[0])
+            self.assertNotIn("backtest_intro", fake.prompts[0])
+            self.assertNotIn(narrative, fake.prompts[0])
+            self.assertNotIn("如何用 qteasy 回测", fake.prompts[0])
+            self.assertNotIn("run backtest", fake.prompts[0])
+            self.assertNotIn(narrative, fake.prompts[1])
+            self.assertIn("backtest_intro", fake.prompts[1])
+            self.assertIn(narrative, fake.prompts[2])
+            self.assertNotIn("plan_id", payload["answer"])
+
+    def test_provider_drops_unknown_topic_and_keeps_backtest(self) -> None:
+        """未知主题被丢掉，剩下的 backtest 仍点卡。"""
+
+        print("\n[TestAiAskEngine] 丢掉未知主题")
+        fake = self._protocol(["backtest", "no-such"], ["backtest_intro"])
+        engine = AskEngine(knowledge_base=self.kb, provider=fake)
+        payload = engine.ask("如何用qteasy进行回测").to_dict()
+        print(" sources:", payload.get("sources"))
+        print(" card prompt:", fake.prompts[1][:240])
+        self.assertEqual(payload["sources"], ["backtest_intro"])
+        self.assertIn("backtest_intro", fake.prompts[1])
+        self.assertNotIn("what_is_qteasy", fake.prompts[1])
+        self.assertEqual(len(fake.prompts), 3)
+
+    def test_provider_unknown_uncertain_and_illegal_json_skip_writer(self) -> None:
+        """只剩未知主题、uncertain、非法 JSON 都不调作家。"""
+
+        print("\n[TestAiAskEngine] 定主题失败不作文")
+        cases = (
+            ['{"topics":["no-such"]}'],
+            ['{"uncertain": true}'],
+            ["not json"],
+            ['{"topics":["backtest","optimize","strategy"]}'],
+        )
+        for replies in cases:
+            fake = FakeLLMProvider(replies=list(replies))
+            engine = AskEngine(knowledge_base=self.kb, provider=fake)
+            payload = engine.ask("如何用qteasy回测").to_dict()
+            print(" replies:", replies, "prompts:", len(fake.prompts), "code:", (payload.get("error") or {}).get("code"))
+            self.assertFalse(payload["ok"])
+            self.assertEqual((payload.get("error") or {}).get("code"), "NOT_FOUND")
+            self.assertEqual(payload["sources"], [])
+            self.assertEqual(len(fake.prompts), 1)
+            self.assertNotIn("Knowledge snippets", fake.prompts[0])
+
+    def test_provider_card_miss_and_uncertain_skip_writer(self) -> None:
+        """点卡 id 不在菜单、uncertain 或空校验都不调作家。"""
+
+        print("\n[TestAiAskEngine] 点卡失败不作文")
+        card_replies = (
+            '{"ids":["what_is_qteasy"]}',
+            '{"uncertain": true}',
+            "still not json",
+        )
+        for card_reply in card_replies:
+            fake = FakeLLMProvider(replies=['{"topics":["backtest"]}', card_reply, "should not be the answer"])
+            engine = AskEngine(knowledge_base=self.kb, provider=fake)
+            payload = engine.ask("如何用qteasy回测").to_dict()
+            print(" card reply:", card_reply, "prompts:", len(fake.prompts), "sources:", payload.get("sources"))
+            self.assertFalse(payload["ok"])
+            self.assertEqual((payload.get("error") or {}).get("code"), "NOT_FOUND")
+            self.assertEqual(len(fake.prompts), 2)
+            self.assertNotIn("should not be the answer", payload["answer"])
+            self.assertNotIn("A built-in backtest Job needs", "".join(fake.prompts))
+
+    def test_provider_trap_is_answered_alone(self) -> None:
+        """同一菜单里点中 trap 时，作家只读 trap，不拌 concept。"""
+
+        print("\n[TestAiAskEngine] trap 单独作答")
+        fake = self._protocol(
+            ["backtest"],
+            ["backtest_intro", "common_errors_nan"],
+            answer="NaN prices are skipped.",
+        )
+        engine = AskEngine(knowledge_base=self.kb, provider=fake)
+        payload = engine.ask("trade price is NaN during backtest").to_dict()
+        print(" sources:", payload.get("sources"))
+        print(" writer has concept:", "A built-in backtest Job needs" in fake.prompts[2])
+        print(" writer has trap:", "must not be filled" in fake.prompts[2])
+        self.assertEqual(payload["sources"], ["common_errors_nan"])
+        self.assertIn("must not be filled", fake.prompts[2])
+        self.assertNotIn("A built-in backtest Job needs", fake.prompts[2])
+
+    def test_provider_appends_strategy_meta_only_for_concrete_id(self) -> None:
+        """点卡成功后，具体策略 id 才追加 strategy_meta；泛词不追加。"""
+
+        print("\n[TestAiAskEngine] strategy_meta 只跟具体 id")
+        concrete = self._protocol(["strategy"], ["pt_ps_vs"], answer="MACD is a built-in strategy.")
+        engine = AskEngine(knowledge_base=self.kb, provider=concrete)
+        concrete_payload = engine.ask("what is macd strategy").to_dict()
+        print(" concrete sources:", concrete_payload.get("sources"))
+        self.assertEqual(concrete_payload["sources"][0], "pt_ps_vs")
+        self.assertIn("strategy_meta", concrete_payload["sources"])
+        self.assertIn("Matched strategy_id=macd", concrete.prompts[2])
+
+        generic = self._protocol(["strategy"], ["strategy_builder_intro"], answer="策略是 Operator 上的信号。")
+        generic_engine = AskEngine(knowledge_base=self.kb, provider=generic)
+        generic_payload = generic_engine.ask("策略是什么").to_dict()
+        print(" generic sources:", generic_payload.get("sources"))
+        self.assertEqual(generic_payload["sources"], ["strategy_builder_intro"])
+        self.assertNotIn("strategy_meta", generic_payload["sources"])
+
+    def test_provider_ask_focus_is_prompt_only(self) -> None:
+        """显式 ask_focus 只进入定主题提示，缺省不写焦点字段。"""
+
+        print("\n[TestAiAskEngine] ask_focus 只进提示")
+        focused = self._protocol(["backtest"], ["backtest_intro"])
+        engine = AskEngine(knowledge_base=self.kb, provider=focused)
+        engine.ask("如何用qteasy回测", ask_focus={"menu_item": 3, "topic": "backtest"})
+        print(" focused topic prompt:", focused.prompts[0])
+        self.assertIn("Current ask_focus:", focused.prompts[0])
+        self.assertIn('"menu_item": 3', focused.prompts[0])
+        self.assertNotIn("第二项", focused.prompts[0])
+
+        plain = self._protocol(["backtest"], ["backtest_intro"])
+        AskEngine(knowledge_base=self.kb, provider=plain).ask("第二项")
+        print(" plain topic prompt has ask_focus:", "ask_focus" in plain.prompts[0])
+        self.assertNotIn("ask_focus", plain.prompts[0])
+        self.assertNotIn("data-downloading", plain.prompts[1])
+
+    def test_provider_depth1_neighbor_is_allowed_only_with_menu_card(self) -> None:
+        """深度 1 邻居可与菜单卡一起入选；只点邻居则 NOT_FOUND。"""
+
+        print("\n[TestAiAskEngine] 深度 1 邻居")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kb_dir = _write_neighbor_kb(Path(temp_dir))
+            kb = KnowledgeBase(kb_dir=kb_dir, list_func=lambda: [], doc_func=lambda sid: "")
+            paired = self._protocol(["backtest"], ["menu_card", "neighbor_card"], answer="menu plus neighbor")
+            paired_payload = AskEngine(knowledge_base=kb, provider=paired).ask("回测和旁边那张").to_dict()
+            print(" paired sources:", paired_payload.get("sources"))
+            print(" card prompt:", paired.prompts[1])
+            self.assertEqual(paired_payload["sources"], ["menu_card", "neighbor_card"])
+            self.assertIn("edge see_also -> neighbor_card: Neighbor title", paired.prompts[1])
+            self.assertNotIn("NEIGHBOR BODY", paired.prompts[1])
+            self.assertIn("NEIGHBOR BODY", paired.prompts[2])
+            self.assertIn("MENU BODY", paired.prompts[2])
+
+            alone = FakeLLMProvider(replies=[
+                '{"topics":["backtest"]}',
+                '{"ids":["neighbor_card"]}',
+                "should not write",
+            ])
+            alone_payload = AskEngine(knowledge_base=kb, provider=alone).ask("只点邻居").to_dict()
+            print(" alone prompts:", len(alone.prompts), "sources:", alone_payload.get("sources"))
+            self.assertFalse(alone_payload["ok"])
+            self.assertEqual(len(alone.prompts), 2)
+            self.assertNotIn("NEIGHBOR BODY", "".join(alone.prompts))
+
+            incoming = self._protocol(
+                ["backtest"],
+                ["menu_card", "incoming_card"],
+                answer="menu plus incoming",
+            )
+            incoming_payload = AskEngine(knowledge_base=kb, provider=incoming).ask("入边邻居").to_dict()
+            print(" incoming sources:", incoming_payload.get("sources"))
+            self.assertEqual(incoming_payload["sources"], ["menu_card", "incoming_card"])
+
+
+def _write_neighbor_kb(root: Path) -> Path:
+    """临时库：回测菜单卡指向 strategy 邻居，另一张卡反向指向菜单卡。"""
+
+    kb_dir = root / "kb"
+    kb_dir.mkdir()
+    source = kb_dir / "_source"
+    source.mkdir()
+    registry = {
+        "topics": [
+            {"id": "backtest", "scope": "回测解释"},
+            {"id": "strategy", "scope": "策略、信号、Operator"},
+        ]
+    }
+    (source / "topic_registry.json").write_text(json.dumps(registry, ensure_ascii=False), encoding="utf-8")
+    cards = (
+        {
+            "id": "menu_card",
+            "title": "Menu title",
+            "summary": "Menu summary.",
+            "narrative": "MENU BODY",
+            "type": "concept",
+            "topics": ["backtest"],
+            "manual_anchor": "",
+            "relations": [{"rel": "see_also", "to": "neighbor_card"}],
+        },
+        {
+            "id": "neighbor_card",
+            "title": "Neighbor title",
+            "summary": "Neighbor summary.",
+            "narrative": "NEIGHBOR BODY",
+            "type": "concept",
+            "topics": ["strategy"],
+            "manual_anchor": "",
+            "relations": [],
+        },
+        {
+            "id": "incoming_card",
+            "title": "Incoming title",
+            "summary": "Incoming summary.",
+            "narrative": "INCOMING BODY",
+            "type": "concept",
+            "topics": ["strategy"],
+            "manual_anchor": "",
+            "relations": [{"rel": "see_also", "to": "menu_card"}],
+        },
+    )
+    for card in cards:
+        (kb_dir / f"{card['id']}.json").write_text(
+            json.dumps(card, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    return kb_dir
 
 
 if __name__ == "__main__":

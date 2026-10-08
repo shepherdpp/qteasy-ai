@@ -6,7 +6,7 @@
 # Created: 2026-10-07
 # Desc:
 # 从策展地图编译问句目录与 type 索引。
-# 不读取 Sphinx / 手册正文。
+# 同时校验主题注册表。不读取 Sphinx / 手册正文。
 # ======================================
 
 """官方 KB 策展地图的 compile。
@@ -103,15 +103,20 @@ def compile_catalog(
     Raises
     ------
     ValueError
-        地图与 JSON 不一致、问句重复、relation 悬空，或锚点文件不存在。
+        地图与 JSON 不一致、未知主题、问句重复、relation 悬空，或锚点文件不存在。
     """
 
     from qteasy_ai.knowledge_base import (
         _KB_ENTRY_TYPES,
         _parse_manual_anchor,
         _parse_relations,
+        _parse_topics,
         _require_entry_type,
+        load_topic_registry,
     )
+
+    registry = load_topic_registry(map_path.parent / "topic_registry.json")
+    registered = {spec.id for spec in registry}
 
     entries = _load_json_entries(kb_dir)
     rows = _load_map_rows(map_path)
@@ -125,6 +130,7 @@ def compile_catalog(
         row = rows[entry_id]
         entry = entries[entry_id]
         entry_type = _require_same_type(entry_id, row, entry, _require_entry_type)
+        topics = _require_same_topics(entry_id, row, entry, _parse_topics, registered)
         anchor = _require_same_anchor(entry_id, row, entry, _parse_manual_anchor)
         relations = _require_same_relations(entry_id, row, entry, _parse_relations)
         _require_anchor_file(entry_id, anchor, qteasy_root)
@@ -133,6 +139,7 @@ def compile_catalog(
         rendered_rows.append({
             "id": entry_id,
             "type": entry_type,
+            "topics": topics,
             "manual_anchor": anchor,
             "relations": relations,
             "questions": list(row["questions"]),
@@ -230,6 +237,25 @@ def _require_same_type(
     return map_type
 
 
+def _require_same_topics(
+        entry_id: str,
+        row: Mapping[str, Any],
+        entry: Mapping[str, Any],
+        parse_topics: Callable[..., List[str]],
+        registered: set,
+) -> List[str]:
+    """地图与 JSON 的 topics 必须相同，且都落在注册表内。"""
+
+    map_topics = parse_topics(entry_id, row, registered)
+    json_topics = parse_topics(entry_id, entry, registered)
+    if map_topics != json_topics:
+        raise ValueError(
+            f"KB entry {entry_id!r} topics mismatch: "
+            f"map {map_topics!r} vs JSON {json_topics!r}"
+        )
+    return map_topics
+
+
 def _require_same_anchor(
         entry_id: str,
         row: Mapping[str, Any],
@@ -304,13 +330,14 @@ def _render_catalog_markdown(rows: List[Dict[str, Any]]) -> str:
         "",
         "# 官方 KB 问句目录",
         "",
-        "由策展地图编译生成。只列 id、type、手册锚、代表问句与 relations。",
+        "由策展地图编译生成。只列 id、type、topics、手册锚、代表问句与 relations。",
         "",
     ]
     for row in rows:
         lines.append(f"## {row['id']}")
         lines.append("")
         lines.append(f"- type: {row['type']}")
+        lines.append(f"- topics: {', '.join(row['topics'])}")
         lines.append(f"- manual_anchor: {row['manual_anchor']}")
         relations = row["relations"]
         if relations:

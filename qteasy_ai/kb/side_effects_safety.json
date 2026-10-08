@@ -18,5 +18,6 @@
   "risk_notes": "Never treat Ask as a way to skip confirmation. preview shows the plan but does not execute skills.",
   "type": "boundary",
   "manual_anchor": "",
+  "topics": ["capability", "live_boundary"],
   "relations": []
 }

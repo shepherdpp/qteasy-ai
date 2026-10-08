@@ -15,5 +15,6 @@
   "risk_notes": "Do not put secrets in session_id. Sessions live under QTEASY_AI_HOME/sessions/.",
   "type": "concept",
   "manual_anchor": "",
+  "topics": ["onboarding"],
   "relations": []
 }

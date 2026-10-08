@@ -5,8 +5,8 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-08-28
 # Desc:
-# qteasy-ai 策展 KnowledgeBase：问句目录定条，
-# 未命中再按 type 桶关键词/tag 检索。
+# qteasy-ai 策展 KnowledgeBase：无模型路径先问句目录，
+# 未命中再按 type 桶关键词/tag 检索。主题注册表供有模型选题。
 # ======================================
 
 """qteasy 专用结构化知识库（Ask 目标态主消费方）。
@@ -22,7 +22,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import AbstractSet, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from qteasy_ai.kb_catalog import normalize_question
 
@@ -53,6 +53,92 @@ _KB_RELATION_RELS = frozenset({
 })
 # 目录命中是定条，分数只用于和关键词命中区分，不参与桶内打分。
 _CATALOG_HIT_SCORE = 100.0
+_EXCLUSIVE_ENTRY_TYPES = ("trap", "boundary")
+
+
+@dataclass(frozen=True)
+class TopicSpec:
+    """主题注册表的一行：id、一句话范围、可选能力地图编号。"""
+
+    id: str
+    scope: str
+    map_item: Optional[int] = None
+
+
+def load_topic_registry(path: Path) -> List[TopicSpec]:
+    """读取主题注册表。
+
+    Parameters
+    ----------
+    path : Path
+        ``topic_registry.json``。
+
+    Returns
+    -------
+    list of TopicSpec
+        文件中的顺序。
+
+    Raises
+    ------
+    ValueError
+        文件缺失、不是非空列表，或某一行缺 id / scope。
+    """
+
+    if not path.is_file():
+        raise ValueError(f"KB topic registry is missing: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload.get("topics") if isinstance(payload, dict) else None
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("KB topic registry must contain a non-empty topics list")
+    specs: List[TopicSpec] = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("KB topic registry row must be an object")
+        topic_id = item.get("id")
+        scope = item.get("scope")
+        if not isinstance(topic_id, str) or not topic_id.strip():
+            raise ValueError("KB topic registry row is missing id")
+        topic_id = topic_id.strip()
+        if not isinstance(scope, str) or not scope.strip():
+            raise ValueError(f"KB topic {topic_id!r} is missing scope")
+        if topic_id in seen:
+            raise ValueError(f"KB topic registry duplicates id {topic_id!r}")
+        map_item = item.get("map_item", None)
+        if "map_item" in item and map_item is None:
+            raise ValueError(f"KB topic {topic_id!r} map_item must be an integer")
+        if map_item is not None and not isinstance(map_item, int):
+            raise ValueError(f"KB topic {topic_id!r} map_item must be an integer")
+        seen.add(topic_id)
+        specs.append(TopicSpec(id=topic_id, scope=scope.strip(), map_item=map_item))
+    return specs
+
+
+def _parse_topics(
+        entry_id: str,
+        payload: Mapping[str, Any],
+        registered: AbstractSet[str],
+) -> List[str]:
+    """读取 topics。必须是 1 个已注册主题，最多再加 1 个不同的副主题。"""
+
+    if "topics" not in payload or payload.get("topics") is None:
+        raise ValueError(f"KB entry {entry_id!r} is missing topics")
+    raw = payload.get("topics")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 2:
+        raise ValueError(
+            f"KB entry {entry_id!r} topics must be a list of 1 or 2 registered topic ids"
+        )
+    parsed: List[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"KB entry {entry_id!r} has an invalid topic {item!r}")
+        topic = item.strip()
+        if topic not in registered:
+            raise ValueError(f"KB entry {entry_id!r} has unknown topic {topic!r}")
+        if topic in parsed:
+            raise ValueError(f"KB entry {entry_id!r} repeats topic {topic!r}")
+        parsed.append(topic)
+    return parsed
 
 
 def _require_entry_type(entry_id: str, payload: Dict[str, Any]) -> str:
@@ -113,7 +199,8 @@ class KbEntry:
 
     ``type`` 只要求 JSON 策展条目（concept / trap / boundary / pointer）。
     适配器内存条目（如 strategy_meta）保持空字符串，不落 JSON。
-    ``manual_anchor`` 不参与打分。
+    ``topics`` 为 1 个已注册主题，最多再加 1 个副主题。适配器条目为空列表。
+    ``manual_anchor`` 不参与选题。
     """
 
     id: str
@@ -125,6 +212,7 @@ class KbEntry:
     tags: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     type: str = ""
+    topics: List[str] = field(default_factory=list)
     manual_anchor: str = ""
     relations: List[Dict[str, str]] = field(default_factory=list)
     score: float = 0.0
@@ -143,6 +231,7 @@ class KbEntry:
             "tags": list(self.tags),
             "keywords": list(self.keywords),
             "type": self.type,
+            "topics": list(self.topics),
             "manual_anchor": self.manual_anchor,
             "relations": [dict(item) for item in self.relations],
             "score": self.score,
@@ -153,7 +242,8 @@ class KbEntry:
 class KnowledgeBase:
     """从 ``qteasy_ai/kb/*.json`` 加载策展条目。
 
-    检索先查 compile 问句目录，命中则定条；未命中再在胜出的 type 桶内检索。
+    无模型检索先查 compile 问句目录，命中则定条；未命中再在胜出的 type 桶内检索。
+    主题注册表与 ``topics`` 供有 Provider 时定主题、点卡，不改变这条无模型路径。
 
     Parameters
     ----------
@@ -175,6 +265,10 @@ class KnowledgeBase:
         self.kb_dir = Path(kb_dir) if kb_dir is not None else _KB_DIR
         self._list_func = list_func
         self._doc_func = doc_func
+        self._topic_specs: List[TopicSpec] = load_topic_registry(
+            self.kb_dir / "_source" / "topic_registry.json"
+        )
+        self._registered_topics = {spec.id for spec in self._topic_specs}
         self._entries: List[KbEntry] = self._load_entries()
         self._by_id: Dict[str, KbEntry] = {entry.id: entry for entry in self._entries}
         self._question_catalog: Dict[str, str] = self._load_question_catalog()
@@ -201,6 +295,7 @@ class KnowledgeBase:
                     tags=[str(item) for item in payload.get("tags", [])],
                     keywords=[str(item) for item in payload.get("keywords", [])],
                     type=_require_entry_type(entry_id, payload),
+                    topics=_parse_topics(entry_id, payload, self._registered_topics),
                     manual_anchor=_parse_manual_anchor(entry_id, payload),
                     relations=_parse_relations(entry_id, payload),
                 )
@@ -224,6 +319,108 @@ class KnowledgeBase:
             catalog[key] = entry_id
         return catalog
 
+    def topic_specs(self) -> List[TopicSpec]:
+        """当前主题注册表，顺序与文件一致。"""
+
+        return list(self._topic_specs)
+
+    def menu_for_topics(self, topic_ids: Sequence[str]) -> List[KbEntry]:
+        """命中主题下的卡片。副主题的卡会出现在两个菜单里。
+
+        Parameters
+        ----------
+        topic_ids : sequence of str
+            已选定的主题 id。
+
+        Returns
+        -------
+        list of KbEntry
+            加载顺序中、topics 与 ``topic_ids`` 有交集的条目。
+        """
+
+        wanted = {topic_id for topic_id in topic_ids if topic_id}
+        if not wanted:
+            return []
+        return [entry for entry in self._entries if wanted.intersection(entry.topics)]
+
+    def validate_card_ids(self, menu: Sequence[KbEntry], raw_ids: Sequence[str]) -> List[KbEntry]:
+        """按返回顺序保留菜单内的卡，以及这些卡的深度 1 邻居。
+
+        邻居包括菜单卡的出边 ``to``，以及指向菜单卡的入边来源。不沿边再爬。
+        菜单外且不是这些邻居的 id 丢掉。邻居不在已加载条目里也丢掉。
+
+        Parameters
+        ----------
+        menu : sequence of KbEntry
+            当前主题菜单。
+        raw_ids : sequence of str
+            模型返回的 id，调用方已限制为 1～3 个字符串。
+
+        Returns
+        -------
+        list of KbEntry
+            校验后的条目。可能为空。
+        """
+
+        menu_ids = {entry.id for entry in menu}
+        selected_menu: List[str] = []
+        for card_id in raw_ids:
+            if card_id in menu_ids and card_id not in selected_menu:
+                selected_menu.append(card_id)
+        neighbors = self._depth1_neighbor_ids(selected_menu)
+        accepted: List[str] = []
+        for card_id in raw_ids:
+            if card_id in accepted:
+                continue
+            if card_id not in self._by_id:
+                continue
+            if card_id in menu_ids or card_id in neighbors:
+                accepted.append(card_id)
+        return [self._clone_scored(self._by_id[card_id], 0.0) for card_id in accepted]
+
+    def _depth1_neighbor_ids(self, selected_menu_ids: Sequence[str]) -> set:
+        """已选菜单卡的一跳邻居，不含这些卡自身。"""
+
+        selected = set(selected_menu_ids)
+        if not selected:
+            return set()
+        neighbors = set()
+        for entry in self._entries:
+            targets = [item["to"] for item in entry.relations]
+            if entry.id in selected:
+                for target in targets:
+                    if target not in selected and target in self._by_id:
+                        neighbors.add(target)
+            elif any(target in selected for target in targets):
+                neighbors.add(entry.id)
+        return neighbors
+
+    @staticmethod
+    def prefer_exclusive(hits: Sequence[KbEntry]) -> List[KbEntry]:
+        """trap 或 boundary 被点中时只留那一类，不与概念卡拌在一起。
+
+        两类同时出现时，只留先出现的那一类。
+
+        Parameters
+        ----------
+        hits : sequence of KbEntry
+            校验后的选中卡。
+
+        Returns
+        -------
+        list of KbEntry
+            交给作家的卡片。
+        """
+
+        chosen = ""
+        for item in hits:
+            if item.type in _EXCLUSIVE_ENTRY_TYPES:
+                chosen = item.type
+                break
+        if not chosen:
+            return list(hits)
+        return [item for item in hits if item.type == chosen]
+
     @staticmethod
     def _clone_scored(entry: KbEntry, score: float) -> KbEntry:
         """复制一条命中并写上分数。"""
@@ -238,6 +435,7 @@ class KnowledgeBase:
             tags=list(entry.tags),
             keywords=list(entry.keywords),
             type=entry.type,
+            topics=list(entry.topics),
             manual_anchor=entry.manual_anchor,
             relations=[dict(item) for item in entry.relations],
             score=score,
@@ -289,6 +487,7 @@ class KnowledgeBase:
                 tags=list(entry.tags),
                 keywords=list(entry.keywords),
                 type=entry.type,
+                topics=list(entry.topics),
                 manual_anchor=entry.manual_anchor,
                 relations=[dict(item) for item in entry.relations],
                 score=score,
@@ -426,6 +625,7 @@ class KnowledgeBase:
             tags=["strategy", "meta"],
             keywords=["strategy", "macd", "dma"],
             type="",
+            topics=[],
             manual_anchor="",
             relations=[],
             score=8.0 if strategy_id else 4.0,

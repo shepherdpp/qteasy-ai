@@ -25,6 +25,29 @@ _KB_DIR = _REPO / "qteasy_ai" / "kb"
 _MAP_PATH = _KB_DIR / "_source" / "curation_map.json"
 _GENERATED = _KB_DIR / "_generated"
 _QTEASY_ROOT = _REPO.parent / "qteasy"
+_REGISTRY_PATH = _KB_DIR / "_source" / "topic_registry.json"
+_STARTER_TOPIC_IDS = (
+    "capability",
+    "onboarding",
+    "data-downloading",
+    "data-analysis",
+    "strategy",
+    "backtest",
+    "optimize",
+    "live_boundary",
+)
+
+
+def _write_topic_registry(source_dir: Path, topic_ids=("capability",)) -> None:
+    """在临时 ``_source`` 写一份最小主题注册表。"""
+
+    payload = {
+        "topics": [{"id": topic_id, "scope": f"scope for {topic_id}"} for topic_id in topic_ids],
+    }
+    (source_dir / "topic_registry.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 _BACKTEST_QUESTIONS = (
     "如何用 qteasy 回测",
@@ -77,6 +100,7 @@ class TestAiKbCatalog(unittest.TestCase):
                 len(row["questions"]),
             )
             self.assertEqual(row["type"], entry["type"])
+            self.assertEqual(row["topics"], entry["topics"])
             self.assertEqual(row["manual_anchor"], entry["manual_anchor"])
             self.assertEqual(row["relations"], entry["relations"])
             self.assertTrue(row["questions"])
@@ -100,6 +124,8 @@ class TestAiKbCatalog(unittest.TestCase):
         self.assertEqual(artifacts.type_index["by_type"]["pointer"], [])
         self.assertNotIn("dry-run", markdown)
         self.assertNotIn("narrative", markdown.lower())
+        self.assertIn("- topics: backtest", markdown)
+        self.assertIn("- topics: capability, live_boundary", markdown)
 
     def test_dangling_relation_fails(self) -> None:
         """relation.to 指向不存在的官方 id 时 compile 失败。"""
@@ -115,6 +141,7 @@ class TestAiKbCatalog(unittest.TestCase):
                 "summary": "probe",
                 "narrative": "probe",
                 "type": "concept",
+                "topics": ["capability"],
                 "manual_anchor": "",
                 "relations": [{"rel": "see_also", "to": "missing_card"}],
                 "tags": [],
@@ -131,6 +158,7 @@ class TestAiKbCatalog(unittest.TestCase):
                     {
                         "id": "solo_card",
                         "type": "concept",
+                        "topics": ["capability"],
                         "manual_anchor": "",
                         "questions": ["solo question"],
                         "relations": [{"rel": "see_also", "to": "missing_card"}],
@@ -139,6 +167,7 @@ class TestAiKbCatalog(unittest.TestCase):
             }
             map_path = source / "curation_map.json"
             map_path.write_text(json.dumps(curation, ensure_ascii=False), encoding="utf-8")
+            _write_topic_registry(source)
             with self.assertRaises(ValueError) as ctx:
                 compile_catalog(kb_dir=kb_dir, map_path=map_path, qteasy_root=root)
             print(" error:", ctx.exception)
@@ -205,6 +234,7 @@ class TestAiKbCatalog(unittest.TestCase):
                     "summary": "probe",
                     "narrative": "probe",
                     "type": "concept",
+                    "topics": ["capability"],
                     "manual_anchor": "",
                     "relations": [],
                     "tags": [],
@@ -217,6 +247,7 @@ class TestAiKbCatalog(unittest.TestCase):
                 rows.append({
                     "id": entry_id,
                     "type": "concept",
+                    "topics": ["capability"],
                     "manual_anchor": "",
                     "questions": [question],
                     "relations": [],
@@ -228,6 +259,7 @@ class TestAiKbCatalog(unittest.TestCase):
                 json.dumps({"entries": rows}, ensure_ascii=False),
                 encoding="utf-8",
             )
+            _write_topic_registry(source)
             with self.assertRaises(ValueError) as ctx:
                 compile_catalog(kb_dir=kb_dir, map_path=map_path, qteasy_root=root)
             print(" error:", ctx.exception)
@@ -264,6 +296,130 @@ class TestAiKbCatalog(unittest.TestCase):
         print(" in catalog:", key in questions)
         self.assertNotIn(key, questions)
         self.assertEqual(ids, ["operator_run_freq"])
+
+    def test_starter_registry_has_eight_topics_and_no_single_data(self) -> None:
+        """起步注册表是计划里的八个 id，没有单一 data。"""
+
+        print("\n[TestAiKbCatalog] 起步主题注册表")
+        payload = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
+        ids = [row["id"] for row in payload["topics"]]
+        print(" topic ids:", ids)
+        self.assertEqual(ids, list(_STARTER_TOPIC_IDS))
+        self.assertNotIn("data", ids)
+        kb = KnowledgeBase()
+        live_ids = [entry.id for entry in kb.menu_for_topics(["live_boundary"])]
+        download_ids = [entry.id for entry in kb.menu_for_topics(["data-downloading"])]
+        print(" live_boundary menu:", live_ids)
+        print(" data-downloading menu:", download_ids)
+        self.assertEqual(live_ids, ["live_plan_only", "side_effects_safety"])
+        self.assertIn("refill_bounded", download_ids)
+        self.assertNotIn("data_three_entries", download_ids)
+
+    def test_unknown_topic_fails_compile_and_load(self) -> None:
+        """未知主题在 compile 与加载时都失败。"""
+
+        print("\n[TestAiKbCatalog] 未知主题失败")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            kb_dir = root / "kb"
+            kb_dir.mkdir()
+            entry = {
+                "id": "solo_card",
+                "title": "Solo",
+                "summary": "probe",
+                "narrative": "probe",
+                "type": "concept",
+                "topics": ["not-a-topic"],
+                "manual_anchor": "",
+                "relations": [],
+            }
+            (kb_dir / "solo_card.json").write_text(
+                json.dumps(entry, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            source = kb_dir / "_source"
+            source.mkdir()
+            curation = {
+                "entries": [
+                    {
+                        "id": "solo_card",
+                        "type": "concept",
+                        "topics": ["not-a-topic"],
+                        "manual_anchor": "",
+                        "questions": ["solo question"],
+                        "relations": [],
+                    }
+                ]
+            }
+            (source / "curation_map.json").write_text(
+                json.dumps(curation, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _write_topic_registry(source, ("capability",))
+            with self.assertRaises(ValueError) as ctx:
+                compile_catalog(
+                    kb_dir=kb_dir,
+                    map_path=source / "curation_map.json",
+                    qteasy_root=root,
+                )
+            print(" compile error:", ctx.exception)
+            self.assertIn("not-a-topic", str(ctx.exception))
+            self.assertIn("solo_card", str(ctx.exception))
+            with self.assertRaises(ValueError) as load_ctx:
+                KnowledgeBase(kb_dir=kb_dir)
+            print(" load error:", load_ctx.exception)
+            self.assertIn("not-a-topic", str(load_ctx.exception))
+
+    def test_topics_mismatch_fails_compile(self) -> None:
+        """地图与 JSON 的 topics 不一致时 compile 失败。"""
+
+        print("\n[TestAiKbCatalog] topics 不一致")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            kb_dir = root / "kb"
+            kb_dir.mkdir()
+            entry = {
+                "id": "solo_card",
+                "title": "Solo",
+                "summary": "probe",
+                "narrative": "probe",
+                "type": "concept",
+                "topics": ["onboarding"],
+                "manual_anchor": "",
+                "relations": [],
+            }
+            (kb_dir / "solo_card.json").write_text(
+                json.dumps(entry, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            source = kb_dir / "_source"
+            source.mkdir()
+            curation = {
+                "entries": [
+                    {
+                        "id": "solo_card",
+                        "type": "concept",
+                        "topics": ["capability"],
+                        "manual_anchor": "",
+                        "questions": ["solo question"],
+                        "relations": [],
+                    }
+                ]
+            }
+            (source / "curation_map.json").write_text(
+                json.dumps(curation, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _write_topic_registry(source, ("capability", "onboarding"))
+            with self.assertRaises(ValueError) as ctx:
+                compile_catalog(
+                    kb_dir=kb_dir,
+                    map_path=source / "curation_map.json",
+                    qteasy_root=root,
+                )
+            print(" error:", ctx.exception)
+            self.assertIn("topics mismatch", str(ctx.exception))
+            self.assertIn("solo_card", str(ctx.exception))
 
 
 if __name__ == "__main__":

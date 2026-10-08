@@ -16,5 +16,6 @@
   "risk_notes": "This Job does not download. Tokens stay in env / qteasy config, not in Ask answers.",
   "type": "concept",
   "manual_anchor": "docs/source/manage_data/03. datasource.md",
+  "topics": ["data-downloading"],
   "relations": []
 }

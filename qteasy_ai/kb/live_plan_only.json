@@ -14,5 +14,6 @@
   "risk_notes": "Never treat a live checklist as an order ticket.",
   "type": "boundary",
   "manual_anchor": "docs/source/tutorials/8-live-trade-risk-and-broker-walkthrough.md",
+  "topics": ["live_boundary"],
   "relations": []
 }

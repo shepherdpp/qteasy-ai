@@ -2,11 +2,12 @@
 
 # 官方 KB 问句目录
 
-由策展地图编译生成。只列 id、type、手册锚、代表问句与 relations。
+由策展地图编译生成。只列 id、type、topics、手册锚、代表问句与 relations。
 
 ## ask_plan_agent
 
 - type: concept
+- topics: capability
 - manual_anchor: 
 - relations: []
 - questions:
@@ -16,6 +17,7 @@
 ## backtest_intro
 
 - type: concept
+- topics: backtest
 - manual_anchor: docs/source/back_testing/1. overview.md
 - relations: []
 - questions:
@@ -29,6 +31,7 @@
 ## common_errors_date_window
 
 - type: trap
+- topics: data-analysis
 - manual_anchor: docs/source/tutorials/2.0-get-data.md
 - relations: []
 - questions:
@@ -39,6 +42,7 @@
 ## common_errors_nan
 
 - type: trap
+- topics: backtest
 - manual_anchor: docs/source/back_testing/1. overview.md
 - relations: []
 - questions:
@@ -49,6 +53,7 @@
 ## common_errors_run_freq
 
 - type: trap
+- topics: strategy
 - manual_anchor: docs/source/manage_strategies/2. operator.md
 - relations: []
 - questions:
@@ -58,6 +63,7 @@
 ## data_three_entries
 
 - type: concept
+- topics: data-analysis
 - manual_anchor: docs/source/manage_data/01. overview.md
 - relations: []
 - questions:
@@ -69,6 +75,7 @@
 ## env_ready
 
 - type: concept
+- topics: data-downloading
 - manual_anchor: docs/source/manage_data/03. datasource.md
 - relations: []
 - questions:
@@ -79,6 +86,7 @@
 ## getting_started
 
 - type: concept
+- topics: onboarding
 - manual_anchor: docs/source/tutorials/1-get-started.md
 - relations: []
 - questions:
@@ -90,6 +98,7 @@
 ## live_plan_only
 
 - type: boundary
+- topics: live_boundary
 - manual_anchor: docs/source/tutorials/8-live-trade-risk-and-broker-walkthrough.md
 - relations: []
 - questions:
@@ -100,6 +109,7 @@
 ## notebook_cli
 
 - type: concept
+- topics: onboarding
 - manual_anchor: 
 - relations: []
 - questions:
@@ -110,6 +120,7 @@
 ## official_vs_user_kb
 
 - type: concept
+- topics: capability
 - manual_anchor: 
 - relations: []
 - questions:
@@ -121,6 +132,7 @@
 ## operator_run_freq
 
 - type: concept
+- topics: strategy
 - manual_anchor: docs/source/manage_strategies/2. operator.md
 - relations: []
 - questions:
@@ -130,6 +142,7 @@
 ## optimize_intro
 
 - type: concept
+- topics: optimize
 - manual_anchor: docs/source/optimization/1. overview.md
 - relations: []
 - questions:
@@ -142,6 +155,7 @@
 ## pt_ps_vs
 
 - type: concept
+- topics: strategy
 - manual_anchor: docs/source/manage_strategies/5. strategy_bases.md
 - relations: []
 - questions:
@@ -152,6 +166,7 @@
 ## refill_bounded
 
 - type: concept
+- topics: data-downloading
 - manual_anchor: docs/source/tutorials/2.0-get-data.md
 - relations: []
 - questions:
@@ -162,6 +177,7 @@
 ## side_effects_safety
 
 - type: boundary
+- topics: capability, live_boundary
 - manual_anchor: 
 - relations: []
 - questions:
@@ -171,6 +187,7 @@
 ## strategy_builder_intro
 
 - type: concept
+- topics: strategy
 - manual_anchor: docs/source/manage_strategies/6. custom_strategy.md
 - relations: []
 - questions:
@@ -182,6 +199,7 @@
 ## what_is_qteasy
 
 - type: concept
+- topics: capability
 - manual_anchor: docs/source/tutorials/1-get-started.md
 - relations: []
 - questions:

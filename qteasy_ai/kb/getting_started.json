@@ -16,5 +16,6 @@
   "risk_notes": "First-run refill without dates is rejected. Confirm side-effects before run.",
   "type": "concept",
   "manual_anchor": "docs/source/tutorials/1-get-started.md",
+  "topics": ["onboarding"],
   "relations": []
 }
