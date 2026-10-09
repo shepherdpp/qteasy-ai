@@ -38,6 +38,16 @@ _STARTER_TOPIC_IDS = (
 )
 
 
+_RELATION_REGISTRY = {
+    "relations": [
+        {"id": "see_also", "compose": "appendix"},
+        {"id": "next_topic", "compose": "next_card"},
+        {"id": "contrasts_with", "compose": "contrast"},
+        {"id": "plan_handoff", "compose": "plan_switch"},
+    ]
+}
+
+
 def _write_topic_registry(source_dir: Path, topic_ids=("capability",)) -> None:
     """在临时 ``_source`` 写一份最小主题注册表。"""
 
@@ -46,6 +56,11 @@ def _write_topic_registry(source_dir: Path, topic_ids=("capability",)) -> None:
     }
     (source_dir / "topic_registry.json").write_text(
         json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    official = _KB_DIR / "_source" / "relation_registry.json"
+    (source_dir / "relation_registry.json").write_text(
+        official.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
@@ -172,6 +187,128 @@ class TestAiKbCatalog(unittest.TestCase):
                 compile_catalog(kb_dir=kb_dir, map_path=map_path, qteasy_root=root)
             print(" error:", ctx.exception)
             self.assertIn("missing_card", str(ctx.exception))
+
+    def test_unregistered_relation_fails_compile(self) -> None:
+        """未注册 rel 使 compile 失败。"""
+
+        print("\n[TestAiKbCatalog] 未注册 rel")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            kb_dir = root / "kb"
+            kb_dir.mkdir()
+            entry = {
+                "id": "solo_card",
+                "title": "Solo",
+                "summary": "probe",
+                "narrative": "probe",
+                "type": "concept",
+                "topics": ["capability"],
+                "manual_anchor": "",
+                "relations": [{"rel": "parent", "to": "solo_card"}],
+                "tags": [],
+                "keywords": [],
+            }
+            (kb_dir / "solo_card.json").write_text(
+                json.dumps(entry, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            source = kb_dir / "_source"
+            source.mkdir()
+            curation = {
+                "entries": [
+                    {
+                        "id": "solo_card",
+                        "type": "concept",
+                        "topics": ["capability"],
+                        "manual_anchor": "",
+                        "questions": ["solo question"],
+                        "relations": [{"rel": "parent", "to": "solo_card"}],
+                    }
+                ]
+            }
+            map_path = source / "curation_map.json"
+            map_path.write_text(json.dumps(curation, ensure_ascii=False), encoding="utf-8")
+            _write_topic_registry(source)
+            (source / "relation_registry.json").write_text(
+                json.dumps(_RELATION_REGISTRY, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as ctx:
+                compile_catalog(kb_dir=kb_dir, map_path=map_path, qteasy_root=root)
+            print(" error:", ctx.exception)
+            self.assertIn("unregistered", str(ctx.exception))
+            self.assertIn("parent", str(ctx.exception))
+
+    def test_unknown_compose_fails_compile(self) -> None:
+        """注册表里未知合编方式使 compile 失败。"""
+
+        print("\n[TestAiKbCatalog] 未知 compose")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            kb_dir = root / "kb"
+            kb_dir.mkdir()
+            left = {
+                "id": "left_card",
+                "title": "Left",
+                "summary": "probe",
+                "narrative": "probe",
+                "type": "concept",
+                "topics": ["capability"],
+                "manual_anchor": "",
+                "relations": [{"rel": "see_also", "to": "right_card"}],
+                "tags": [],
+                "keywords": [],
+            }
+            right = {
+                "id": "right_card",
+                "title": "Right",
+                "summary": "probe",
+                "narrative": "probe",
+                "type": "concept",
+                "topics": ["capability"],
+                "manual_anchor": "",
+                "relations": [],
+                "tags": [],
+                "keywords": [],
+            }
+            (kb_dir / "left_card.json").write_text(json.dumps(left, ensure_ascii=False), encoding="utf-8")
+            (kb_dir / "right_card.json").write_text(json.dumps(right, ensure_ascii=False), encoding="utf-8")
+            source = kb_dir / "_source"
+            source.mkdir()
+            curation = {
+                "entries": [
+                    {
+                        "id": "left_card",
+                        "type": "concept",
+                        "topics": ["capability"],
+                        "manual_anchor": "",
+                        "questions": ["left question"],
+                        "relations": [{"rel": "see_also", "to": "right_card"}],
+                    },
+                    {
+                        "id": "right_card",
+                        "type": "concept",
+                        "topics": ["capability"],
+                        "manual_anchor": "",
+                        "questions": ["right question"],
+                        "relations": [],
+                    },
+                ]
+            }
+            map_path = source / "curation_map.json"
+            map_path.write_text(json.dumps(curation, ensure_ascii=False), encoding="utf-8")
+            _write_topic_registry(source)
+            bad_registry = {
+                "relations": [{"id": "see_also", "compose": "free_text"}],
+            }
+            (source / "relation_registry.json").write_text(
+                json.dumps(bad_registry, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as ctx:
+                compile_catalog(kb_dir=kb_dir, map_path=map_path, qteasy_root=root)
+            print(" error:", ctx.exception)
+            self.assertIn("free_text", str(ctx.exception))
 
     def test_catalog_gold_questions_pin_backtest_intro(self) -> None:
         """目录内回测金句定条为 backtest_intro，不落到 what_is_qteasy。"""

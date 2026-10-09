@@ -50,6 +50,25 @@ _MENU_ORDINAL_RE = re.compile(
     r"^\s*第\s*([1-5一二三四五])\s*项"
     r"(?:\s*(?:再)?解释一下|呢|吧|[。！!?])?\s*$"
 )
+_COMPOSE_CLAUSES = {
+    "appendix": (
+        "Composition appendix: after the main answer, add a short related note from the linked card."
+    ),
+    "next_card": (
+        "Composition next_card: after the main answer, point to the next wide card by its title."
+    ),
+    "contrast": (
+        "Composition contrast: organize the answer as a contrast between the linked cards."
+    ),
+    "plan_switch": (
+        "Composition plan_switch: after the explanation, tell the user to switch to Plan. "
+        "Do not emit plan_id, steps, or a confirmable plan."
+    ),
+}
+_NO_CURATED_RELATION = (
+    "No curated relation links these cards. "
+    "Answer only the selected cards and say that there is no curated relation (没有策展关联)."
+)
 _ORDINAL_VALUE = {
     "1": 1,
     "2": 2,
@@ -483,7 +502,7 @@ class AskEngine:
         )
 
     def _ask_llm(self, *, query: str, hits: List[KbEntry], session_context: str = "") -> str:
-        """将检索片段注入 prompt 后调用 Provider。"""
+        """将检索片段与选中集内部的合编方式注入 prompt 后调用 Provider。"""
 
         snippets = []
         for item in hits:
@@ -496,10 +515,24 @@ class AskEngine:
             f"{context_block}"
             "Knowledge snippets:\n"
             + "\n\n".join(snippets)
+            + "\n\n"
+            + self._compose_block(hits)
             + "\n\nWrite a concise answer in the same language as the Question, "
             "grounded in the snippets."
         )
         return str(self.provider.chat(prompt, system_prompt=_ASK_SYSTEM_PROMPT)).strip()
+
+    def _compose_block(self, hits: Sequence[KbEntry]) -> str:
+        """按选中卡之间的直接边写合编句。没有这种边时说明没有策展关联。"""
+
+        edges = self.knowledge_base.edges_among([item.id for item in hits])
+        if not edges:
+            return _NO_CURATED_RELATION
+        lines = []
+        for edge in edges:
+            clause = _COMPOSE_CLAUSES[edge["compose"]]
+            lines.append(f"{clause} Linked cards: {edge['fr']} -> {edge['to']}.")
+        return "\n".join(lines)
 
     @staticmethod
     def _offline_answer(hits: List[KbEntry]) -> str:

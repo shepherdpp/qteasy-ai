@@ -1,0 +1,20 @@
+{
+  "relations": [
+    {
+      "id": "see_also",
+      "compose": "appendix"
+    },
+    {
+      "id": "next_topic",
+      "compose": "next_card"
+    },
+    {
+      "id": "contrasts_with",
+      "compose": "contrast"
+    },
+    {
+      "id": "plan_handoff",
+      "compose": "plan_switch"
+    }
+  ]
+}

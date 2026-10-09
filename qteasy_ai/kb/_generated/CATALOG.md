@@ -19,7 +19,8 @@
 - type: concept
 - topics: backtest
 - manual_anchor: docs/source/back_testing/1. overview.md
-- relations: []
+- relations:
+  - contrasts_with -> optimize_intro
 - questions:
   - 如何用 qteasy 回测
   - 怎么回测

@@ -28,7 +28,9 @@
         "backtest intro",
         "run backtest"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "contrasts_with", "to": "optimize_intro"}
+      ]
     },
     {
       "id": "common_errors_date_window",

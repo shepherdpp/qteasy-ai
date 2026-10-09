@@ -16,5 +16,7 @@
   "type": "concept",
   "manual_anchor": "docs/source/back_testing/1. overview.md",
   "topics": ["backtest"],
-  "relations": []
+  "relations": [
+    {"rel": "contrasts_with", "to": "optimize_intro"}
+  ]
 }
