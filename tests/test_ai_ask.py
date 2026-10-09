@@ -627,19 +627,25 @@ class TestAiAskEngine(unittest.TestCase):
     def test_provider_depth1_neighbor_is_allowed_only_with_menu_card(self) -> None:
         """深度 1 邻居可与菜单卡一起入选；只点邻居则 NOT_FOUND。"""
 
-        print("\n[TestAiAskEngine] 深度 1 邻居")
+        print("\n[TestAiAskEngine] 深度 1 邻居降为邀请")
         with tempfile.TemporaryDirectory() as temp_dir:
             kb_dir = _write_neighbor_kb(Path(temp_dir))
             kb = KnowledgeBase(kb_dir=kb_dir, list_func=lambda: [], doc_func=lambda sid: "")
-            paired = self._protocol(["backtest"], ["menu_card", "neighbor_card"], answer="menu plus neighbor")
+            paired = self._protocol(["backtest"], ["menu_card", "neighbor_card"], answer="只答菜单卡")
             paired_payload = AskEngine(knowledge_base=kb, provider=paired).ask("回测和旁边那张").to_dict()
+            see_also = _see_also_line("Neighbor title", "Neighbor summary.")
             print(" paired sources:", paired_payload.get("sources"))
             print(" card prompt:", paired.prompts[1])
-            self.assertEqual(paired_payload["sources"], ["menu_card", "neighbor_card"])
+            print(" writer has neighbor body:", "NEIGHBOR BODY" in paired.prompts[2])
+            print(" writer has see_also:", see_also in paired.prompts[2])
+            self.assertEqual(paired_payload["sources"], ["menu_card"])
             self.assertIn("edge see_also -> neighbor_card: Neighbor title", paired.prompts[1])
+            self.assertIn("edge see_also <- incoming_card: Incoming title", paired.prompts[1])
             self.assertNotIn("NEIGHBOR BODY", paired.prompts[1])
-            self.assertIn("NEIGHBOR BODY", paired.prompts[2])
+            self.assertNotIn("NEIGHBOR BODY", paired.prompts[2])
             self.assertIn("MENU BODY", paired.prompts[2])
+            self.assertIn(see_also, paired.prompts[2])
+            self.assertNotIn("没有策展关联", paired.prompts[2])
 
             alone = FakeLLMProvider(replies=[
                 '{"topics":["backtest"]}',
@@ -655,72 +661,86 @@ class TestAiAskEngine(unittest.TestCase):
             incoming = self._protocol(
                 ["backtest"],
                 ["menu_card", "incoming_card"],
-                answer="menu plus incoming",
+                answer="只答菜单卡",
             )
             incoming_payload = AskEngine(knowledge_base=kb, provider=incoming).ask("入边邻居").to_dict()
+            incoming_line = _see_also_line("Incoming title", "Incoming summary.")
             print(" incoming sources:", incoming_payload.get("sources"))
-            self.assertEqual(incoming_payload["sources"], ["menu_card", "incoming_card"])
+            print(" writer has incoming body:", "INCOMING BODY" in incoming.prompts[2])
+            self.assertEqual(incoming_payload["sources"], ["menu_card"])
+            self.assertIn(incoming_line, incoming.prompts[2])
+            self.assertNotIn("INCOMING BODY", incoming.prompts[2])
 
     def test_relation_compose_clauses_cover_four_rels(self) -> None:
         """四种 rel 各按注册表合编；不看问句表面。"""
 
-        print("\n[TestAiAskEngine] 四种 rel 合编")
+        print("\n[TestAiAskEngine] 四种 rel 只邀请或列举")
         cases = (
             {
                 "rel": "see_also",
                 "target": "beta",
-                "ids": ["alpha", "beta"],
-                "clause": _APPENDIX_CLAUSE,
-                "answer": "主答之后短附相关。",
+                "title": "Beta title",
+                "narrative": "NARR-BETA",
+                "line": _see_also_line("Beta title", "Beta title summary."),
+                "answer": "主答之后列举一句。",
             },
             {
                 "rel": "next_topic",
                 "target": "gamma",
-                "ids": ["alpha", "gamma"],
-                "clause": _NEXT_CARD_CLAUSE,
-                "answer": "主答之后提示下一张宽卡。",
+                "title": "Gamma title",
+                "narrative": "NARR-GAMMA",
+                "line": _invite_line("Gamma title"),
+                "answer": "主答之后邀请下一张。",
             },
             {
                 "rel": "contrasts_with",
                 "target": "delta",
-                "ids": ["alpha", "delta"],
-                "clause": _CONTRAST_CLAUSE,
-                "answer": "两边对照说明。",
+                "title": "Delta title",
+                "narrative": "NARR-DELTA",
+                "line": _invite_line("Delta title"),
+                "answer": "只问一侧时不展开对照。",
             },
             {
                 "rel": "plan_handoff",
                 "target": "epsilon",
-                "ids": ["alpha", "epsilon"],
-                "clause": _PLAN_SWITCH_CLAUSE,
-                "answer": "解释之后应切换到 Plan。",
+                "title": "Epsilon title",
+                "narrative": "NARR-EPSILON",
+                "line": _plan_invite_line("Epsilon title"),
+                "answer": "解释之后可以切到 Plan。",
             },
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            kb = KnowledgeBase(
-                kb_dir=_write_relation_kb(Path(temp_dir)),
-                list_func=lambda: [],
-                doc_func=lambda sid: "",
-            )
+            root = Path(temp_dir)
             for case in cases:
+                kb = KnowledgeBase(
+                    kb_dir=_write_pair_kb(
+                        root / case["rel"],
+                        case["rel"],
+                        case["target"],
+                        case["title"],
+                        case["narrative"],
+                    ),
+                    list_func=lambda: [],
+                    doc_func=lambda sid: "",
+                )
                 query = f"probe {case['rel']} without special casing"
-                fake = self._protocol(["backtest"], case["ids"], answer=case["answer"])
+                fake = self._protocol(["backtest"], ["alpha", case["target"]], answer=case["answer"])
                 payload = AskEngine(knowledge_base=kb, provider=fake).ask(query).to_dict()
                 encoded = json.dumps(payload, ensure_ascii=False)
                 print(" rel:", case["rel"])
                 print(" sources:", payload.get("sources"))
-                print(" answer:", payload.get("answer"))
-                print(" writer has clause:", case["clause"] in fake.prompts[2])
-                print(" card prompt has clause:", case["clause"] in fake.prompts[1])
+                print(" writer has line:", case["line"] in fake.prompts[2])
+                print(" writer has narrative:", case["narrative"] in fake.prompts[2])
                 self._assert_no_plan_execution(payload)
-                self.assertEqual(payload["sources"], case["ids"])
-                self.assertIn(case["target"], payload["sources"])
-                self.assertIn(case["clause"], fake.prompts[2])
-                self.assertNotIn(case["clause"], fake.prompts[1])
+                self.assertEqual(payload["sources"], ["alpha"])
+                self.assertNotIn(case["target"], payload["sources"])
+                self.assertIn(case["line"], fake.prompts[2])
+                self.assertNotIn(case["narrative"], fake.prompts[2])
                 self.assertNotIn("没有策展关联", fake.prompts[2])
+                self.assertNotIn(_CONTRAST_CLAUSE, fake.prompts[2])
                 self.assertEqual(payload["answer"], case["answer"])
                 self.assertNotIn("plan_id", payload["answer"])
                 self.assertNotIn("plan_id", encoded)
-                self.assertNotIn("plan_id", payload)
 
     def test_selected_cards_without_edge_state_no_curated_relation(self) -> None:
         """选中集内部没有边时只答这些卡，并说明没有策展关联。"""
@@ -766,12 +786,14 @@ class TestAiAskEngine(unittest.TestCase):
             payload = AskEngine(knowledge_base=kb, provider=fake).ask("沿边再看一张").to_dict()
             print(" sources:", payload.get("sources"))
             print(" prompts mention NARR-ETA:", "NARR-ETA" in "".join(fake.prompts))
+            print(" writer has beta body:", "NARR-BETA" in fake.prompts[2])
             self._assert_no_plan_execution(payload)
-            self.assertEqual(payload["sources"], ["alpha", "beta"])
+            self.assertEqual(payload["sources"], ["alpha"])
+            self.assertNotIn("beta", payload["sources"])
             self.assertNotIn("eta", payload["sources"])
             self.assertNotIn("NARR-ETA", "".join(fake.prompts))
-            self.assertIn(_APPENDIX_CLAUSE, fake.prompts[2])
-            self.assertIn("NARR-BETA", fake.prompts[2])
+            self.assertNotIn("NARR-BETA", fake.prompts[2])
+            self.assertIn(_see_also_line("Beta title", "Beta title summary."), fake.prompts[2])
 
     def test_official_contrast_sources_include_both_cards(self) -> None:
         """实库 contrasts_with：两边 id 都在 sources，合编句不依赖问句原文。"""
@@ -789,14 +811,60 @@ class TestAiAskEngine(unittest.TestCase):
             print(" query:", query)
             print(" sources:", payload.get("sources"))
             print(" writer has contrast:", _CONTRAST_CLAUSE in fake.prompts[2])
+            print(" writer has optimize narrative:", "qt.ai.optimize.run_builtin" in fake.prompts[2])
             self._assert_no_plan_execution(payload)
             self.assertEqual(payload["sources"], ["backtest_intro", "optimize_intro"])
             self.assertIn("backtest_intro", payload["sources"])
             self.assertIn("optimize_intro", payload["sources"])
             self.assertIn(_CONTRAST_CLAUSE, fake.prompts[2])
+            self.assertIn("qt.ai.optimize.run_builtin", fake.prompts[2])
             self.assertNotIn("没有策展关联", fake.prompts[2])
             self.assertNotIn("plan_id", payload["answer"])
             self.assertNotIn("plan_id", encoded)
+
+    def test_backtest_only_demotes_optimize_to_invitation(self) -> None:
+        """只点回测主题时，模型返回的优化卡不进正文，只留邀请。"""
+
+        print("\n[TestAiAskEngine] 回测题不展开优化正文")
+        fake = self._protocol(
+            ["backtest"],
+            ["backtest_intro", "optimize_intro"],
+            answer="回测需要 strategy_id。",
+        )
+        payload = AskEngine(knowledge_base=self.kb, provider=fake).ask("如何进行回测").to_dict()
+        invite = _invite_line("Built-in parameter optimization")
+        print(" sources:", payload.get("sources"))
+        print(" writer has optimize narrative:", "qt.ai.optimize.run_builtin" in fake.prompts[2])
+        print(" writer has invite:", invite in fake.prompts[2])
+        self._assert_no_plan_execution(payload)
+        self.assertEqual(payload["sources"], ["backtest_intro"])
+        self.assertIn("A built-in backtest Job needs", fake.prompts[2])
+        self.assertNotIn("qt.ai.optimize.run_builtin", fake.prompts[2])
+        self.assertIn(invite, fake.prompts[2])
+        self.assertNotIn(_CONTRAST_CLAUSE, fake.prompts[2])
+        self.assertNotIn("没有策展关联", fake.prompts[2])
+        self.assertNotIn("plan_id", payload["answer"])
+        self.assertNotIn("plan_id", json.dumps(payload, ensure_ascii=False))
+
+    def test_optimize_menu_shows_backtest_and_does_not_deny_relation(self) -> None:
+        """只点优化主题时，菜单能看见回测边，答案不说没有策展关联。"""
+
+        print("\n[TestAiAskEngine] 优化题邀请回测")
+        fake = self._protocol(["optimize"], ["optimize_intro"], answer="优化需要 strategy_id。")
+        payload = AskEngine(knowledge_base=self.kb, provider=fake).ask("如何进行优化").to_dict()
+        invite = _invite_line("Built-in strategy backtest")
+        print(" sources:", payload.get("sources"))
+        print(" card prompt:", fake.prompts[1])
+        print(" writer has backtest narrative:", "A built-in backtest Job needs" in fake.prompts[2])
+        self._assert_no_plan_execution(payload)
+        self.assertIn("backtest_intro", fake.prompts[1])
+        self.assertIn("contrasts_with", fake.prompts[1])
+        self.assertEqual(payload["sources"], ["optimize_intro"])
+        self.assertIn(invite, fake.prompts[2])
+        self.assertNotIn("A built-in backtest Job needs", fake.prompts[2])
+        self.assertNotIn("没有策展关联", fake.prompts[2])
+        self.assertNotIn("plan_id", payload["answer"])
+        self.assertNotIn("plan_id", json.dumps(payload, ensure_ascii=False))
 
     def test_offline_backtest_stays_on_one_card(self) -> None:
         """无模型回测金句仍只定 backtest_intro，不沿边对比。"""
@@ -811,19 +879,34 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertNotIn("没有策展关联", payload["answer"])
 
 
-_APPENDIX_CLAUSE = (
-    "Composition appendix: after the main answer, add a short related note from the linked card."
-)
-_NEXT_CARD_CLAUSE = (
-    "Composition next_card: after the main answer, point to the next wide card by its title."
-)
 _CONTRAST_CLAUSE = (
     "Composition contrast: organize the answer as a contrast between the linked cards."
 )
-_PLAN_SWITCH_CLAUSE = (
-    "Composition plan_switch: after the explanation, tell the user to switch to Plan. "
-    "Do not emit plan_id, steps, or a confirmable plan."
-)
+
+
+def _invite_line(title: str) -> str:
+    """默认邀请金句。"""
+
+    return (
+        f"Invitation: if you want to know more about {title}, you can ask next. "
+        "Do not expand that card in this answer."
+    )
+
+
+def _plan_invite_line(title: str) -> str:
+    """plan_handoff 邀请金句。"""
+
+    return (
+        "Invitation plan_handoff: you can switch to Plan to go further. "
+        "Do not emit plan_id, steps, or a confirmable plan. "
+        f"Related title: {title}."
+    )
+
+
+def _see_also_line(title: str, summary: str) -> str:
+    """see_also 列举金句。"""
+
+    return f"Related see_also: {title}. {summary}"
 
 
 def _menu_line_ids(prompt: str) -> list:
@@ -886,6 +969,45 @@ def _write_neighbor_kb(root: Path) -> Path:
             "manual_anchor": "",
             "relations": [{"rel": "see_also", "to": "menu_card"}],
         },
+    )
+    for card in cards:
+        (kb_dir / f"{card['id']}.json").write_text(
+            json.dumps(card, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    return kb_dir
+
+
+def _write_pair_kb(root: Path, rel: str, target_id: str, title: str, narrative: str) -> Path:
+    """临时库：回测菜单上的 alpha 用一条边连到 strategy 上的对方。"""
+
+    kb_dir = root / "kb"
+    kb_dir.mkdir(parents=True)
+    source = kb_dir / "_source"
+    source.mkdir()
+    registry = {
+        "topics": [
+            {"id": "backtest", "scope": "回测解释"},
+            {"id": "strategy", "scope": "策略、信号、Operator"},
+        ]
+    }
+    (source / "topic_registry.json").write_text(
+        json.dumps(registry, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (source / "relation_registry.json").write_text(
+        json.dumps(_RELATION_REGISTRY, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    cards = (
+        _relation_card(
+            "alpha",
+            "Alpha title",
+            "NARR-ALPHA",
+            ["backtest"],
+            [{"rel": rel, "to": target_id}],
+        ),
+        _relation_card(target_id, title, narrative, ["strategy"], []),
     )
     for card in cards:
         (kb_dir / f"{card['id']}.json").write_text(

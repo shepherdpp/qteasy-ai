@@ -17,5 +17,8 @@
   "type": "concept",
   "manual_anchor": "docs/source/manage_data/03. datasource.md",
   "topics": ["data-downloading"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "refill_bounded"},
+    {"rel": "next_topic", "to": "refill_bounded"}
+  ]
 }

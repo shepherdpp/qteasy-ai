@@ -18,5 +18,7 @@
   "type": "concept",
   "manual_anchor": "",
   "topics": ["capability"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "what_is_qteasy"}
+  ]
 }

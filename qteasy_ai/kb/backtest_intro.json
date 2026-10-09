@@ -17,6 +17,7 @@
   "manual_anchor": "docs/source/back_testing/1. overview.md",
   "topics": ["backtest"],
   "relations": [
-    {"rel": "contrasts_with", "to": "optimize_intro"}
+    {"rel": "contrasts_with", "to": "optimize_intro"},
+    {"rel": "plan_handoff", "to": "side_effects_safety"}
   ]
 }

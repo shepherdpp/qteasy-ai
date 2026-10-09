@@ -16,5 +16,8 @@
   "type": "concept",
   "manual_anchor": "docs/source/manage_strategies/6. custom_strategy.md",
   "topics": ["strategy"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "pt_ps_vs"},
+    {"rel": "plan_handoff", "to": "ask_plan_agent"}
+  ]
 }

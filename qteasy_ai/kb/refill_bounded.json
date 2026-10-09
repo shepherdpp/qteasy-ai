@@ -16,5 +16,9 @@
   "type": "concept",
   "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
   "topics": ["data-downloading"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "see_also", "to": "env_ready"},
+    {"rel": "plan_handoff", "to": "side_effects_safety"}
+  ]
 }

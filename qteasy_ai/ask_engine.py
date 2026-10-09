@@ -51,18 +51,8 @@ _MENU_ORDINAL_RE = re.compile(
     r"(?:\s*(?:再)?解释一下|呢|吧|[。！!?])?\s*$"
 )
 _COMPOSE_CLAUSES = {
-    "appendix": (
-        "Composition appendix: after the main answer, add a short related note from the linked card."
-    ),
-    "next_card": (
-        "Composition next_card: after the main answer, point to the next wide card by its title."
-    ),
     "contrast": (
         "Composition contrast: organize the answer as a contrast between the linked cards."
-    ),
-    "plan_switch": (
-        "Composition plan_switch: after the explanation, tell the user to switch to Plan. "
-        "Do not emit plan_id, steps, or a confirmable plan."
     ),
 }
 _NO_CURATED_RELATION = (
@@ -252,7 +242,15 @@ class AskEngine:
 
         sources = [item.id for item in hits]
         if self.provider is not None:
-            answer = self._ask_llm(query=text, hits=hits, session_context=session_context)
+            menu_ids = [
+                entry.id for entry in self.knowledge_base.menu_for_topics(topic_ids)
+            ]
+            answer = self._ask_llm(
+                query=text,
+                hits=hits,
+                session_context=session_context,
+                menu_ids=menu_ids,
+            )
         else:
             answer = self._offline_answer(hits)
             if session_context:
@@ -305,15 +303,16 @@ class AskEngine:
         raw_ids = self._parse_ids_reply(str(card_raw))
         if raw_ids is None:
             return [], []
-        chosen = self.knowledge_base.prefer_exclusive(
-            self.knowledge_base.validate_card_ids(menu, raw_ids)
-        )
-        if not chosen:
+        menu_ids = {entry.id for entry in menu}
+        accepted = self.knowledge_base.validate_card_ids(menu, raw_ids)
+        primaries = [entry for entry in accepted if entry.id in menu_ids]
+        primaries = self.knowledge_base.prefer_exclusive(primaries)
+        if not primaries:
             return [], []
         meta = self.knowledge_base._maybe_strategy_meta(query)
         if meta is not None:
-            chosen = list(chosen) + [meta]
-        return chosen, topic_ids
+            primaries = list(primaries) + [meta]
+        return primaries, topic_ids
 
     def _resolve_topics(
             self,
@@ -425,11 +424,10 @@ class AskEngine:
         lines = ["Cards in the selected topics:"]
         for entry in menu:
             lines.append(f"- {entry.id}: {entry.title}. {entry.summary}")
-            for relation in entry.relations:
-                other = self.knowledge_base._by_id.get(relation["to"])
-                other_title = other.title if other is not None else ""
+            for edge in self.knowledge_base.incident_edges(entry.id):
+                arrow = "->" if edge["direction"] == "out" else "<-"
                 lines.append(
-                    f"  edge {relation['rel']} -> {relation['to']}: {other_title}"
+                    f"  edge {edge['rel']} {arrow} {edge['other_id']}: {edge['title']}"
                 )
         if resolved_focus:
             lines.append(
@@ -501,8 +499,15 @@ class AskEngine:
             error=error,
         )
 
-    def _ask_llm(self, *, query: str, hits: List[KbEntry], session_context: str = "") -> str:
-        """将检索片段与选中集内部的合编方式注入 prompt 后调用 Provider。"""
+    def _ask_llm(
+            self,
+            *,
+            query: str,
+            hits: List[KbEntry],
+            session_context: str = "",
+            menu_ids: Optional[Sequence[str]] = None,
+    ) -> str:
+        """将主答卡正文与合编方式注入 prompt 后调用 Provider。"""
 
         snippets = []
         for item in hits:
@@ -510,28 +515,60 @@ class AskEngine:
                 f"[{item.id}] {item.title}\n{item.narrative}\npython:\n{item.python_code}"
             )
         context_block = f"\n\nConfirmed session slots: {session_context}\n" if session_context else "\n"
+        compose = self._compose_block(hits, menu_ids=menu_ids or [])
+        compose_block = f"\n\n{compose}" if compose else ""
         prompt = (
             f"Question: {query}"
             f"{context_block}"
             "Knowledge snippets:\n"
             + "\n\n".join(snippets)
-            + "\n\n"
-            + self._compose_block(hits)
+            + compose_block
             + "\n\nWrite a concise answer in the same language as the Question, "
-            "grounded in the snippets."
+            "grounded in the snippets. "
+            "Do not expand a card that is only mentioned as an invitation."
         )
         return str(self.provider.chat(prompt, system_prompt=_ASK_SYSTEM_PROMPT)).strip()
 
-    def _compose_block(self, hits: Sequence[KbEntry]) -> str:
-        """按选中卡之间的直接边写合编句。没有这种边时说明没有策展关联。"""
+    def _compose_block(
+            self,
+            hits: Sequence[KbEntry],
+            *,
+            menu_ids: Sequence[str],
+    ) -> str:
+        """主答卡之间才整段对比；菜单外的关联只邀请或列举。"""
 
-        edges = self.knowledge_base.edges_among([item.id for item in hits])
-        if not edges:
-            return _NO_CURATED_RELATION
-        lines = []
-        for edge in edges:
-            clause = _COMPOSE_CLAUSES[edge["compose"]]
-            lines.append(f"{clause} Linked cards: {edge['fr']} -> {edge['to']}.")
+        menu_set = set(menu_ids)
+        primary_ids = [item.id for item in hits if item.id in menu_set]
+        lines: List[str] = []
+        internal = self.knowledge_base.edges_among(primary_ids)
+        seen_pairs = set()
+        for edge in internal:
+            if edge["rel"] != "contrasts_with":
+                continue
+            pair = tuple(sorted((edge["fr"], edge["to"])))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            lines.append(
+                f"{_COMPOSE_CLAUSES['contrast']} Linked cards: {edge['fr']} -> {edge['to']}."
+            )
+        if len(primary_ids) >= 2 and not internal:
+            lines.append(_NO_CURATED_RELATION)
+        for item in self.knowledge_base.external_invitations(primary_ids, menu_ids):
+            title = item["title"]
+            if item["rel"] == "see_also":
+                lines.append(f"Related see_also: {title}. {item['summary']}")
+            elif item["rel"] == "plan_handoff":
+                lines.append(
+                    "Invitation plan_handoff: you can switch to Plan to go further. "
+                    "Do not emit plan_id, steps, or a confirmable plan. "
+                    f"Related title: {title}."
+                )
+            else:
+                lines.append(
+                    f"Invitation: if you want to know more about {title}, you can ask next. "
+                    "Do not expand that card in this answer."
+                )
         return "\n".join(lines)
 
     @staticmethod

@@ -469,6 +469,101 @@ class KnowledgeBase:
                 neighbors.add(entry.id)
         return neighbors
 
+    def incident_edges(self, card_id: str) -> List[Dict[str, str]]:
+        """一张卡的出边和入边。不含对方正文。
+
+        Parameters
+        ----------
+        card_id : str
+            菜单卡 id。
+
+        Returns
+        -------
+        list of dict
+            每条含 ``direction``（``out`` / ``in``）、``rel``、``other_id``、``title``、``summary``。
+        """
+
+        found: List[Dict[str, str]] = []
+        entry = self._by_id.get(card_id)
+        if entry is None:
+            return found
+        for item in entry.relations:
+            other = self._by_id.get(item["to"])
+            if other is None:
+                continue
+            found.append({
+                "direction": "out",
+                "rel": item["rel"],
+                "other_id": other.id,
+                "title": other.title,
+                "summary": other.summary,
+            })
+        for other in self._entries:
+            if other.id == card_id:
+                continue
+            for item in other.relations:
+                if item["to"] != card_id:
+                    continue
+                found.append({
+                    "direction": "in",
+                    "rel": item["rel"],
+                    "other_id": other.id,
+                    "title": other.title,
+                    "summary": other.summary,
+                })
+        return found
+
+    def external_invitations(
+            self,
+            primary_ids: Sequence[str],
+            menu_ids: Sequence[str],
+            *,
+            limit: int = 3,
+    ) -> List[Dict[str, str]]:
+        """主答卡指向菜单外的关联，最多 ``limit`` 条。
+
+        同一对方只留一条。菜单里的卡不邀请。截断顺序是 ``contrasts_with``、
+        ``see_also``、``next_topic``、``plan_handoff``。不沿边再爬。
+
+        Parameters
+        ----------
+        primary_ids : sequence of str
+            落在本次主题菜单里的主答卡。
+        menu_ids : sequence of str
+            本次主题菜单。菜单内的对方不进邀请。
+        limit : int, default 3
+            邀请条数上限。
+
+        Returns
+        -------
+        list of dict
+            每条含 ``rel``、``other_id``、``title``、``summary``。
+        """
+
+        primary: List[str] = []
+        for card_id in primary_ids:
+            if card_id not in primary and card_id in self._by_id:
+                primary.append(card_id)
+        menu_set = set(menu_ids)
+        chosen: List[Dict[str, str]] = []
+        seen = set()
+        for rel in ("contrasts_with", "see_also", "next_topic", "plan_handoff"):
+            for card_id in primary:
+                for edge in self.incident_edges(card_id):
+                    other_id = edge["other_id"]
+                    if edge["rel"] != rel or other_id in menu_set or other_id in seen:
+                        continue
+                    seen.add(other_id)
+                    chosen.append({
+                        "rel": rel,
+                        "other_id": other_id,
+                        "title": edge["title"],
+                        "summary": edge["summary"],
+                    })
+                    if len(chosen) >= limit:
+                        return chosen
+        return chosen
+
     def edges_among(self, selected_ids: Sequence[str]) -> List[Dict[str, str]]:
         """选中集内部的直接边。不把边外的卡算进来，也不沿边再爬。
 

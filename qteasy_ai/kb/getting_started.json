@@ -17,5 +17,9 @@
   "type": "concept",
   "manual_anchor": "docs/source/tutorials/1-get-started.md",
   "topics": ["onboarding"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "what_is_qteasy"},
+    {"rel": "see_also", "to": "notebook_cli"},
+    {"rel": "next_topic", "to": "data_three_entries"}
+  ]
 }
