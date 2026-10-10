@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .ask_engine import AskEngine, AskResponse
+from .ask_engine import AskEngine, AskResponse, build_ask_history_index
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .contracts import ToolPlan, new_plan_id
 from .executor import PlanExecutor
@@ -59,7 +59,6 @@ from .session import (
     mark_live_progress,
     mark_live_step_end,
     mark_live_step_start,
-    latest_ask_focus,
     pop_deferred_run,
     register_live_running,
     set_deferred_run,
@@ -341,8 +340,8 @@ class QteasyAssistant:
         """Ask 目标态：LLMClient + KnowledgeBase 问答，不执行 skill。
 
         不调用 PlanExecutor，不写入 ``runs/``。``persist`` / ``keep`` 被忽略。
-        有 ``session_id`` 时读取上一张成功 Ask 卡的 ``ask_focus``，答完写回；
-        整句「第N项」按主题注册表展开。不建 Task。
+        有 ``session_id`` 时从 ``messages[]`` 现算成功 Ask 的一句话索引并传给引擎。
+        引擎不读 session。成功后仍把 ``ask_focus`` 写在 Ask 卡上供查看。不建 Task。
         若仍需审阅可执行步骤，请使用 ``preview()`` 或 ``plan()``。
 
         Parameters
@@ -379,12 +378,15 @@ class QteasyAssistant:
             if not already:
                 session.append_user_text(query)
             self.session_store.save(session)
+        ask_history = (
+            build_ask_history_index(session.messages, self.ask_engine.knowledge_base)
+            if session is not None else None
+        )
         result: AskResponse = self.ask_engine.ask(
             query,
             explanation_depth=explanation_depth,
             session_context=session_context,
-            ask_focus=latest_ask_focus(session) if session is not None else None,
-            resolve_menu_ordinal=session is not None,
+            ask_history=ask_history,
         )
         payload = result.to_dict()
         if session is not None:

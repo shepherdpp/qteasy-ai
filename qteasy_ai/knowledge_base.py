@@ -382,22 +382,6 @@ class KnowledgeBase:
 
         return list(self._topic_specs)
 
-    def topics_for_map_item(self, menu_item: int) -> List[str]:
-        """能力地图编号对应的全部主题 id，顺序与注册表一致。
-
-        Parameters
-        ----------
-        menu_item : int
-            能力地图编号。第 2 项同时对应下载侧和分析侧。
-
-        Returns
-        -------
-        list of str
-            ``map_item`` 等于该编号的主题。没有则空列表。
-        """
-
-        return [spec.id for spec in self._topic_specs if spec.map_item == menu_item]
-
     def menu_for_topics(self, topic_ids: Sequence[str]) -> List[KbEntry]:
         """命中主题下的卡片。副主题的卡会出现在两个菜单里。
 
