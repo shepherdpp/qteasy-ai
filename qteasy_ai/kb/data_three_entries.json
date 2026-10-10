@@ -21,5 +21,7 @@
   "type": "concept",
   "manual_anchor": "docs/source/manage_data/01. overview.md",
   "topics": ["data-analysis"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "refill_bounded"}
+  ]
 }

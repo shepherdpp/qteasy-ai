@@ -6,7 +6,7 @@
 # Created: 2026-10-07
 # Desc:
 # 从策展地图编译问句目录与 type 索引。
-# 同时校验主题注册表。不读取 Sphinx / 手册正文。
+# 同时校验主题注册表与边注册表。不读取 Sphinx / 手册正文。
 # ======================================
 
 """官方 KB 策展地图的 compile。
@@ -103,7 +103,8 @@ def compile_catalog(
     Raises
     ------
     ValueError
-        地图与 JSON 不一致、未知主题、问句重复、relation 悬空，或锚点文件不存在。
+        地图与 JSON 不一致、未知主题、未注册 rel、未知合编方式、
+        问句重复、relation 悬空，或锚点文件不存在。
     """
 
     from qteasy_ai.knowledge_base import (
@@ -112,11 +113,19 @@ def compile_catalog(
         _parse_relations,
         _parse_topics,
         _require_entry_type,
+        load_relation_registry,
         load_topic_registry,
     )
 
     registry = load_topic_registry(map_path.parent / "topic_registry.json")
     registered = {spec.id for spec in registry}
+    relation_specs = load_relation_registry(map_path.parent / "relation_registry.json")
+    registered_rels = {spec.id for spec in relation_specs}
+
+    def parse_relations(entry_id: str, payload: Mapping[str, Any]) -> List[Dict[str, str]]:
+        """用当前边注册表解析一条 relations。"""
+
+        return _parse_relations(entry_id, payload, registered_rels)
 
     entries = _load_json_entries(kb_dir)
     rows = _load_map_rows(map_path)
@@ -132,7 +141,7 @@ def compile_catalog(
         entry_type = _require_same_type(entry_id, row, entry, _require_entry_type)
         topics = _require_same_topics(entry_id, row, entry, _parse_topics, registered)
         anchor = _require_same_anchor(entry_id, row, entry, _parse_manual_anchor)
-        relations = _require_same_relations(entry_id, row, entry, _parse_relations)
+        relations = _require_same_relations(entry_id, row, entry, parse_relations)
         _require_anchor_file(entry_id, anchor, qteasy_root)
         _collect_questions(entry_id, row.get("questions"), questions)
         by_type[entry_type].append(entry_id)
@@ -147,7 +156,7 @@ def compile_catalog(
 
     known = set(entries)
     for entry_id in sorted(entries):
-        for item in _parse_relations(entry_id, entries[entry_id]):
+        for item in parse_relations(entry_id, entries[entry_id]):
             target = item["to"]
             if target not in known:
                 raise ValueError(

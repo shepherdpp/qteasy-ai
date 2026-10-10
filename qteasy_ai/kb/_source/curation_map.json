@@ -11,7 +11,9 @@
         "run mode",
         "问答"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "what_is_qteasy"}
+      ]
     },
     {
       "id": "backtest_intro",
@@ -28,7 +30,10 @@
         "backtest intro",
         "run backtest"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "contrasts_with", "to": "optimize_intro"},
+        {"rel": "plan_handoff", "to": "side_effects_safety"}
+      ]
     },
     {
       "id": "common_errors_date_window",
@@ -42,7 +47,9 @@
         "at least one of start",
         "start and end"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "data_three_entries"}
+      ]
     },
     {
       "id": "common_errors_nan",
@@ -56,7 +63,9 @@
         "trade price",
         "停牌"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "backtest_intro"}
+      ]
     },
     {
       "id": "common_errors_run_freq",
@@ -69,7 +78,9 @@
         "built-in parameter key",
         "not a built-in parameter"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "operator_run_freq"}
+      ]
     },
     {
       "id": "data_three_entries",
@@ -84,7 +95,9 @@
         "参考数据",
         "静态数据"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "refill_bounded"}
+      ]
     },
     {
       "id": "env_ready",
@@ -98,7 +111,10 @@
         "check table",
         "缺表"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "refill_bounded"},
+        {"rel": "next_topic", "to": "refill_bounded"}
+      ]
     },
     {
       "id": "getting_started",
@@ -113,7 +129,11 @@
         "快速开始",
         "first steps"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "what_is_qteasy"},
+        {"rel": "see_also", "to": "notebook_cli"},
+        {"rel": "next_topic", "to": "data_three_entries"}
+      ]
     },
     {
       "id": "live_plan_only",
@@ -127,7 +147,10 @@
         "live plan",
         "never auto"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "side_effects_safety"},
+        {"rel": "plan_handoff", "to": "side_effects_safety"}
+      ]
     },
     {
       "id": "notebook_cli",
@@ -141,7 +164,9 @@
         "notebook magic",
         "命令行"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "getting_started"}
+      ]
     },
     {
       "id": "official_vs_user_kb",
@@ -156,7 +181,9 @@
         "用户知识库",
         "官方知识库"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "what_is_qteasy"}
+      ]
     },
     {
       "id": "operator_run_freq",
@@ -169,7 +196,9 @@
         "run timing",
         "运行频率"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "common_errors_run_freq"}
+      ]
     },
     {
       "id": "optimize_intro",
@@ -185,7 +214,10 @@
         "optimize intro",
         "parameter optimize"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "contrasts_with", "to": "backtest_intro"},
+        {"rel": "plan_handoff", "to": "side_effects_safety"}
+      ]
     },
     {
       "id": "pt_ps_vs",
@@ -199,7 +231,9 @@
         "position target",
         "value signal"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "strategy_builder_intro"}
+      ]
     },
     {
       "id": "refill_bounded",
@@ -213,7 +247,11 @@
         "下载日线",
         "灌数据"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "data_three_entries"},
+        {"rel": "see_also", "to": "env_ready"},
+        {"rel": "plan_handoff", "to": "side_effects_safety"}
+      ]
     },
     {
       "id": "side_effects_safety",
@@ -227,7 +265,9 @@
         "side effect",
         "auto execute"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "live_plan_only"}
+      ]
     },
     {
       "id": "strategy_builder_intro",
@@ -242,7 +282,10 @@
         "双均线",
         "金叉"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "pt_ps_vs"},
+        {"rel": "plan_handoff", "to": "ask_plan_agent"}
+      ]
     },
     {
       "id": "what_is_qteasy",
@@ -258,7 +301,12 @@
         "qteasy是什么",
         "qteasy 是什么"
       ],
-      "relations": []
+      "relations": [
+        {"rel": "see_also", "to": "ask_plan_agent"},
+        {"rel": "see_also", "to": "getting_started"},
+        {"rel": "see_also", "to": "official_vs_user_kb"},
+        {"rel": "next_topic", "to": "getting_started"}
+      ]
     }
   ]
 }

@@ -15,5 +15,8 @@
   "type": "boundary",
   "manual_anchor": "docs/source/tutorials/8-live-trade-risk-and-broker-walkthrough.md",
   "topics": ["live_boundary"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "side_effects_safety"},
+    {"rel": "plan_handoff", "to": "side_effects_safety"}
+  ]
 }

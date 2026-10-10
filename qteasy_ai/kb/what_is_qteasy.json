@@ -17,5 +17,10 @@
   "type": "concept",
   "manual_anchor": "docs/source/tutorials/1-get-started.md",
   "topics": ["capability"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "ask_plan_agent"},
+    {"rel": "see_also", "to": "getting_started"},
+    {"rel": "see_also", "to": "official_vs_user_kb"},
+    {"rel": "next_topic", "to": "getting_started"}
+  ]
 }

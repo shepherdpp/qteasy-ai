@@ -867,6 +867,38 @@ class ConversationState:
         return {"ok": True, "needs_confirm": False, "executed_run_ids": executed}
 
 
+def latest_ask_focus(state: Optional["ConversationState"]) -> Optional[Dict[str, Any]]:
+    """最近一张带 ``ask_focus`` 的 ask 卡。
+
+    失败的 Ask 卡不写焦点，读取时跳过。不新增会话字段。
+
+    Parameters
+    ----------
+    state : ConversationState, optional
+        已加载的会话。空则无焦点。
+
+    Returns
+    -------
+    dict or None
+        ``topic`` / ``menu_item`` / ``sources``。没有则 ``None``。
+    """
+
+    if state is None:
+        return None
+    for row in reversed(state.messages or []):
+        if str(row.get("kind") or "") != "ask":
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        focus = payload.get("ask_focus")
+        if isinstance(focus, dict) and focus.get("topic"):
+            return {
+                "topic": focus.get("topic"),
+                "menu_item": focus.get("menu_item"),
+                "sources": [str(item) for item in (focus.get("sources") or []) if str(item)],
+            }
+    return None
+
+
 class SessionStore:
     """读写 ``sessions/{session_id}.json``。"""
 

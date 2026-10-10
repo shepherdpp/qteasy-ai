@@ -318,7 +318,17 @@ def project_human_cards(
     if _is_ask_payload(raw):
         sources = [str(item) for item in (raw.get("sources") or []) if str(item)]
         answer = str(raw.get("answer") or raw.get("narrative") or "").strip() or "No answer."
-        cards.append(make_card("ask", answer, {"sources": sources}))
+        card_payload: Dict[str, Any] = {"sources": sources}
+        if raw.get("ok") is True:
+            nested = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
+            focus = nested.get("ask_focus") if isinstance(nested.get("ask_focus"), dict) else None
+            if focus is not None and focus.get("topic"):
+                card_payload["ask_focus"] = {
+                    "topic": focus.get("topic"),
+                    "menu_item": focus.get("menu_item"),
+                    "sources": list(sources),
+                }
+        cards.append(make_card("ask", answer, card_payload))
         err = _enrich_error(raw.get("error") if isinstance(raw.get("error"), dict) else None)
         if err:
             cards.append(make_card("error", _error_card_text(err), dict(err)))
