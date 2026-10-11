@@ -1,0 +1,264 @@
+{
+  "entries": [
+    {
+      "id": "ask_plan_agent",
+      "gold": [
+        "run mode",
+        "问答"
+      ],
+      "paraphrases": [
+        "Ask、Plan 和 Agent 分别做什么"
+      ],
+      "expect_ids": [
+        "ask_plan_agent"
+      ]
+    },
+    {
+      "id": "backtest_intro",
+      "gold": [
+        "如何用 qteasy 回测",
+        "怎么回测",
+        "how to backtest",
+        "回测入门",
+        "backtest intro",
+        "run backtest"
+      ],
+      "paraphrases": [
+        "如何用qteasy回测",
+        "如何用qteasy进行回测"
+      ],
+      "expect_ids": [
+        "backtest_intro"
+      ]
+    },
+    {
+      "id": "common_errors_date_window",
+      "gold": [
+        "date window",
+        "at least one of start",
+        "start and end"
+      ],
+      "paraphrases": [
+        "起止日期至少要给其中一个"
+      ],
+      "expect_ids": [
+        "common_errors_date_window"
+      ]
+    },
+    {
+      "id": "common_errors_nan",
+      "gold": [
+        "missing bar",
+        "trade price",
+        "停牌"
+      ],
+      "paraphrases": [
+        "缺了一根K线时成交价能不能补成1"
+      ],
+      "expect_ids": [
+        "common_errors_nan"
+      ]
+    },
+    {
+      "id": "common_errors_run_freq",
+      "gold": [
+        "built-in parameter key",
+        "not a built-in parameter"
+      ],
+      "paraphrases": [
+        "这个名字并不是内置参数键"
+      ],
+      "expect_ids": [
+        "common_errors_run_freq"
+      ]
+    },
+    {
+      "id": "data_three_entries",
+      "gold": [
+        "三入口",
+        "历史数据",
+        "参考数据",
+        "静态数据"
+      ],
+      "paraphrases": [
+        "取历史、参考和静态是三条不同的路"
+      ],
+      "expect_ids": [
+        "data_three_entries"
+      ]
+    },
+    {
+      "id": "env_ready",
+      "gold": [
+        "local data table",
+        "check table",
+        "缺表"
+      ],
+      "paraphrases": [
+        "本地数据表有没有缺"
+      ],
+      "expect_ids": [
+        "env_ready"
+      ]
+    },
+    {
+      "id": "getting_started",
+      "gold": [
+        "getting started",
+        "how to start",
+        "快速开始",
+        "first steps"
+      ],
+      "paraphrases": [
+        "装好以后第一次怎么跑通"
+      ],
+      "expect_ids": [
+        "getting_started"
+      ]
+    },
+    {
+      "id": "live_plan_only",
+      "gold": [
+        "live trade",
+        "live plan",
+        "never auto"
+      ],
+      "paraphrases": [
+        "模拟交易会不会自动发出委托"
+      ],
+      "expect_ids": [
+        "live_plan_only"
+      ]
+    },
+    {
+      "id": "notebook_cli",
+      "gold": [
+        "qteasy-ai cli",
+        "notebook magic",
+        "命令行"
+      ],
+      "paraphrases": [
+        "在笔记本里怎么打开交互命令"
+      ],
+      "expect_ids": [
+        "notebook_cli"
+      ]
+    },
+    {
+      "id": "official_vs_user_kb",
+      "gold": [
+        "user kb",
+        "official kb",
+        "用户知识库",
+        "官方知识库"
+      ],
+      "paraphrases": [
+        "我自己整理的笔记会混进官方回答吗"
+      ],
+      "expect_ids": [
+        "official_vs_user_kb"
+      ]
+    },
+    {
+      "id": "operator_run_freq",
+      "gold": [
+        "run timing",
+        "运行频率"
+      ],
+      "paraphrases": [
+        "策略隔多久计算一次信号"
+      ],
+      "expect_ids": [
+        "operator_run_freq"
+      ]
+    },
+    {
+      "id": "optimize_intro",
+      "gold": [
+        "优化入门",
+        "how to optimize",
+        "参数优化",
+        "optimize intro",
+        "parameter optimize"
+      ],
+      "paraphrases": [
+        "怎样找出一组更好的参数组合"
+      ],
+      "expect_ids": [
+        "optimize_intro"
+      ]
+    },
+    {
+      "id": "pt_ps_vs",
+      "gold": [
+        "signal type",
+        "position target",
+        "value signal"
+      ],
+      "paraphrases": [
+        "目标仓位和按比例下单的信号有什么差别"
+      ],
+      "expect_ids": [
+        "pt_ps_vs"
+      ]
+    },
+    {
+      "id": "refill_bounded",
+      "gold": [
+        "download daily",
+        "下载日线",
+        "灌数据"
+      ],
+      "paraphrases": [
+        "只补一段指定日期里的日线"
+      ],
+      "expect_ids": [
+        "refill_bounded"
+      ]
+    },
+    {
+      "id": "side_effects_safety",
+      "gold": [
+        "side effect",
+        "auto execute"
+      ],
+      "paraphrases": [
+        "只问一个概念时会不会顺手执行"
+      ],
+      "expect_ids": [
+        "side_effects_safety"
+      ]
+    },
+    {
+      "id": "strategy_builder_intro",
+      "gold": [
+        "generate a strategy",
+        "写策略",
+        "双均线",
+        "金叉"
+      ],
+      "paraphrases": [
+        "能不能按规则起草一个新的策略"
+      ],
+      "expect_ids": [
+        "strategy_builder_intro"
+      ]
+    },
+    {
+      "id": "what_is_qteasy",
+      "gold": [
+        "what is qteasy",
+        "什么是 qteasy",
+        "什么是qteasy",
+        "qteasy是什么",
+        "qteasy 是什么"
+      ],
+      "paraphrases": [
+        "qteasy这个库是用来做什么的"
+      ],
+      "expect_ids": [
+        "what_is_qteasy"
+      ]
+    }
+  ]
+}
