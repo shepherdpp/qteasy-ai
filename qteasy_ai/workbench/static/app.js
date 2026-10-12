@@ -2538,6 +2538,16 @@ function paintCodeHighlight(source) {
   pre.innerHTML = `${highlightPython(source)}\n`;
 }
 
+const CHAT_CODE_HIGHLIGHT_LANGS = new Set(["python", "py"]);
+
+function renderChatCodeBlock(source, info) {
+  const token = String(info || "").trim().split(/\s+/)[0] || "";
+  const label = token || "text";
+  const key = label.toLowerCase();
+  const body = CHAT_CODE_HIGHLIGHT_LANGS.has(key) ? highlightPython(source) : escapeHtml(source);
+  return `<div class="md-code"><div class="md-code-lang">${escapeHtml(label)}</div><pre><code>${body}</code></pre></div>`;
+}
+
 function metricsCards(metrics) {
   const entries = Object.entries(metrics || {});
   if (!entries.length) return "<p class=\"empty-hint\">No metrics.</p>";
@@ -2557,7 +2567,13 @@ function renderChatMarkdown(text) {
   if (!markedLib || !purify || typeof markedLib.parse !== "function") {
     return `<div class="chat-md">${escapeHtml(raw)}</div>`;
   }
-  const html = markedLib.parse(raw, { breaks: true });
+  const options = { breaks: true };
+  if (typeof markedLib.Renderer === "function") {
+    const renderer = new markedLib.Renderer();
+    renderer.code = ({ text: code, lang }) => renderChatCodeBlock(code, lang);
+    options.renderer = renderer;
+  }
+  const html = markedLib.parse(raw, options);
   return `<div class="chat-md">${purify.sanitize(html)}</div>`;
 }
 

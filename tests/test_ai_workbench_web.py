@@ -473,6 +473,84 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("renderPlanMarkdown", src.split('current.type === "plan"')[1].split("host.innerHTML")[0])
             self.assertNotIn('<pre class="plan-md">${escapeHtml(markdown', src.split("function renderPlanMarkdown")[0])
 
+    def test_chat_markdown_code_fence_label_and_highlight(self) -> None:
+        """会话围栏显示语言标签；仅 python/py 着色，bash/text 保持纯文本。"""
+
+        print("\n[TestAiWorkbenchWeb] chat code fence label")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            index = client.get("/").text
+            chat = _extract_js_function(src, "renderChatMarkdown")
+            block = _extract_js_function(src, "renderChatCodeBlock")
+            plan = _extract_js_function(src, "renderPlanMarkdown")
+            lang_match = re.search(
+                r"const CHAT_CODE_HIGHLIGHT_LANGS = new Set\(\[(.*?)\]\)",
+                src,
+            )
+            self.assertIsNotNone(lang_match)
+            langs = re.findall(r'"([^"]+)"', lang_match.group(1))
+            print(" highlight langs:", langs)
+            print(" chat calls renderChatCodeBlock:", "renderChatCodeBlock" in chat)
+            print(" block uses highlightPython:", "highlightPython(source)" in block)
+            print(" block uses escapeHtml:", "escapeHtml(source)" in block)
+            print(" plan isolated:", "renderChatCodeBlock" not in plan)
+            self.assertEqual(langs, ["python", "py"])
+            self.assertIn("renderChatCodeBlock", chat)
+            self.assertIn("md-code-lang", block)
+            self.assertIn("highlightPython(source)", block)
+            self.assertIn("escapeHtml(source)", block)
+            self.assertNotIn("renderChatCodeBlock", plan)
+            self.assertNotIn("marked.use", chat)
+            self.assertNotIn("highlight.js", src)
+            self.assertNotIn("hljs", src)
+            self.assertNotIn("highlight.js", index)
+            self.assertNotIn("hljs", index)
+            self.assertIn(".chat-md .md-code-lang", css)
+            self.assertIn(".chat-md .tok-kw", css)
+            self.assertIn('html[data-theme="light"] .chat-md .tok-kw', css)
+
+            prelude = (
+                _extract_js_function(src, "escapeHtml")
+                + "\n"
+                + src[src.find("const PY_KEYWORDS"):src.find("function metricsCards")]
+            )
+
+            def fence(source: str, info: str) -> str:
+                html = _eval_js(prelude, f"renderChatCodeBlock({json.dumps(source)}, {json.dumps(info)})")
+                print(" fence", json.dumps(info), "->", html)
+                self.assertIsInstance(html, str)
+                return str(html)
+
+            python_html = fence("def run():\n    return 1", "Python")
+            self.assertIn('<div class="md-code-lang">Python</div>', python_html)
+            self.assertIn('<span class="tok-kw">def</span>', python_html)
+            self.assertIn('<span class="tok-kw">return</span>', python_html)
+            self.assertIn('<span class="tok-num">1</span>', python_html)
+
+            py_html = fence("pass", "py")
+            self.assertIn('<div class="md-code-lang">py</div>', py_html)
+            self.assertIn('<span class="tok-kw">pass</span>', py_html)
+
+            bash_html = fence('echo "hi"', "bash")
+            self.assertIn('<div class="md-code-lang">bash</div>', bash_html)
+            self.assertNotIn("tok-", bash_html)
+            self.assertIn('echo "hi"', bash_html)
+
+            text_html = fence("plain line", "")
+            self.assertIn('<div class="md-code-lang">text</div>', text_html)
+            self.assertNotIn("tok-", text_html)
+            self.assertIn("plain line", text_html)
+
+            json_html = fence('{"a": 1}', "json")
+            self.assertIn('<div class="md-code-lang">json</div>', json_html)
+            self.assertNotIn("tok-", json_html)
+
     def test_run_liveness_stop_and_switch_session(self) -> None:
         """Stop 停观望；切 Session 不因 busy 早退，先 abort 再 load。"""
 
