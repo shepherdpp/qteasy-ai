@@ -7,19 +7,24 @@
     "入门",
     "快速开始",
     "how to start",
-    "first steps"
+    "first steps",
+    "一分钟跑通",
+    "端到端路线图",
+    "tutorial route"
   ],
-  "title": "Getting started with qteasy-ai",
-  "summary": "Install qteasy, set a local AI home, then Ask concepts or Plan a read-only task.",
-  "narrative": "Getting started: (1) install qteasy and qteasy-ai in the same Python env; (2) optionally set QTEASY_AI_HOME; (3) run `qteasy-ai ask \"what is qteasy\"` for concepts; (4) `qteasy-ai plan \"list built-in strategies\"` to review a ToolPlan without executing skills.\n\nFor data work, check Tushare / local tables first, then Plan a bounded download with explicit dates. Do not run unbounded refill.",
-  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('getting started', response_style='raw')['answer'][:200])\nprint(assistant.plan('list built-in strategies', response_style='raw')['plan']['steps'][0]['skill_name'])",
-  "risk_notes": "First-run refill without dates is rejected. Confirm side-effects before run.",
+  "title": "Getting started with qteasy",
+  "summary": "The first hour is an environment, a data channel, one bounded download, and one built-in-strategy backtest, then the tutorial route.",
+  "narrative": "The first hour with qteasy has four steps. Install qteasy into a Python environment that can import it; install options, including TA-Lib, are a separate question. Choose a data channel, often a Tushare token, or another supported channel. Download one bounded set of data, for example daily bars of the CSI 300 index for a date range you name. Run one backtest of a built-in strategy on that data. A result report means the one-minute path worked.\n\nThe tutorial route after that is: configure the data source, download data, optionally learn the data panel, pick or define a strategy and backtest it, optimize parameters, then read the simulated-live boundary. Ask explains each step. To actually download or backtest, use Plan and confirm. Sample profit figures from the manual are not repeated here.",
+  "python_code": "import qteasy as qt\nprint(qt.__version__)\nqt.update_start_up_setting(tushare_token='your_token')",
+  "risk_notes": "A download or backtest without an explicit date range is not the first-hour path. Confirm before anything that writes data or recomputes a backtest.",
   "type": "concept",
-  "manual_anchor": "docs/source/tutorials/1-get-started.md",
+  "manual_anchor": "docs/source/getting_started.md",
   "topics": ["onboarding"],
   "relations": [
     {"rel": "see_also", "to": "what_is_qteasy"},
     {"rel": "see_also", "to": "notebook_cli"},
+    {"rel": "see_also", "to": "install_and_env"},
+    {"rel": "see_also", "to": "get_help"},
     {"rel": "next_topic", "to": "data_three_entries"}
   ]
 }

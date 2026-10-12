@@ -28,6 +28,7 @@ _QTEASY_ROOT = _REPO.parent / "qteasy"
 _REGISTRY_PATH = _KB_DIR / "_source" / "topic_registry.json"
 _STARTER_TOPIC_IDS = (
     "capability",
+    "overview",
     "onboarding",
     "data-downloading",
     "data-analysis",
@@ -36,6 +37,34 @@ _STARTER_TOPIC_IDS = (
     "optimize",
     "live_boundary",
 )
+_F5_IDS = {
+    "pt_ps_vs",
+    "operator_run_freq",
+    "ask_plan_agent",
+    "side_effects_safety",
+    "common_errors_nan",
+    "common_errors_run_freq",
+    "common_errors_date_window",
+    "what_is_qteasy",
+    "getting_started",
+    "data_three_entries",
+    "backtest_intro",
+    "optimize_intro",
+    "refill_bounded",
+    "strategy_builder_intro",
+    "env_ready",
+    "notebook_cli",
+    "live_plan_only",
+    "official_vs_user_kb",
+}
+_C1_NEW_IDS = {
+    "library_map",
+    "qteasy_advantages",
+    "capability_map",
+    "install_and_env",
+    "faq_datasource",
+    "get_help",
+}
 
 
 _RELATION_REGISTRY = {
@@ -100,8 +129,12 @@ class TestAiKbCatalog(unittest.TestCase):
         json_ids = sorted(path.stem for path in _KB_DIR.glob("*.json"))
         print(" map ids:", sorted(rows))
         print(" json ids:", json_ids)
+        print(" count:", len(json_ids))
+        print(" f5 missing:", sorted(_F5_IDS - set(json_ids)))
+        print(" c1 missing:", sorted(_C1_NEW_IDS - set(json_ids)))
         self.assertEqual(sorted(rows), json_ids)
-        self.assertEqual(len(json_ids), 18)
+        self.assertTrue(_F5_IDS.issubset(set(json_ids)))
+        self.assertTrue(_C1_NEW_IDS.issubset(set(json_ids)))
 
         for entry_id in json_ids:
             entry = json.loads((_KB_DIR / f"{entry_id}.json").read_text(encoding="utf-8"))
@@ -434,10 +467,10 @@ class TestAiKbCatalog(unittest.TestCase):
         self.assertNotIn(key, questions)
         self.assertEqual(ids, ["operator_run_freq"])
 
-    def test_starter_registry_has_eight_topics_and_no_single_data(self) -> None:
-        """起步注册表是计划里的八个 id，没有单一 data。"""
+    def test_registry_includes_overview_and_has_no_single_data(self) -> None:
+        """注册表含 overview，没有单一 data。"""
 
-        print("\n[TestAiKbCatalog] 起步主题注册表")
+        print("\n[TestAiKbCatalog] 主题注册表含 overview")
         payload = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
         ids = [row["id"] for row in payload["topics"]]
         print(" topic ids:", ids)

@@ -19,6 +19,7 @@
   "manual_anchor": "",
   "topics": ["capability"],
   "relations": [
-    {"rel": "see_also", "to": "what_is_qteasy"}
+    {"rel": "see_also", "to": "what_is_qteasy"},
+    {"rel": "see_also", "to": "capability_map"}
   ]
 }

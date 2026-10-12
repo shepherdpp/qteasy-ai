@@ -1,0 +1,25 @@
+{
+  "id": "install_and_env",
+  "tags": ["install", "environment", "ta-lib"],
+  "keywords": [
+    "如何安装 TA-Lib",
+    "how to install qteasy",
+    "python version for qteasy",
+    "TA-Lib",
+    "ta-lib",
+    "install",
+    "安装"
+  ],
+  "title": "Install qteasy and optional TA-Lib",
+  "summary": "pip install qteasy on Python >=3.9 and <3.13. TA-Lib needs the C library before the Python wrapper.",
+  "narrative": "Install qteasy with pip into Python >=3.9 and <3.13. A dedicated virtual environment avoids clashes with other packages. `pip install qteasy` is the base install. Upgrade with `pip install qteasy --upgrade`. If the download is slow, point pip at a domestic index.\n\nOptional pieces are separate from the base install. Use a local MySQL database only if you want the database store instead of files. Install TA-Lib only if you want the built-in technical indicators.\n\nTA-Lib: `pip install ta-lib` installs only the Python wrapper. Install the C library first, for example `conda install -c conda-forge libta-lib`, or a system package such as Homebrew `ta-lib` on macOS. Then install the Python package. Without the C library, importing the indicators fails. This card does not list every operating-system command.",
+  "python_code": "import qteasy as qt\nprint(qt.__version__)",
+  "risk_notes": "Installing packages changes the Python environment. This card does not run pip for you.",
+  "type": "concept",
+  "manual_anchor": "docs/source/tutorials/1-get-started.md",
+  "topics": ["onboarding"],
+  "relations": [
+    {"rel": "see_also", "to": "getting_started"},
+    {"rel": "see_also", "to": "faq_datasource"}
+  ]
+}

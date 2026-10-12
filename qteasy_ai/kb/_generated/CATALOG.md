@@ -11,6 +11,7 @@
 - manual_anchor: 
 - relations:
   - see_also -> what_is_qteasy
+  - see_also -> capability_map
 - questions:
   - run mode
   - 问答
@@ -30,6 +31,17 @@
   - 回测入门
   - backtest intro
   - run backtest
+
+## capability_map
+
+- type: concept
+- topics: capability
+- manual_anchor: 
+- relations:
+  - see_also -> ask_plan_agent
+- questions:
+  - 你能帮我做什么？
+  - what can you help me do
 
 ## common_errors_date_window
 
@@ -92,20 +104,71 @@
   - check table
   - 缺表
 
+## faq_datasource
+
+- type: concept
+- topics: onboarding
+- manual_anchor: docs/source/faq.md
+- relations:
+  - see_also -> install_and_env
+- questions:
+  - 数据库连不上怎么办
+  - tushare rate limit
+
+## get_help
+
+- type: concept
+- topics: onboarding
+- manual_anchor: docs/source/help.md
+- relations:
+  - see_also -> getting_started
+- questions:
+  - 如何报告 bug
+  - how to report a bug
+
 ## getting_started
 
 - type: concept
 - topics: onboarding
-- manual_anchor: docs/source/tutorials/1-get-started.md
+- manual_anchor: docs/source/getting_started.md
 - relations:
   - see_also -> what_is_qteasy
   - see_also -> notebook_cli
+  - see_also -> install_and_env
+  - see_also -> get_help
   - next_topic -> data_three_entries
 - questions:
   - getting started
   - how to start
   - 快速开始
   - first steps
+  - 一分钟跑通
+  - 端到端路线图
+
+## install_and_env
+
+- type: concept
+- topics: onboarding
+- manual_anchor: docs/source/tutorials/1-get-started.md
+- relations:
+  - see_also -> getting_started
+  - see_also -> faq_datasource
+- questions:
+  - 如何安装 TA-Lib
+  - how to install qteasy
+  - python version for qteasy
+
+## library_map
+
+- type: concept
+- topics: overview
+- manual_anchor: docs/source/index.rst
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> qteasy_advantages
+- questions:
+  - qteasy 有哪些模块
+  - what modules does qteasy have
 
 ## live_plan_only
 
@@ -183,6 +246,18 @@
   - position target
   - value signal
 
+## qteasy_advantages
+
+- type: concept
+- topics: overview
+- manual_anchor: docs/source/index.rst
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> library_map
+- questions:
+  - 为什么用 qteasy 而不是自己写回测
+  - why use qteasy instead of writing your own backtest
+
 ## refill_bounded
 
 - type: concept
@@ -225,12 +300,14 @@
 ## what_is_qteasy
 
 - type: concept
-- topics: capability
-- manual_anchor: docs/source/tutorials/1-get-started.md
+- topics: overview
+- manual_anchor: docs/source/index.rst
 - relations:
   - see_also -> ask_plan_agent
   - see_also -> getting_started
   - see_also -> official_vs_user_kb
+  - see_also -> library_map
+  - see_also -> qteasy_advantages
   - next_topic -> getting_started
 - questions:
   - what is qteasy

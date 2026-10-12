@@ -12,7 +12,8 @@
         "问答"
       ],
       "relations": [
-        {"rel": "see_also", "to": "what_is_qteasy"}
+        {"rel": "see_also", "to": "what_is_qteasy"},
+        {"rel": "see_also", "to": "capability_map"}
       ]
     },
     {
@@ -122,16 +123,20 @@
       "topics": [
         "onboarding"
       ],
-      "manual_anchor": "docs/source/tutorials/1-get-started.md",
+      "manual_anchor": "docs/source/getting_started.md",
       "questions": [
         "getting started",
         "how to start",
         "快速开始",
-        "first steps"
+        "first steps",
+        "一分钟跑通",
+        "端到端路线图"
       ],
       "relations": [
         {"rel": "see_also", "to": "what_is_qteasy"},
         {"rel": "see_also", "to": "notebook_cli"},
+        {"rel": "see_also", "to": "install_and_env"},
+        {"rel": "see_also", "to": "get_help"},
         {"rel": "next_topic", "to": "data_three_entries"}
       ]
     },
@@ -291,9 +296,9 @@
       "id": "what_is_qteasy",
       "type": "concept",
       "topics": [
-        "capability"
+        "overview"
       ],
-      "manual_anchor": "docs/source/tutorials/1-get-started.md",
+      "manual_anchor": "docs/source/index.rst",
       "questions": [
         "what is qteasy",
         "什么是 qteasy",
@@ -305,7 +310,103 @@
         {"rel": "see_also", "to": "ask_plan_agent"},
         {"rel": "see_also", "to": "getting_started"},
         {"rel": "see_also", "to": "official_vs_user_kb"},
+        {"rel": "see_also", "to": "library_map"},
+        {"rel": "see_also", "to": "qteasy_advantages"},
         {"rel": "next_topic", "to": "getting_started"}
+      ]
+    },
+    {
+      "id": "library_map",
+      "type": "concept",
+      "topics": [
+        "overview"
+      ],
+      "manual_anchor": "docs/source/index.rst",
+      "questions": [
+        "qteasy 有哪些模块",
+        "what modules does qteasy have"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "what_is_qteasy"},
+        {"rel": "see_also", "to": "qteasy_advantages"}
+      ]
+    },
+    {
+      "id": "qteasy_advantages",
+      "type": "concept",
+      "topics": [
+        "overview"
+      ],
+      "manual_anchor": "docs/source/index.rst",
+      "questions": [
+        "为什么用 qteasy 而不是自己写回测",
+        "why use qteasy instead of writing your own backtest"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "what_is_qteasy"},
+        {"rel": "see_also", "to": "library_map"}
+      ]
+    },
+    {
+      "id": "capability_map",
+      "type": "concept",
+      "topics": [
+        "capability"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "你能帮我做什么？",
+        "what can you help me do"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "ask_plan_agent"}
+      ]
+    },
+    {
+      "id": "install_and_env",
+      "type": "concept",
+      "topics": [
+        "onboarding"
+      ],
+      "manual_anchor": "docs/source/tutorials/1-get-started.md",
+      "questions": [
+        "如何安装 TA-Lib",
+        "how to install qteasy",
+        "python version for qteasy"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "getting_started"},
+        {"rel": "see_also", "to": "faq_datasource"}
+      ]
+    },
+    {
+      "id": "faq_datasource",
+      "type": "concept",
+      "topics": [
+        "onboarding"
+      ],
+      "manual_anchor": "docs/source/faq.md",
+      "questions": [
+        "数据库连不上怎么办",
+        "tushare rate limit"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "install_and_env"}
+      ]
+    },
+    {
+      "id": "get_help",
+      "type": "concept",
+      "topics": [
+        "onboarding"
+      ],
+      "manual_anchor": "docs/source/help.md",
+      "questions": [
+        "如何报告 bug",
+        "how to report a bug"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "getting_started"}
       ]
     }
   ]

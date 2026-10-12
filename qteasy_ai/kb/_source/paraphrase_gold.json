@@ -107,7 +107,9 @@
         "getting started",
         "how to start",
         "快速开始",
-        "first steps"
+        "first steps",
+        "一分钟跑通",
+        "端到端路线图"
       ],
       "paraphrases": [
         "装好以后第一次怎么跑通"
@@ -258,6 +260,85 @@
       ],
       "expect_ids": [
         "what_is_qteasy"
+      ]
+    },
+    {
+      "id": "library_map",
+      "gold": [
+        "qteasy 有哪些模块",
+        "what modules does qteasy have"
+      ],
+      "paraphrases": [
+        "qteasy 整条链路是怎么串起来的"
+      ],
+      "expect_ids": [
+        "library_map"
+      ]
+    },
+    {
+      "id": "qteasy_advantages",
+      "gold": [
+        "为什么用 qteasy 而不是自己写回测",
+        "why use qteasy instead of writing your own backtest"
+      ],
+      "paraphrases": [
+        "相比自己用 pandas 写回测，qteasy 好在哪里"
+      ],
+      "expect_ids": [
+        "qteasy_advantages"
+      ]
+    },
+    {
+      "id": "capability_map",
+      "gold": [
+        "你能帮我做什么？",
+        "what can you help me do"
+      ],
+      "paraphrases": [
+        "这个助手现在能协助哪些事"
+      ],
+      "expect_ids": [
+        "capability_map"
+      ]
+    },
+    {
+      "id": "install_and_env",
+      "gold": [
+        "如何安装 TA-Lib",
+        "how to install qteasy",
+        "python version for qteasy"
+      ],
+      "paraphrases": [
+        "TA-Lib 要先装 C 库再装 python 包吗"
+      ],
+      "expect_ids": [
+        "install_and_env"
+      ]
+    },
+    {
+      "id": "faq_datasource",
+      "gold": [
+        "数据库连不上怎么办",
+        "tushare rate limit"
+      ],
+      "paraphrases": [
+        "配了数据库还是提示连接失败"
+      ],
+      "expect_ids": [
+        "faq_datasource"
+      ]
+    },
+    {
+      "id": "get_help",
+      "gold": [
+        "如何报告 bug",
+        "how to report a bug"
+      ],
+      "paraphrases": [
+        "发现漏洞应该去哪里提 issue"
+      ],
+      "expect_ids": [
+        "get_help"
       ]
     }
   ]

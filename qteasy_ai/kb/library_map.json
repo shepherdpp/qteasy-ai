@@ -1,0 +1,25 @@
+{
+  "id": "library_map",
+  "tags": ["overview", "modules", "pipeline"],
+  "keywords": [
+    "qteasy 有哪些模块",
+    "what modules does qteasy have",
+    "modules",
+    "模块",
+    "pipeline",
+    "HistoryPanel",
+    "Operator"
+  ],
+  "title": "How qteasy's parts fit together",
+  "summary": "Local data, a data panel, strategies run by an Operator, then backtest, optimization, and simulated live trading.",
+  "narrative": "qteasy is one pipeline.\n\nLocal data store (DataSource). Downloads from Tushare or other channels land in local tables. Which channel or table to use is a separate question.\n\nHistoryPanel. This is the in-memory panel for looking at and analyzing that data.\n\nStrategies and Operator. Built-in or custom strategies declare the data they need. An Operator runs them.\n\nBacktest. It evaluates a strategy on historical data and reports the result.\n\nOptimization. It searches parameters of a strategy.\n\nSimulated live. The same strategy logic runs on a live-style schedule. Ask can explain the boundary. It does not start a trader or send orders.\n\nThis card only names the parts. Ask a self-contained question for any one of them, for example how to backtest with qteasy.",
+  "python_code": "import qteasy as qt\nprint(qt.__version__)",
+  "risk_notes": "Naming a module does not download data, run a backtest, or start simulated live trading.",
+  "type": "concept",
+  "manual_anchor": "docs/source/index.rst",
+  "topics": ["overview"],
+  "relations": [
+    {"rel": "see_also", "to": "what_is_qteasy"},
+    {"rel": "see_also", "to": "qteasy_advantages"}
+  ]
+}
