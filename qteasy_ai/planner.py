@@ -28,6 +28,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
+from .identity import prefix_system_prompt
 from .intent_engine import IntentEngine, IntentDecision
 from .intents.recipes import compose_recipe
 from .provider import BaseLLMProvider
@@ -136,6 +137,7 @@ class Planner:
         self.env_facts: Dict[str, Any] = dict(env_facts or {})
         self.validator = RuleValidator(registry)
         self.intent_engine = IntentEngine(provider=provider)
+        self.identity_dir = None
         self._strategy_alias_map: Optional[Dict[str, str]] = None
         self._skill_runtime = SkillRuntime()
 
@@ -682,7 +684,13 @@ class Planner:
             f"User query:\n{query}\n"
         )
         try:
-            raw = self.provider.chat(prompt, system_prompt=self._LLM_OPEN_SYSTEM)
+            raw = self.provider.chat(
+                prompt,
+                system_prompt=prefix_system_prompt(
+                    self._LLM_OPEN_SYSTEM,
+                    getattr(self, "identity_dir", None),
+                ),
+            )
         except Exception as exc:
             return None, f"open_llm_error:{exc}"
         payload = self._parse_llm_plan_json(raw)

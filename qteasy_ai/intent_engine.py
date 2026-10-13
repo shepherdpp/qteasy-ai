@@ -21,6 +21,7 @@ import json
 import re
 from typing import Any, Dict, NamedTuple, Optional, Set
 
+from .identity import prefix_system_prompt
 from .intents import IntentCatalog, IntentDecision, load_default_catalog
 from .provider import BaseLLMProvider
 
@@ -84,6 +85,7 @@ class IntentEngine:
     ) -> None:
         self.catalog = catalog or load_default_catalog()
         self.provider = provider
+        self.identity_dir = None
         self._gold_index = {
             normalize_query_text(str(item.get("query") or "")): item
             for item in self.catalog.gold_cases()
@@ -226,7 +228,13 @@ class IntentEngine:
             f"User query:\n{query}\n"
         )
         try:
-            raw = self.provider.chat(prompt, system_prompt=_LLM_JOB_SYSTEM)
+            raw = self.provider.chat(
+                prompt,
+                system_prompt=prefix_system_prompt(
+                    _LLM_JOB_SYSTEM,
+                    getattr(self, "identity_dir", None),
+                ),
+            )
         except Exception:
             return _LlmParse("illegal", "")
         return _parse_llm_job_payload(raw, allowed)

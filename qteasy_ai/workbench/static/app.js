@@ -1251,6 +1251,40 @@ async function cancelPlan() {
   renderChat();
 }
 
+function identityActions(msg) {
+  const spec = msg && msg.payload && msg.payload.identity_write;
+  if (!spec || !spec.pending) return "";
+  const lock = busy ? "disabled" : "";
+  return `<div class="actions"><button type="button" class="primary" id="btn-identity-confirm" ${lock}>Confirm</button><button type="button" class="ghost" id="btn-identity-dismiss" ${lock}>Cancel</button></div>`;
+}
+
+async function confirmIdentityWrite(confirm) {
+  if (busy || !sessionId) return;
+  setBusy(true);
+  try {
+    const body = confirm
+      ? { session_id: sessionId, confirm: true }
+      : { session_id: sessionId, dismiss: true };
+    const dto = await api("/v1/kb/write", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!adoptServerResult(dto)) renderChat();
+    else renderPanes();
+  } catch (exc) {
+    transcript.push({
+      kind: "error",
+      text: "Network error. The name was not saved.",
+      payload: { next_action: PENCIL_RESEND },
+    });
+    persistTranscript();
+    renderChat();
+  } finally {
+    setBusy(false);
+  }
+}
+
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof HTMLElement)) return;
@@ -1260,6 +1294,14 @@ function onChatClick(ev) {
     if (openProcessTurns.has(key)) openProcessTurns.delete(key);
     else openProcessTurns.add(key);
     renderChat();
+    return;
+  }
+  if (t.id === "btn-identity-confirm") {
+    confirmIdentityWrite(true);
+    return;
+  }
+  if (t.id === "btn-identity-dismiss") {
+    confirmIdentityWrite(false);
     return;
   }
   if (t.id === "btn-confirm") confirmPlan();
@@ -2259,7 +2301,7 @@ function renderVisibleMessage(msg, index) {
   }
   const src = (msg.payload && msg.payload.sources) || state.sources || [];
   const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
-  return `<div class="msg"><div class="msg-role">Assistant</div><div class="bubble">${escapeHtml(msg.text || "")}${extra}</div></div>`;
+  return `<div class="msg"><div class="msg-role">Assistant</div><div class="bubble">${escapeHtml(msg.text || "")}${extra}${identityActions(msg)}</div></div>`;
 }
 
 function renderTurn(range, isLatest) {

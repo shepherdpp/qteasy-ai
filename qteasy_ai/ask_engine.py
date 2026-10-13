@@ -21,6 +21,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .identity import prefix_system_prompt
 from .knowledge_base import KbEntry, KnowledgeBase
 from .provider import BaseLLMProvider
 
@@ -257,6 +258,7 @@ class AskEngine:
     ) -> None:
         self.knowledge_base = knowledge_base or KnowledgeBase()
         self.provider = provider
+        self.identity_dir = None
 
     def ask(
         self,
@@ -665,7 +667,15 @@ class AskEngine:
             "grounded in the snippets. "
             "Do not expand a card that is only mentioned as an invitation."
         )
-        return str(self.provider.chat(prompt, system_prompt=_ASK_SYSTEM_PROMPT)).strip()
+        return str(
+            self.provider.chat(
+                prompt,
+                system_prompt=prefix_system_prompt(
+                    _ASK_SYSTEM_PROMPT,
+                    getattr(self, "identity_dir", None),
+                ),
+            )
+        ).strip()
 
     def _compose_block(
             self,
