@@ -9,7 +9,9 @@
 - type: concept
 - topics: capability
 - manual_anchor: 
-- relations: []
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> capability_map
 - questions:
   - run mode
   - 问答
@@ -19,7 +21,9 @@
 - type: concept
 - topics: backtest
 - manual_anchor: docs/source/back_testing/1. overview.md
-- relations: []
+- relations:
+  - contrasts_with -> optimize_intro
+  - plan_handoff -> side_effects_safety
 - questions:
   - 如何用 qteasy 回测
   - 怎么回测
@@ -28,12 +32,24 @@
   - backtest intro
   - run backtest
 
+## capability_map
+
+- type: concept
+- topics: capability
+- manual_anchor: 
+- relations:
+  - see_also -> ask_plan_agent
+- questions:
+  - 你能帮我做什么？
+  - what can you help me do
+
 ## common_errors_date_window
 
 - type: trap
 - topics: data-analysis
 - manual_anchor: docs/source/tutorials/2.0-get-data.md
-- relations: []
+- relations:
+  - see_also -> data_three_entries
 - questions:
   - date window
   - at least one of start
@@ -44,7 +60,8 @@
 - type: trap
 - topics: backtest
 - manual_anchor: docs/source/back_testing/1. overview.md
-- relations: []
+- relations:
+  - see_also -> backtest_intro
 - questions:
   - missing bar
   - trade price
@@ -55,7 +72,8 @@
 - type: trap
 - topics: strategy
 - manual_anchor: docs/source/manage_strategies/2. operator.md
-- relations: []
+- relations:
+  - see_also -> operator_run_freq
 - questions:
   - built-in parameter key
   - not a built-in parameter
@@ -65,7 +83,8 @@
 - type: concept
 - topics: data-analysis
 - manual_anchor: docs/source/manage_data/01. overview.md
-- relations: []
+- relations:
+  - see_also -> refill_bounded
 - questions:
   - 三入口
   - 历史数据
@@ -77,30 +96,88 @@
 - type: concept
 - topics: data-downloading
 - manual_anchor: docs/source/manage_data/03. datasource.md
-- relations: []
+- relations:
+  - see_also -> refill_bounded
+  - next_topic -> refill_bounded
 - questions:
   - local data table
   - check table
   - 缺表
 
+## faq_datasource
+
+- type: concept
+- topics: onboarding
+- manual_anchor: docs/source/faq.md
+- relations:
+  - see_also -> install_and_env
+- questions:
+  - 数据库连不上怎么办
+  - tushare rate limit
+
+## get_help
+
+- type: concept
+- topics: onboarding
+- manual_anchor: docs/source/help.md
+- relations:
+  - see_also -> getting_started
+- questions:
+  - 如何报告 bug
+  - how to report a bug
+
 ## getting_started
 
 - type: concept
 - topics: onboarding
-- manual_anchor: docs/source/tutorials/1-get-started.md
-- relations: []
+- manual_anchor: docs/source/getting_started.md
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> notebook_cli
+  - see_also -> install_and_env
+  - see_also -> get_help
+  - next_topic -> data_three_entries
 - questions:
   - getting started
   - how to start
   - 快速开始
   - first steps
+  - 一分钟跑通
+  - 端到端路线图
+
+## install_and_env
+
+- type: concept
+- topics: onboarding
+- manual_anchor: docs/source/tutorials/1-get-started.md
+- relations:
+  - see_also -> getting_started
+  - see_also -> faq_datasource
+- questions:
+  - 如何安装 TA-Lib
+  - how to install qteasy
+  - python version for qteasy
+
+## library_map
+
+- type: concept
+- topics: overview
+- manual_anchor: docs/source/index.rst
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> qteasy_advantages
+- questions:
+  - qteasy 有哪些模块
+  - what modules does qteasy have
 
 ## live_plan_only
 
 - type: boundary
 - topics: live_boundary
 - manual_anchor: docs/source/tutorials/8-live-trade-risk-and-broker-walkthrough.md
-- relations: []
+- relations:
+  - see_also -> side_effects_safety
+  - plan_handoff -> side_effects_safety
 - questions:
   - live trade
   - live plan
@@ -111,7 +188,8 @@
 - type: concept
 - topics: onboarding
 - manual_anchor: 
-- relations: []
+- relations:
+  - see_also -> getting_started
 - questions:
   - qteasy-ai cli
   - notebook magic
@@ -122,7 +200,8 @@
 - type: concept
 - topics: capability
 - manual_anchor: 
-- relations: []
+- relations:
+  - see_also -> what_is_qteasy
 - questions:
   - user kb
   - official kb
@@ -134,7 +213,8 @@
 - type: concept
 - topics: strategy
 - manual_anchor: docs/source/manage_strategies/2. operator.md
-- relations: []
+- relations:
+  - see_also -> common_errors_run_freq
 - questions:
   - run timing
   - 运行频率
@@ -144,7 +224,9 @@
 - type: concept
 - topics: optimize
 - manual_anchor: docs/source/optimization/1. overview.md
-- relations: []
+- relations:
+  - contrasts_with -> backtest_intro
+  - plan_handoff -> side_effects_safety
 - questions:
   - 优化入门
   - how to optimize
@@ -157,18 +239,34 @@
 - type: concept
 - topics: strategy
 - manual_anchor: docs/source/manage_strategies/5. strategy_bases.md
-- relations: []
+- relations:
+  - see_also -> strategy_builder_intro
 - questions:
   - signal type
   - position target
   - value signal
+
+## qteasy_advantages
+
+- type: concept
+- topics: overview
+- manual_anchor: docs/source/index.rst
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> library_map
+- questions:
+  - 为什么用 qteasy 而不是自己写回测
+  - why use qteasy instead of writing your own backtest
 
 ## refill_bounded
 
 - type: concept
 - topics: data-downloading
 - manual_anchor: docs/source/tutorials/2.0-get-data.md
-- relations: []
+- relations:
+  - see_also -> data_three_entries
+  - see_also -> env_ready
+  - plan_handoff -> side_effects_safety
 - questions:
   - download daily
   - 下载日线
@@ -179,7 +277,8 @@
 - type: boundary
 - topics: capability, live_boundary
 - manual_anchor: 
-- relations: []
+- relations:
+  - see_also -> live_plan_only
 - questions:
   - side effect
   - auto execute
@@ -189,7 +288,9 @@
 - type: concept
 - topics: strategy
 - manual_anchor: docs/source/manage_strategies/6. custom_strategy.md
-- relations: []
+- relations:
+  - see_also -> pt_ps_vs
+  - plan_handoff -> ask_plan_agent
 - questions:
   - generate a strategy
   - 写策略
@@ -199,9 +300,15 @@
 ## what_is_qteasy
 
 - type: concept
-- topics: capability
-- manual_anchor: docs/source/tutorials/1-get-started.md
-- relations: []
+- topics: overview
+- manual_anchor: docs/source/index.rst
+- relations:
+  - see_also -> ask_plan_agent
+  - see_also -> getting_started
+  - see_also -> official_vs_user_kb
+  - see_also -> library_map
+  - see_also -> qteasy_advantages
+  - next_topic -> getting_started
 - questions:
   - what is qteasy
   - 什么是 qteasy

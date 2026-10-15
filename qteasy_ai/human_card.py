@@ -16,6 +16,7 @@ import re
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .identity import prefix_system_prompt
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
 HUMAN_CARD_KINDS = frozenset(
@@ -318,7 +319,17 @@ def project_human_cards(
     if _is_ask_payload(raw):
         sources = [str(item) for item in (raw.get("sources") or []) if str(item)]
         answer = str(raw.get("answer") or raw.get("narrative") or "").strip() or "No answer."
-        cards.append(make_card("ask", answer, {"sources": sources}))
+        card_payload: Dict[str, Any] = {"sources": sources}
+        if raw.get("ok") is True:
+            nested = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
+            focus = nested.get("ask_focus") if isinstance(nested.get("ask_focus"), dict) else None
+            if focus is not None and focus.get("topic"):
+                card_payload["ask_focus"] = {
+                    "topic": focus.get("topic"),
+                    "menu_item": focus.get("menu_item"),
+                    "sources": list(sources),
+                }
+        cards.append(make_card("ask", answer, card_payload))
         err = _enrich_error(raw.get("error") if isinstance(raw.get("error"), dict) else None)
         if err:
             cards.append(make_card("error", _error_card_text(err), dict(err)))
@@ -479,6 +490,7 @@ def polish_human_cards(
     *,
     provider: Any = None,
     query: str = "",
+    identity_dir: Any = None,
 ) -> List[Dict[str, Any]]:
     """在确定性英文卡之上按语气改写。未配置模型或问句不含中文时原样返回。
 
@@ -494,6 +506,8 @@ def polish_human_cards(
         实现 ``chat(prompt, system_prompt=...)`` 的 LLM Provider。
     query : str, optional
         本轮用户句。含中文且 Provider 可用时才润色。
+    identity_dir : Path, optional
+        用户库目录。传入时人读卡改写提示前接身份前缀。
 
     Returns
     -------
@@ -521,6 +535,7 @@ def polish_human_cards(
             text,
             kind=kind,
             next_mode=str(payload.get("next_mode") or ""),
+            identity_dir=identity_dir,
         )
         if rewritten and _card_rewrite_ok(text, rewritten, kind=kind):
             cloned = dict(item)
@@ -532,7 +547,14 @@ def polish_human_cards(
     return out
 
 
-def _rewrite_card_text(provider: Any, text: str, *, kind: str, next_mode: str = "") -> str:
+def _rewrite_card_text(
+    provider: Any,
+    text: str,
+    *,
+    kind: str,
+    next_mode: str = "",
+    identity_dir: Any = None,
+) -> str:
     """调用 Provider 改写一张卡。失败返回空串。"""
 
     if kind == "result" and next_mode == "open":
@@ -542,7 +564,10 @@ def _rewrite_card_text(provider: Any, text: str, *, kind: str, next_mode: str = 
     else:
         prompt = _CARD_SYSTEM_PROMPT
     try:
-        raw = provider.chat(text, system_prompt=prompt)
+        raw = provider.chat(
+            text,
+            system_prompt=prefix_system_prompt(prompt, identity_dir),
+        )
     except Exception:
         return ""
     body = str(raw or "").strip()

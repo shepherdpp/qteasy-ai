@@ -20,5 +20,7 @@
   "type": "concept",
   "manual_anchor": "docs/source/manage_strategies/5. strategy_bases.md",
   "topics": ["strategy"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "strategy_builder_intro"}
+  ]
 }

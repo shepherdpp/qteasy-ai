@@ -15,5 +15,7 @@
   "type": "trap",
   "manual_anchor": "docs/source/manage_strategies/2. operator.md",
   "topics": ["strategy"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "operator_run_freq"}
+  ]
 }

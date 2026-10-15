@@ -64,6 +64,11 @@ def _write_probe(directory: str, payload: dict) -> None:
     source.mkdir(parents=True, exist_ok=True)
     registry = {"topics": [{"id": "capability", "scope": "probe scope"}]}
     (source / "topic_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+    official = _KB_DIR / "_source" / "relation_registry.json"
+    (source / "relation_registry.json").write_text(
+        official.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
 
 class TestAiKbTier1(unittest.TestCase):

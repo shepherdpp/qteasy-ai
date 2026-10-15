@@ -16,5 +16,8 @@
   "type": "concept",
   "manual_anchor": "docs/source/optimization/1. overview.md",
   "topics": ["optimize"],
-  "relations": []
+  "relations": [
+    {"rel": "contrasts_with", "to": "backtest_intro"},
+    {"rel": "plan_handoff", "to": "side_effects_safety"}
+  ]
 }

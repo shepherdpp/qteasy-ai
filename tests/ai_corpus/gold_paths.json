@@ -1,0 +1,77 @@
+{
+  "paths": [
+    {
+      "id": "BJ-LEARN-01",
+      "enabled": true,
+      "session_id": "bj-learn-01",
+      "steps": [
+        {
+          "id": "L1",
+          "channel": "ask",
+          "query": "如何用 qteasy 回测",
+          "kind": "new",
+          "topics": ["backtest"],
+          "ids": ["backtest_intro"],
+          "answer": "L1-ANSWER-MARKER 内置回测需要 strategy_id，例如 macd。",
+          "expect_sources": ["backtest_intro"]
+        },
+        {
+          "id": "L2",
+          "channel": "ask",
+          "query": "你说的这一点我不太明白，可否进一步解释？",
+          "kind": "prior",
+          "prior": [{"turn": 1, "sources": ["backtest_intro"]}],
+          "ids": ["backtest_intro"],
+          "answer": "L2-ANSWER-MARKER 确认后才运行回测。",
+          "expect_sources": ["backtest_intro"],
+          "menu_ids": ["backtest_intro", "common_errors_nan"],
+          "excerpt_from": "L1"
+        },
+        {
+          "id": "L2b",
+          "channel": "ask",
+          "query": "刚才回测那段能再说清楚一点吗？",
+          "kind": "prior",
+          "prior": [{"turn": 1, "sources": ["backtest_intro"]}],
+          "ids": ["backtest_intro"],
+          "answer": "L2B-ANSWER-MARKER 仍是同一张回测卡。",
+          "expect_sources": ["backtest_intro"],
+          "menu_ids": ["backtest_intro", "common_errors_nan"],
+          "excerpt_from": "L1"
+        },
+        {
+          "id": "L3",
+          "channel": "ask",
+          "query": "回测和优化有什么差别？",
+          "kind": "new",
+          "topics": ["backtest", "optimize"],
+          "ids": ["backtest_intro", "optimize_intro"],
+          "answer": "L3-ANSWER-MARKER 回测跑一次，优化搜索参数。",
+          "expect_sources": ["backtest_intro", "optimize_intro"]
+        },
+        {
+          "id": "L4",
+          "channel": "plan",
+          "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+          "expect_job": "backtest.builtin",
+          "expect_skills": [
+            "qt.ai.backtest.run_builtin",
+            "qt.ai.insight.summarize_backtest"
+          ],
+          "expect_strategy_id": "macd",
+          "expect_asset_pool": "000300.SH"
+        }
+      ]
+    },
+    {
+      "id": "BJ-LEARN-02",
+      "enabled": false,
+      "note": "另一张已有宽卡的自足问句，再解释。G1 不跑。"
+    },
+    {
+      "id": "BJ-LEARN-03",
+      "enabled": false,
+      "note": "实盘边界解释后，走已有 live 金句的 Plan，只出清单。G1 不跑。"
+    }
+  ]
+}

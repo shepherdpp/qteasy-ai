@@ -16,5 +16,7 @@
   "type": "concept",
   "manual_anchor": "",
   "topics": ["onboarding"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "getting_started"}
+  ]
 }

@@ -646,11 +646,13 @@ class WorkbenchHttp:
         session_id = str(body.get("session_id") or "").strip()
         if not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide session_id.", 400)
-        if not bool(body.get("confirm")):
+        confirm = bool(body.get("confirm"))
+        dismiss = bool(body.get("dismiss"))
+        if not confirm and not dismiss:
             return _error("CONFIRM_REQUIRED", "KB write requires confirm=true.", 400)
         try:
             payload = self.assistant.confirm_kb_write(
-                session_id, confirm=True, response_style="raw"
+                session_id, confirm=confirm, response_style="raw"
             )
         except ValueError as exc:
             return _error("KB_WRITE_NOT_PENDING", str(exc), 400)

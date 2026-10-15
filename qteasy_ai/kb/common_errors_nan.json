@@ -18,5 +18,7 @@
   "type": "trap",
   "manual_anchor": "docs/source/back_testing/1. overview.md",
   "topics": ["backtest"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "backtest_intro"}
+  ]
 }

@@ -17,5 +17,7 @@
   "type": "trap",
   "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
   "topics": ["data-analysis"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "data_three_entries"}
+  ]
 }

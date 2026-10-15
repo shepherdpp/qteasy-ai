@@ -6,6 +6,10 @@
       "map_item": 1
     },
     {
+      "id": "overview",
+      "scope": "qteasy 是什么、模块如何串联、相对自己写代码的优势"
+    },
+    {
       "id": "onboarding",
       "scope": "安装、快速开始、help / FAQ"
     },

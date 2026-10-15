@@ -10,12 +10,19 @@
     "qteasy"
   ],
   "title": "What is qteasy",
-  "summary": "qteasy is a practical quantitative-research toolkit; qteasy-ai is the orchestration shell around it.",
-  "narrative": "qteasy is a Python toolkit for quantitative research: local market data, built-in strategies, backtest, and optimization. It is meant to be usable in real workflows, not a toy demo.\n\nqteasy-ai is the optional AI shell. Ask answers from the official knowledge base and never calls skills. Plan builds a reviewable ToolPlan. Run executes after confirmation.\n\nStart with Ask for concepts (this page), then Plan a bounded task such as listing strategies or a dated data download.",
-  "python_code": "import qteasy as qt\nprint(qt.__version__)\nfrom qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('what is qteasy', response_style='raw')['sources'])",
-  "risk_notes": "Ask never downloads data or runs a backtest. Use Plan, then confirm, before high-side-effect work.",
+  "summary": "qteasy is a local quantitative-research toolkit: data, strategies, backtest, optimization, and simulated live trading share one pipeline.",
+  "narrative": "qteasy is a Python toolkit for quantitative research and trading-strategy development. It covers the path from market data to strategies, backtest, parameter optimization, and simulated live trading.\n\nFour properties define it. The pipeline is local: data, research, and runs stay on your machine. The same strategy logic is used for backtest and simulated live, and the engine injects only the data visible at that step. Strategies can be combined, and many built-in strategies are ready to run.\n\nqteasy includes an AI agent. Ask explains concepts. Plan shows a reviewable list of steps. High-side-effect work waits until you confirm. An MCP connection under the display name qteasy is planned and is not released; this card does not give connection steps.\n\nHow the parts fit together, and why this is easier than a hand-written backtest, are separate questions.",
+  "python_code": "import qteasy as qt\nprint(qt.__version__)",
+  "risk_notes": "Ask never downloads data or runs a backtest. Use Plan, then confirm, before high-side-effect work. This is not investment advice.",
   "type": "concept",
-  "manual_anchor": "docs/source/tutorials/1-get-started.md",
-  "topics": ["capability"],
-  "relations": []
+  "manual_anchor": "docs/source/index.rst",
+  "topics": ["overview"],
+  "relations": [
+    {"rel": "see_also", "to": "ask_plan_agent"},
+    {"rel": "see_also", "to": "getting_started"},
+    {"rel": "see_also", "to": "official_vs_user_kb"},
+    {"rel": "see_also", "to": "library_map"},
+    {"rel": "see_also", "to": "qteasy_advantages"},
+    {"rel": "next_topic", "to": "getting_started"}
+  ]
 }

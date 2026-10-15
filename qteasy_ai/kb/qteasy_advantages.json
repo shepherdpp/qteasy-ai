@@ -1,0 +1,26 @@
+{
+  "id": "qteasy_advantages",
+  "tags": ["overview", "advantages", "lookahead"],
+  "keywords": [
+    "为什么用 qteasy 而不是自己写回测",
+    "why use qteasy instead of writing your own backtest",
+    "advantages",
+    "优势",
+    "pandas backtest",
+    "lookahead",
+    "未来函数",
+    "local data"
+  ],
+  "title": "Why use qteasy instead of a hand-written backtest",
+  "summary": "Local reproducible data, engine-enforced lookahead isolation, one strategy logic for backtest and simulated live, and built-in strategies ready to run.",
+  "narrative": "Compared with writing a pandas backtest yourself, or keeping one codebase for research and another for live trading, qteasy takes on the plumbing.\n\nLocal data. Downloads are stored on your machine. Later research reads that store, so a result can be repeated without depending on a cloud session staying up. More than one data channel can fill the store; which channel to use is a separate question.\n\nLookahead. A hand-written script often computes indicators on the full price series and silently uses later bars. qteasy's engine passes the strategy only the window visible at the current step. You do not have to remember to avoid shift leaks. Whether the current bar is included is a backtest setting explained elsewhere, not here.\n\nOne logic for backtest and simulated live. The strategy you define is what both modes run. You do not rewrite the signals when you move from a historical test to a simulated live loop.\n\nEasy to start. More than 70 built-in strategies can be run without writing a signal function first. Several strategies can be combined. Custom strategy classes exist when you need them; this card does not teach the class hierarchy.\n\nBuilt-in agent. Ask answers conceptual questions and does not call tools. Plan turns a request into steps you can read. Execution waits until you confirm. Live trading is never automatic. An MCP connection under the display name qteasy is on the roadmap and is not a released way to connect yet.\n\nThis is not investment advice. Simulated live does not place real orders by itself.",
+  "python_code": "import qteasy as qt\nprint(qt.__version__)",
+  "risk_notes": "This card does not promise a profit, place orders, or connect an external assistant.",
+  "type": "concept",
+  "manual_anchor": "docs/source/index.rst",
+  "topics": ["overview"],
+  "relations": [
+    {"rel": "see_also", "to": "what_is_qteasy"},
+    {"rel": "see_also", "to": "library_map"}
+  ]
+}

@@ -7,6 +7,7 @@
 # Desc:
 # qteasy-ai 策展 KnowledgeBase：无模型路径先问句目录，
 # 未命中再按 type 桶关键词/tag 检索。主题注册表供有模型选题。
+# 边注册表只约束 rel，不参与主检索。
 # ======================================
 
 """qteasy 专用结构化知识库（Ask 目标态主消费方）。
@@ -45,12 +46,8 @@ _TYPE_TIE_RANK = {
 }
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _KB_ENTRY_TYPES = frozenset({"concept", "trap", "boundary", "pointer"})
-_KB_RELATION_RELS = frozenset({
-    "see_also",
-    "next_topic",
-    "contrasts_with",
-    "plan_handoff",
-})
+# 合编方式是代码里的封闭集合。注册表只能引用这些键，不能写自由字符串。
+_COMPOSE_METHODS = frozenset({"appendix", "next_card", "contrast", "plan_switch"})
 # 目录命中是定条，分数只用于和关键词命中区分，不参与桶内打分。
 _CATALOG_HIT_SCORE = 100.0
 _EXCLUSIVE_ENTRY_TYPES = ("trap", "boundary")
@@ -114,6 +111,58 @@ def load_topic_registry(path: Path) -> List[TopicSpec]:
     return specs
 
 
+@dataclass(frozen=True)
+class RelationSpec:
+    """边注册表的一行：rel id 与已实现的合编方式。"""
+
+    id: str
+    compose: str
+
+
+def load_relation_registry(path: Path) -> List[RelationSpec]:
+    """读取边注册表。
+
+    Parameters
+    ----------
+    path : Path
+        ``relation_registry.json``。
+
+    Returns
+    -------
+    list of RelationSpec
+        文件中的顺序。
+
+    Raises
+    ------
+    ValueError
+        文件缺失、不是非空列表、id 重复，或 ``compose`` 不在已实现的合编方式里。
+    """
+
+    if not path.is_file():
+        raise ValueError(f"KB relation registry is missing: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload.get("relations") if isinstance(payload, dict) else None
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("KB relation registry must contain a non-empty relations list")
+    specs: List[RelationSpec] = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("KB relation registry row must be an object")
+        rel_id = item.get("id")
+        compose = item.get("compose")
+        if not isinstance(rel_id, str) or not rel_id.strip():
+            raise ValueError("KB relation registry row is missing id")
+        rel_id = rel_id.strip()
+        if rel_id in seen:
+            raise ValueError(f"KB relation registry duplicates id {rel_id!r}")
+        if not isinstance(compose, str) or compose not in _COMPOSE_METHODS:
+            raise ValueError(f"KB relation {rel_id!r} has unknown compose {compose!r}")
+        seen.add(rel_id)
+        specs.append(RelationSpec(id=rel_id, compose=compose))
+    return specs
+
+
 def _parse_topics(
         entry_id: str,
         payload: Mapping[str, Any],
@@ -171,8 +220,12 @@ def _parse_manual_anchor(entry_id: str, payload: Dict[str, Any]) -> str:
     return anchor
 
 
-def _parse_relations(entry_id: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
-    """读取 relations。缺省为空列表；rel 必须落在冻结枚举内。"""
+def _parse_relations(
+        entry_id: str,
+        payload: Mapping[str, Any],
+        registered_rels: AbstractSet[str],
+) -> List[Dict[str, str]]:
+    """读取 relations。缺省为空列表；rel 必须已在边注册表登记。"""
 
     raw = payload.get("relations", [])
     if raw is None:
@@ -185,11 +238,11 @@ def _parse_relations(entry_id: str, payload: Dict[str, Any]) -> List[Dict[str, s
             raise ValueError(f"KB entry {entry_id!r} relation must be an object")
         rel = item.get("rel")
         target = item.get("to")
-        if not isinstance(rel, str) or rel not in _KB_RELATION_RELS:
-            raise ValueError(f"KB entry {entry_id!r} has invalid relation rel {rel!r}")
+        if not isinstance(rel, str) or rel not in registered_rels:
+            raise ValueError(f"KB entry {entry_id!r} has unregistered relation rel {rel!r}")
         if not isinstance(target, str) or not target.strip():
             raise ValueError(f"KB entry {entry_id!r} relation is missing a non-empty 'to'")
-        parsed.append({"rel": rel, "to": target})
+        parsed.append({"rel": rel, "to": target.strip()})
     return parsed
 
 
@@ -244,6 +297,7 @@ class KnowledgeBase:
 
     无模型检索先查 compile 问句目录，命中则定条；未命中再在胜出的 type 桶内检索。
     主题注册表与 ``topics`` 供有 Provider 时定主题、点卡，不改变这条无模型路径。
+    边注册表只校验 ``rel``，检索不沿边扩展。
 
     Parameters
     ----------
@@ -269,6 +323,10 @@ class KnowledgeBase:
             self.kb_dir / "_source" / "topic_registry.json"
         )
         self._registered_topics = {spec.id for spec in self._topic_specs}
+        relation_specs = load_relation_registry(
+            self.kb_dir / "_source" / "relation_registry.json"
+        )
+        self._relation_compose = {spec.id: spec.compose for spec in relation_specs}
         self._entries: List[KbEntry] = self._load_entries()
         self._by_id: Dict[str, KbEntry] = {entry.id: entry for entry in self._entries}
         self._question_catalog: Dict[str, str] = self._load_question_catalog()
@@ -297,7 +355,7 @@ class KnowledgeBase:
                     type=_require_entry_type(entry_id, payload),
                     topics=_parse_topics(entry_id, payload, self._registered_topics),
                     manual_anchor=_parse_manual_anchor(entry_id, payload),
-                    relations=_parse_relations(entry_id, payload),
+                    relations=_parse_relations(entry_id, payload, self._relation_compose),
                 )
             )
         return entries
@@ -394,6 +452,136 @@ class KnowledgeBase:
             elif any(target in selected for target in targets):
                 neighbors.add(entry.id)
         return neighbors
+
+    def incident_edges(self, card_id: str) -> List[Dict[str, str]]:
+        """一张卡的出边和入边。不含对方正文。
+
+        Parameters
+        ----------
+        card_id : str
+            菜单卡 id。
+
+        Returns
+        -------
+        list of dict
+            每条含 ``direction``（``out`` / ``in``）、``rel``、``other_id``、``title``、``summary``。
+        """
+
+        found: List[Dict[str, str]] = []
+        entry = self._by_id.get(card_id)
+        if entry is None:
+            return found
+        for item in entry.relations:
+            other = self._by_id.get(item["to"])
+            if other is None:
+                continue
+            found.append({
+                "direction": "out",
+                "rel": item["rel"],
+                "other_id": other.id,
+                "title": other.title,
+                "summary": other.summary,
+            })
+        for other in self._entries:
+            if other.id == card_id:
+                continue
+            for item in other.relations:
+                if item["to"] != card_id:
+                    continue
+                found.append({
+                    "direction": "in",
+                    "rel": item["rel"],
+                    "other_id": other.id,
+                    "title": other.title,
+                    "summary": other.summary,
+                })
+        return found
+
+    def external_invitations(
+            self,
+            primary_ids: Sequence[str],
+            menu_ids: Sequence[str],
+            *,
+            limit: int = 3,
+    ) -> List[Dict[str, str]]:
+        """主答卡指向菜单外的关联，最多 ``limit`` 条。
+
+        同一对方只留一条。菜单里的卡不邀请。截断顺序是 ``contrasts_with``、
+        ``see_also``、``next_topic``、``plan_handoff``。不沿边再爬。
+
+        Parameters
+        ----------
+        primary_ids : sequence of str
+            落在本次主题菜单里的主答卡。
+        menu_ids : sequence of str
+            本次主题菜单。菜单内的对方不进邀请。
+        limit : int, default 3
+            邀请条数上限。
+
+        Returns
+        -------
+        list of dict
+            每条含 ``rel``、``other_id``、``title``、``summary``。
+        """
+
+        primary: List[str] = []
+        for card_id in primary_ids:
+            if card_id not in primary and card_id in self._by_id:
+                primary.append(card_id)
+        menu_set = set(menu_ids)
+        chosen: List[Dict[str, str]] = []
+        seen = set()
+        for rel in ("contrasts_with", "see_also", "next_topic", "plan_handoff"):
+            for card_id in primary:
+                for edge in self.incident_edges(card_id):
+                    other_id = edge["other_id"]
+                    if edge["rel"] != rel or other_id in menu_set or other_id in seen:
+                        continue
+                    seen.add(other_id)
+                    chosen.append({
+                        "rel": rel,
+                        "other_id": other_id,
+                        "title": edge["title"],
+                        "summary": edge["summary"],
+                    })
+                    if len(chosen) >= limit:
+                        return chosen
+        return chosen
+
+    def edges_among(self, selected_ids: Sequence[str]) -> List[Dict[str, str]]:
+        """选中集内部的直接边。不把边外的卡算进来，也不沿边再爬。
+
+        Parameters
+        ----------
+        selected_ids : sequence of str
+            已经通过校验的卡片 id。
+
+        Returns
+        -------
+        list of dict
+            每条含 ``rel``、``compose``、``fr``、``to``。两端都必须在 ``selected_ids`` 里。
+        """
+
+        selected: List[str] = []
+        for card_id in selected_ids:
+            if card_id not in selected:
+                selected.append(card_id)
+        selected_set = set(selected)
+        found: List[Dict[str, str]] = []
+        for card_id in selected:
+            entry = self._by_id.get(card_id)
+            if entry is None:
+                continue
+            for item in entry.relations:
+                target = item["to"]
+                if target in selected_set and target != card_id:
+                    found.append({
+                        "rel": item["rel"],
+                        "compose": self._relation_compose[item["rel"]],
+                        "fr": card_id,
+                        "to": target,
+                    })
+        return found
 
     @staticmethod
     def prefer_exclusive(hits: Sequence[KbEntry]) -> List[KbEntry]:

@@ -1,0 +1,23 @@
+{
+  "id": "get_help",
+  "tags": ["help", "bug", "issue"],
+  "keywords": [
+    "如何报告 bug",
+    "how to report a bug",
+    "bug",
+    "issue",
+    "报告",
+    "discussions"
+  ],
+  "title": "How to report a bug or ask for help",
+  "summary": "Use the GitHub bug-report template, check the roadmap before a feature request, and use Discussions for usage questions.",
+  "narrative": "To report a bug, open a GitHub issue on shepherdpp/qteasy with the bug-report template. Include what you did, what you expected, and your environment.\n\nFor a feature request, use the feature-request template after checking the published roadmap, so you do not ask for work already planned.\n\nUsage questions can go to GitHub Discussions. The manual help page also lists contact email addresses.\n\nThis card does not explain how to submit code changes.",
+  "python_code": "",
+  "risk_notes": "Do not put tokens, passwords, or account data in an issue.",
+  "type": "concept",
+  "manual_anchor": "docs/source/help.md",
+  "topics": ["onboarding"],
+  "relations": [
+    {"rel": "see_also", "to": "getting_started"}
+  ]
+}

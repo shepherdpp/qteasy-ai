@@ -19,5 +19,7 @@
   "type": "boundary",
   "manual_anchor": "",
   "topics": ["capability", "live_boundary"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "live_plan_only"}
+  ]
 }

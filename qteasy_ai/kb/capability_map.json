@@ -1,0 +1,21 @@
+{
+  "id": "capability_map",
+  "tags": ["capability", "agent", "ask", "plan"],
+  "keywords": [
+    "你能帮我做什么",
+    "what can you help me do",
+    "capability",
+    "能力"
+  ],
+  "title": "What the built-in agent can help with",
+  "summary": "Five kinds of help: explain concepts, explain data work, explain backtests, explain optimization, and explain the simulated-live boundary.",
+  "narrative": "qteasy's built-in agent can help with five kinds of work. The numbers below are for reading. A later message does not select an item by number; ask a full question of your own.\n\n1. Concept Q&A (Ask): what qteasy is, how parts differ, and where the boundaries are.\n2. Getting and understanding data: Ask explains. Plan downloads or reads tables when you give bounds such as dates.\n3. Backtesting a strategy: Ask explains. Plan can draft a backtest for you to confirm.\n4. Parameter optimization: Ask explains. Plan can draft an optimization for you to confirm.\n5. Simulated live: Ask explains the boundary. Plan can list steps. Nothing is sent automatically.\n\nInstalling, the first-hour path, and the details of strategy signals are separate questions. They are not items on this list.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('你能帮我做什么？', response_style='raw')['sources'])",
+  "risk_notes": "Ask does not download, backtest, optimize, or trade. Plan shows steps and waits for confirmation.",
+  "type": "concept",
+  "manual_anchor": "",
+  "topics": ["capability"],
+  "relations": [
+    {"rel": "see_also", "to": "ask_plan_agent"}
+  ]
+}

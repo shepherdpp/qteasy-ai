@@ -1,0 +1,23 @@
+{
+  "id": "faq_datasource",
+  "tags": ["faq", "datasource", "tushare"],
+  "keywords": [
+    "数据库连不上怎么办",
+    "tushare rate limit",
+    "local_db",
+    "sqlalchemy",
+    "连接失败",
+    "频率"
+  ],
+  "title": "Data-source FAQ: connection, SQLAlchemy warning, rate limits",
+  "summary": "Check local_db_* keys, treat the SQLAlchemy warning as non-fatal, and slow Tushare downloads with retry or batch pauses.",
+  "narrative": "If database settings in qteasy.cfg still fail to connect, check the key names: local_db_host, local_db_port, local_db_user, local_db_password, local_db_name, and local_data_source. Do not wrap values in extra quotes or angle brackets. Write the port as an integer, for example local_db_port = 3306.\n\nA pandas warning that mentions SQLAlchemy is not a failed read. You do not need to install SQLAlchemy to clear it. The read can still succeed.\n\nIf Tushare says the call rate is too high, qteasy retries with increasing waits. The settings are hist_dnld_retry_cnt, hist_dnld_retry_wait, and hist_dnld_backoff. Raise the retry count or the initial wait if bursts still fail. To pause between batches, hist_dnld_delay and hist_dnld_delay_evy space out groups of requests.\n\nThis card does not explain which table to download, how to look up a data type, or why a backtest is slow.",
+  "python_code": "import qteasy as qt\nqt.configure(hist_dnld_retry_cnt=10, hist_dnld_retry_wait=2.0)",
+  "risk_notes": "Changing download retries only spaces out requests. It does not raise your Tushare quota.",
+  "type": "concept",
+  "manual_anchor": "docs/source/faq.md",
+  "topics": ["onboarding"],
+  "relations": [
+    {"rel": "see_also", "to": "install_and_env"}
+  ]
+}

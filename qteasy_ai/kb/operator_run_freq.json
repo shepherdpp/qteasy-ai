@@ -19,5 +19,7 @@
   "type": "concept",
   "manual_anchor": "docs/source/manage_strategies/2. operator.md",
   "topics": ["strategy"],
-  "relations": []
+  "relations": [
+    {"rel": "see_also", "to": "common_errors_run_freq"}
+  ]
 }

@@ -30,11 +30,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .ask_engine import AskEngine, AskResponse
+from .ask_engine import AskEngine, AskResponse, build_ask_history_index
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .contracts import ToolPlan, new_plan_id
 from .executor import PlanExecutor
 from .human_card import infer_effective_kind, polish_human_cards, project_human_cards
+from .identity import (
+    parse_identity_utterance,
+    remove_identity_file,
+    write_identity_file,
+)
 from .knowledge_base import KnowledgeBase
 from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
@@ -257,6 +262,42 @@ class AssistantResponse:
     run_file: str
 
 
+def _identity_spec(row: Dict[str, Any]) -> Dict[str, Any]:
+    """取出消息上的身份写入草案。没有时为空字典。"""
+
+    payload = row.get("payload") if isinstance(row, dict) else None
+    if not isinstance(payload, dict):
+        return {}
+    spec = payload.get("identity_write")
+    if not isinstance(spec, dict):
+        return {}
+    return spec
+
+
+def _pending_identity_index(session: Optional[ConversationState]) -> int:
+    """最近一条仍待确认的身份卡下标。没有时为 -1。"""
+
+    if session is None:
+        return -1
+    for index in range(len(session.messages) - 1, -1, -1):
+        spec = _identity_spec(session.messages[index])
+        if spec.get("pending"):
+            return index
+    return -1
+
+
+def _mark_identity_pending(session: ConversationState, index: int, *, pending: bool) -> None:
+    """改身份卡的 pending 标记。文件是否写入由调用方决定。"""
+
+    row = dict(session.messages[index])
+    payload = dict(row.get("payload") or {})
+    spec = dict(payload.get("identity_write") or {})
+    spec["pending"] = bool(pending)
+    payload["identity_write"] = spec
+    row["payload"] = payload
+    session.messages[index] = row
+
+
 class QteasyAssistant:
     """Notebook/CLI 共用助手对象。
 
@@ -297,6 +338,10 @@ class QteasyAssistant:
         self.session_store = SessionStore(self.memory_store)
         self.session_gate = SessionGate(provider=provider)
         self._last_run_id = ""
+        identity_dir = self.memory_store.user_kb_dir
+        self.ask_engine.identity_dir = identity_dir
+        self.planner.identity_dir = identity_dir
+        self.planner.intent_engine.identity_dir = identity_dir
 
     def apply_provider(self, provider: Optional[BaseLLMProvider]) -> None:
         """热替换 Ask / Planner / SessionGate 的 LLM Provider。"""
@@ -340,6 +385,8 @@ class QteasyAssistant:
         """Ask 目标态：LLMClient + KnowledgeBase 问答，不执行 skill。
 
         不调用 PlanExecutor，不写入 ``runs/``。``persist`` / ``keep`` 被忽略。
+        有 ``session_id`` 时从 ``messages[]`` 现算成功 Ask 的一句话索引并传给引擎。
+        引擎不读 session。成功后仍把 ``ask_focus`` 写在 Ask 卡上供查看。不建 Task。
         若仍需审阅可执行步骤，请使用 ``preview()`` 或 ``plan()``。
 
         Parameters
@@ -362,6 +409,14 @@ class QteasyAssistant:
         """
 
         del persist, keep
+        identity = self._identity_response(
+            query,
+            session_id=session_id,
+            requested_mode=str(requested_mode or "ask"),
+            response_style=response_style,
+        )
+        if identity is not None:
+            return identity
         session_context = ""
         session = None
         sid = str(session_id or "").strip()
@@ -376,10 +431,15 @@ class QteasyAssistant:
             if not already:
                 session.append_user_text(query)
             self.session_store.save(session)
+        ask_history = (
+            build_ask_history_index(session.messages, self.ask_engine.knowledge_base)
+            if session is not None else None
+        )
         result: AskResponse = self.ask_engine.ask(
             query,
             explanation_depth=explanation_depth,
             session_context=session_context,
+            ask_history=ask_history,
         )
         payload = result.to_dict()
         if session is not None:
@@ -472,6 +532,14 @@ class QteasyAssistant:
                 include_user_text=False,
             )
         if not structured:
+            identity = self._identity_response(
+                query,
+                session_id=session_id,
+                requested_mode="plan",
+                response_style=response_style,
+            )
+            if identity is not None:
+                return identity
             hatched = self._maybe_hatch_mode_gap(
                 query,
                 session_id=session_id,
@@ -533,6 +601,14 @@ class QteasyAssistant:
         live 步永不 auto。
         """
 
+        identity = self._identity_response(
+            query,
+            session_id=session_id,
+            requested_mode="run",
+            response_style=response_style,
+        )
+        if identity is not None:
+            return identity
         hatched = self._maybe_hatch_mode_gap(
             query,
             session_id=session_id,
@@ -1317,12 +1393,142 @@ class QteasyAssistant:
         confirm: bool = True,
         response_style: str = "user_friendly",
     ) -> Dict[str, Any] | AssistantOutput:
-        """确认后写入 user_kb/raw 并 compile。不再绑 active_design。"""
+        """确认后写入用户身份文件。没有待确认的身份变更时保持原失败。
 
-        del session_id
+        Parameters
+        ----------
+        session_id : str
+            会话 id。
+        confirm : bool, default True
+            True 写入；False 且存在待确认身份卡时只取消。
+        response_style : {'user_friendly', 'raw'}, default 'user_friendly'
+            raw 返回字典。
+
+        Returns
+        -------
+        dict or AssistantOutput
+            确认或取消后的人读结果。
+
+        Raises
+        ------
+        ValueError
+            未确认，或没有待写入的身份变更。
+        """
+
+        sid = str(session_id or "").strip()
+        session = self.session_store.load(sid) if sid else None
+        index = _pending_identity_index(session)
         if not confirm:
-            raise ValueError("KB write requires explicit confirmation.")
-        raise ValueError("No pending user-KB write to confirm.")
+            if index < 0:
+                raise ValueError("KB write requires explicit confirmation.")
+            _mark_identity_pending(session, index, pending=False)
+            self.session_store.save(session)
+            return self._identity_notice_payload(
+                session,
+                text=str(session.messages[index].get("text") or ""),
+                response_style=response_style,
+            )
+        if index < 0:
+            raise ValueError("No pending user-KB write to confirm.")
+        spec = _identity_spec(session.messages[index])
+        if str(spec.get("action") or "") == "restore":
+            remove_identity_file(self.memory_store.user_kb_dir)
+        else:
+            write_identity_file(
+                self.memory_store.user_kb_dir,
+                name=str(spec.get("name") or ""),
+                voice=str(spec.get("voice") or ""),
+            )
+        self.memory_store.compile_user_kb()
+        _mark_identity_pending(session, index, pending=False)
+        self.session_store.save(session)
+        return self._identity_notice_payload(
+            session,
+            text=str(session.messages[index].get("text") or ""),
+            response_style=response_style,
+        )
+
+    def _identity_response(
+        self,
+        query: str,
+        *,
+        session_id: str | None,
+        requested_mode: str,
+        response_style: str,
+    ) -> Dict[str, Any] | AssistantOutput | None:
+        """身份变更先出确认卡，不写文件。不是身份句时返回 None。"""
+
+        utterance = parse_identity_utterance(query)
+        if utterance is None:
+            return None
+        if utterance.action == "refuse":
+            text = utterance.refusal
+            spec: Dict[str, Any] = {}
+        else:
+            text = utterance.confirm_text
+            spec = {
+                "identity_write": {
+                    "pending": True,
+                    "action": utterance.action,
+                    "name": utterance.name,
+                    "voice": utterance.voice,
+                }
+            }
+        sid = str(session_id or "").strip()
+        session = self.session_store.load(sid) if sid else None
+        card = {"kind": "mode_notice", "text": text, "payload": spec}
+        if session is not None:
+            last = session.messages[-1] if session.messages else {}
+            already = (
+                str(last.get("kind") or "") == "user_text"
+                and str(last.get("text") or "").strip() == str(query or "").strip()
+            )
+            if not already:
+                session.append_user_text(query)
+            session.append_messages([card])
+            self.session_store.save(session)
+        cards = [
+            {"kind": "user_text", "text": str(query or ""), "payload": {}},
+            card,
+        ]
+        return self._identity_notice_payload(
+            session,
+            text=text,
+            response_style=response_style,
+            cards=cards,
+            requested_mode=requested_mode,
+        )
+
+    def _identity_notice_payload(
+        self,
+        session: Optional[ConversationState],
+        *,
+        text: str,
+        response_style: str,
+        cards: Optional[List[Dict[str, Any]]] = None,
+        requested_mode: str = "ask",
+    ) -> Dict[str, Any] | AssistantOutput:
+        """身份确认卡的 raw / user_friendly 返回。"""
+
+        sid = session.session_id if session is not None else ""
+        payload: Dict[str, Any] = {
+            "mode": "ask",
+            "requested_mode": requested_mode,
+            "narrative": text,
+            "answer": text,
+            "sources": [],
+            "human_cards": list(cards or []),
+        }
+        if sid:
+            payload["session"] = {"session_id": sid}
+        if response_style == "raw":
+            return payload
+        return AssistantOutput(
+            narrative=text,
+            python_code="",
+            result_preview="",
+            raw=payload,
+        )
 
     def _sync_session_from_plan(
         self,
@@ -1405,6 +1611,7 @@ class QteasyAssistant:
             cards,
             provider=getattr(self.planner, "provider", None),
             query=query,
+            identity_dir=self.memory_store.user_kb_dir,
         )
         payload["human_cards"] = cards
         if session is None:
