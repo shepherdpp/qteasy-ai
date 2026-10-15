@@ -3,6 +3,18 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
+## 0.2.3 (2026-10-15)
+
+### Added
+
+- Ask covers an overview window: what qteasy is, how the parts connect, why it beats a hand-written backtest, plus install, datasource FAQ, help, and the capability map.
+
+### Changed
+
+- In the same session, Ask remembers the last focus and follows up from named topics or earlier turns, instead of whole-sentence menu ordinals. Related notes are invited for a later question rather than pasted into the current answer.
+- Workbench code fences label Ask and Result blocks and highlight only Python; bash and plain text stay uncolored.
+- The assistant introduces itself as Kairos when asked who it is; the product shell title remains qteasy-ai.
+
 ## 0.2.2 (2026-10-08)
 
 ### Changed
