@@ -75,6 +75,8 @@ const PROCESS_KINDS = new Set(["executing", "mode_notice", "plan_ready", "clarif
 let livePoll = null;
 let executeSseOpen = false;
 let treeCollapsed = new Set();
+let sessionAttachments = [];
+let attachDragDepth = 0;
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -257,8 +259,12 @@ function mountShell() {
         <div class="now-chips" id="now-chips"></div>
         <div class="mode-notice" id="mode-notice" hidden></div>
         <div class="chat-log" id="chat-log"></div>
-        <div class="composer">
+        <div class="composer" id="composer">
+          <div class="attach-chips" id="attach-chips" hidden></div>
+          <div class="attach-status err-text" id="attach-status" hidden></div>
           <textarea id="query-input" placeholder="Ask in natural language · Ctrl/⌘+Enter to send" rows="3"></textarea>
+          <input type="file" id="attach-input" multiple hidden
+            accept=".txt,.md,.py,.json,.csv,.yaml,.yml,.toml,.ini,.log,.html,.css,.js,.ts,.png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.docx,.xlsx,.pptx">
           <div class="composer-row">
             <div class="mode-dropdown">
               <button type="button" class="mode-badge btn-mode-menu mode-plan" data-testid="mode-badge" id="composer-mode" aria-haspopup="listbox" aria-expanded="false">Plan ▾</button>
@@ -276,7 +282,8 @@ function mountShell() {
               </div>
             </div>
             <span class="composer-row-spacer"></span>
-            <button type="button" class="primary" id="btn-send">Send</button>
+            <button type="button" class="icon-btn ghost attach-btn" id="btn-attach" title="Attach" aria-label="Attach">📎</button>
+            <button type="button" class="send-btn mode-plan" id="btn-send" title="Send" aria-label="Send">↑</button>
           </div>
         </div>
       </section>
@@ -452,6 +459,7 @@ function bindShell() {
       sendQuery(input.value);
     }
   });
+  bindComposerAttachments();
   $("btn-new-session").onclick = () => createSession();
   $("btn-toggle-rail").onclick = () => {
     railCollapsed = !railCollapsed;
@@ -688,6 +696,11 @@ function renderMode() {
     el.classList.remove("mode-ask", "mode-plan", "mode-agent");
     el.classList.add(`mode-${tone}`);
   });
+  const send = $("btn-send");
+  if (send) {
+    send.classList.remove("mode-ask", "mode-plan", "mode-agent");
+    send.classList.add(`mode-${tone}`);
+  }
   document.querySelectorAll("#mode-menu button[data-mode], #edit-mode-menu button[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
     btn.disabled = busy;
@@ -962,8 +975,10 @@ function setBusy(next) {
   }
   const input = $("query-input");
   const send = $("btn-send");
+  const attach = $("btn-attach");
   if (input) input.disabled = busy;
   if (send) send.disabled = busy;
+  if (attach) attach.disabled = busy;
   document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
@@ -1922,6 +1937,199 @@ async function onWorkspaceArtifactClick(ev) {
   if (art) openArtifactTab(art);
 }
 
+function attachIconFor(entry) {
+  const mime = String((entry && entry.mime_type) || "").toLowerCase();
+  const name = String((entry && entry.display_name) || "").toLowerCase();
+  if (mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/.test(name)) return "🖼";
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "📄";
+  if (/\.(docx?|xlsx?|pptx?)$/.test(name) || mime.includes("officedocument")) return "📊";
+  return "📝";
+}
+
+function setAttachStatus(text) {
+  const el = $("attach-status");
+  if (!el) return;
+  const msg = String(text || "").trim();
+  el.hidden = !msg;
+  el.textContent = msg;
+}
+
+function renderAttachChips() {
+  const host = $("attach-chips");
+  if (!host) return;
+  const rows = Array.isArray(sessionAttachments) ? sessionAttachments : [];
+  if (!rows.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = rows
+    .map((row) => {
+      const id = escapeHtml(String(row.id || ""));
+      const name = escapeHtml(String(row.display_name || row.source_path || "file"));
+      const icon = attachIconFor(row);
+      return `<span class="attach-chip" data-attach-id="${id}" title="${name}">` +
+        `<span class="attach-chip-icon">${icon}</span>` +
+        `<span class="attach-chip-name">${name}</span>` +
+        `<button type="button" class="attach-chip-remove" data-attach-remove="${id}" title="Remove" aria-label="Remove">×</button>` +
+        `</span>`;
+    })
+    .join("");
+}
+
+async function refreshAttachments() {
+  if (!sessionId) {
+    sessionAttachments = [];
+    renderAttachChips();
+    return;
+  }
+  const data = await api(`/v1/session/${encodeURIComponent(sessionId)}/attachments`);
+  if (data && data.error) {
+    sessionAttachments = [];
+  } else {
+    sessionAttachments = Array.isArray(data && data.attachments) ? data.attachments : [];
+  }
+  renderAttachChips();
+}
+
+async function ensureSessionForAttach() {
+  if (!sessionId) {
+    sessionId = newSessionId();
+    localStorage.setItem(STORAGE_SESSION, sessionId);
+  }
+  return sessionId;
+}
+
+async function uploadAttachmentFile(file) {
+  if (!file) return;
+  await ensureSessionForAttach();
+  const form = new FormData();
+  form.append("file", file, file.name || "paste.png");
+  const res = await fetch(`/v1/session/${encodeURIComponent(sessionId)}/attachments`, {
+    method: "POST",
+    body: form,
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (exc) {
+    data = {};
+  }
+  if (!res.ok || (data && data.ok === false)) {
+    const err = (data && data.error) || {};
+    setAttachStatus(err.message || "Attachment upload failed.");
+    return;
+  }
+  setAttachStatus("");
+  if (data.attachment) {
+    sessionAttachments = [...sessionAttachments, data.attachment];
+    renderAttachChips();
+  } else {
+    await refreshAttachments();
+  }
+  await refreshSessions();
+}
+
+async function uploadAttachmentFiles(fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  for (const file of files) {
+    await uploadAttachmentFile(file);
+  }
+}
+
+async function removeAttachment(attachmentId) {
+  const id = String(attachmentId || "").trim();
+  if (!id || !sessionId) return;
+  const data = await api(
+    `/v1/session/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (data && data.error) {
+    setAttachStatus((data.error && data.error.message) || "Could not remove attachment.");
+    return;
+  }
+  setAttachStatus("");
+  sessionAttachments = Array.isArray(data.attachments)
+    ? data.attachments
+    : sessionAttachments.filter((row) => String(row.id) !== id);
+  renderAttachChips();
+}
+
+function bindComposerAttachments() {
+  const composer = $("composer");
+  const input = $("query-input");
+  const fileInput = $("attach-input");
+  const btnAttach = $("btn-attach");
+  const chips = $("attach-chips");
+  if (!composer || !input || !fileInput || !btnAttach) return;
+
+  btnAttach.onclick = () => {
+    if (busy) return;
+    fileInput.value = "";
+    fileInput.click();
+  };
+  fileInput.onchange = () => {
+    uploadAttachmentFiles(fileInput.files);
+    fileInput.value = "";
+  };
+  if (chips) {
+    chips.onclick = (ev) => {
+      const btn = ev.target && ev.target.closest && ev.target.closest("[data-attach-remove]");
+      if (!btn) return;
+      removeAttachment(btn.getAttribute("data-attach-remove"));
+    };
+  }
+
+  input.addEventListener("paste", (ev) => {
+    const clipboard = ev.clipboardData;
+    if (!clipboard) return;
+    const files = [];
+    if (clipboard.files && clipboard.files.length) {
+      Array.from(clipboard.files).forEach((f) => files.push(f));
+    }
+    if (!files.length && clipboard.items) {
+      Array.from(clipboard.items).forEach((item) => {
+        if (item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      });
+    }
+    if (!files.length) return;
+    ev.preventDefault();
+    uploadAttachmentFiles(files);
+  });
+
+  const onDragEnter = (ev) => {
+    if (!ev.dataTransfer || !Array.from(ev.dataTransfer.types || []).includes("Files")) return;
+    ev.preventDefault();
+    attachDragDepth += 1;
+    composer.classList.add("composer-drop");
+  };
+  const onDragLeave = (ev) => {
+    if (!composer.classList.contains("composer-drop")) return;
+    attachDragDepth = Math.max(0, attachDragDepth - 1);
+    if (attachDragDepth === 0) composer.classList.remove("composer-drop");
+  };
+  const onDragOver = (ev) => {
+    if (!ev.dataTransfer || !Array.from(ev.dataTransfer.types || []).includes("Files")) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "copy";
+  };
+  const onDrop = (ev) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.files || !ev.dataTransfer.files.length) return;
+    ev.preventDefault();
+    attachDragDepth = 0;
+    composer.classList.remove("composer-drop");
+    uploadAttachmentFiles(ev.dataTransfer.files);
+  };
+  composer.addEventListener("dragenter", onDragEnter);
+  composer.addEventListener("dragleave", onDragLeave);
+  composer.addEventListener("dragover", onDragOver);
+  composer.addEventListener("drop", onDrop);
+}
+
 async function createSession() {
   stopLivePoll();
   dropRunWatch();
@@ -1943,6 +2151,9 @@ async function createSession() {
   state.artifacts = [];
   modeNotice = "";
   mode = "plan";
+  sessionAttachments = [];
+  renderAttachChips();
+  setAttachStatus("");
   renderPanes();
   await refreshSessions();
   focusComposer();
@@ -1967,6 +2178,7 @@ async function switchSession(id) {
   editingUserIndex = -1;
   await refreshWorkspace();
   await refreshProvider();
+  await refreshAttachments();
   renderPanes();
   applyRunningWatch(dto);
   focusComposer();
@@ -3174,6 +3386,7 @@ async function restoreCurrentSession() {
   await refreshSessions();
   await refreshWorkspace();
   await refreshProvider();
+  await refreshAttachments();
   renderPanes();
 }
 

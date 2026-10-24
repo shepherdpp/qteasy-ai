@@ -354,3 +354,28 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         self.assertTrue(self.harness.hold.finished.wait(timeout=5))
         print(" hold reason:", self.harness.hold.reason)
         self.assertEqual(self.harness.hold.reason, "cancelled")
+
+    def test_attach_file_chip_and_remove(self) -> None:
+        """回形针选文件后芯片出现，× 后芯片清空。"""
+
+        print("\n[TestWorkbenchBrowser] attach file chip and remove")
+        send_label = self.page.locator("#btn-send").get_attribute("aria-label")
+        attach_label = self.page.locator("#btn-attach").get_attribute("aria-label")
+        print(" send aria:", send_label, "attach aria:", attach_label)
+        self.assertEqual(send_label, "Send")
+        self.assertEqual(attach_label, "Attach")
+        sample = Path(self.harness.temp_dir.name) / "browser_note.txt"
+        sample.write_text("hello attach\n", encoding="utf-8")
+        print(" sample:", sample)
+        self.page.set_input_files("#attach-input", str(sample))
+        self.page.wait_for_selector(".attach-chip", timeout=10000)
+        chip_text = self.page.locator(".attach-chip").inner_text()
+        print(" chip:", chip_text)
+        self.assertIn("browser_note.txt", chip_text)
+        self.page.locator(".attach-chip-remove").click()
+        self.page.wait_for_function(
+            "() => document.querySelectorAll('.attach-chip').length === 0",
+            timeout=10000,
+        )
+        print(" chips after remove:", self.page.locator(".attach-chip").count())
+        self.assertEqual(self.page.locator(".attach-chip").count(), 0)

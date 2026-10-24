@@ -40,6 +40,7 @@ workbench = [
     "uvicorn>=0.22",
     "httpx>=0.24",
     "textual>=0.47",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]

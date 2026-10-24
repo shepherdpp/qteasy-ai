@@ -35,6 +35,7 @@ from ..memory_store import MemoryStore, _json_safe
 from ..session import (
     BACKGROUND_RUN_NOTICE,
     CANCEL_RUN_NOTICE,
+    ConversationState,
     SessionStore,
     is_live_backgrounded,
     is_live_running,
@@ -44,6 +45,10 @@ from ..session import (
     mark_live_background,
     note_cancelled_task,
     request_live_cancel,
+)
+from ..session_attachments import (
+    remove_attachment_files,
+    save_attachment_bytes,
 )
 from ..plan_markdown import plan_artifact_title, run_group_title
 from .mapper import classify_artifacts, map_assistant_payload
@@ -75,6 +80,12 @@ _NEXT_ACTION = {
     "RUN_IN_PROGRESS": "Wait for the current run to finish, or open that session and watch it.",
     "QUIT_DISABLED": "Quit is available from Settings when this page was opened with qteasy-ai serve.",
     "QUIT_CONFIRM_REQUIRED": "Confirm quit in the dialog, then try again.",
+    "ATTACHMENT_REQUIRED": "Choose a file with the paperclip, or paste / drop a supported file.",
+    "ATTACHMENT_TYPE_REJECTED": "That file type is not supported. Use text, image, PDF, or Office (docx/xlsx/pptx).",
+    "ATTACHMENT_TOO_LARGE": "Each attachment must be 10 MB or smaller.",
+    "ATTACHMENT_SESSION_FULL": "Session attachments total at most 50 MB. Remove one, then try again.",
+    "ATTACHMENT_NOT_FOUND": "That attachment is gone. Refresh the composer chips, or attach again.",
+    "ATTACHMENT_PATH_INVALID": "Could not store the file under this session. Try another file.",
 }
 
 
@@ -719,7 +730,7 @@ class WorkbenchHttp:
         return JSONResponse(row)
 
     async def delete_session(self, request: Request) -> JSONResponse:
-        """DELETE /v1/session/{session_id}：只删 session 文件。"""
+        """DELETE /v1/session/{session_id}：删 session JSON 与旁路附件目录。"""
 
         session_id = str(request.path_params.get("session_id") or "").strip()
         if not session_id:
@@ -728,6 +739,117 @@ class WorkbenchHttp:
         if not store.delete(session_id):
             return _error("SESSION_NOT_FOUND", "Session not found.", 404)
         return JSONResponse({"ok": True, "session_id": session_id})
+
+    async def list_attachments(self, request: Request) -> JSONResponse:
+        """GET /v1/session/{session_id}/attachments：会话附件元数据列表。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        store = SessionStore(self.assistant.memory_store)
+        conv = store.load(session_id)
+        return JSONResponse(
+            {
+                "ok": True,
+                "session_id": session_id,
+                "attachments": list(conv.attachments or []),
+            }
+        )
+
+    async def upload_attachment(self, request: Request) -> JSONResponse:
+        """POST /v1/session/{session_id}/attachments：multipart 字段 ``file``；无会话则 ensure。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None:
+            return _error("ATTACHMENT_REQUIRED", "Provide multipart field file.", 400)
+        filename = str(getattr(upload, "filename", None) or "").strip() or "file"
+        content_type = str(getattr(upload, "content_type", None) or "").strip()
+        data: bytes = b""
+        if hasattr(upload, "read"):
+            raw = await upload.read()
+            data = bytes(raw or b"")
+            close = getattr(upload, "close", None)
+            if callable(close):
+                try:
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception:
+                    pass
+        else:
+            data = bytes(upload) if upload else b""
+        store = SessionStore(self.assistant.memory_store)
+        if store.exists(session_id):
+            conv = store.load(session_id)
+        else:
+            conv = ConversationState.empty(session_id)
+        entry, err = save_attachment_bytes(
+            self.assistant.memory_store,
+            session_id,
+            filename=filename,
+            data=bytes(data),
+            mime_type=content_type,
+            existing=list(conv.attachments or []),
+        )
+        if err:
+            status = {
+                "ATTACHMENT_TYPE_REJECTED": 415,
+                "ATTACHMENT_TOO_LARGE": 413,
+                "ATTACHMENT_SESSION_FULL": 413,
+                "ATTACHMENT_PATH_INVALID": 400,
+            }.get(err, 400)
+            return _error(
+                err,
+                {
+                    "ATTACHMENT_TYPE_REJECTED": "Unsupported file type.",
+                    "ATTACHMENT_TOO_LARGE": "File exceeds 10 MB limit.",
+                    "ATTACHMENT_SESSION_FULL": "Session attachments exceed 50 MB total.",
+                    "ATTACHMENT_PATH_INVALID": "Could not store attachment path.",
+                }.get(err, "Attachment rejected."),
+                status,
+            )
+        assert entry is not None
+        conv.attachments = list(conv.attachments or []) + [entry]
+        store.save(conv)
+        return JSONResponse({"ok": True, "session_id": session_id, "attachment": entry})
+
+    async def delete_attachment(self, request: Request) -> JSONResponse:
+        """DELETE /v1/session/{session_id}/attachments/{attachment_id}：删元数据与磁盘文件。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        attachment_id = str(request.path_params.get("attachment_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        if not attachment_id:
+            return _error("ATTACHMENT_NOT_FOUND", "Provide an attachment id.", 404)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.exists(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        conv = store.load(session_id)
+        kept: List[Dict[str, Any]] = []
+        removed: Optional[Dict[str, Any]] = None
+        for item in conv.attachments or []:
+            if str(item.get("id") or "") == attachment_id and removed is None:
+                removed = item
+                continue
+            kept.append(item)
+        if removed is None:
+            return _error("ATTACHMENT_NOT_FOUND", "Attachment not found.", 404)
+        remove_attachment_files(self.assistant.memory_store, removed)
+        conv.attachments = kept
+        store.save(conv)
+        return JSONResponse(
+            {
+                "ok": True,
+                "session_id": session_id,
+                "attachment_id": attachment_id,
+                "attachments": kept,
+            }
+        )
 
     async def cancel_run(self, request: Request) -> JSONResponse:
         """POST /v1/session/{session_id}/cancel-run：确认后的 Stop。"""
@@ -1085,6 +1207,13 @@ def create_app(
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
         Route("/v1/session/{session_id}/cancel-run", api.cancel_run, methods=["POST"]),
         Route("/v1/session/{session_id}/background-run", api.background_run, methods=["POST"]),
+        Route("/v1/session/{session_id}/attachments", api.list_attachments, methods=["GET"]),
+        Route("/v1/session/{session_id}/attachments", api.upload_attachment, methods=["POST"]),
+        Route(
+            "/v1/session/{session_id}/attachments/{attachment_id}",
+            api.delete_attachment,
+            methods=["DELETE"],
+        ),
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
         Route("/v1/session/{session_id}", api.patch_session, methods=["PATCH"]),
         Route("/v1/session/{session_id}", api.delete_session, methods=["DELETE"]),

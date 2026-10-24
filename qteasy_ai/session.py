@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from .human_card import HUMAN_CARD_KINDS, SKIP_MESSAGE_KINDS, normalize_card_kind
 from .memory_store import MemoryStore, _json_safe
+from .session_attachments import normalize_attachment, remove_session_blob_dir
 
 SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"})
 VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
@@ -653,17 +654,12 @@ class ConversationState:
 
         data = raw if isinstance(raw, dict) else {}
         sid = str(data.get("session_id") or session_id or "").strip() or "default"
+        # attachments：会话上下文槽；Ask/Plan/Agent 消费层本阶段未接线。
         attachments: List[Dict[str, Any]] = []
         for item in data.get("attachments") or []:
-            if not isinstance(item, dict):
-                continue
-            path = str(item.get("source_path") or "").strip()
-            if not path:
-                continue
-            att: Dict[str, Any] = {"source_path": path}
-            if item.get("summary"):
-                att["summary"] = str(item.get("summary"))
-            attachments.append(att)
+            att = normalize_attachment(item)
+            if att is not None:
+                attachments.append(att)
         task = Task.from_dict(data.get("task"))
         if task is None:
             task = _migrate_task_from_flat(data)
@@ -919,7 +915,7 @@ class SessionStore:
         return self.path_for(session_id).is_file()
 
     def delete(self, session_id: str) -> bool:
-        """删除 session JSON 与旁路 transcript；不碰 ``runs/``。"""
+        """删除 session JSON、旁路 transcript 与 ``sessions/{stem}/``；不碰 ``runs/``。"""
 
         path = self.path_for(session_id)
         if not path.is_file():
@@ -934,6 +930,7 @@ class SessionStore:
                 transcript.unlink()
             except OSError:
                 pass
+        remove_session_blob_dir(self.memory_store, session_id)
         return True
 
     def summarize_one(self, state: ConversationState) -> Dict[str, Any]:
