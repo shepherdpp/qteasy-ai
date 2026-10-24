@@ -1,0 +1,26 @@
+{
+  "id": "datatype_lookup",
+  "tags": ["datatype", "lookup", "information-id"],
+  "keywords": [
+    "什么是 DataType",
+    "how to look up a data type",
+    "怎么查一个 DataType",
+    "find_history_data",
+    "get_dtype_map",
+    "信息 ID",
+    "DataType"
+  ],
+  "title": "DataType is a stable information ID",
+  "summary": "A DataType is a stable information ID with a shape. Look it up with find_history_data or get_dtype_map, then pick an entry by shape.",
+  "narrative": "A DataType is a stable information ID plus a consumption shape. It is not a table column name and not a downloader. You write a string such as close, close|b, or close_E_d. You do not construct DataType(...) for everyday work.\n\nTwo string forms:\n- Wide name: close, pe, close|b. The framework matches frequency and asset type; if several candidates remain, it errors instead of guessing.\n- Full id: close_E_d. The rightmost segments are frequency and asset type; the rest is the wide name. Prefer full ids in strategies when names collide.\n\nThree symbol families (do not mix them):\n- Pipe for adjustment: close|b (backward), close|f (forward).\n- Hyphen to pull one symbol into a reference series: close-000300.SH.\n- Underscore for a full id: close_E_d.\n\nFind types with qt.find_history_data('pe') or a Chinese keyword, or browse datatypes.get_dtype_map(). The full catalog has a thousand rows; do not memorize it. After a hit, read the shape first, then choose an entry. Empty results are often a wrong shape or a local table that was never downloaded for that date window — check the entry, the starter tables, and overview.\n\nThis card does not teach filtering steps. Filtering is a separate question.",
+  "python_code": "import qteasy as qt\nprint(qt.find_history_data('pe'))\nfrom qteasy import datatypes\nprint(len(datatypes.get_dtype_map()))",
+  "risk_notes": "A catalog hit does not mean every id can go through get_history_data. Check shape and usable_in first.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/02. datatypes.md",
+  "topics": ["data-analysis"],
+  "relations": [
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "see_also", "to": "data_filter"},
+    {"rel": "see_also", "to": "capability_map"}
+  ]
+}

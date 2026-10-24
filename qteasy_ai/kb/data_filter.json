@@ -1,0 +1,25 @@
+{
+  "id": "data_filter",
+  "tags": ["filter", "static", "universe", "pandas"],
+  "keywords": [
+    "怎么按行业筛选股票",
+    "行业",
+    "上市日",
+    "筛股票",
+    "get_static_data",
+    "股票池"
+  ],
+  "title": "Filter a pool with static attributes, then read history",
+  "summary": "Screen with get_static_data and pandas, then pass the codes into get_history_data. This is not HistoryPanel slicing and not a strategy stock picker.",
+  "narrative": "Research-side filtering has two steps.\n\n1. Attributes such as industry, list_date, and name are Static. Load them with get_static_data, then use pandas to keep the rows you want and collect the share codes.\n2. Pass those codes to get_history_data through shares, with an explicit start and end. Date and symbol subsets are read parameters, not a separate screener API.\n\nTwo boundaries:\n- Types marked usable_in=none in the catalog are not first-class filters or panel columns. Do not force them through get_history_data.\n- Do not put Static fields into a strategy's data_types. Attributes belong outside the time window.\n\nThis card does not teach HistoryPanel slicing, where masks, or Operator stock pickers. Those are later topics.",
+  "python_code": "import qteasy as qt\nbasics = qt.get_static_data(names='industry, list_date', shares='000001.SZ, 000002.SZ, 600000.SH', asset_type='E')\nbank = basics[basics['industry'] == '银行']\nprint(list(bank.index))",
+  "risk_notes": "Static screening is research-side. It does not replace a strategy FactorSorter or live universe filter.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/02. datatypes.md",
+  "topics": ["data-analysis"],
+  "relations": [
+    {"rel": "see_also", "to": "datatype_lookup"},
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "see_also", "to": "capability_map"}
+  ]
+}

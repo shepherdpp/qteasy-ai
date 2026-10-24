@@ -1,0 +1,23 @@
+{
+  "id": "data_minimum",
+  "tags": ["minimum", "starter", "download", "tables"],
+  "keywords": [
+    "起步要下载哪些表",
+    "最小数据集",
+    "trade_calendar",
+    "stock_basic",
+    "stock_daily"
+  ],
+  "title": "Starter tables before data play",
+  "summary": "Before looking up types or screening, download the five starter tables from tutorial 2.0. Daily bars need symbols and dates. This is not a table catalog.",
+  "narrative": "Before you look up DataTypes or screen a pool, fill a small local starter set. Tutorial 2.0 names five tables: trade_calendar, stock_basic, index_basic, index_daily (a benchmark such as 000300.SH), and stock_daily (a few example stocks). Daily bar tables need share codes and an explicit start and end.\n\nThis is a starter set for data play, not a catalog of every built-in table. Other tables come after you look up the information ID, and they still need dates when they are time series. Periodic refresh is still refill_data_source; this card does not teach a scheduler script.\n\nIf a lookup returns an id but a read comes back empty, the usual cause is that these starter tables or that date window were never downloaded. Check the local overview next.",
+  "python_code": "import qteasy as qt\nqt.refill_data_source(tables='trade_calendar, stock_basic, index_basic')\nqt.refill_data_source(tables='index_daily', symbols='000300.SH', start_date='20220101', end_date='20221231')\nqt.refill_data_source(tables='stock_daily', symbols='000001.SZ, 600519.SH', start_date='20220101', end_date='20221231')",
+  "risk_notes": "Naming the five starter tables is not permission to download the whole market without dates.",
+  "type": "concept",
+  "manual_anchor": "docs/source/tutorials/2.0-get-data.md",
+  "topics": ["data-downloading"],
+  "relations": [
+    {"rel": "see_also", "to": "capability_map"},
+    {"rel": "see_also", "to": "refill_bounded"}
+  ]
+}

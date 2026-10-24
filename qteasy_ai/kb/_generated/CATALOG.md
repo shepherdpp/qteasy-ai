@@ -78,6 +78,42 @@
   - built-in parameter key
   - not a built-in parameter
 
+## data_channels
+
+- type: concept
+- topics: data-downloading
+- manual_anchor: docs/source/manage_data/10. data_channels.md
+- relations:
+  - see_also -> datasource_local
+  - see_also -> refill_bounded
+- questions:
+  - 数据通道是什么
+  - what is a data channel
+  - 下载时怎么指定数据通道
+
+## data_filter
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/manage_data/02. datatypes.md
+- relations:
+  - see_also -> datatype_lookup
+  - see_also -> data_three_entries
+  - see_also -> capability_map
+- questions:
+  - 怎么按行业筛选股票
+
+## data_minimum
+
+- type: concept
+- topics: data-downloading
+- manual_anchor: docs/source/tutorials/2.0-get-data.md
+- relations:
+  - see_also -> capability_map
+  - see_also -> refill_bounded
+- questions:
+  - 起步要下载哪些表
+
 ## data_three_entries
 
 - type: concept
@@ -85,11 +121,43 @@
 - manual_anchor: docs/source/manage_data/01. overview.md
 - relations:
   - see_also -> refill_bounded
+  - see_also -> datatype_lookup
+  - see_also -> data_filter
+  - see_also -> capability_map
 - questions:
   - 三入口
   - 历史数据
   - 参考数据
   - 静态数据
+  - 三入口有什么区别
+
+## datasource_local
+
+- type: concept
+- topics: data-downloading
+- manual_anchor: docs/source/manage_data/03. datasource.md
+- relations:
+  - see_also -> capability_map
+  - see_also -> data_channels
+  - see_also -> refill_bounded
+- questions:
+  - 什么是 DataSource
+  - local data source
+  - 怎么看本地已经有哪些数据
+
+## datatype_lookup
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/manage_data/02. datatypes.md
+- relations:
+  - see_also -> data_three_entries
+  - see_also -> data_filter
+  - see_also -> capability_map
+- questions:
+  - 什么是 DataType
+  - how to look up a data type
+  - 怎么查一个 DataType
 
 ## env_ready
 
@@ -266,11 +334,13 @@
 - relations:
   - see_also -> data_three_entries
   - see_also -> env_ready
+  - see_also -> data_minimum
   - plan_handoff -> side_effects_safety
 - questions:
   - download daily
   - 下载日线
   - 灌数据
+  - 帮我下载
 
 ## side_effects_safety
 

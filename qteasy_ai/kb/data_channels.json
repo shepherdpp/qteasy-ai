@@ -1,0 +1,25 @@
+{
+  "id": "data_channels",
+  "tags": ["channel", "tushare", "akshare", "eastmoney", "refill"],
+  "keywords": [
+    "数据通道是什么",
+    "what is a data channel",
+    "下载时怎么指定数据通道",
+    "channel",
+    "tushare",
+    "akshare",
+    "eastmoney"
+  ],
+  "title": "Data channels feed refill_data_source",
+  "summary": "A channel is the network source passed to refill_data_source. It is not a DataType and not a table. Coverage differs by channel.",
+  "narrative": "A data channel is the network provider used by refill_data_source through its channel argument. Common names are tushare, eastmoney, and akshare. The channel fills local DataTables. It is not a DataType and not a table name.\n\nNot every channel covers every table. Prefer the channel that actually supports the tables you need. Ask explains the choice. Bounded download still needs an explicit start and end, and Ask does not emit a plan_id.\n\nThis card does not configure live-trade channel settings.",
+  "python_code": "import qteasy as qt\n# Choose a channel when refilling. Dates are required for bar tables.\nprint('channels include tushare, eastmoney, akshare')",
+  "risk_notes": "A channel name does not download by itself. Refill still needs tables and a date window where applicable.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/10. data_channels.md",
+  "topics": ["data-downloading"],
+  "relations": [
+    {"rel": "see_also", "to": "datasource_local"},
+    {"rel": "see_also", "to": "refill_bounded"}
+  ]
+}

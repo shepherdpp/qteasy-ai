@@ -35,8 +35,9 @@ _NAN_SUMMARY = (
 )
 _DATA_TITLE = "Three data entry points"
 _DATA_SUMMARY = (
-    "qteasy reads data through history, reference, and static channels — "
-    "not a single catch-all API."
+    "Prices and bars use get_history_data; macro and benchmarks use "
+    "get_reference_data; attributes use get_static_data. get_kline is "
+    "OHLCV sugar, not a fourth door."
 )
 _BACKTEST_TITLE = "Built-in strategy backtest"
 _BACKTEST_SUMMARY = (
