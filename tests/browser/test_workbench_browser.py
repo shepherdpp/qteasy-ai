@@ -273,6 +273,39 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
         self.assertEqual(self.page.locator("#chat-log .msg-role", has_text="Result").count(), 0)
 
+    def test_rename_empty_session_before_first_message(self) -> None:
+        """空会话先改名再发首条：自定义名钉死，不被首条全文覆盖。"""
+
+        print("\n[TestWorkbenchBrowser] rename empty session before first message")
+        custom = "Pre-named empty"
+        query = "list built-in strategies"
+        session_id = self.session_id()
+        row = self.page.locator(f'[data-session-id="{session_id}"]')
+        row.hover()
+        row.locator("[data-session-rename]").click()
+        self.page.fill(".session-rename", custom)
+        self.page.press(".session-rename", "Enter")
+        self.page.wait_for_function(
+            "() => document.querySelector('#session-title').textContent.includes('Pre-named empty')",
+            timeout=10000,
+        )
+        title_before = self.page.locator("#session-title").inner_text()
+        print(" title before send:", title_before)
+        self.assertIn(custom, title_before)
+        self.send(query)
+        self.page.wait_for_selector("#btn-confirm", timeout=_PLAN_TIMEOUT_MS)
+        self.page.wait_for_function(
+            "() => document.querySelector('#session-title').textContent.includes('Pre-named empty')",
+            timeout=10000,
+        )
+        title = self.page.locator("#session-title").inner_text()
+        sid = row.locator(".sid").inner_text()
+        print(" title after send:", title, "sid:", sid)
+        self.assertIn(custom, title)
+        self.assertEqual(sid.strip(), custom)
+        self.assertNotEqual(sid.strip(), query)
+        self.assertTrue(self.harness.session_file_exists(session_id))
+
     def test_rename_then_delete_session(self) -> None:
         """改名后删除。session 文件与该会话 run 消失，无关 run 留下。"""
 

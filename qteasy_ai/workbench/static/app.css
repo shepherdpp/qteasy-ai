@@ -289,7 +289,7 @@ button.provider-badge {
 .rail-body, .workspace-body { flex: 1; overflow: auto; padding: 6px; }
 .session-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 4px;
   width: 100%;
   text-align: left;
@@ -305,7 +305,7 @@ button.provider-badge {
 .session-item.active { background: var(--bg-active); color: var(--text-on-active); }
 .session-item .session-main { flex: 1; min-width: 0; }
 .session-item .sid { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.session-item .meta { display: block; font-size: 11px; color: var(--text-muted); }
+.session-item .meta { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-item .running-tag { color: var(--accent); }
 .session-actions {
   display: none;

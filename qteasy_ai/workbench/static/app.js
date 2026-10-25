@@ -61,6 +61,8 @@ let shellReady = false;
 let codeCache = {};
 let filePreview = null;
 let sessions = [];
+/** @type {Record<string, string>} local_only 改名尚未 PATCH 到服务端时暂存 */
+let pendingSessionNames = {};
 let workspace = { artifacts: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
@@ -1690,16 +1692,33 @@ function beginRenameSession(id) {
   }
 }
 
+async function flushPendingSessionName(id) {
+  const key = String(id || "").trim();
+  const name = pendingSessionNames[key];
+  if (!key || !name) return false;
+  const dto = await api(`/v1/session/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (dto && dto.error) return false;
+  delete pendingSessionNames[key];
+  return true;
+}
+
 async function commitRenameSession(id, raw) {
   const name = String(raw || "").trim();
   renamingSessionId = "";
   const local = sessions.find((row) => row.session_id === id);
   const persisted = Boolean(local && !local.local_only);
   if (!persisted) {
+    const label = name || "New session";
     if (local) {
-      local.name = name || "New session";
-      local.title = local.name;
+      local.name = label;
+      local.title = label;
     }
+    if (label === "New session") delete pendingSessionNames[id];
+    else pendingSessionNames[id] = label;
     renderSessionList();
     return;
   }
@@ -1712,6 +1731,7 @@ async function commitRenameSession(id, raw) {
     renderSessionList();
     return;
   }
+  delete pendingSessionNames[id];
   await refreshSessions();
 }
 
@@ -1727,6 +1747,7 @@ async function deleteSession(id) {
     return;
   }
   if (row && row.local_only) {
+    delete pendingSessionNames[id];
     if (id === sessionId) createSession();
     else {
       sessions = sessions.filter((item) => item.session_id !== id);
@@ -1742,6 +1763,7 @@ async function deleteSession(id) {
     window.alert(String(msg));
     return;
   }
+  delete pendingSessionNames[id];
   if (id === sessionId) {
     await createSession();
     return;
@@ -2216,9 +2238,19 @@ async function switchSession(id) {
 async function refreshSessions() {
   const data = await api("/v1/sessions");
   sessions = data.sessions || [];
+  const onServer = new Set(sessions.map((row) => row.session_id));
+  let flushed = false;
+  for (const id of Object.keys(pendingSessionNames)) {
+    if (onServer.has(id) && (await flushPendingSessionName(id))) flushed = true;
+  }
+  if (flushed) {
+    const again = await api("/v1/sessions");
+    sessions = again.sessions || [];
+  }
   if (sessionId && !sessions.some((row) => row.session_id === sessionId)) {
+    const label = pendingSessionNames[sessionId] || "New session";
     sessions = [
-      { session_id: sessionId, name: "New session", title: "New session", last_user: "", job: "", local_only: true },
+      { session_id: sessionId, name: label, title: label, last_user: "", job: "", local_only: true },
       ...sessions,
     ];
   }
