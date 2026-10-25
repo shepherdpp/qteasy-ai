@@ -77,6 +77,9 @@ let executeSseOpen = false;
 let treeCollapsed = new Set();
 let sessionAttachments = [];
 let attachDragDepth = 0;
+let outputAgeTimer = null;
+const COPY_ICON_SVG =
+  '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="2" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -1302,7 +1305,7 @@ async function confirmIdentityWrite(confirm) {
 
 function onChatClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
   const foldBtn = t.closest("button.process-toggle");
   if (foldBtn) {
     const key = Number(foldBtn.getAttribute("data-process-turn"));
@@ -1350,6 +1353,11 @@ function onChatClick(ev) {
   }
   if (t.closest("#edit-mode-menu") && t.dataset.mode) {
     setMode(t.dataset.mode);
+    return;
+  }
+  const copyBtn = t.closest("[data-copy-kind]");
+  if (copyBtn) {
+    handleCopyButton(copyBtn);
     return;
   }
   const editUser = t.closest("[data-edit-user]");
@@ -1549,7 +1557,12 @@ function onNowClick(ev) {
 
 function onArtifactClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
+  const copyBtn = t.closest("[data-copy-kind]");
+  if (copyBtn) {
+    handleCopyButton(copyBtn);
+    return;
+  }
   const toggle = t.closest("[data-tree-toggle]");
   if (toggle) {
     const key = toggle.getAttribute("data-tree-toggle") || "";
@@ -1702,7 +1715,13 @@ async function deleteSession(id) {
   if (!id || busy) return;
   const row = sessions.find((item) => item.session_id === id);
   const label = sessionDisplayName(row) || id;
-  if (!window.confirm(`Delete session "${label}"? This cannot be undone.`)) return;
+  if (
+    !window.confirm(
+      `Delete session "${label}"? This also deletes its plans, runs, and artifacts. This cannot be undone.`
+    )
+  ) {
+    return;
+  }
   if (row && row.local_only) {
     if (id === sessionId) createSession();
     else {
@@ -1712,7 +1731,13 @@ async function deleteSession(id) {
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (dto && dto.error) return;
+  if (dto && dto.error) {
+    const msg =
+      (dto.error && (dto.error.message || dto.error.next_action)) ||
+      "Could not delete this session.";
+    window.alert(String(msg));
+    return;
+  }
   if (id === sessionId) {
     await createSession();
     return;
@@ -2500,7 +2525,7 @@ function renderVisibleMessage(msg, index) {
     return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${resultArtifactButtons(msg)}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);
@@ -2509,7 +2534,7 @@ function renderVisibleMessage(msg, index) {
   if (msg.kind === "ask" || msg.kind === "ask_text") {
     const src = (msg.payload && msg.payload.sources) || state.sources || [];
     const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
-    return `<div class="msg prose"><div class="msg-role">Assistant</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${extra}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Assistant</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${extra}</div></div>`;
   }
   const src = (msg.payload && msg.payload.sources) || state.sources || [];
   const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
@@ -2590,6 +2615,8 @@ function renderChat() {
   parts.push(renderClarification());
   parts.push(renderPlanCard());
   host.innerHTML = parts.join("");
+  decorateCodeBlocks(host);
+  ensureOutputAgeTimer();
   const rewind = $("rewind-text");
   if (rewind) {
     rewind.addEventListener("keydown", (ev) => {
@@ -2799,7 +2826,123 @@ function renderChatCodeBlock(source, info) {
   const label = token || "text";
   const key = label.toLowerCase();
   const body = CHAT_CODE_HIGHLIGHT_LANGS.has(key) ? highlightPython(source) : escapeHtml(source);
-  return `<div class="md-code"><div class="md-code-lang">${escapeHtml(label)}</div><pre><code>${body}</code></pre></div>`;
+  return `<div class="md-code"><div class="md-code-lang"><span class="md-code-lang-label">${escapeHtml(label)}</span></div><pre><code>${body}</code></pre></div>`;
+}
+
+function formatOutputAge(iso, nowMs) {
+  const raw = String(iso || "").trim();
+  if (!raw) return "";
+  const ts = Date.parse(raw);
+  if (!Number.isFinite(ts)) return "";
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  let s = Math.floor((now - ts) / 1000);
+  if (s < 0) s = 0;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} hr ago`;
+  const days = Math.floor(s / 86400);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 360) {
+    const months = Math.floor(days / 30);
+    return `${months} mo ago`;
+  }
+  const years = Math.floor(days / 360);
+  return `${years} yr${years === 1 ? "" : "s"} ago`;
+}
+
+function renderOutputMeta(msg, index) {
+  const age = formatOutputAge(msg && msg.created_at);
+  const ageHtml = age ? `<span class="output-age" data-created-at="${escapeHtml(String(msg.created_at || ""))}">${escapeHtml(age)}</span>` : "";
+  return `<div class="output-meta"><button type="button" class="icon-btn ghost md-code-copy" data-copy-kind="output" data-msg-index="${Number(index)}" title="Copy">${COPY_ICON_SVG}</button>${ageHtml}</div>`;
+}
+
+function copyButtonHtml() {
+  return `<button type="button" class="icon-btn ghost md-code-copy" data-copy-kind="code" title="Copy">${COPY_ICON_SVG}</button>`;
+}
+
+function decorateCodeBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll(".md-code").forEach((block) => {
+    const lang = block.querySelector(".md-code-lang");
+    if (!lang || lang.querySelector(".md-code-copy")) return;
+    lang.insertAdjacentHTML("beforeend", copyButtonHtml());
+  });
+  root.querySelectorAll("pre > code").forEach((code) => {
+    const pre = code.parentElement;
+    if (!pre || pre.closest(".md-code") || pre.closest(".mermaid")) return;
+    if (pre.classList.contains("report-text") || pre.classList.contains("code-highlight")) return;
+    if (pre.closest(".code-editor-wrap")) return;
+    const cls = String(code.className || "");
+    const match = cls.match(/language-([^\s]+)/i);
+    const label = (match && match[1]) || "text";
+    if (String(label).toLowerCase() === "mermaid") return;
+    const wrap = document.createElement("div");
+    wrap.className = "md-code";
+    const head = document.createElement("div");
+    head.className = "md-code-lang";
+    head.innerHTML = `<span class="md-code-lang-label">${escapeHtml(label)}</span>${copyButtonHtml()}`;
+    pre.replaceWith(wrap);
+    wrap.appendChild(head);
+    wrap.appendChild(pre);
+  });
+}
+
+function flashCopied(btn) {
+  if (!btn) return;
+  btn.setAttribute("title", "Copied");
+  window.setTimeout(() => {
+    if (btn.isConnected) btn.setAttribute("title", "Copy");
+  }, 1500);
+}
+
+async function writeClipboard(text) {
+  const value = String(text || "");
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  ta.remove();
+}
+
+async function handleCopyButton(btn) {
+  const kind = btn.getAttribute("data-copy-kind") || "";
+  let text = "";
+  if (kind === "output") {
+    const index = Number(btn.getAttribute("data-msg-index"));
+    const msg = transcript[index];
+    text = msg && msg.text != null ? String(msg.text) : "";
+  } else {
+    const block = btn.closest(".md-code");
+    const code = block && block.querySelector("pre code");
+    text = code ? String(code.textContent || "") : "";
+  }
+  try {
+    await writeClipboard(text);
+    flashCopied(btn);
+  } catch (exc) {
+    window.alert("Could not copy to the clipboard.");
+  }
+}
+
+function refreshOutputAges() {
+  const now = Date.now();
+  document.querySelectorAll(".output-age[data-created-at]").forEach((el) => {
+    const next = formatOutputAge(el.getAttribute("data-created-at"), now);
+    if (next && el.textContent !== next) el.textContent = next;
+  });
+}
+
+function ensureOutputAgeTimer() {
+  if (outputAgeTimer != null) return;
+  outputAgeTimer = window.setInterval(refreshOutputAges, 30000);
 }
 
 function metricsCards(metrics) {
@@ -3081,6 +3224,7 @@ function renderArtifacts() {
   host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel"${fillPane ? ' class="fill-pane"' : ""}>${body}</div>`;
   bindTabsWheel(host);
   runMermaid(host);
+  decorateCodeBlocks(host);
   const ta = $("code-editor");
   if (ta) {
     ta.addEventListener("input", () => {

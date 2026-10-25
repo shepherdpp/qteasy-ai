@@ -274,16 +274,22 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         self.assertEqual(self.page.locator("#chat-log .msg-role", has_text="Result").count(), 0)
 
     def test_rename_then_delete_session(self) -> None:
-        """改名后删除。session 文件消失，runs/ 还在。"""
+        """改名后删除。session 文件与该会话 run 消失，无关 run 留下。"""
 
         print("\n[TestWorkbenchBrowser] rename then delete")
         self.send("list built-in strategies")
         self.page.wait_for_selector("#btn-confirm", timeout=_PLAN_TIMEOUT_MS)
         session_id = self.session_id()
         self.assertTrue(self.harness.session_file_exists(session_id))
-        runs_before = self.harness.run_names()
-        print(" session:", session_id, "runs:", runs_before)
+        runs_before = set(self.harness.run_names())
+        print(" session:", session_id, "runs:", sorted(runs_before))
         self.assertTrue(runs_before)
+        other = Path(self.harness.store.runs_dir) / "unrelated-keep.json"
+        other.write_text(
+            '{"plan":{"plan_id":"plan-keep"},"execution":{"status":"dry_run"},'
+            '"session":{"session_id":"other-session"}}',
+            encoding="utf-8",
+        )
         row = self.page.locator(f'[data-session-id="{session_id}"]')
         row.hover()
         row.locator("[data-session-rename]").click()
@@ -304,10 +310,12 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         )
         status = self.harness.session_status(session_id)
         file_exists = self.harness.session_file_exists(session_id)
-        runs_after = self.harness.run_names()
-        print(" GET:", status, "file:", file_exists, "runs after:", runs_after)
+        runs_after = set(self.harness.run_names())
+        print(" GET:", status, "file:", file_exists, "runs after:", sorted(runs_after))
         self.assertFalse(file_exists)
-        self.assertEqual(runs_after, runs_before)
+        for name in runs_before:
+            self.assertNotIn(name, runs_after)
+        self.assertIn("unrelated-keep.json", runs_after)
 
     def test_background_unlocks_composer(self) -> None:
         """Background 解开输入框，进度条还在。"""

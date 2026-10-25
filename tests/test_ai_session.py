@@ -168,6 +168,122 @@ class TestAiSession(unittest.TestCase):
             self.assertNotIn("active_design", on_disk)
             self.assertNotIn("future_field", on_disk)
 
+    def test_append_messages_stamps_created_at(self) -> None:
+        """append 盖上 created_at；已有值保留；旧 JSON 无字段仍可加载。"""
+
+        print("\n[TestAiSession] append messages stamps created_at")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("ts-1")
+            state.append_user_text("hello")
+            state.append_messages(
+                [
+                    {
+                        "kind": "ask",
+                        "text": "Answer",
+                        "payload": {"sources": ["kb"]},
+                        "created_at": "2026-01-02T03:04:05Z",
+                    }
+                ]
+            )
+            print(" stamped user:", state.messages[0])
+            print(" kept ask:", state.messages[1])
+            self.assertIn("created_at", state.messages[0])
+            self.assertTrue(str(state.messages[0]["created_at"]).endswith("Z"))
+            self.assertEqual(state.messages[1]["created_at"], "2026-01-02T03:04:05Z")
+            sessions.save(state)
+            loaded = sessions.load("ts-1")
+            print(" loaded created_at:", [row.get("created_at") for row in loaded.messages])
+            self.assertEqual(loaded.messages[1]["created_at"], "2026-01-02T03:04:05Z")
+            path = sessions.path_for("legacy")
+            path.write_text(
+                json.dumps(
+                    {
+                        "session_id": "legacy",
+                        "task": None,
+                        "messages": [{"kind": "ask", "text": "old", "payload": {}}],
+                        "attachments": [],
+                        "agent_auto": False,
+                        "name": "",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            legacy = sessions.load("legacy")
+            print(" legacy message:", legacy.messages[0])
+            self.assertEqual(legacy.messages[0]["text"], "old")
+            self.assertNotIn("created_at", legacy.messages[0])
+
+    def test_delete_session_cascades_owned_runs(self) -> None:
+        """DELETE 清本会话 run / plan.md / pinned / PNG；他会话与 strategies 留下。"""
+
+        print("\n[TestAiSession] delete session cascades owned runs")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            sessions = SessionStore(store)
+            state = ConversationState.empty("own")
+            state.append_user_text("plan")
+            state.append_messages(
+                [
+                    {
+                        "kind": "plan_ready",
+                        "text": "Plan ready",
+                        "payload": {"plan_id": "plan_keep", "run_id": "run_msg"},
+                    }
+                ]
+            )
+            sessions.save(state)
+            store.save_run(
+                "run_msg",
+                {
+                    "plan": {"plan_id": "plan_keep"},
+                    "execution": {"status": "dry_run"},
+                    "session": {"session_id": "own"},
+                },
+            )
+            store.save_plan_md("run_msg", "# plan")
+            store.pin_run("run_msg", tag="keep")
+            orphan = "run_orphan"
+            store.save_run(
+                orphan,
+                {
+                    "plan": {"plan_id": "plan_orphan"},
+                    "execution": {"status": "success"},
+                    "session": {"session_id": "own"},
+                },
+            )
+            png_dir = store.base_dir / "artifacts"
+            png_dir.mkdir(parents=True, exist_ok=True)
+            png_path = png_dir / f"backtest_{orphan}.png"
+            png_path.write_bytes(b"png")
+            other = "run_other"
+            store.save_run(
+                other,
+                {
+                    "plan": {"plan_id": "plan_other"},
+                    "execution": {"status": "dry_run"},
+                    "session": {"session_id": "other"},
+                },
+            )
+            store.save_plan_md(other, "# other")
+            strat = store.strategies_dir / "KeepMe.py"
+            strat.write_text("class KeepMe: pass\n", encoding="utf-8")
+            print(" before:", sorted(p.name for p in store.runs_dir.iterdir()))
+            self.assertTrue(sessions.delete("own"))
+            print(" after runs:", sorted(p.name for p in store.runs_dir.iterdir()))
+            print(" png exists:", png_path.exists(), "strat exists:", strat.exists())
+            self.assertFalse((store.runs_dir / "run_msg.json").exists())
+            self.assertFalse((store.runs_dir / "run_msg.plan.md").exists())
+            self.assertFalse(any(store.pinned_dir.glob("run_msg*")))
+            self.assertFalse((store.runs_dir / f"{orphan}.json").exists())
+            self.assertFalse(png_path.exists())
+            self.assertTrue((store.runs_dir / f"{other}.json").exists())
+            self.assertTrue((store.runs_dir / f"{other}.plan.md").exists())
+            self.assertTrue(strat.exists())
+            self.assertFalse(sessions.path_for("own").exists())
+
     def test_open_design_roundtrip(self) -> None:
         """设计环字段不再落盘；无 live_design 方法。"""
 

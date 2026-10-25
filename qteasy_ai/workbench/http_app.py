@@ -730,11 +730,17 @@ class WorkbenchHttp:
         return JSONResponse(row)
 
     async def delete_session(self, request: Request) -> JSONResponse:
-        """DELETE /v1/session/{session_id}：删 session JSON 与旁路附件目录。"""
+        """DELETE /v1/session/{session_id}：删会话、附件与该会话拥有的 run / plan / PNG。"""
 
         session_id = str(request.path_params.get("session_id") or "").strip()
         if not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        if is_live_running(session_id):
+            return _error(
+                "RUN_IN_PROGRESS",
+                "Stop the current run in this session before deleting it.",
+                409,
+            )
         store = SessionStore(self.assistant.memory_store)
         if not store.delete(session_id):
             return _error("SESSION_NOT_FOUND", "Session not found.", 404)

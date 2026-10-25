@@ -491,24 +491,63 @@ html[data-theme="light"] .mode-notice {
   font-size: 12px;
 }
 .chat-md pre code { background: transparent; padding: 0; }
-.chat-md .md-code {
+.chat-md .md-code,
+.plan-md-html .md-code {
   margin: 0.6em 0;
   background: var(--bg-code);
   border-radius: 4px;
   overflow: auto;
 }
-.chat-md .md-code-lang {
+.chat-md .md-code-lang,
+.plan-md-html .md-code-lang {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-muted);
   text-align: right;
   padding: 4px 8px 0;
 }
-.chat-md .md-code pre {
+.chat-md .md-code pre,
+.plan-md-html .md-code pre {
   margin: 0;
   background: transparent;
   padding: 4px 8px 8px;
 }
+.md-code-copy {
+  display: none;
+  padding: 0 2px;
+  line-height: 11px;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+.md-code-copy .copy-icon,
+.output-meta .copy-icon {
+  display: block;
+  vertical-align: middle;
+  pointer-events: none;
+}
+.md-code:hover .md-code-copy,
+.md-code:focus-within .md-code-copy {
+  display: inline-flex;
+  align-items: center;
+}
+.md-code-copy:hover { opacity: 1; }
+.output-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.output-meta .md-code-copy {
+  display: inline-flex;
+  align-items: center;
+}
+.output-age { font-family: var(--mono); }
 .msg-role { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
 .bubble-edit {
   display: none;
@@ -800,6 +839,7 @@ html[data-theme="light"] .composer-row .send-btn.mode-agent {
 .plan-md-html { font-size: 13px; line-height: 1.55; color: var(--text); }
 .plan-md-html h1, .plan-md-html h2, .plan-md-html h3 { color: var(--text-bright); margin: 12px 0 8px; }
 .plan-md-html pre, .plan-md { background: var(--bg-code); padding: 8px; overflow: auto; border-radius: 4px; font-size: 12px; }
+.plan-md-html .md-code pre { border-radius: 0 0 4px 4px; }
 .plan-md-html .mermaid {
   display: flex;
   justify-content: center;

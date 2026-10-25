@@ -21,6 +21,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -368,8 +369,14 @@ def _new_task_id() -> str:
     return "task_" + uuid.uuid4().hex[:12]
 
 
+def _utc_now_iso() -> str:
+    """UTC ISO 秒精度，末尾 ``Z``（与 ``saved_at`` 同写法）。"""
+
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
 def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
-    """把一条可见对话规范成 ``kind`` / ``text`` / ``payload``。
+    """把一条可见对话规范成 ``kind`` / ``text`` / ``payload``，可选 ``created_at``。
 
     Parameters
     ----------
@@ -391,7 +398,11 @@ def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
         return None
     text = str(raw.get("text") or "")
     payload = dict(raw.get("payload") or {}) if isinstance(raw.get("payload"), dict) else {}
-    return {"kind": kind, "text": text, "payload": payload}
+    out: Dict[str, Any] = {"kind": kind, "text": text, "payload": payload}
+    created = str(raw.get("created_at") or "").strip()
+    if created:
+        out["created_at"] = created
+    return out
 
 
 def _coerce_messages(raw: Any) -> List[Dict[str, Any]]:
@@ -772,6 +783,8 @@ class ConversationState:
                 continue
             if not str(item.get("text") or "") and item.get("kind") != "error":
                 continue
+            if not str(item.get("created_at") or "").strip():
+                item["created_at"] = _utc_now_iso()
             if str(item.get("kind") or "") == "plan_ready":
                 pid = str((item.get("payload") or {}).get("plan_id") or "")
                 replaced = False
@@ -915,11 +928,36 @@ class SessionStore:
         return self.path_for(session_id).is_file()
 
     def delete(self, session_id: str) -> bool:
-        """删除 session JSON、旁路 transcript 与 ``sessions/{stem}/``；不碰 ``runs/``。"""
+        """删除 session JSON、旁路目录，以及该会话拥有的 run / plan / pinned / PNG。"""
 
         path = self.path_for(session_id)
         if not path.is_file():
             return False
+        extra_run_ids: List[str] = []
+        extra_plan_ids: List[str] = []
+        try:
+            conv = self.load(session_id)
+        except Exception:
+            conv = None
+        if conv is not None:
+            for row in conv.messages:
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                rid = str(payload.get("run_id") or "").strip()
+                pid = str(payload.get("plan_id") or "").strip()
+                if rid:
+                    extra_run_ids.append(rid)
+                if pid:
+                    extra_plan_ids.append(pid)
+            if conv.task is not None:
+                if str(conv.task.run_id or "").strip():
+                    extra_run_ids.append(str(conv.task.run_id).strip())
+                if str(conv.task.plan_id or "").strip():
+                    extra_plan_ids.append(str(conv.task.plan_id).strip())
+        self.memory_store.delete_session_owned_runs(
+            session_id,
+            extra_run_ids=extra_run_ids,
+            extra_plan_ids=extra_plan_ids,
+        )
         try:
             path.unlink()
         except OSError:
