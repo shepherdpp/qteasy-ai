@@ -330,9 +330,7 @@ def project_human_cards(
                     "sources": list(sources),
                 }
         cards.append(make_card("ask", answer, card_payload))
-        err = _enrich_error(raw.get("error") if isinstance(raw.get("error"), dict) else None)
-        if err:
-            cards.append(make_card("error", _error_card_text(err), dict(err)))
+        # R1：Ask 未命中只留一条 Assistant；机器可读 error 仍在顶层 payload。
         return cards
 
     clar = _clarification_blob(raw)

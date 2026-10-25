@@ -21,12 +21,21 @@ _NEEDS_PROVIDER_MESSAGE = (
     "Follow-up questions, references to earlier turns, and relations need a configured language model. "
     "Without a provider, Ask only answers a self-contained question."
 )
+_NEEDS_PROVIDER_ANSWER_ZH = (
+    "追问、指代前文以及关联需要配置大模型。"
+    "未配置 Provider 时，Ask 只回答本句就能命中的自足问题。"
+)
 _OFFLINE_NOT_FOUND_MESSAGE = "No matching knowledge snippet. Try Plan mode for executable requests."
 _OFFLINE_NOT_FOUND_ANSWER = (
     "No matching qteasy knowledge snippet was found for this question. "
     "Ask will not invent an answer from an empty knowledge base. "
     "If you want to list strategies, download data, backtest, or optimize, "
     "use Plan or preview instead of Ask."
+)
+_OFFLINE_NOT_FOUND_ANSWER_ZH = (
+    "官方知识库中没有与这个问题匹配的条目。"
+    "Ask 不会在空库上编造答案。"
+    "若要列出策略、下载数据、回测或优化，请改用 Plan 或 preview。"
 )
 _NAN_TITLE = "NaN trade prices must not be filled"
 _NAN_SUMMARY = (
@@ -163,6 +172,10 @@ class TestAiAskEngine(unittest.TestCase):
         """KB 未命中 → 英文 not_found，建议改用 Plan，禁止空库瞎编。"""
 
         print("\n[TestAiAskEngine] KB miss")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.human_card import project_human_cards
+        from qteasy_ai.memory_store import MemoryStore
+
         fake = FakeLLMProvider(replies=["I made this up without sources."])
         engine = AskEngine(knowledge_base=self.kb, provider=fake)
         result = engine.ask("quantum foam meaning of life xyzzy-no-match")
@@ -174,11 +187,34 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertFalse(payload["ok"])
         error = payload.get("error") or {}
         self.assertEqual(error.get("code"), "NOT_FOUND")
+        self.assertEqual(payload["answer"], _OFFLINE_NOT_FOUND_ANSWER)
+        self.assertEqual(error.get("message"), _OFFLINE_NOT_FOUND_MESSAGE)
         self.assertIn("plan", payload["answer"].lower())
         self.assertEqual(len(fake.prompts), 1)
         self.assertNotIn("Knowledge snippets", fake.prompts[0])
         self.assertNotIn("I made this up", payload["answer"])
         self._assert_no_plan_execution(payload)
+        cards = project_human_cards(payload, requested_mode="ask", query="quantum foam meaning of life xyzzy-no-match")
+        kinds = [item.get("kind") for item in cards]
+        print(" projected kinds:", kinds)
+        self.assertIn("ask", kinds)
+        self.assertNotIn("error", kinds)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(memory_store=MemoryStore(base_dir=temp_dir))
+            assistant.ask_engine = AskEngine(knowledge_base=self.kb, provider=None)
+            dumped = assistant.ask(
+                "quantum foam meaning of life xyzzy-no-match",
+                response_style="raw",
+                session_id="r1-en-miss",
+            )
+            session = assistant.session_store.load("r1-en-miss")
+            msg_kinds = [str(item.get("kind") or "") for item in session.messages]
+            print(" session kinds:", msg_kinds)
+            self.assertFalse(dumped.get("ok"))
+            self.assertEqual(dumped.get("answer"), _OFFLINE_NOT_FOUND_ANSWER)
+            self.assertNotIn("error", msg_kinds)
+            self.assertEqual(msg_kinds.count("ask"), 1)
 
     def test_executable_phrasing_still_zero_skill(self) -> None:
         """办事句进 Ask 仍零 skill；sources 来自 KB，不短路劝退。"""
@@ -795,13 +831,19 @@ class TestAiAskEngine(unittest.TestCase):
             empty = assistant.ask("第二项", response_style="raw", session_id="a7-offline-empty")
             print(" empty code:", (empty.get("error") or {}).get("code"))
             print(" empty message:", (empty.get("error") or {}).get("message"))
+            print(" empty answer:", empty.get("answer"))
             self.assertFalse(empty.get("ok"))
             self.assertEqual((empty.get("error") or {}).get("code"), "NOT_FOUND")
             self.assertEqual((empty.get("error") or {}).get("message"), _OFFLINE_NOT_FOUND_MESSAGE)
-            self.assertEqual(empty.get("answer"), _OFFLINE_NOT_FOUND_ANSWER)
+            self.assertEqual(empty.get("answer"), _OFFLINE_NOT_FOUND_ANSWER_ZH)
             self.assertEqual(empty.get("sources"), [])
             self.assertNotIn("data-downloading", empty.get("answer") or "")
-            self.assertIsNone(assistant.session_store.load("a7-offline-empty").task)
+            empty_session = assistant.session_store.load("a7-offline-empty")
+            empty_kinds = [str(item.get("kind") or "") for item in empty_session.messages]
+            print(" empty session kinds:", empty_kinds)
+            self.assertNotIn("error", empty_kinds)
+            self.assertEqual(empty_kinds.count("ask"), 1)
+            self.assertIsNone(empty_session.task)
 
             hit = assistant.ask("停牌", response_style="raw", session_id="a7-offline-hist")
             print(" gold sources:", hit.get("sources"))
@@ -811,21 +853,57 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertIn("must not be filled with 1", hit.get("answer") or "")
             missed = assistant.ask("第二项", response_style="raw", session_id="a7-offline-hist")
             print(" history miss message:", (missed.get("error") or {}).get("message"))
+            print(" history miss answer:", missed.get("answer"))
             print(" history miss sources:", missed.get("sources"))
             self.assertFalse(missed.get("ok"))
             self.assertEqual((missed.get("error") or {}).get("code"), "NOT_FOUND")
             self.assertEqual((missed.get("error") or {}).get("message"), _NEEDS_PROVIDER_MESSAGE)
-            self.assertEqual(missed.get("answer"), _NEEDS_PROVIDER_MESSAGE)
+            self.assertEqual(missed.get("answer"), _NEEDS_PROVIDER_ANSWER_ZH)
             self.assertEqual(missed.get("sources"), [])
             self.assertNotIn("data-downloading", missed.get("answer") or "")
             self.assertNotIn("data-analysis", missed.get("answer") or "")
             self.assertNotIn("data_three_entries", missed.get("answer") or "")
+            hist_session = assistant.session_store.load("a7-offline-hist")
+            hist_kinds = [str(item.get("kind") or "") for item in hist_session.messages]
+            print(" hist session kinds:", hist_kinds)
+            self.assertNotIn("error", hist_kinds)
+            self.assertEqual(hist_kinds.count("ask"), 2)
             again = assistant.ask("停牌", response_style="raw", session_id="a7-offline-hist")
             print(" gold again sources:", again.get("sources"))
             self.assertTrue(again.get("ok"))
             self.assertEqual(again.get("sources"), ["common_errors_nan"])
             self.assertIn("must not be filled with 1", again.get("answer") or "")
             self.assertIsNone(assistant.session_store.load("a7-offline-hist").task)
+
+    def test_zh_kb_miss_one_ask_bubble_no_error_card(self) -> None:
+        """中文空库问句 → 中文静态答文；session 仅一条 ask，无 kind=error。"""
+
+        print("\n[TestAiAskEngine] R1 中文空库单气泡")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(memory_store=MemoryStore(base_dir=temp_dir))
+            payload = assistant.ask(
+                "量子泡沫的人生意义 xyzzy-no-match",
+                response_style="raw",
+                session_id="r1-zh-miss",
+            )
+            print(" ok:", payload.get("ok"))
+            print(" answer:", payload.get("answer"))
+            print(" error:", payload.get("error"))
+            self.assertFalse(payload.get("ok"))
+            self.assertEqual((payload.get("error") or {}).get("code"), "NOT_FOUND")
+            self.assertEqual((payload.get("error") or {}).get("message"), _OFFLINE_NOT_FOUND_MESSAGE)
+            self.assertEqual(payload.get("answer"), _OFFLINE_NOT_FOUND_ANSWER_ZH)
+            self.assertEqual(payload.get("sources"), [])
+            session = assistant.session_store.load("r1-zh-miss")
+            kinds = [str(item.get("kind") or "") for item in session.messages]
+            print(" session kinds:", kinds)
+            self.assertNotIn("error", kinds)
+            self.assertEqual(kinds.count("ask"), 1)
+            ask_card = next(item for item in session.messages if item.get("kind") == "ask")
+            self.assertEqual(ask_card.get("text"), _OFFLINE_NOT_FOUND_ANSWER_ZH)
 
     def test_provider_depth1_neighbor_is_allowed_only_with_menu_card(self) -> None:
         """深度 1 邻居可与菜单卡一起入选；只点邻居则 NOT_FOUND。"""

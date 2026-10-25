@@ -132,6 +132,38 @@ class TestAiHumanCardProjector(unittest.TestCase):
         self.assertIn("Reviewed plan not found", err["text"])
         self.assertTrue(str(err["payload"].get("next_action") or "").strip())
 
+    def test_ask_not_found_projects_ask_only_without_error_card(self) -> None:
+        """Ask 空库：只投影一条 ask，不追加 kind=error（机器可读 error 仍在 payload）。"""
+
+        print("\n[TestAiHumanCardProjector] Ask NOT_FOUND 单气泡")
+        answer = (
+            "官方知识库中没有与这个问题匹配的条目。"
+            "Ask 不会在空库上编造答案。"
+            "若要列出策略、下载数据、回测或优化，请改用 Plan 或 preview。"
+        )
+        payload = {
+            "mode": "ask",
+            "ok": False,
+            "answer": answer,
+            "sources": [],
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "No matching knowledge snippet. Try Plan mode for executable requests.",
+            },
+        }
+        cards = project_human_cards(
+            payload,
+            requested_mode="ask",
+            query="量子泡沫的人生意义",
+            include_user_text=False,
+        )
+        kinds = [item["kind"] for item in cards]
+        print(" kinds:", kinds)
+        print(" ask text:", next(item for item in cards if item["kind"] == "ask")["text"])
+        self.assertEqual(kinds, ["ask"])
+        self.assertEqual(cards[0]["text"], answer)
+        self.assertEqual((cards[0].get("payload") or {}).get("sources"), [])
+
     def test_industry_clarify_samples_enter_error_card(self) -> None:
         """行业 0 精确命中：Tushare 说明与样例必须进人读 error 卡正文。"""
 

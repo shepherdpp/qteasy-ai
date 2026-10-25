@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -39,9 +40,26 @@ _TOPIC_SYSTEM_PROMPT = (
     "When choosing topics, use only topic ids from the registry. "
     "When naming earlier turns, use only turns and source ids from the history index."
 )
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _NEEDS_PROVIDER_MESSAGE = (
     "Follow-up questions, references to earlier turns, and relations need a configured language model. "
     "Without a provider, Ask only answers a self-contained question."
+)
+_NEEDS_PROVIDER_ANSWER_ZH = (
+    "追问、指代前文以及关联需要配置大模型。"
+    "未配置 Provider 时，Ask 只回答本句就能命中的自足问题。"
+)
+_NOT_FOUND_MESSAGE = "No matching knowledge snippet. Try Plan mode for executable requests."
+_NOT_FOUND_ANSWER_EN = (
+    "No matching qteasy knowledge snippet was found for this question. "
+    "Ask will not invent an answer from an empty knowledge base. "
+    "If you want to list strategies, download data, backtest, or optimize, "
+    "use Plan or preview instead of Ask."
+)
+_NOT_FOUND_ANSWER_ZH = (
+    "官方知识库中没有与这个问题匹配的条目。"
+    "Ask 不会在空库上编造答案。"
+    "若要列出策略、下载数据、回测或优化，请改用 Plan 或 preview。"
 )
 
 _CARD_SYSTEM_PROMPT = (
@@ -209,7 +227,7 @@ class AskResponse:
     raw : dict
         机器可读载荷（命中条目、检索上下文）。
     error : dict, optional
-        ``{code, message}``；用户可见 message 为英文。
+        ``{code, message}``；机器可读 message 为英文；用户可见答文在 answer。
     """
 
     mode: str = "ask"
@@ -600,17 +618,12 @@ class AskEngine:
         return [item.strip() for item in raw_ids]
 
     def _not_found(self, *, query: str, depth: str) -> AskResponse:
-        """KB 未命中：英文 not_found，建议 Plan，不调用 LLM。"""
+        """KB 未命中：静态答文跟问句语言，建议 Plan，不调用 LLM。"""
 
-        answer = (
-            "No matching qteasy knowledge snippet was found for this question. "
-            "Ask will not invent an answer from an empty knowledge base. "
-            "If you want to list strategies, download data, backtest, or optimize, "
-            "use Plan or preview instead of Ask."
-        )
+        answer = _NOT_FOUND_ANSWER_ZH if _CJK_RE.search(str(query or "")) else _NOT_FOUND_ANSWER_EN
         error = {
             "code": "NOT_FOUND",
-            "message": "No matching knowledge snippet. Try Plan mode for executable requests.",
+            "message": _NOT_FOUND_MESSAGE,
         }
         return self._pack(
             query=query,
@@ -625,13 +638,18 @@ class AskEngine:
     def _not_found_needs_provider(self, *, query: str, depth: str) -> AskResponse:
         """无 Provider 且已有成功 Ask，但本句自己未命中。不读历史正文。"""
 
+        answer = (
+            _NEEDS_PROVIDER_ANSWER_ZH
+            if _CJK_RE.search(str(query or ""))
+            else _NEEDS_PROVIDER_MESSAGE
+        )
         error = {
             "code": "NOT_FOUND",
             "message": _NEEDS_PROVIDER_MESSAGE,
         }
         return self._pack(
             query=query,
-            answer=_NEEDS_PROVIDER_MESSAGE,
+            answer=answer,
             hits=[],
             sources=[],
             depth=depth,
