@@ -78,8 +78,11 @@ let treeCollapsed = new Set();
 let sessionAttachments = [];
 let attachDragDepth = 0;
 let outputAgeTimer = null;
+let statusNoticeTimer = null;
 const COPY_ICON_SVG =
   '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="2" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+const CHECK_ICON_SVG =
+  '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -307,6 +310,7 @@ function mountShell() {
       </aside>
     </div>
     <div class="statusbar" id="statusbar">
+      <span id="status-notice" class="status-notice" hidden></span>
       <span id="status-provider">Provider —</span>
       <span class="status-sep">·</span>
       <span id="status-env">Environment —</span>
@@ -2887,11 +2891,38 @@ function decorateCodeBlocks(root) {
   });
 }
 
+function showStatusNotice(text, ms) {
+  const el = $("status-notice");
+  if (!el) return;
+  const delay = Number.isFinite(ms) ? Number(ms) : 5000;
+  el.textContent = String(text || "");
+  el.hidden = !el.textContent;
+  if (statusNoticeTimer != null) {
+    window.clearTimeout(statusNoticeTimer);
+    statusNoticeTimer = null;
+  }
+  if (!el.textContent) return;
+  statusNoticeTimer = window.setTimeout(() => {
+    statusNoticeTimer = null;
+    el.textContent = "";
+    el.hidden = true;
+  }, delay);
+}
+
 function flashCopied(btn) {
   if (!btn) return;
+  if (btn._copyFlashTimer != null) {
+    window.clearTimeout(btn._copyFlashTimer);
+    btn._copyFlashTimer = null;
+  }
+  btn.innerHTML = CHECK_ICON_SVG;
   btn.setAttribute("title", "Copied");
-  window.setTimeout(() => {
-    if (btn.isConnected) btn.setAttribute("title", "Copy");
+  showStatusNotice("Text copied to clipboard");
+  btn._copyFlashTimer = window.setTimeout(() => {
+    btn._copyFlashTimer = null;
+    if (!btn.isConnected) return;
+    btn.innerHTML = COPY_ICON_SVG;
+    btn.setAttribute("title", "Copy");
   }, 1500);
 }
 

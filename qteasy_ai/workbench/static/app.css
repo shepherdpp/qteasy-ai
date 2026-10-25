@@ -987,6 +987,14 @@ html[data-theme="light"] .file-tree button.file.tree-plan.is-active {
   font-size: 11px;
   flex-shrink: 0;
 }
+.status-notice {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
 .status-sep { color: var(--border); }
 .settings-panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--text-bright); }
 .settings-panel p { margin: 6px 0; }
