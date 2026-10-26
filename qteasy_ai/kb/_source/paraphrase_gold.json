@@ -196,7 +196,8 @@
       "gold": [
         "signal type",
         "position target",
-        "value signal"
+        "value signal",
+        "什么是 PT"
       ],
       "paraphrases": [
         "目标仓位和按比例下单的信号有什么差别"
@@ -281,7 +282,8 @@
       "id": "qteasy_advantages",
       "gold": [
         "为什么用 qteasy 而不是自己写回测",
-        "why use qteasy instead of writing your own backtest"
+        "why use qteasy instead of writing your own backtest",
+        "qteasy 如何防止未来函数"
       ],
       "paraphrases": [
         "相比自己用 pandas 写回测，qteasy 好在哪里"

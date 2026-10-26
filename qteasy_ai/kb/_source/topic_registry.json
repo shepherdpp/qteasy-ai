@@ -7,7 +7,7 @@
     },
     {
       "id": "overview",
-      "scope": "qteasy 是什么、模块如何串联、相对自己写代码的优势"
+      "scope": "qteasy 是什么、模块如何串联、相对自己写代码的优势、未来函数 / lookahead 窗口隔离"
     },
     {
       "id": "onboarding",
@@ -25,7 +25,7 @@
     },
     {
       "id": "strategy",
-      "scope": "策略、信号、Operator"
+      "scope": "策略、信号、Operator、PT/PS/VS"
     },
     {
       "id": "backtest",

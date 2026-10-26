@@ -65,7 +65,10 @@ _NOT_FOUND_ANSWER_ZH = (
 _CARD_SYSTEM_PROMPT = (
     "You select knowledge cards for a qteasy Ask question. "
     "Reply with one JSON object and no other text. "
-    "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select."
+    "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select. "
+    "When one question covers multiple matters, pick one card per matter you can cover "
+    "(still at most 3 ids). If a matter has no matching card, still select cards for the "
+    "matters that do; do not reply with {\"uncertain\": true} for the whole question."
 )
 
 _COMPOSE_CLAUSES = {

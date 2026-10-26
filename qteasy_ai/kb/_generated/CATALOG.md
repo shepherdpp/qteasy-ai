@@ -313,6 +313,7 @@
   - signal type
   - position target
   - value signal
+  - 什么是 PT
 
 ## qteasy_advantages
 
@@ -325,6 +326,7 @@
 - questions:
   - 为什么用 qteasy 而不是自己写回测
   - why use qteasy instead of writing your own backtest
+  - qteasy 如何防止未来函数
 
 ## refill_bounded
 
