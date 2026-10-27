@@ -32,6 +32,17 @@
   - backtest intro
   - run backtest
 
+## builtin_strategy_lookup
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/4. builtin_strategies.md
+- relations:
+  - see_also -> operator_create
+  - see_also -> strategy_overview
+- questions:
+  - 怎么查阅内置策略文档
+
 ## capability_map
 
 - type: concept
@@ -321,6 +332,18 @@
   - 用户知识库
   - 官方知识库
 
+## operator_create
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/2. operator.md
+- relations:
+  - see_also -> operator_run_freq
+  - see_also -> strategy_overview
+  - see_also -> strategy_blender
+- questions:
+  - 怎么创建 Operator
+
 ## operator_run_freq
 
 - type: concept
@@ -328,6 +351,7 @@
 - manual_anchor: docs/source/manage_strategies/2. operator.md
 - relations:
   - see_also -> common_errors_run_freq
+  - see_also -> operator_create
 - questions:
   - run timing
   - 运行频率
@@ -351,9 +375,11 @@
 
 - type: concept
 - topics: strategy
-- manual_anchor: docs/source/manage_strategies/5. strategy_bases.md
+- manual_anchor: docs/source/manage_strategies/3. group_and_blender.md
 - relations:
   - see_also -> strategy_builder_intro
+  - see_also -> strategy_blender
+  - see_also -> strategy_bases
 - questions:
   - signal type
   - position target
@@ -400,6 +426,31 @@
   - side effect
   - auto execute
 
+## strategy_bases
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/5. strategy_bases.md
+- relations:
+  - see_also -> pt_ps_vs
+  - see_also -> strategy_realize
+  - see_also -> strategy_overview
+- questions:
+  - 三种策略基类有什么区别
+  - 每只股票用不同参数怎么设
+
+## strategy_blender
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/3. group_and_blender.md
+- relations:
+  - see_also -> pt_ps_vs
+  - see_also -> operator_create
+  - see_also -> strategy_overview
+- questions:
+  - blender 是什么
+
 ## strategy_builder_intro
 
 - type: concept
@@ -407,12 +458,49 @@
 - manual_anchor: docs/source/manage_strategies/6. custom_strategy.md
 - relations:
   - see_also -> pt_ps_vs
+  - see_also -> strategy_realize
   - plan_handoff -> ask_plan_agent
 - questions:
   - generate a strategy
   - 写策略
   - 双均线
   - 金叉
+
+## strategy_overview
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/1. overview.md
+- relations:
+  - see_also -> operator_create
+  - see_also -> strategy_blender
+  - see_also -> strategy_bases
+  - see_also -> builtin_strategy_lookup
+- questions:
+  - 策略、Operator 和 Group 各管什么
+
+## strategy_realize
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/6. custom_strategy.md
+- relations:
+  - see_also -> strategy_builder_intro
+  - see_also -> strategy_trace
+  - see_also -> strategy_bases
+  - see_also -> operator_create
+- questions:
+  - 自定义策略的 realize 要返回什么
+
+## strategy_trace
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/7. trace strategy.md
+- relations:
+  - see_also -> strategy_realize
+- questions:
+  - 怎么追踪策略中间变量
 
 ## what_is_qteasy
 

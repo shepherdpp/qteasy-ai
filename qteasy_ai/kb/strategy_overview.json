@@ -1,0 +1,26 @@
+{
+  "id": "strategy_overview",
+  "tags": ["strategy", "operator", "group", "overview"],
+  "keywords": [
+    "策略、Operator 和 Group 各管什么",
+    "Strategy Operator Group",
+    "策略是什么",
+    "Operator 是什么",
+    "Group 是什么",
+    "策略容器"
+  ],
+  "title": "Strategy, Operator, and Group roles",
+  "summary": "Strategy computes signals; Operator schedules strategies; Group holds strategies that share timing. This card names the three roles only—creation, mixing, bases, and lookup are separate cards.",
+  "narrative": "In qteasy, three names work together:\n\n- Strategy: given history DataTypes and tunable parameters, realize() returns a trading signal for the current bar.\n- Operator: holds strategies, sets how they run (timing and signal_type as construction knobs), and produces a unified signal stream for backtest or live.\n- Group: strategies that share the same run timing land in one Group; that Group can mix their outputs with a blender.\n\nThis card only answers what each word means. How to construct an Operator, how blender works, which base class to inherit, and how to look up built-in ids are separate strategy topics. Signal-number meanings (target weight versus order size) are a separate card too.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='pt')\nprint(type(op).__name__, list(op.groups.keys()))",
+  "risk_notes": "Ask explains roles only. Creating files, running backtests, and listing every built-in id are other cards or Plan.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/1. overview.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "operator_create"},
+    {"rel": "see_also", "to": "strategy_blender"},
+    {"rel": "see_also", "to": "strategy_bases"},
+    {"rel": "see_also", "to": "builtin_strategy_lookup"}
+  ]
+}

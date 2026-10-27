@@ -1,0 +1,24 @@
+{
+  "id": "builtin_strategy_lookup",
+  "tags": ["builtin", "lookup", "built_in_list", "built_in_doc"],
+  "keywords": [
+    "怎么查阅内置策略文档",
+    "查阅内置策略",
+    "built_in_doc",
+    "built_in_list",
+    "get_strategy_by_id",
+    "how to look up built-in strategy docs"
+  ],
+  "title": "Look up built-in strategies by API",
+  "summary": "Use built_in_list, built_in_doc, and get_strategy_by_id to inspect built-ins. This card teaches the three lookup calls—not a full id catalog, and not live strategy_meta injection.",
+  "narrative": "qteasy ships many built-in strategies. Look them up with three calls:\n\n- qt.built_in_list() — all ids, or pass a fuzzy string to filter.\n- qt.built_in_doc(stg_id) — docstring for parameters and rules.\n- qt.get_strategy_by_id(stg_id) — an instance you can add to an Operator.\n\nAfter you have an id or instance, put it on an Operator with the Operator creation card. This card does not print the full ~70-id table; Ask can also answer a concrete id or an explicit list-builtins question via the live strategy_meta adapter. Ask never writes strategy files from this card.",
+  "python_code": "import qteasy as qt\nids = qt.built_in_list()\nprint(ids[:5])\nprint(qt.built_in_doc('dma')[:200])\nstg = qt.get_strategy_by_id('dma')\nprint(type(stg).__name__)",
+  "risk_notes": "Do not mirror every built-in id into the KB. Prefer built_in_doc or Ask strategy_meta for a concrete id.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/4. builtin_strategies.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "operator_create"},
+    {"rel": "see_also", "to": "strategy_overview"}
+  ]
+}

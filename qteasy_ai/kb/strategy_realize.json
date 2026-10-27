@@ -1,0 +1,27 @@
+{
+  "id": "strategy_realize",
+  "tags": ["realize", "Parameter", "window_length", "custom"],
+  "keywords": [
+    "自定义策略的 realize 要返回什么",
+    "realize 返回什么",
+    "Parameter",
+    "window_length",
+    "get_data",
+    "get_pars",
+    "自定义策略"
+  ],
+  "title": "Custom strategy: Parameter, data window, realize()",
+  "summary": "Declare Parameter and data windows, implement realize() with get_pars / get_data, then add_strategy. File generation is StrategyBuilder (Plan). Tutorials 5–7 executable loops are out of this card.",
+  "narrative": "A hand-written custom strategy needs three pieces:\n\n1. Parameters — declare Parameter objects (name, range, default) and pass them as pars=[...] in __init__.\n2. Data window — declare required DataTypes, window_length, and related flags so the framework prepares history; inside realize() call get_data(dtype_id) and get_pars().\n3. realize() — no arguments; return the signal shape your base class expects.\n\nThen add the instance with Operator.add_strategy (details on the Operator creation card). Generating a strategy file from natural language is StrategyBuilder on Plan—Ask does not write files.\n\nTutorials chapters 5–7 closed runnable loops are out of this Ask card (later milestone). Tracing intermediate variables inside realize() is a separate card.",
+  "python_code": "import qteasy as qt\nfrom qteasy import RuleIterator, Parameter\n\nclass SimpleDMA(RuleIterator):\n    def __init__(self):\n        super().__init__(pars=[\n            Parameter('short_period', (5, 20), 10),\n            Parameter('long_period', (20, 60), 30),\n        ])\n    def realize(self):\n        close = self.get_data('close')\n        p = self.get_pars()\n        short = close[-p['short_period']:].mean()\n        long_ = close[-p['long_period']:].mean()\n        return 1.0 if short > long_ else 0.0\n\nop = qt.Operator(signal_type='pt')\nop.add_strategy(SimpleDMA())",
+  "risk_notes": "Ask explains realize contracts only. Codegen and disk writes require Plan / StrategyBuilder.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/6. custom_strategy.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "strategy_builder_intro"},
+    {"rel": "see_also", "to": "strategy_trace"},
+    {"rel": "see_also", "to": "strategy_bases"},
+    {"rel": "see_also", "to": "operator_create"}
+  ]
+}

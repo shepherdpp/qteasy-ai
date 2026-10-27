@@ -450,6 +450,91 @@
       "expect_ids": [
         "historypanel_plot"
       ]
+    },
+    {
+      "id": "strategy_overview",
+      "gold": [
+        "策略、Operator 和 Group 各管什么"
+      ],
+      "paraphrases": [
+        "策略容器和策略组分别扮演什么角色"
+      ],
+      "expect_ids": [
+        "strategy_overview"
+      ]
+    },
+    {
+      "id": "operator_create",
+      "gold": [
+        "怎么创建 Operator"
+      ],
+      "paraphrases": [
+        "Operator 里怎样添加策略并设置参数"
+      ],
+      "expect_ids": [
+        "operator_create"
+      ]
+    },
+    {
+      "id": "strategy_blender",
+      "gold": [
+        "blender 是什么"
+      ],
+      "paraphrases": [
+        "同组多个策略的信号怎么合并"
+      ],
+      "expect_ids": [
+        "strategy_blender"
+      ]
+    },
+    {
+      "id": "builtin_strategy_lookup",
+      "gold": [
+        "怎么查阅内置策略文档"
+      ],
+      "paraphrases": [
+        "内置策略的说明文档从哪个接口读"
+      ],
+      "expect_ids": [
+        "builtin_strategy_lookup"
+      ]
+    },
+    {
+      "id": "strategy_bases",
+      "gold": [
+        "三种策略基类有什么区别",
+        "每只股票用不同参数怎么设"
+      ],
+      "paraphrases": [
+        "择时选股通用三类基类分别什么时候用"
+      ],
+      "expect_ids": [
+        "strategy_bases"
+      ]
+    },
+    {
+      "id": "strategy_realize",
+      "gold": [
+        "自定义策略的 realize 要返回什么"
+      ],
+      "paraphrases": [
+        "手写策略时参数和数据窗怎么接到 realize"
+      ],
+      "expect_ids": [
+        "strategy_realize"
+      ]
+    },
+    {
+      "id": "strategy_trace",
+      "gold": [
+        "怎么追踪策略中间变量"
+      ],
+      "paraphrases": [
+        "realize 里怎样把中间结果记下来事后查看"
+      ],
+      "expect_ids": [
+        "strategy_trace"
+      ]
     }
   ]
 }

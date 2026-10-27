@@ -18,6 +18,7 @@
   "topics": ["strategy"],
   "relations": [
     {"rel": "see_also", "to": "pt_ps_vs"},
+    {"rel": "see_also", "to": "strategy_realize"},
     {"rel": "plan_handoff", "to": "ask_plan_agent"}
   ]
 }

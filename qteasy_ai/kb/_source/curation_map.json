@@ -207,7 +207,8 @@
         "运行频率"
       ],
       "relations": [
-        {"rel": "see_also", "to": "common_errors_run_freq"}
+        {"rel": "see_also", "to": "common_errors_run_freq"},
+        {"rel": "see_also", "to": "operator_create"}
       ]
     },
     {
@@ -235,7 +236,7 @@
       "topics": [
         "strategy"
       ],
-      "manual_anchor": "docs/source/manage_strategies/5. strategy_bases.md",
+      "manual_anchor": "docs/source/manage_strategies/3. group_and_blender.md",
       "questions": [
         "signal type",
         "position target",
@@ -243,7 +244,9 @@
         "什么是 PT"
       ],
       "relations": [
-        {"rel": "see_also", "to": "strategy_builder_intro"}
+        {"rel": "see_also", "to": "strategy_builder_intro"},
+        {"rel": "see_also", "to": "strategy_blender"},
+        {"rel": "see_also", "to": "strategy_bases"}
       ]
     },
     {
@@ -297,6 +300,7 @@
       ],
       "relations": [
         {"rel": "see_also", "to": "pt_ps_vs"},
+        {"rel": "see_also", "to": "strategy_realize"},
         {"rel": "plan_handoff", "to": "ask_plan_agent"}
       ]
     },
@@ -556,6 +560,118 @@
         {"rel": "see_also", "to": "historypanel_analysis"},
         {"rel": "see_also", "to": "data_three_entries"},
         {"rel": "see_also", "to": "capability_map"}
+      ]
+    },
+    {
+      "id": "strategy_overview",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/1. overview.md",
+      "questions": [
+        "策略、Operator 和 Group 各管什么"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "operator_create"},
+        {"rel": "see_also", "to": "strategy_blender"},
+        {"rel": "see_also", "to": "strategy_bases"},
+        {"rel": "see_also", "to": "builtin_strategy_lookup"}
+      ]
+    },
+    {
+      "id": "operator_create",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/2. operator.md",
+      "questions": [
+        "怎么创建 Operator"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "operator_run_freq"},
+        {"rel": "see_also", "to": "strategy_overview"},
+        {"rel": "see_also", "to": "strategy_blender"}
+      ]
+    },
+    {
+      "id": "strategy_blender",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/3. group_and_blender.md",
+      "questions": [
+        "blender 是什么"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "pt_ps_vs"},
+        {"rel": "see_also", "to": "operator_create"},
+        {"rel": "see_also", "to": "strategy_overview"}
+      ]
+    },
+    {
+      "id": "builtin_strategy_lookup",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/4. builtin_strategies.md",
+      "questions": [
+        "怎么查阅内置策略文档"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "operator_create"},
+        {"rel": "see_also", "to": "strategy_overview"}
+      ]
+    },
+    {
+      "id": "strategy_bases",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/5. strategy_bases.md",
+      "questions": [
+        "三种策略基类有什么区别",
+        "每只股票用不同参数怎么设"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "pt_ps_vs"},
+        {"rel": "see_also", "to": "strategy_realize"},
+        {"rel": "see_also", "to": "strategy_overview"}
+      ]
+    },
+    {
+      "id": "strategy_realize",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/6. custom_strategy.md",
+      "questions": [
+        "自定义策略的 realize 要返回什么"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "strategy_builder_intro"},
+        {"rel": "see_also", "to": "strategy_trace"},
+        {"rel": "see_also", "to": "strategy_bases"},
+        {"rel": "see_also", "to": "operator_create"}
+      ]
+    },
+    {
+      "id": "strategy_trace",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/manage_strategies/7. trace strategy.md",
+      "questions": [
+        "怎么追踪策略中间变量"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "strategy_realize"}
       ]
     }
   ]
