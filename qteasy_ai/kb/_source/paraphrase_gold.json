@@ -126,13 +126,27 @@
       "gold": [
         "live trade",
         "live plan",
-        "never auto"
+        "never auto",
+        "会不会自动下单"
       ],
       "paraphrases": [
         "模拟交易会不会自动发出委托"
       ],
       "expect_ids": [
         "live_plan_only"
+      ]
+    },
+    {
+      "id": "live_what",
+      "gold": [
+        "模拟实盘是什么",
+        "what is simulated live"
+      ],
+      "paraphrases": [
+        "按真实时钟跑策略算什么"
+      ],
+      "expect_ids": [
+        "live_what"
       ]
     },
     {

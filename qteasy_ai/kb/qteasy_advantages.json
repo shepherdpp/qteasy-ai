@@ -20,6 +20,7 @@
   "relations": [
     {"rel": "see_also", "to": "what_is_qteasy"},
     {"rel": "see_also", "to": "library_map"},
-    {"rel": "see_also", "to": "lookahead_isolation"}
+    {"rel": "see_also", "to": "lookahead_isolation"},
+    {"rel": "see_also", "to": "live_what"}
   ]
 }

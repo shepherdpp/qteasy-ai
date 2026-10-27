@@ -90,17 +90,34 @@ class TestAiKnowledgeBase(unittest.TestCase):
         self.assertIn("NaN", nan_hits[0].narrative)
         self.assertNotIn("get_history_data", nan_hits[0].python_code)
 
-    def test_retrieve_side_effects_safety(self) -> None:
-        """实盘/副作用问法应命中 side_effects_safety。"""
+    def test_retrieve_live_auto_hits_plan_only(self) -> None:
+        """live 专句「会不会自动执行实盘」应命中 live_plan_only，而非副作用总卡。"""
 
-        print("\n[TestAiKnowledgeBase] retrieve safety")
+        print("\n[TestAiKnowledgeBase] retrieve live auto → live_plan_only")
         hits = self.kb.retrieve("will Agent auto execute live trade")
         ids = [item.id for item in hits]
         types = [item.type for item in hits]
         print(" hit ids:", ids)
         print(" hit types:", types)
+        print(" first narrative:", hits[0].narrative[:200] if hits else "")
+        self.assertTrue(hits)
+        self.assertEqual(ids[0], "live_plan_only")
+        self.assertNotIn("ask_plan_agent", ids)
+        self.assertTrue(all(item_type == "boundary" for item_type in types))
+
+    def test_retrieve_side_effects_safety(self) -> None:
+        """非 live 的副作用/确认问法仍命中 side_effects_safety。"""
+
+        print("\n[TestAiKnowledgeBase] retrieve safety (non-live)")
+        hits = self.kb.retrieve("what side effect labels need confirm before download")
+        ids = [item.id for item in hits]
+        types = [item.type for item in hits]
+        print(" hit ids:", ids)
+        print(" hit types:", types)
+        print(" first narrative:", hits[0].narrative[:200] if hits else "")
         self.assertIn("side_effects_safety", ids)
-        self.assertIn("live", hits[0].narrative.lower())
+        self.assertEqual(ids[0], "side_effects_safety")
+        self.assertIn("side effect", hits[0].narrative.lower())
         self.assertNotIn("ask_plan_agent", ids)
         self.assertTrue(types)
         self.assertTrue(all(item_type == "boundary" for item_type in types))

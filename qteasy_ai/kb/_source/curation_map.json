@@ -45,6 +45,10 @@
           "to": "optimize_intro"
         },
         {
+          "rel": "contrasts_with",
+          "to": "live_what"
+        },
+        {
           "rel": "plan_handoff",
           "to": "side_effects_safety"
         },
@@ -234,7 +238,8 @@
       "questions": [
         "live trade",
         "live plan",
-        "never auto"
+        "never auto",
+        "会不会自动下单"
       ],
       "relations": [
         {
@@ -244,6 +249,32 @@
         {
           "rel": "plan_handoff",
           "to": "side_effects_safety"
+        }
+      ]
+    },
+    {
+      "id": "live_what",
+      "type": "concept",
+      "topics": [
+        "live_boundary"
+      ],
+      "manual_anchor": "docs/source/live_trading/1-overview.md",
+      "questions": [
+        "模拟实盘是什么",
+        "what is simulated live"
+      ],
+      "relations": [
+        {
+          "rel": "contrasts_with",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "live_plan_only"
+        },
+        {
+          "rel": "see_also",
+          "to": "qteasy_advantages"
         }
       ]
     },
@@ -544,6 +575,10 @@
         {
           "rel": "see_also",
           "to": "lookahead_isolation"
+        },
+        {
+          "rel": "see_also",
+          "to": "live_what"
         }
       ]
     },

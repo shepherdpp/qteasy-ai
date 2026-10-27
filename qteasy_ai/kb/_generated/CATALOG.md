@@ -50,6 +50,7 @@
 - manual_anchor: docs/source/back_testing/1. overview.md
 - relations:
   - contrasts_with -> optimize_intro
+  - contrasts_with -> live_what
   - plan_handoff -> side_effects_safety
   - see_also -> backtest_config
   - see_also -> backtest_result
@@ -369,6 +370,20 @@
   - live trade
   - live plan
   - never auto
+  - 会不会自动下单
+
+## live_what
+
+- type: concept
+- topics: live_boundary
+- manual_anchor: docs/source/live_trading/1-overview.md
+- relations:
+  - contrasts_with -> backtest_intro
+  - see_also -> live_plan_only
+  - see_also -> qteasy_advantages
+- questions:
+  - 模拟实盘是什么
+  - what is simulated live
 
 ## lookahead_isolation
 
@@ -518,6 +533,7 @@
   - see_also -> what_is_qteasy
   - see_also -> library_map
   - see_also -> lookahead_isolation
+  - see_also -> live_what
 - questions:
   - 为什么用 qteasy 而不是自己写回测
   - why use qteasy instead of writing your own backtest

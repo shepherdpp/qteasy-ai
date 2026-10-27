@@ -21,6 +21,7 @@
   "topics": ["backtest"],
   "relations": [
     {"rel": "contrasts_with", "to": "optimize_intro"},
+    {"rel": "contrasts_with", "to": "live_what"},
     {"rel": "plan_handoff", "to": "side_effects_safety"},
     {"rel": "see_also", "to": "backtest_config"},
     {"rel": "see_also", "to": "backtest_result"},
