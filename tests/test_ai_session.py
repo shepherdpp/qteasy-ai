@@ -32,7 +32,7 @@ class TestAiSession(unittest.TestCase):
     """测试会话状态字段、往返与损坏降级。"""
 
     def test_empty_session_fields(self) -> None:
-        """空 session 六字段含 name=''，task 为 None。"""
+        """空 session 权威字段含 name='' 与 ask_plain_language=False，task 为 None。"""
 
         print("\n[TestAiSession] empty session fields")
         state = ConversationState.empty("sess-1")
@@ -40,14 +40,17 @@ class TestAiSession(unittest.TestCase):
         print(" payload keys:", sorted(payload.keys()))
         print(" task:", payload["task"])
         print(" name:", payload.get("name"))
+        print(" ask_plain_language:", payload.get("ask_plain_language"))
         self.assertEqual(set(payload.keys()), STATE_KEYS)
         self.assertIn("name", STATE_KEYS)
+        self.assertIn("ask_plain_language", STATE_KEYS)
         self.assertEqual(payload["session_id"], "sess-1")
         self.assertEqual(payload.get("name"), "")
         self.assertIsNone(payload["task"])
         self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["attachments"], [])
         self.assertFalse(payload["agent_auto"])
+        self.assertFalse(payload["ask_plain_language"])
         self.assertFalse(hasattr(ConversationState, "active_intent"))
         self.assertFalse(hasattr(ConversationState, "live_design"))
         self.assertFalse(hasattr(ConversationState, "turns"))

@@ -435,14 +435,20 @@ class QteasyAssistant:
             build_ask_history_index(session.messages, self.ask_engine.knowledge_base)
             if session is not None else None
         )
+        latched_plain = bool(session.ask_plain_language) if session is not None else False
         result: AskResponse = self.ask_engine.ask(
             query,
             explanation_depth=explanation_depth,
             session_context=session_context,
             ask_history=ask_history,
+            plain_language=latched_plain,
         )
         payload = result.to_dict()
         if session is not None:
+            turn_plain = bool((payload.get("raw") or {}).get("ask_plain_language"))
+            if turn_plain and not session.ask_plain_language:
+                session.ask_plain_language = True
+                self.session_store.save(session)
             payload["session"] = {"session_id": session.session_id, "slots_summary": session_context}
         self._attach_human_cards(
             payload,

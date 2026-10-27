@@ -11,7 +11,7 @@
 """闭合 Job 的多轮会话状态。
 
 权威字段：``session_id`` / ``task`` / ``messages`` / ``attachments`` / ``agent_auto``
-加可选用户标签 ``name``（不是 DTO 投影）。
+/ ``ask_plain_language`` 加可选用户标签 ``name``（不是 DTO 投影）。
 """
 
 from __future__ import annotations
@@ -33,7 +33,15 @@ SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"
 VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
 _SKIP_MESSAGE_KINDS = SKIP_MESSAGE_KINDS
 TASK_STATUSES = frozenset({"clarifying", "ready", "running", "done", "cancelled"})
-STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto", "name"})
+STATE_KEYS = frozenset({
+    "session_id",
+    "task",
+    "messages",
+    "attachments",
+    "agent_auto",
+    "ask_plain_language",
+    "name",
+})
 _NAME_MAX = 80
 STALE_RUNNING_NOTICE = "Execution interrupted. Confirm again to retry, or start a new topic."
 
@@ -639,6 +647,7 @@ class ConversationState:
     messages: List[Dict[str, Any]] = field(default_factory=list)
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     agent_auto: bool = False
+    ask_plain_language: bool = False
     name: str = ""
 
     @classmethod
@@ -656,6 +665,7 @@ class ConversationState:
             "messages": list(self.messages),
             "attachments": list(self.attachments),
             "agent_auto": bool(self.agent_auto),
+            "ask_plain_language": bool(self.ask_plain_language),
             "name": clip_session_name(self.name),
         }
 
@@ -684,6 +694,7 @@ class ConversationState:
             messages=_coerce_messages(data.get("messages")),
             attachments=attachments,
             agent_auto=bool(data.get("agent_auto", False)),
+            ask_plain_language=bool(data.get("ask_plain_language", False)),
             name=clip_session_name(data.get("name")),
         )
 
