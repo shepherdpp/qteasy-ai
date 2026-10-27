@@ -656,6 +656,22 @@
       "expect_ids": [
         "lookahead_isolation"
       ]
+    },
+    {
+      "id": "workbench_entry",
+      "gold": [
+        "Plan 在哪",
+        "点哪个按钮",
+        "where is Plan mode",
+        "工作台怎么切到 Plan"
+      ],
+      "paraphrases": [
+        "网页上 Ask 和 Plan 怎么切换",
+        "确认按钮在哪里"
+      ],
+      "expect_ids": [
+        "workbench_entry"
+      ]
     }
   ]
 }

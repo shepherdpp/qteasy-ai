@@ -1,0 +1,27 @@
+{
+  "id": "workbench_entry",
+  "tags": ["workbench", "onboarding", "ui", "confirm", "mode"],
+  "keywords": [
+    "Plan 在哪",
+    "点哪个按钮",
+    "工作台",
+    "workbench",
+    "where is Plan mode",
+    "Confirm",
+    "Ask ▾",
+    "Plan ▾",
+    "模式徽章",
+    "网页入口"
+  ],
+  "title": "Where Ask, Plan, and Confirm are in the web workbench",
+  "summary": "On the web workbench, switch Ask/Plan/Agent with the composer mode badge; Confirm is optional and Ask never clicks it for you.",
+  "narrative": "This card is only about the web workbench shell. It does not list CLI, TUI, or Notebook commands.\n\nMode switch: in the composer, click the mode badge that reads Ask ▾, Plan ▾, or Agent ▾. The menu lists three labels exactly: Ask, Plan, and Agent. Choose Plan when you want a reviewable plan artifact; choose Ask for handbook Q&A that does not execute.\n\nConfirm: when a plan is ready, the chat shows a Plan ready card. The primary button is Confirm. Nearby actions are Change params, Cancel, and View Plan. Confirm is optional — you can keep typing instead of clicking it. Ask mode never clicks Confirm for you and never executes the plan.\n\nWhat Ask and Plan mean as channels is a separate capability card. Do not treat a Python assistant.preview call as the only next step for finding these web buttons.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('Plan 在哪', response_style='raw')['sources'])",
+  "risk_notes": "Ask never confirms a plan. Web button labels are English: Ask, Plan, Agent, Confirm, View Plan.",
+  "type": "concept",
+  "manual_anchor": "",
+  "topics": ["onboarding"],
+  "relations": [
+    {"rel": "see_also", "to": "ask_plan_agent"}
+  ]
+}

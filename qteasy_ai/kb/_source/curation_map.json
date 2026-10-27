@@ -19,6 +19,10 @@
         {
           "rel": "see_also",
           "to": "capability_map"
+        },
+        {
+          "rel": "see_also",
+          "to": "workbench_entry"
         }
       ]
     },
@@ -1286,6 +1290,26 @@
         {
           "rel": "see_also",
           "to": "backtest_engine"
+        }
+      ]
+    },
+    {
+      "id": "workbench_entry",
+      "type": "concept",
+      "topics": [
+        "onboarding"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "Plan 在哪",
+        "点哪个按钮",
+        "where is Plan mode",
+        "工作台怎么切到 Plan"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "ask_plan_agent"
         }
       ]
     }

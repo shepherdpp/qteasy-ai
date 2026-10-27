@@ -12,6 +12,7 @@
 - relations:
   - see_also -> what_is_qteasy
   - see_also -> capability_map
+  - see_also -> workbench_entry
 - questions:
   - run mode
   - 问答
@@ -661,3 +662,16 @@
   - 什么是qteasy
   - qteasy是什么
   - qteasy 是什么
+
+## workbench_entry
+
+- type: concept
+- topics: onboarding
+- manual_anchor: 
+- relations:
+  - see_also -> ask_plan_agent
+- questions:
+  - Plan 在哪
+  - 点哪个按钮
+  - where is Plan mode
+  - 工作台怎么切到 Plan
