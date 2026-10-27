@@ -1,0 +1,28 @@
+{
+  "id": "backtest_result",
+  "tags": ["backtest", "result", "summary", "evaluate"],
+  "keywords": [
+    "回测结果看什么",
+    "backtest result",
+    "complete_values",
+    "summary",
+    "净值曲线",
+    "sharpe",
+    "max_drawdown",
+    "visual"
+  ],
+  "title": "What a backtest result contains",
+  "summary": "Read complete_values, summary, and named metrics such as total return, annual return, Sharpe, max drawdown, and win rate. visual=True draws curves. No invented numbers; trade CSV is a separate card.",
+  "narrative": "qt.run(op, mode=1) returns a backtest result container. Common pieces:\n\n- complete_values — the equity path with cash, value, fee, holdings, and p-{symbol} price columns for the day (missing prices can be NaN).\n- summary — a short roll-up of the run.\n- Named metrics the evaluate chapter lists by meaning only: total return, annual return, Sharpe ratio, max drawdown, win rate (and related ratios when present). Ask never invents numeric values for these.\n\nvisual=True on the run draws equity and drawdown-style charts from the same result. Exporting curves or tables for an external report uses the result object's attributes, not a separate Ask card.\n\nNaN trade prices on a halt or missing bar must not be filled with 1—that rule is the NaN trap card. Row-by-row trade CSV belongs on the trade-log card. How to set the run window and costs belongs on the config card.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\nresult = qt.run(op, mode=1, asset_pool='000001.SZ', invest_start='2020-01-01', invest_end='2023-12-31', visual=False)\nprint(type(result).__name__)",
+  "risk_notes": "Ask never invents Sharpe, drawdown, or return numbers. Formal metrics come from a confirmed run, not from conversation.",
+  "type": "concept",
+  "manual_anchor": "docs/source/back_testing/3. result_structure.md",
+  "topics": ["backtest"],
+  "relations": [
+    {"rel": "see_also", "to": "backtest_intro"},
+    {"rel": "see_also", "to": "backtest_config"},
+    {"rel": "see_also", "to": "backtest_trade_log"},
+    {"rel": "see_also", "to": "common_errors_nan"}
+  ]
+}

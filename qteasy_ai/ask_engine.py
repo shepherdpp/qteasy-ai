@@ -54,6 +54,12 @@ _PLAIN_LANGUAGE_WRITER_CLAUSE = (
     "先人话：优先用日常说法解释；标识符后置或省略，"
     "除非用户明确要看符号或代码。"
 )
+_BACKTEST_OPTIMIZE_OOS_WRITER_CLAUSE = (
+    "When a selected card is about backtest or optimize, you may add one "
+    "annotated general principle: split history into an earlier window and a "
+    "later window and run each once; do not compare by return alone. "
+    "Do not invent a cut date, split ratio, or claim a handbook comparison protocol."
+)
 
 _PLAIN_LANGUAGE_SIGNALS = (
     "不懂代码",
@@ -773,6 +779,12 @@ class AskEngine:
         system = _ASK_SYSTEM_PROMPT
         if plain_language:
             system = f"{system} {_PLAIN_LANGUAGE_WRITER_CLAUSE}"
+        if any(
+            topic in ("backtest", "optimize")
+            for item in hits
+            for topic in item.topics
+        ):
+            system = f"{system} {_BACKTEST_OPTIMIZE_OOS_WRITER_CLAUSE}"
         return str(
             self.provider.chat(
                 prompt,

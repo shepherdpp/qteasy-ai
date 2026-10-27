@@ -1,0 +1,26 @@
+{
+  "id": "optimize_result",
+  "tags": ["optimize", "result", "top-k", "set_parameter"],
+  "keywords": [
+    "最优参数怎么读",
+    "optimize result",
+    "Top-K",
+    "set_parameter",
+    "最优参数",
+    "opti_output_count"
+  ],
+  "title": "Reading optimize results and writing parameters back",
+  "summary": "Each trial stores parameters, objective value, and ranking. Keep Top-K rows, then op.set_parameter to apply. In-sample gains do not define an out-of-sample cut; the manual gives no cut date.",
+  "narrative": "qt.run(op, mode=2) returns an optimize result container. Typical contents: each evaluated parameter set, the objective value used for ranking, and related backtest metrics for that set. Keep the best row and the Top-K list sized by opti_output_count.\n\nWrite a chosen set back with op.set_parameter(stg_id, pars=...). That is the documented write-back call. Do not invent alternate getter names as the only API.\n\nParameters that look good on the same window used for search may look worse on another window. The handbook notes that risk and does not prescribe a cut date, split ratio, or official comparison protocol. Ask never invents those numbers. How many samples to spend and which sampler to pick are other optimize cards.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\n# After mode=2, apply a chosen parameter set:\n# op.set_parameter(stg_id, pars=chosen_pars)\nprint('op.set_parameter writes chosen pars back')",
+  "risk_notes": "Ask never invents objective scores or cut dates. Confirm before any optimize run.",
+  "type": "concept",
+  "manual_anchor": "docs/source/optimization/4. optimization_result.md",
+  "topics": ["optimize"],
+  "relations": [
+    {"rel": "see_also", "to": "optimize_intro"},
+    {"rel": "see_also", "to": "optimize_config"},
+    {"rel": "see_also", "to": "optimize_algorithms"},
+    {"rel": "see_also", "to": "backtest_intro"}
+  ]
+}

@@ -12,8 +12,14 @@
         "问答"
       ],
       "relations": [
-        {"rel": "see_also", "to": "what_is_qteasy"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "what_is_qteasy"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -29,11 +35,35 @@
         "how to backtest",
         "回测入门",
         "backtest intro",
-        "run backtest"
+        "run backtest",
+        "回测是什么",
+        "帮我回测"
       ],
       "relations": [
-        {"rel": "contrasts_with", "to": "optimize_intro"},
-        {"rel": "plan_handoff", "to": "side_effects_safety"}
+        {
+          "rel": "contrasts_with",
+          "to": "optimize_intro"
+        },
+        {
+          "rel": "plan_handoff",
+          "to": "side_effects_safety"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_config"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_result"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_trade_log"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_engine"
+        }
       ]
     },
     {
@@ -49,7 +79,10 @@
         "start and end"
       ],
       "relations": [
-        {"rel": "see_also", "to": "data_three_entries"}
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        }
       ]
     },
     {
@@ -65,7 +98,14 @@
         "停牌"
       ],
       "relations": [
-        {"rel": "see_also", "to": "backtest_intro"}
+        {
+          "rel": "see_also",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_result"
+        }
       ]
     },
     {
@@ -80,7 +120,10 @@
         "not a built-in parameter"
       ],
       "relations": [
-        {"rel": "see_also", "to": "operator_run_freq"}
+        {
+          "rel": "see_also",
+          "to": "operator_run_freq"
+        }
       ]
     },
     {
@@ -98,11 +141,26 @@
         "三入口有什么区别"
       ],
       "relations": [
-        {"rel": "see_also", "to": "refill_bounded"},
-        {"rel": "see_also", "to": "datatype_lookup"},
-        {"rel": "see_also", "to": "data_filter"},
-        {"rel": "see_also", "to": "historypanel_basics"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "refill_bounded"
+        },
+        {
+          "rel": "see_also",
+          "to": "datatype_lookup"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_filter"
+        },
+        {
+          "rel": "see_also",
+          "to": "historypanel_basics"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -118,8 +176,14 @@
         "缺表"
       ],
       "relations": [
-        {"rel": "see_also", "to": "refill_bounded"},
-        {"rel": "next_topic", "to": "refill_bounded"}
+        {
+          "rel": "see_also",
+          "to": "refill_bounded"
+        },
+        {
+          "rel": "next_topic",
+          "to": "refill_bounded"
+        }
       ]
     },
     {
@@ -138,11 +202,26 @@
         "端到端路线图"
       ],
       "relations": [
-        {"rel": "see_also", "to": "what_is_qteasy"},
-        {"rel": "see_also", "to": "notebook_cli"},
-        {"rel": "see_also", "to": "install_and_env"},
-        {"rel": "see_also", "to": "get_help"},
-        {"rel": "next_topic", "to": "data_three_entries"}
+        {
+          "rel": "see_also",
+          "to": "what_is_qteasy"
+        },
+        {
+          "rel": "see_also",
+          "to": "notebook_cli"
+        },
+        {
+          "rel": "see_also",
+          "to": "install_and_env"
+        },
+        {
+          "rel": "see_also",
+          "to": "get_help"
+        },
+        {
+          "rel": "next_topic",
+          "to": "data_three_entries"
+        }
       ]
     },
     {
@@ -158,8 +237,14 @@
         "never auto"
       ],
       "relations": [
-        {"rel": "see_also", "to": "side_effects_safety"},
-        {"rel": "plan_handoff", "to": "side_effects_safety"}
+        {
+          "rel": "see_also",
+          "to": "side_effects_safety"
+        },
+        {
+          "rel": "plan_handoff",
+          "to": "side_effects_safety"
+        }
       ]
     },
     {
@@ -175,7 +260,10 @@
         "命令行"
       ],
       "relations": [
-        {"rel": "see_also", "to": "getting_started"}
+        {
+          "rel": "see_also",
+          "to": "getting_started"
+        }
       ]
     },
     {
@@ -192,7 +280,10 @@
         "官方知识库"
       ],
       "relations": [
-        {"rel": "see_also", "to": "what_is_qteasy"}
+        {
+          "rel": "see_also",
+          "to": "what_is_qteasy"
+        }
       ]
     },
     {
@@ -207,8 +298,18 @@
         "运行频率"
       ],
       "relations": [
-        {"rel": "see_also", "to": "common_errors_run_freq"},
-        {"rel": "see_also", "to": "operator_create"}
+        {
+          "rel": "see_also",
+          "to": "common_errors_run_freq"
+        },
+        {
+          "rel": "see_also",
+          "to": "operator_create"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_config"
+        }
       ]
     },
     {
@@ -223,11 +324,31 @@
         "how to optimize",
         "参数优化",
         "optimize intro",
-        "parameter optimize"
+        "parameter optimize",
+        "优化在做什么",
+        "帮我优化"
       ],
       "relations": [
-        {"rel": "contrasts_with", "to": "backtest_intro"},
-        {"rel": "plan_handoff", "to": "side_effects_safety"}
+        {
+          "rel": "contrasts_with",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "plan_handoff",
+          "to": "side_effects_safety"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_config"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_algorithms"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_result"
+        }
       ]
     },
     {
@@ -244,9 +365,18 @@
         "什么是 PT"
       ],
       "relations": [
-        {"rel": "see_also", "to": "strategy_builder_intro"},
-        {"rel": "see_also", "to": "strategy_blender"},
-        {"rel": "see_also", "to": "strategy_bases"}
+        {
+          "rel": "see_also",
+          "to": "strategy_builder_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_blender"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_bases"
+        }
       ]
     },
     {
@@ -263,10 +393,22 @@
         "帮我下载"
       ],
       "relations": [
-        {"rel": "see_also", "to": "data_three_entries"},
-        {"rel": "see_also", "to": "env_ready"},
-        {"rel": "see_also", "to": "data_minimum"},
-        {"rel": "plan_handoff", "to": "side_effects_safety"}
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "see_also",
+          "to": "env_ready"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_minimum"
+        },
+        {
+          "rel": "plan_handoff",
+          "to": "side_effects_safety"
+        }
       ]
     },
     {
@@ -282,7 +424,10 @@
         "auto execute"
       ],
       "relations": [
-        {"rel": "see_also", "to": "live_plan_only"}
+        {
+          "rel": "see_also",
+          "to": "live_plan_only"
+        }
       ]
     },
     {
@@ -299,9 +444,18 @@
         "金叉"
       ],
       "relations": [
-        {"rel": "see_also", "to": "pt_ps_vs"},
-        {"rel": "see_also", "to": "strategy_realize"},
-        {"rel": "plan_handoff", "to": "ask_plan_agent"}
+        {
+          "rel": "see_also",
+          "to": "pt_ps_vs"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_realize"
+        },
+        {
+          "rel": "plan_handoff",
+          "to": "ask_plan_agent"
+        }
       ]
     },
     {
@@ -319,12 +473,30 @@
         "qteasy 是什么"
       ],
       "relations": [
-        {"rel": "see_also", "to": "ask_plan_agent"},
-        {"rel": "see_also", "to": "getting_started"},
-        {"rel": "see_also", "to": "official_vs_user_kb"},
-        {"rel": "see_also", "to": "library_map"},
-        {"rel": "see_also", "to": "qteasy_advantages"},
-        {"rel": "next_topic", "to": "getting_started"}
+        {
+          "rel": "see_also",
+          "to": "ask_plan_agent"
+        },
+        {
+          "rel": "see_also",
+          "to": "getting_started"
+        },
+        {
+          "rel": "see_also",
+          "to": "official_vs_user_kb"
+        },
+        {
+          "rel": "see_also",
+          "to": "library_map"
+        },
+        {
+          "rel": "see_also",
+          "to": "qteasy_advantages"
+        },
+        {
+          "rel": "next_topic",
+          "to": "getting_started"
+        }
       ]
     },
     {
@@ -339,8 +511,14 @@
         "what modules does qteasy have"
       ],
       "relations": [
-        {"rel": "see_also", "to": "what_is_qteasy"},
-        {"rel": "see_also", "to": "qteasy_advantages"}
+        {
+          "rel": "see_also",
+          "to": "what_is_qteasy"
+        },
+        {
+          "rel": "see_also",
+          "to": "qteasy_advantages"
+        }
       ]
     },
     {
@@ -352,12 +530,21 @@
       "manual_anchor": "docs/source/index.rst",
       "questions": [
         "为什么用 qteasy 而不是自己写回测",
-        "why use qteasy instead of writing your own backtest",
-        "qteasy 如何防止未来函数"
+        "why use qteasy instead of writing your own backtest"
       ],
       "relations": [
-        {"rel": "see_also", "to": "what_is_qteasy"},
-        {"rel": "see_also", "to": "library_map"}
+        {
+          "rel": "see_also",
+          "to": "what_is_qteasy"
+        },
+        {
+          "rel": "see_also",
+          "to": "library_map"
+        },
+        {
+          "rel": "see_also",
+          "to": "lookahead_isolation"
+        }
       ]
     },
     {
@@ -372,7 +559,10 @@
         "what can you help me do"
       ],
       "relations": [
-        {"rel": "see_also", "to": "ask_plan_agent"}
+        {
+          "rel": "see_also",
+          "to": "ask_plan_agent"
+        }
       ]
     },
     {
@@ -388,8 +578,14 @@
         "python version for qteasy"
       ],
       "relations": [
-        {"rel": "see_also", "to": "getting_started"},
-        {"rel": "see_also", "to": "faq_datasource"}
+        {
+          "rel": "see_also",
+          "to": "getting_started"
+        },
+        {
+          "rel": "see_also",
+          "to": "faq_datasource"
+        }
       ]
     },
     {
@@ -404,7 +600,10 @@
         "tushare rate limit"
       ],
       "relations": [
-        {"rel": "see_also", "to": "install_and_env"}
+        {
+          "rel": "see_also",
+          "to": "install_and_env"
+        }
       ]
     },
     {
@@ -419,7 +618,10 @@
         "how to report a bug"
       ],
       "relations": [
-        {"rel": "see_also", "to": "getting_started"}
+        {
+          "rel": "see_also",
+          "to": "getting_started"
+        }
       ]
     },
     {
@@ -435,9 +637,18 @@
         "怎么查一个 DataType"
       ],
       "relations": [
-        {"rel": "see_also", "to": "data_three_entries"},
-        {"rel": "see_also", "to": "data_filter"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_filter"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -451,9 +662,18 @@
         "怎么按行业筛选股票"
       ],
       "relations": [
-        {"rel": "see_also", "to": "datatype_lookup"},
-        {"rel": "see_also", "to": "data_three_entries"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "datatype_lookup"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -469,9 +689,18 @@
         "怎么看本地已经有哪些数据"
       ],
       "relations": [
-        {"rel": "see_also", "to": "capability_map"},
-        {"rel": "see_also", "to": "data_channels"},
-        {"rel": "see_also", "to": "refill_bounded"}
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_channels"
+        },
+        {
+          "rel": "see_also",
+          "to": "refill_bounded"
+        }
       ]
     },
     {
@@ -487,8 +716,14 @@
         "下载时怎么指定数据通道"
       ],
       "relations": [
-        {"rel": "see_also", "to": "datasource_local"},
-        {"rel": "see_also", "to": "refill_bounded"}
+        {
+          "rel": "see_also",
+          "to": "datasource_local"
+        },
+        {
+          "rel": "see_also",
+          "to": "refill_bounded"
+        }
       ]
     },
     {
@@ -502,8 +737,18 @@
         "起步要下载哪些表"
       ],
       "relations": [
-        {"rel": "see_also", "to": "capability_map"},
-        {"rel": "see_also", "to": "refill_bounded"}
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        },
+        {
+          "rel": "see_also",
+          "to": "refill_bounded"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_config"
+        }
       ]
     },
     {
@@ -519,10 +764,22 @@
         "what is HistoryPanel shape"
       ],
       "relations": [
-        {"rel": "see_also", "to": "data_three_entries"},
-        {"rel": "see_also", "to": "historypanel_analysis"},
-        {"rel": "see_also", "to": "historypanel_plot"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "see_also",
+          "to": "historypanel_analysis"
+        },
+        {
+          "rel": "see_also",
+          "to": "historypanel_plot"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -537,11 +794,26 @@
         "HistoryPanel 怎么算收益率"
       ],
       "relations": [
-        {"rel": "see_also", "to": "historypanel_basics"},
-        {"rel": "see_also", "to": "historypanel_plot"},
-        {"rel": "see_also", "to": "data_three_entries"},
-        {"rel": "plan_handoff", "to": "backtest_intro"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "historypanel_basics"
+        },
+        {
+          "rel": "see_also",
+          "to": "historypanel_plot"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "plan_handoff",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -556,10 +828,22 @@
         "怎么画 K 线"
       ],
       "relations": [
-        {"rel": "see_also", "to": "historypanel_basics"},
-        {"rel": "see_also", "to": "historypanel_analysis"},
-        {"rel": "see_also", "to": "data_three_entries"},
-        {"rel": "see_also", "to": "capability_map"}
+        {
+          "rel": "see_also",
+          "to": "historypanel_basics"
+        },
+        {
+          "rel": "see_also",
+          "to": "historypanel_analysis"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        }
       ]
     },
     {
@@ -573,10 +857,22 @@
         "策略、Operator 和 Group 各管什么"
       ],
       "relations": [
-        {"rel": "see_also", "to": "operator_create"},
-        {"rel": "see_also", "to": "strategy_blender"},
-        {"rel": "see_also", "to": "strategy_bases"},
-        {"rel": "see_also", "to": "builtin_strategy_lookup"}
+        {
+          "rel": "see_also",
+          "to": "operator_create"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_blender"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_bases"
+        },
+        {
+          "rel": "see_also",
+          "to": "builtin_strategy_lookup"
+        }
       ]
     },
     {
@@ -590,9 +886,18 @@
         "怎么创建 Operator"
       ],
       "relations": [
-        {"rel": "see_also", "to": "operator_run_freq"},
-        {"rel": "see_also", "to": "strategy_overview"},
-        {"rel": "see_also", "to": "strategy_blender"}
+        {
+          "rel": "see_also",
+          "to": "operator_run_freq"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_overview"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_blender"
+        }
       ]
     },
     {
@@ -606,9 +911,18 @@
         "blender 是什么"
       ],
       "relations": [
-        {"rel": "see_also", "to": "pt_ps_vs"},
-        {"rel": "see_also", "to": "operator_create"},
-        {"rel": "see_also", "to": "strategy_overview"}
+        {
+          "rel": "see_also",
+          "to": "pt_ps_vs"
+        },
+        {
+          "rel": "see_also",
+          "to": "operator_create"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_overview"
+        }
       ]
     },
     {
@@ -622,8 +936,14 @@
         "怎么查阅内置策略文档"
       ],
       "relations": [
-        {"rel": "see_also", "to": "operator_create"},
-        {"rel": "see_also", "to": "strategy_overview"}
+        {
+          "rel": "see_also",
+          "to": "operator_create"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_overview"
+        }
       ]
     },
     {
@@ -638,9 +958,18 @@
         "每只股票用不同参数怎么设"
       ],
       "relations": [
-        {"rel": "see_also", "to": "pt_ps_vs"},
-        {"rel": "see_also", "to": "strategy_realize"},
-        {"rel": "see_also", "to": "strategy_overview"}
+        {
+          "rel": "see_also",
+          "to": "pt_ps_vs"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_realize"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_overview"
+        }
       ]
     },
     {
@@ -654,10 +983,26 @@
         "自定义策略的 realize 要返回什么"
       ],
       "relations": [
-        {"rel": "see_also", "to": "strategy_builder_intro"},
-        {"rel": "see_also", "to": "strategy_trace"},
-        {"rel": "see_also", "to": "strategy_bases"},
-        {"rel": "see_also", "to": "operator_create"}
+        {
+          "rel": "see_also",
+          "to": "strategy_builder_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_trace"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_bases"
+        },
+        {
+          "rel": "see_also",
+          "to": "operator_create"
+        },
+        {
+          "rel": "see_also",
+          "to": "lookahead_isolation"
+        }
       ]
     },
     {
@@ -671,7 +1016,242 @@
         "怎么追踪策略中间变量"
       ],
       "relations": [
-        {"rel": "see_also", "to": "strategy_realize"}
+        {
+          "rel": "see_also",
+          "to": "strategy_realize"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_trade_log"
+        }
+      ]
+    },
+    {
+      "id": "backtest_config",
+      "type": "concept",
+      "topics": [
+        "backtest"
+      ],
+      "manual_anchor": "docs/source/back_testing/2. run_backtest.md",
+      "questions": [
+        "回测区间和成本怎么设",
+        "backtest config"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_result"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_trade_log"
+        },
+        {
+          "rel": "see_also",
+          "to": "operator_run_freq"
+        },
+        {
+          "rel": "see_also",
+          "to": "data_minimum"
+        }
+      ]
+    },
+    {
+      "id": "backtest_result",
+      "type": "concept",
+      "topics": [
+        "backtest"
+      ],
+      "manual_anchor": "docs/source/back_testing/3. result_structure.md",
+      "questions": [
+        "回测结果看什么",
+        "backtest result"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_config"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_trade_log"
+        },
+        {
+          "rel": "see_also",
+          "to": "common_errors_nan"
+        }
+      ]
+    },
+    {
+      "id": "backtest_trade_log",
+      "type": "concept",
+      "topics": [
+        "backtest"
+      ],
+      "manual_anchor": "docs/source/back_testing/4. trade_log.md",
+      "questions": [
+        "交易日志在哪",
+        "trade_log file path"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_config"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_result"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_trace"
+        }
+      ]
+    },
+    {
+      "id": "backtest_engine",
+      "type": "concept",
+      "topics": [
+        "backtest"
+      ],
+      "manual_anchor": "docs/source/back_testing/6. backtest_engine_and_performance.md",
+      "questions": [
+        "回测为什么按时间步走",
+        "backtest engine"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "backtest_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "lookahead_isolation"
+        }
+      ]
+    },
+    {
+      "id": "optimize_config",
+      "type": "concept",
+      "topics": [
+        "optimize"
+      ],
+      "manual_anchor": "docs/source/optimization/2. run_optimization.md",
+      "questions": [
+        "opti_sample_count 是什么",
+        "opti_sample_count"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "optimize_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_algorithms"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_result"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_config"
+        }
+      ]
+    },
+    {
+      "id": "optimize_algorithms",
+      "type": "concept",
+      "topics": [
+        "optimize"
+      ],
+      "manual_anchor": "docs/source/optimization/3. optimization_algorithms.md",
+      "questions": [
+        "网格搜索和蒙特卡洛怎么选",
+        "grid vs montecarlo"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "optimize_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_config"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_result"
+        }
+      ]
+    },
+    {
+      "id": "optimize_result",
+      "type": "concept",
+      "topics": [
+        "optimize"
+      ],
+      "manual_anchor": "docs/source/optimization/4. optimization_result.md",
+      "questions": [
+        "最优参数怎么读",
+        "optimize result Top-K"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "optimize_intro"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_config"
+        },
+        {
+          "rel": "see_also",
+          "to": "optimize_algorithms"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_intro"
+        }
+      ]
+    },
+    {
+      "id": "lookahead_isolation",
+      "type": "concept",
+      "topics": [
+        "overview"
+      ],
+      "manual_anchor": "docs/source/tutorials/3-start-first-strategy.md",
+      "questions": [
+        "qteasy 如何防止未来函数",
+        "lookahead isolation"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "qteasy_advantages"
+        },
+        {
+          "rel": "see_also",
+          "to": "strategy_realize"
+        },
+        {
+          "rel": "see_also",
+          "to": "backtest_engine"
+        }
       ]
     }
   ]

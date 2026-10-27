@@ -24,7 +24,14 @@
           "ids": ["backtest_intro"],
           "answer": "L2-ANSWER-MARKER 确认后才运行回测。",
           "expect_sources": ["backtest_intro"],
-          "menu_ids": ["backtest_intro", "common_errors_nan"],
+          "menu_ids": [
+            "backtest_intro",
+            "backtest_config",
+            "backtest_result",
+            "backtest_trade_log",
+            "backtest_engine",
+            "common_errors_nan"
+          ],
           "excerpt_from": "L1"
         },
         {
@@ -36,7 +43,14 @@
           "ids": ["backtest_intro"],
           "answer": "L2B-ANSWER-MARKER 仍是同一张回测卡。",
           "expect_sources": ["backtest_intro"],
-          "menu_ids": ["backtest_intro", "common_errors_nan"],
+          "menu_ids": [
+            "backtest_intro",
+            "backtest_config",
+            "backtest_result",
+            "backtest_trade_log",
+            "backtest_engine",
+            "common_errors_nan"
+          ],
           "excerpt_from": "L1"
         },
         {

@@ -50,8 +50,9 @@ _DATA_SUMMARY = (
 )
 _BACKTEST_TITLE = "Built-in strategy backtest"
 _BACKTEST_SUMMARY = (
-    "Plan a built-in backtest with strategy_id and an explicit date window; "
-    "confirm before run."
+    "A backtest rehearses rules on a historical window; it is not a promise "
+    "about the future. Plan a built-in run with strategy_id and an explicit "
+    "date window; confirm before run."
 )
 _NAN_ANSWER = "NAN-ANSWER-MARKER"
 _DATA_ANSWER = "DATA-ANSWER-MARKER"
@@ -608,7 +609,17 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
             self.assertNotIn(_DATA_ANSWER, card_prompt)
             self.assertNotIn("参考数据", card_prompt)
-            self.assertEqual(menu_ids, {"backtest_intro", "common_errors_nan"})
+            self.assertEqual(
+                menu_ids,
+                {
+                    "backtest_intro",
+                    "backtest_config",
+                    "backtest_result",
+                    "backtest_trade_log",
+                    "backtest_engine",
+                    "common_errors_nan",
+                },
+            )
             self.assertNotIn("data_three_entries", card_prompt)
             self.assertIn("optimize_intro", card_prompt)
             self.assertNotIn(_NAN_ANSWER, writer_prompt)
@@ -796,7 +807,17 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertEqual(len(fake.prompts) - before, 3)
             self.assertTrue(topic_prompt.startswith("Topic registry:"))
             self.assertIn("Ask history index:", topic_prompt)
-            self.assertEqual(menu_ids, {"backtest_intro", "common_errors_nan"})
+            self.assertEqual(
+                menu_ids,
+                {
+                    "backtest_intro",
+                    "backtest_config",
+                    "backtest_result",
+                    "backtest_trade_log",
+                    "backtest_engine",
+                    "common_errors_nan",
+                },
+            )
             self.assertNotIn("data-downloading", card_prompt)
             self.assertNotIn("data-analysis", card_prompt)
             self.assertNotIn("data_three_entries", card_prompt)
@@ -814,7 +835,17 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertNotIn("Ask history index:", plain.prompts[0])
             self.assertNotIn('"prior"', plain.prompts[0])
             self.assertNotIn("ask_focus", plain.prompts[0])
-            self.assertEqual(set(_menu_line_ids(plain.prompts[1])), {"backtest_intro", "common_errors_nan"})
+            self.assertEqual(
+                set(_menu_line_ids(plain.prompts[1])),
+                {
+                    "backtest_intro",
+                    "backtest_config",
+                    "backtest_result",
+                    "backtest_trade_log",
+                    "backtest_engine",
+                    "common_errors_nan",
+                },
+            )
             self.assertNotIn("data_three_entries", plain.prompts[1])
             self.assertEqual(payload.get("sources"), ["backtest_intro"])
             self.assertNotIn("session", payload)

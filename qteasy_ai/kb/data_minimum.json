@@ -18,6 +18,7 @@
   "topics": ["data-downloading"],
   "relations": [
     {"rel": "see_also", "to": "capability_map"},
-    {"rel": "see_also", "to": "refill_bounded"}
+    {"rel": "see_also", "to": "refill_bounded"},
+    {"rel": "see_also", "to": "backtest_config"}
   ]
 }

@@ -1,0 +1,30 @@
+{
+  "id": "backtest_config",
+  "tags": ["backtest", "config", "qt.run", "mode=1"],
+  "keywords": [
+    "回测区间和成本怎么设",
+    "backtest config",
+    "invest_start",
+    "invest_end",
+    "asset_pool",
+    "cost_rate_buy",
+    "trade_batch_size",
+    "allow_sell_short",
+    "mode=1"
+  ],
+  "title": "Backtest run knobs: pool, window, cash, and costs",
+  "summary": "qt.run(..., mode=1) merges qt.configure with run kwargs. Set asset_pool, invest_start/end, cash, costs, trade_batch_size (minimum 0.01), and allow_sell_short here—not result fields.",
+  "narrative": "Run a backtest with qt.run(op, mode=1, ...). Values from qt.configure merge with run kwargs; kwargs on the call win.\n\nCommon knobs from the backtest chapter:\n\n- asset_pool and asset_type — which symbols to simulate.\n- invest_start and invest_end — the historical window.\n- invest_cash_amounts and optional invest_cash_dates — initial or staged cash.\n- cost_rate_buy, cost_rate_sell, cost_min — commission-style costs.\n- trade_batch_size — minimum trade unit; the documented floor is 0.01 (for example 100 for one A-share lot).\n- allow_sell_short — whether short selling is allowed.\n- trade_log and visual — switches that turn on trade CSV or charts; their file layout and chart reading are other cards.\n\nRun frequency lives on the Operator / Group, not among these run kwargs. Missing local history is a data topic (starter tables and bounded refill), not a config-parameter list.\n\nSlippage and other items the manual leaves to the configure docs are not invented here. Result fields and trade CSV columns belong on the result and trade-log cards.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\nqt.configure(asset_pool='000001.SZ', invest_start='2020-01-01', invest_end='2023-12-31')\nresult = qt.run(op, mode=1)",
+  "risk_notes": "Ask explains knobs only. A real run needs Plan and confirmation. Do not invent undocumented parameter names.",
+  "type": "concept",
+  "manual_anchor": "docs/source/back_testing/2. run_backtest.md",
+  "topics": ["backtest"],
+  "relations": [
+    {"rel": "see_also", "to": "backtest_intro"},
+    {"rel": "see_also", "to": "backtest_result"},
+    {"rel": "see_also", "to": "backtest_trade_log"},
+    {"rel": "see_also", "to": "operator_run_freq"},
+    {"rel": "see_also", "to": "data_minimum"}
+  ]
+}

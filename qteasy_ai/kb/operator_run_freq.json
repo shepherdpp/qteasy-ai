@@ -21,6 +21,7 @@
   "topics": ["strategy"],
   "relations": [
     {"rel": "see_also", "to": "common_errors_run_freq"},
-    {"rel": "see_also", "to": "operator_create"}
+    {"rel": "see_also", "to": "operator_create"},
+    {"rel": "see_also", "to": "backtest_config"}
   ]
 }

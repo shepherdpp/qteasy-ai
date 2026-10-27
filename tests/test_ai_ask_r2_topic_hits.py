@@ -23,7 +23,7 @@ _REGISTRY_PATH = _KB_DIR / "_source" / "topic_registry.json"
 # 固定问句表：无模型金句 + 有模型替身。期望 id 是独立金标准。
 _HIT_TABLE = (
     ("什么是 PT", "pt_ps_vs", ["strategy"], "PT/PS/VS"),
-    ("qteasy 如何防止未来函数", "qteasy_advantages", ["overview"], "未来函数"),
+    ("qteasy 如何防止未来函数", "lookahead_isolation", ["overview"], "未来函数"),
 )
 
 

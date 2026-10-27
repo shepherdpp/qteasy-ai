@@ -6,18 +6,25 @@
     "how to backtest",
     "回测入门",
     "怎么回测",
-    "run backtest"
+    "run backtest",
+    "回测是什么",
+    "帮我回测",
+    "what is backtest"
   ],
   "title": "Built-in strategy backtest",
-  "summary": "Plan a built-in backtest with strategy_id and an explicit date window; confirm before run.",
-  "narrative": "A built-in backtest Job needs a strategy_id (for example macd or DMA). Dates and a symbol pool are optional slots: you can say them in the sentence or let profile.defaults fill optional shares/start/end/freq.\n\nPlan shows `qt.ai.backtest.run_builtin` as dry-run. CLI `run \"<query>\"` is one confirmation. Unattended `agent_auto` also needs `profile.agent.allow_backtest=true`.",
+  "summary": "A backtest rehearses rules on a historical window; it is not a promise about the future. Plan a built-in run with strategy_id and an explicit date window; confirm before run.",
+  "narrative": "A built-in backtest Job needs a strategy_id (for example macd or DMA). In plain words: a backtest rehearses a trading rule on a named historical interval—it is practice on the past, not a promise about the future.\n\nDates and a symbol pool are optional slots: you can say them in the sentence or let profile.defaults fill optional shares/start/end/freq.\n\nHistoryPanel helpers such as returns, portfolio, or cum_return are research checks on a panel. They omit fees, settlement, and MOQ. A formal backtest goes through Operator and the Backtester.\n\nPlan shows `qt.ai.backtest.run_builtin` as dry-run. CLI `run \"<query>\"` is one confirmation. Unattended `agent_auto` also needs `profile.agent.allow_backtest=true`. How to set pool, costs, and dates; how to read results, trade CSV, or the stepping engine are separate backtest cards.",
   "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('用 macd 在沪深300上跑 2018-2023 回测', response_style='raw')\nprint(plan['plan']['steps'][0]['skill_name'])",
-  "risk_notes": "Backtest is high-side-effect (heavy compute). Live trade is never auto-executed.",
+  "risk_notes": "Backtest is high-side-effect (heavy compute). Live trade is never auto-executed. Ask never invents performance numbers.",
   "type": "concept",
   "manual_anchor": "docs/source/back_testing/1. overview.md",
   "topics": ["backtest"],
   "relations": [
     {"rel": "contrasts_with", "to": "optimize_intro"},
-    {"rel": "plan_handoff", "to": "side_effects_safety"}
+    {"rel": "plan_handoff", "to": "side_effects_safety"},
+    {"rel": "see_also", "to": "backtest_config"},
+    {"rel": "see_also", "to": "backtest_result"},
+    {"rel": "see_also", "to": "backtest_trade_log"},
+    {"rel": "see_also", "to": "backtest_engine"}
   ]
 }

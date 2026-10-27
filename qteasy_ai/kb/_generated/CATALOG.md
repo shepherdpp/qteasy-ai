@@ -16,6 +16,33 @@
   - run mode
   - 问答
 
+## backtest_config
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/2. run_backtest.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> backtest_result
+  - see_also -> backtest_trade_log
+  - see_also -> operator_run_freq
+  - see_also -> data_minimum
+- questions:
+  - 回测区间和成本怎么设
+  - backtest config
+
+## backtest_engine
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/6. backtest_engine_and_performance.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> lookahead_isolation
+- questions:
+  - 回测为什么按时间步走
+  - backtest engine
+
 ## backtest_intro
 
 - type: concept
@@ -24,6 +51,10 @@
 - relations:
   - contrasts_with -> optimize_intro
   - plan_handoff -> side_effects_safety
+  - see_also -> backtest_config
+  - see_also -> backtest_result
+  - see_also -> backtest_trade_log
+  - see_also -> backtest_engine
 - questions:
   - 如何用 qteasy 回测
   - 怎么回测
@@ -31,6 +62,36 @@
   - 回测入门
   - backtest intro
   - run backtest
+  - 回测是什么
+  - 帮我回测
+
+## backtest_result
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/3. result_structure.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> backtest_config
+  - see_also -> backtest_trade_log
+  - see_also -> common_errors_nan
+- questions:
+  - 回测结果看什么
+  - backtest result
+
+## backtest_trade_log
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/4. trade_log.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> backtest_config
+  - see_also -> backtest_result
+  - see_also -> strategy_trace
+- questions:
+  - 交易日志在哪
+  - trade_log file path
 
 ## builtin_strategy_lookup
 
@@ -73,6 +134,7 @@
 - manual_anchor: docs/source/back_testing/1. overview.md
 - relations:
   - see_also -> backtest_intro
+  - see_also -> backtest_result
 - questions:
   - missing bar
   - trade price
@@ -122,6 +184,7 @@
 - relations:
   - see_also -> capability_map
   - see_also -> refill_bounded
+  - see_also -> backtest_config
 - questions:
   - 起步要下载哪些表
 
@@ -307,6 +370,19 @@
   - live plan
   - never auto
 
+## lookahead_isolation
+
+- type: concept
+- topics: overview
+- manual_anchor: docs/source/tutorials/3-start-first-strategy.md
+- relations:
+  - see_also -> qteasy_advantages
+  - see_also -> strategy_realize
+  - see_also -> backtest_engine
+- questions:
+  - qteasy 如何防止未来函数
+  - lookahead isolation
+
 ## notebook_cli
 
 - type: concept
@@ -352,9 +428,37 @@
 - relations:
   - see_also -> common_errors_run_freq
   - see_also -> operator_create
+  - see_also -> backtest_config
 - questions:
   - run timing
   - 运行频率
+
+## optimize_algorithms
+
+- type: concept
+- topics: optimize
+- manual_anchor: docs/source/optimization/3. optimization_algorithms.md
+- relations:
+  - see_also -> optimize_intro
+  - see_also -> optimize_config
+  - see_also -> optimize_result
+- questions:
+  - 网格搜索和蒙特卡洛怎么选
+  - grid vs montecarlo
+
+## optimize_config
+
+- type: concept
+- topics: optimize
+- manual_anchor: docs/source/optimization/2. run_optimization.md
+- relations:
+  - see_also -> optimize_intro
+  - see_also -> optimize_algorithms
+  - see_also -> optimize_result
+  - see_also -> backtest_config
+- questions:
+  - opti_sample_count 是什么
+  - opti_sample_count
 
 ## optimize_intro
 
@@ -364,12 +468,31 @@
 - relations:
   - contrasts_with -> backtest_intro
   - plan_handoff -> side_effects_safety
+  - see_also -> optimize_config
+  - see_also -> optimize_algorithms
+  - see_also -> optimize_result
 - questions:
   - 优化入门
   - how to optimize
   - 参数优化
   - optimize intro
   - parameter optimize
+  - 优化在做什么
+  - 帮我优化
+
+## optimize_result
+
+- type: concept
+- topics: optimize
+- manual_anchor: docs/source/optimization/4. optimization_result.md
+- relations:
+  - see_also -> optimize_intro
+  - see_also -> optimize_config
+  - see_also -> optimize_algorithms
+  - see_also -> backtest_intro
+- questions:
+  - 最优参数怎么读
+  - optimize result Top-K
 
 ## pt_ps_vs
 
@@ -394,10 +517,10 @@
 - relations:
   - see_also -> what_is_qteasy
   - see_also -> library_map
+  - see_also -> lookahead_isolation
 - questions:
   - 为什么用 qteasy 而不是自己写回测
   - why use qteasy instead of writing your own backtest
-  - qteasy 如何防止未来函数
 
 ## refill_bounded
 
@@ -489,6 +612,7 @@
   - see_also -> strategy_trace
   - see_also -> strategy_bases
   - see_also -> operator_create
+  - see_also -> lookahead_isolation
 - questions:
   - 自定义策略的 realize 要返回什么
 
@@ -499,6 +623,7 @@
 - manual_anchor: docs/source/manage_strategies/7. trace strategy.md
 - relations:
   - see_also -> strategy_realize
+  - see_also -> backtest_trade_log
 - questions:
   - 怎么追踪策略中间变量
 

@@ -1,0 +1,27 @@
+{
+  "id": "optimize_config",
+  "tags": ["optimize", "config", "mode=2", "opti"],
+  "keywords": [
+    "opti_sample_count 是什么",
+    "opti_sample_count",
+    "opti_output_count",
+    "opti_method",
+    "mode=2",
+    "par_range",
+    "优化参数怎么设"
+  ],
+  "title": "Optimize run knobs: mode=2, sample count, and par_range",
+  "summary": "qt.run(..., mode=2) uses opti_method, opti_sample_count, opti_output_count, and Parameter par_range. Pool and dates match a backtest. Algorithm choice tables are a separate card.",
+  "narrative": "Run optimization with qt.run(op, mode=2, ...). The same asset_pool and invest_start/end as a backtest define each trial's environment.\n\nMain knobs from the optimize chapter:\n\n- opti_method — which sampler or searcher to use (grid, montecarlo, GA, SA, PSO, bayesian, and others the API lists).\n- opti_sample_count — how many samples or iterations to spend.\n- opti_output_count — how many top results to keep.\n- Parameter and par_range on the strategy — the search space the sampler walks.\n\nWhat \"better\" means is set by configuration (for example favoring Sharpe or drawdown). This card does not invent a configuration key name for that objective. Which method fits which space size is the algorithms card. How to read Top-K and write parameters back is the result card.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\nqt.configure(asset_pool='000001.SZ', invest_start='2020-01-01', invest_end='2023-12-31')\nresult = qt.run(op, mode=2, opti_method='grid', opti_sample_count=100, opti_output_count=10)",
+  "risk_notes": "Ask explains knobs only. A real optimize run needs Plan and confirmation.",
+  "type": "concept",
+  "manual_anchor": "docs/source/optimization/2. run_optimization.md",
+  "topics": ["optimize"],
+  "relations": [
+    {"rel": "see_also", "to": "optimize_intro"},
+    {"rel": "see_also", "to": "optimize_algorithms"},
+    {"rel": "see_also", "to": "optimize_result"},
+    {"rel": "see_also", "to": "backtest_config"}
+  ]
+}

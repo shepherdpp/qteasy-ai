@@ -21,7 +21,9 @@
         "how to backtest",
         "回测入门",
         "backtest intro",
-        "run backtest"
+        "run backtest",
+        "回测是什么",
+        "帮我回测"
       ],
       "paraphrases": [
         "如何用qteasy回测",
@@ -182,7 +184,9 @@
         "how to optimize",
         "参数优化",
         "optimize intro",
-        "parameter optimize"
+        "parameter optimize",
+        "优化在做什么",
+        "帮我优化"
       ],
       "paraphrases": [
         "怎样找出一组更好的参数组合"
@@ -282,8 +286,7 @@
       "id": "qteasy_advantages",
       "gold": [
         "为什么用 qteasy 而不是自己写回测",
-        "why use qteasy instead of writing your own backtest",
-        "qteasy 如何防止未来函数"
+        "why use qteasy instead of writing your own backtest"
       ],
       "paraphrases": [
         "相比自己用 pandas 写回测，qteasy 好在哪里"
@@ -534,6 +537,110 @@
       ],
       "expect_ids": [
         "strategy_trace"
+      ]
+    },
+    {
+      "id": "backtest_config",
+      "gold": [
+        "回测区间和成本怎么设",
+        "backtest config"
+      ],
+      "paraphrases": [
+        "回测的资产池和手续费在哪设"
+      ],
+      "expect_ids": [
+        "backtest_config"
+      ]
+    },
+    {
+      "id": "backtest_result",
+      "gold": [
+        "回测结果看什么",
+        "backtest result"
+      ],
+      "paraphrases": [
+        "回测跑完看哪些指标"
+      ],
+      "expect_ids": [
+        "backtest_result"
+      ]
+    },
+    {
+      "id": "backtest_trade_log",
+      "gold": [
+        "交易日志在哪",
+        "trade_log file path"
+      ],
+      "paraphrases": [
+        "回测成交记录存在哪里"
+      ],
+      "expect_ids": [
+        "backtest_trade_log"
+      ]
+    },
+    {
+      "id": "backtest_engine",
+      "gold": [
+        "回测为什么按时间步走",
+        "backtest engine"
+      ],
+      "paraphrases": [
+        "qteasy 回测是怎么按 bar 推进的"
+      ],
+      "expect_ids": [
+        "backtest_engine"
+      ]
+    },
+    {
+      "id": "optimize_config",
+      "gold": [
+        "opti_sample_count 是什么",
+        "opti_sample_count"
+      ],
+      "paraphrases": [
+        "优化时采样次数怎么设"
+      ],
+      "expect_ids": [
+        "optimize_config"
+      ]
+    },
+    {
+      "id": "optimize_algorithms",
+      "gold": [
+        "网格搜索和蒙特卡洛怎么选",
+        "grid vs montecarlo"
+      ],
+      "paraphrases": [
+        "优化算法 grid 和 montecarlo 怎么选"
+      ],
+      "expect_ids": [
+        "optimize_algorithms"
+      ]
+    },
+    {
+      "id": "optimize_result",
+      "gold": [
+        "最优参数怎么读",
+        "optimize result Top-K"
+      ],
+      "paraphrases": [
+        "优化结果 Top-K 怎么用"
+      ],
+      "expect_ids": [
+        "optimize_result"
+      ]
+    },
+    {
+      "id": "lookahead_isolation",
+      "gold": [
+        "qteasy 如何防止未来函数",
+        "lookahead isolation"
+      ],
+      "paraphrases": [
+        "回测里怎么避免用到未来数据"
+      ],
+      "expect_ids": [
+        "lookahead_isolation"
       ]
     }
   ]

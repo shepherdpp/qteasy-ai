@@ -6,18 +6,24 @@
     "parameter optimize",
     "优化入门",
     "参数优化",
-    "how to optimize"
+    "how to optimize",
+    "优化在做什么",
+    "帮我优化",
+    "what is optimize"
   ],
   "title": "Built-in parameter optimization",
-  "summary": "Optimization needs a built-in strategy_id; default sampler is a small Monte Carlo.",
-  "narrative": "Plan `optimize DMA parameters` routes to `qt.ai.optimize.run_builtin`. The recipe fills opti_method=montecarlo and a small opti_sample_count unless you override later.\n\nMissing strategy_id triggers clarify. Unattended optimize requires `allow_optimize`. One-shot `qteasy-ai run` is still a human confirmation and does not read that flag.",
+  "summary": "Optimization is many backtests plus an objective comparison—not a single replay. Needs a built-in strategy_id; default sampler is a small Monte Carlo.",
+  "narrative": "Plan `optimize DMA parameters` routes to `qt.ai.optimize.run_builtin`. Optimization means many backtests under different parameter sets, then ranking them by an objective—it is not a single historical replay.\n\nThe recipe fills opti_method=montecarlo and a small opti_sample_count unless you override later. Missing strategy_id triggers clarify. Unattended optimize requires `allow_optimize`. One-shot `qteasy-ai run` is still a human confirmation and does not read that flag.\n\nHow to set mode=2 knobs, which sampler to choose, and how to read Top-K results are separate optimize cards.",
   "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('optimize DMA parameters', response_style='raw')\nprint(plan['plan']['steps'][0]['inputs'])",
-  "risk_notes": "Optimization is heavy compute. Do not confuse it with a single backtest.",
+  "risk_notes": "Optimization is heavy compute. Do not confuse it with a single backtest. Ask never invents performance numbers.",
   "type": "concept",
   "manual_anchor": "docs/source/optimization/1. overview.md",
   "topics": ["optimize"],
   "relations": [
     {"rel": "contrasts_with", "to": "backtest_intro"},
-    {"rel": "plan_handoff", "to": "side_effects_safety"}
+    {"rel": "plan_handoff", "to": "side_effects_safety"},
+    {"rel": "see_also", "to": "optimize_config"},
+    {"rel": "see_also", "to": "optimize_algorithms"},
+    {"rel": "see_also", "to": "optimize_result"}
   ]
 }

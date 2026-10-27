@@ -18,6 +18,7 @@
   "manual_anchor": "docs/source/manage_strategies/7. trace strategy.md",
   "topics": ["strategy"],
   "relations": [
-    {"rel": "see_also", "to": "strategy_realize"}
+    {"rel": "see_also", "to": "strategy_realize"},
+    {"rel": "see_also", "to": "backtest_trade_log"}
   ]
 }

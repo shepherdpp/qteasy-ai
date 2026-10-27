@@ -22,6 +22,7 @@
     {"rel": "see_also", "to": "strategy_builder_intro"},
     {"rel": "see_also", "to": "strategy_trace"},
     {"rel": "see_also", "to": "strategy_bases"},
-    {"rel": "see_also", "to": "operator_create"}
+    {"rel": "see_also", "to": "operator_create"},
+    {"rel": "see_also", "to": "lookahead_isolation"}
   ]
 }

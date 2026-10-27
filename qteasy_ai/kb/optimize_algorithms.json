@@ -1,0 +1,26 @@
+{
+  "id": "optimize_algorithms",
+  "tags": ["optimize", "algorithm", "grid", "montecarlo"],
+  "keywords": [
+    "网格搜索和蒙特卡洛怎么选",
+    "opti_method grid",
+    "montecarlo",
+    "遗传算法",
+    "bayesian",
+    "PSO",
+    "优化算法"
+  ],
+  "title": "Choosing an optimization algorithm",
+  "summary": "Pick grid for tiny discrete spaces, montecarlo for broader random sampling, and GA/SA/PSO/bayesian for harder or expensive searches. Sample-count knobs live on the config card.",
+  "narrative": "opti_method selects how the search walks Parameter space:\n\n- grid — exhaust or coarse-grid small, mostly discrete spaces.\n- montecarlo — random samples when the space is larger.\n- GA — genetic search for mid-to-large mixed spaces.\n- SA — simulated annealing when local optima are a risk.\n- PSO — particle swarm, stronger on continuous spaces.\n- bayesian — few expensive evaluations when each trial is costly.\n\nPrefer grid or a small montecarlo when dimensions are few. Prefer bayesian or GA/PSO when you need fewer steps in a larger space. How many samples opti_sample_count buys, and how many Top-K rows to keep, belong on the optimize config card—not here. This card does not invent default hyperparameters or performance numbers.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\n# Choose opti_method for the space size; sample counts are configure/run knobs.\nprint('grid | montecarlo | GA | SA | PSO | bayesian')",
+  "risk_notes": "Ask explains selection scenes only. It does not invent algorithm hyperparameters or claim a best Sharpe.",
+  "type": "concept",
+  "manual_anchor": "docs/source/optimization/3. optimization_algorithms.md",
+  "topics": ["optimize"],
+  "relations": [
+    {"rel": "see_also", "to": "optimize_intro"},
+    {"rel": "see_also", "to": "optimize_config"},
+    {"rel": "see_also", "to": "optimize_result"}
+  ]
+}
