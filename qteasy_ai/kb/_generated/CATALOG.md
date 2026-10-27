@@ -123,6 +123,7 @@
   - see_also -> refill_bounded
   - see_also -> datatype_lookup
   - see_also -> data_filter
+  - see_also -> historypanel_basics
   - see_also -> capability_map
 - questions:
   - 三入口
@@ -212,6 +213,50 @@
   - first steps
   - 一分钟跑通
   - 端到端路线图
+
+## historypanel_analysis
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/tutorials/2.5-historypanel-data-analysis.md
+- relations:
+  - see_also -> historypanel_basics
+  - see_also -> historypanel_plot
+  - see_also -> data_three_entries
+  - plan_handoff -> backtest_intro
+  - see_also -> capability_map
+- questions:
+  - 怎么用 HistoryPanel 做数据分析
+  - HistoryPanel 怎么算收益率
+
+## historypanel_basics
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/tutorials/2.4-historypanel-basics.md
+- relations:
+  - see_also -> data_three_entries
+  - see_also -> historypanel_analysis
+  - see_also -> historypanel_plot
+  - see_also -> capability_map
+- questions:
+  - HistoryPanel 的三维是什么
+  - 什么是 HistoryPanel
+  - what is HistoryPanel shape
+
+## historypanel_plot
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/manage_data/02.6. historypanel_visual.md
+- relations:
+  - see_also -> historypanel_basics
+  - see_also -> historypanel_analysis
+  - see_also -> data_three_entries
+  - see_also -> capability_map
+- questions:
+  - HistoryPanel 怎么用 plotly 画图
+  - 怎么画 K 线
 
 ## install_and_env
 

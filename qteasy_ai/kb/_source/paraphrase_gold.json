@@ -410,6 +410,46 @@
       "expect_ids": [
         "data_minimum"
       ]
+    },
+    {
+      "id": "historypanel_basics",
+      "gold": [
+        "HistoryPanel 的三维是什么",
+        "什么是 HistoryPanel",
+        "what is HistoryPanel shape"
+      ],
+      "paraphrases": [
+        "HistoryPanel 的 shape 三个轴分别代表什么"
+      ],
+      "expect_ids": [
+        "historypanel_basics"
+      ]
+    },
+    {
+      "id": "historypanel_analysis",
+      "gold": [
+        "怎么用 HistoryPanel 做数据分析",
+        "HistoryPanel 怎么算收益率"
+      ],
+      "paraphrases": [
+        "在面板上怎么算波动率和截面排名"
+      ],
+      "expect_ids": [
+        "historypanel_analysis"
+      ]
+    },
+    {
+      "id": "historypanel_plot",
+      "gold": [
+        "HistoryPanel 怎么用 plotly 画图",
+        "怎么画 K 线"
+      ],
+      "paraphrases": [
+        "HistoryPanel 交互图画蜡烛怎么开"
+      ],
+      "expect_ids": [
+        "historypanel_plot"
+      ]
     }
   ]
 }

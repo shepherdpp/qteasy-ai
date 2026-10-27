@@ -101,6 +101,7 @@
         {"rel": "see_also", "to": "refill_bounded"},
         {"rel": "see_also", "to": "datatype_lookup"},
         {"rel": "see_also", "to": "data_filter"},
+        {"rel": "see_also", "to": "historypanel_basics"},
         {"rel": "see_also", "to": "capability_map"}
       ]
     },
@@ -499,6 +500,62 @@
       "relations": [
         {"rel": "see_also", "to": "capability_map"},
         {"rel": "see_also", "to": "refill_bounded"}
+      ]
+    },
+    {
+      "id": "historypanel_basics",
+      "type": "concept",
+      "topics": [
+        "data-analysis"
+      ],
+      "manual_anchor": "docs/source/tutorials/2.4-historypanel-basics.md",
+      "questions": [
+        "HistoryPanel 的三维是什么",
+        "什么是 HistoryPanel",
+        "what is HistoryPanel shape"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "data_three_entries"},
+        {"rel": "see_also", "to": "historypanel_analysis"},
+        {"rel": "see_also", "to": "historypanel_plot"},
+        {"rel": "see_also", "to": "capability_map"}
+      ]
+    },
+    {
+      "id": "historypanel_analysis",
+      "type": "concept",
+      "topics": [
+        "data-analysis"
+      ],
+      "manual_anchor": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
+      "questions": [
+        "怎么用 HistoryPanel 做数据分析",
+        "HistoryPanel 怎么算收益率"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "historypanel_basics"},
+        {"rel": "see_also", "to": "historypanel_plot"},
+        {"rel": "see_also", "to": "data_three_entries"},
+        {"rel": "plan_handoff", "to": "backtest_intro"},
+        {"rel": "see_also", "to": "capability_map"}
+      ]
+    },
+    {
+      "id": "historypanel_plot",
+      "type": "concept",
+      "topics": [
+        "data-analysis"
+      ],
+      "manual_anchor": "docs/source/manage_data/02.6. historypanel_visual.md",
+      "questions": [
+        "HistoryPanel 怎么用 plotly 画图",
+        "怎么画 K 线"
+      ],
+      "relations": [
+        {"rel": "see_also", "to": "historypanel_basics"},
+        {"rel": "see_also", "to": "historypanel_analysis"},
+        {"rel": "see_also", "to": "data_three_entries"},
+        {"rel": "see_also", "to": "capability_map"}
       ]
     }
   ]
