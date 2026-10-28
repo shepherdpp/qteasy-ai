@@ -46,6 +46,7 @@ class _Hit:
         self.title = "What is qteasy"
         self.narrative = "qteasy is a local quant library."
         self.python_code = "import qteasy"
+        self.topics = []
 
 
 class TestAiIdentity(unittest.TestCase):
