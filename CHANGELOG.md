@@ -3,6 +3,20 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
+## 0.3.0 (2026-10-28)
+
+### Added
+
+- Ask covers data concepts, HistoryPanel, strategy and signals, backtest and optimize, live-trade boundaries, and how to enter Ask / Plan / Confirm in the workbench.
+- Session-level file attachments in the workbench composer.
+- One-click copy for assistant output, with a checkmark and status-bar notice on success.
+
+### Changed
+
+- A "plain language" preference sticks for the rest of the Ask session. Questions about lookahead bias or PT / PS / VS stay on those topics.
+- When nothing in the official notes matches, Ask leaves one language-matched assistant reply and does not add an error card.
+- Deleting a session also removes the runs it owns. The Sessions list shortens long last-user previews; you can rename a session before it is saved.
+
 ## 0.2.3 (2026-10-15)
 
 ### Added
