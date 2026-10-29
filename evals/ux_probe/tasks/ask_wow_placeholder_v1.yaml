@@ -1,0 +1,10 @@
+# Placeholder for 0.4 Wow — skipped until min_product is met by runner config.
+id: ask_wow_hp_timing_v1
+persona_id: chen_yan
+channel: ask
+min_product: "0.4-wow"
+upgrade_of: ask_researcher_boundary_v1
+goal: HistoryPanel 2.6 择时可执行讲解（0.4 才跑；当前应跳过）。
+turns:
+  - id: T1
+    text: 用 HistoryPanel 做纵向择时怎么跑通？

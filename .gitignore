@@ -32,3 +32,7 @@ htmlcov/
 tests/ai_corpus/manual_record_*.md
 !tests/ai_corpus/manual_record_template.md
 tests/ai_corpus/_drill_*.json
+
+# UX Probe run artifacts (YAML + runner stay tracked)
+evals/ux_probe/runs/*/
+

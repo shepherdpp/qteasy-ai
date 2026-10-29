@@ -1,0 +1,18 @@
+# Beginner onboarding Ask path — post R1–R4 / C5 expectations.
+id: ask_onboarding_v1
+persona_id: lin_xiaoman
+channel: ask
+min_product: "0.3-ask"
+goal: >
+  外行搞懂：不会自动真下单；回测/未来函数有人话；知道网页上 Ask/Plan 和 Confirm 大概在哪。
+  不要求荐股；办事句只解释切 Plan。
+turns:
+  - id: T1
+    text: 我完全不懂代码。你这东西会不会自己拿我的钱去买股票？用大白话说。
+  - id: T2
+    text: 那「回测」和「未来函数」到底啥意思？我妈能听懂的那种讲法。
+  - id: T3
+    text: Plan 模式在网页上点哪个按钮？确认又在哪？别甩给我一串 Python。
+  - id: T4
+    improvise: true
+    hint: 基于上一轮，追问自己还没听懂的一点；保持初学者语气；不要要求荐股。

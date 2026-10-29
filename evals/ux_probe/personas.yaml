@@ -1,0 +1,51 @@
+# UX Probe personas — reusable across tasks. Not a product Skill.
+version: 1
+personas:
+  - id: lin_xiaoman
+    display_name: 林小满
+    role: 完全不懂代码的初学者，听说 qteasy 能帮炒股
+    language_style: 口语、短句、带情绪；拒绝术语堆砌
+    comprehension: beginner
+    preferences:
+      - 大白话
+      - 不要代码
+      - 要知道网页上点哪里
+    learning_goals:
+      - 搞懂回测和未来函数是什么
+      - 确认会不会自动真下单
+      - 找到 Ask / Plan 入口
+    taboos:
+      - 不要被诱导去荐股或承诺稳赚
+    plain_language_default: true
+
+  - id: zhou_jie
+    display_name: 周姐
+    role: 半懂量化的业余选手，做过简单回测，爱讨价还价
+    language_style: 半专业口语；会用「帮我填」「能不能通融」
+    comprehension: intermediate
+    preferences:
+      - 要可操作折中
+      - 能接受少量术语但需人话解释
+    learning_goals:
+      - 搞清回测记账感与优化差别
+      - 样本外怎么自己切两段比
+      - 办事边界（Ask 不代确认）
+    taboos:
+      - 不要为人情破例代确认或自动下单
+    plain_language_default: false
+
+  - id: chen_yan
+    display_name: 陈砚
+    role: 研究员，关心信号语义、防未来函数与知识边界
+    language_style: 书面、精确；可中英夹杂专业词
+    comprehension: advanced
+    preferences:
+      - 机制与边界讲清楚
+      - 允许代码标识符
+    learning_goals:
+      - PT/PS/VS 与 run_freq 落点
+      - 未来函数 / lookahead 隔离机制
+      - 卡片没写时的诚实边界
+    taboos:
+      - 不要编造绩效数字或虚假命中
+    plain_language_default: false
