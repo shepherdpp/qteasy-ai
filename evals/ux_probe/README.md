@@ -12,4 +12,4 @@ cd /Users/jackie/Projects/qteasy-ai
 /opt/anaconda3/envs/py39/bin/python scripts/run_ux_probe.py --task ask_onboarding_v1
 ```
 
-报告默认写到 `runs/<run_id>/`（gitignore）。禁止注册 `qt.ai.ux_probe.*`。
+报告默认写到 `runs/<run_id>/`（gitignore）。每条含 `journey_summary`（问/答/达目的）与 `persona_voice`（第一人称继续用/推荐）。禁止注册 `qt.ai.ux_probe.*`。

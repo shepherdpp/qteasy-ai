@@ -67,6 +67,59 @@ class TestAiUxProbeLoader(unittest.TestCase):
         self.assertIn("非关单", md)
         self.assertIn("ask_wow_hp_timing_v1", md)
 
+    def test_markdown_report_includes_journey_and_persona_voice(self) -> None:
+        """人读报告含旅程摘要与第一人称主观（继续用/推荐）。"""
+
+        print("\n[TestAiUxProbeLoader] 报告含 journey_summary / persona_voice")
+        md = render_markdown(
+            {
+                "generated_at": "2026-10-29T12:00:00Z",
+                "current_product": "0.3-ask",
+                "skipped": [],
+                "runs": [
+                    {
+                        "persona": {
+                            "id": "lin_xiaoman",
+                            "display_name": "林小满",
+                            "role": "初学者",
+                        },
+                        "task": {
+                            "id": "ask_onboarding_v1",
+                            "goal": "搞懂不会自动真下单",
+                        },
+                        "transcript": {"turns": []},
+                        "judge": {
+                            "auto_scores": {"plain_language": 3},
+                            "jackie_scores": {},
+                            "summary": "边界讲清，术语仍偏多",
+                            "journey_summary": {
+                                "asked": "会不会拿我的钱买股票；回测是啥",
+                                "answered": "不会真下单；回测=拿过去练一遍",
+                                "goal_met": "partial",
+                                "note": "安全边界清楚，术语仍硌人",
+                            },
+                            "persona_voice": {
+                                "narrative": "我听懂了不会偷下单，但半路冒出一堆英文词，心里还是紧。",
+                                "continue_use": "犹豫",
+                                "recommend": "不愿意",
+                            },
+                            "friction": [],
+                            "suggested_fixes": ["writer：初学禁出 allow_live"],
+                        },
+                    }
+                ],
+            }
+        )
+        print(" md snippet:\n", "\n".join(md.splitlines()[8:28]))
+        self.assertIn("### 旅程摘要", md)
+        self.assertIn("会不会拿我的钱买股票", md)
+        self.assertIn("部分达到", md)
+        self.assertIn("### 虚拟用户主观（林小满 · 第一人称）", md)
+        self.assertIn("还愿不愿意继续用", md)
+        self.assertIn("犹豫", md)
+        self.assertIn("愿不愿意推荐给朋友", md)
+        self.assertIn("不愿意", md)
+
 
 if __name__ == "__main__":
     unittest.main()

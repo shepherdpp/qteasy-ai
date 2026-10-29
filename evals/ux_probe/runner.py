@@ -249,6 +249,17 @@ def run_probe(
                 "auto_scores": {},
                 "jackie_scores": {},
                 "summary": "",
+                "journey_summary": {
+                    "asked": "",
+                    "answered": "",
+                    "goal_met": "",
+                    "note": "",
+                },
+                "persona_voice": {
+                    "narrative": "",
+                    "continue_use": "",
+                    "recommend": "",
+                },
                 "friction": [],
                 "suggested_fixes": [],
                 "rule_flags": [],

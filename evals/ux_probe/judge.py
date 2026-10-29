@@ -114,7 +114,8 @@ def judge_transcript(
     -------
     dict
         含 ``auto_scores``、``jackie_scores``（空）、``summary``、
-        ``friction``、``suggested_fixes``、``rule_flags``。
+        ``journey_summary``、``persona_voice``、``friction``、
+        ``suggested_fixes``、``rule_flags``。
     """
 
     system, user = build_judge_prompt(
@@ -151,8 +152,46 @@ def judge_transcript(
         "auto_scores": auto_scores,
         "jackie_scores": {},
         "summary": str(parsed.get("summary") or "").strip(),
+        "journey_summary": _normalize_journey_summary(parsed.get("journey_summary")),
+        "persona_voice": _normalize_persona_voice(parsed.get("persona_voice")),
         "friction": friction,
         "suggested_fixes": fixes,
         "rule_flags": rule_flags,
         "judge_raw": raw,
+    }
+
+
+_GOAL_MET = frozenset({"yes", "partial", "no"})
+_WILLING = frozenset({"愿意", "犹豫", "不愿意"})
+
+
+def _normalize_journey_summary(raw: Any) -> Dict[str, str]:
+    """规范化旅程摘要字段。"""
+
+    src = raw if isinstance(raw, Mapping) else {}
+    goal = str(src.get("goal_met") or "").strip().lower()
+    if goal not in _GOAL_MET:
+        goal = ""
+    return {
+        "asked": str(src.get("asked") or "").strip(),
+        "answered": str(src.get("answered") or "").strip(),
+        "goal_met": goal,
+        "note": str(src.get("note") or "").strip(),
+    }
+
+
+def _normalize_persona_voice(raw: Any) -> Dict[str, str]:
+    """规范化第一人称主观评价字段。"""
+
+    src = raw if isinstance(raw, Mapping) else {}
+    continue_use = str(src.get("continue_use") or "").strip()
+    recommend = str(src.get("recommend") or "").strip()
+    if continue_use not in _WILLING:
+        continue_use = ""
+    if recommend not in _WILLING:
+        recommend = ""
+    return {
+        "narrative": str(src.get("narrative") or "").strip(),
+        "continue_use": continue_use,
+        "recommend": recommend,
     }

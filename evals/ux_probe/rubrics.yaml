@@ -45,5 +45,23 @@ judge_instructions: |
   Score each dimension 1–5 using the anchors. Prefer concrete friction and suggested_fixes
   (card rewrite / writer prompt / workbench copy) over vague "train more".
   Never treat this score as a release gate. If red_lines < 5, friction must include the breach.
-  Output JSON only with keys: scores (object), summary (string), friction (string list),
-  suggested_fixes (string list). Leave jackie_scores empty for the runner to fill.
+
+  Also produce two review blocks for humans reading the run report:
+  1) journey_summary — brief third-person digest of this persona's session:
+     - asked: what the user asked across turns (short; may use numbered clauses)
+     - answered: what the assistant covered (short; not a full transcript dump)
+     - goal_met: one of "yes" | "partial" | "no"
+     - note: one sentence on whether the task goal was met for this persona
+  2) persona_voice — first-person subjective judgment AS the persona (match their
+     language_style and comprehension). Write Chinese if the transcript is Chinese.
+     - narrative: one short paragraph — how it felt to use Ask, overall evaluation of
+       the answers (helpful / confusing / cold / etc.)
+     - continue_use: one of "愿意" | "犹豫" | "不愿意" — would I keep using this myself
+     - recommend: one of "愿意" | "犹豫" | "不愿意" — would I recommend it to a friend
+     Be honest relative to the transcript; do not invent features that were not shown.
+
+  Output JSON only with keys: scores (object), summary (string),
+  journey_summary (object with asked/answered/goal_met/note),
+  persona_voice (object with narrative/continue_use/recommend),
+  friction (string list), suggested_fixes (string list).
+  Leave jackie_scores empty for the runner to fill.

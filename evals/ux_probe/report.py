@@ -28,6 +28,13 @@ def write_json_report(path: Path, payload: Mapping[str, Any]) -> Path:
     return path
 
 
+_GOAL_MET_LABEL = {
+    "yes": "达到",
+    "partial": "部分达到",
+    "no": "未达到",
+}
+
+
 def _score_table(scores: Mapping[str, Any]) -> str:
     """Markdown 分数表。"""
 
@@ -38,6 +45,47 @@ def _score_table(scores: Mapping[str, Any]) -> str:
     for key in keys:
         lines.append(f"| {key} | {auto.get(key, '')} | {jackie.get(key, '')} |")
     return "\n".join(lines)
+
+
+def _journey_section(judge: Mapping[str, Any]) -> List[str]:
+    """旅程摘要：问了什么 / 答了什么 / 是否达到目的。"""
+
+    journey = judge.get("journey_summary") if isinstance(judge.get("journey_summary"), Mapping) else {}
+    goal_raw = str(journey.get("goal_met") or "").strip().lower()
+    goal_label = _GOAL_MET_LABEL.get(goal_raw, goal_raw or "（未评）")
+    note = str(journey.get("note") or "").strip()
+    lines = [
+        "### 旅程摘要",
+        "",
+        f"- **问了什么：** {journey.get('asked') or '（无）'}",
+        f"- **答了什么：** {journey.get('answered') or '（无）'}",
+        f"- **是否达到目的：** {goal_label}"
+        + (f"：{note}" if note else ""),
+        "",
+    ]
+    return lines
+
+
+def _persona_voice_section(
+    persona: Mapping[str, Any],
+    judge: Mapping[str, Any],
+) -> List[str]:
+    """虚拟用户第一人称主观评价。"""
+
+    voice = judge.get("persona_voice") if isinstance(judge.get("persona_voice"), Mapping) else {}
+    name = str(persona.get("display_name") or "虚拟用户").strip() or "虚拟用户"
+    narrative = str(voice.get("narrative") or "").strip() or "（无）"
+    continue_use = str(voice.get("continue_use") or "").strip() or "（未评）"
+    recommend = str(voice.get("recommend") or "").strip() or "（未评）"
+    return [
+        f"### 虚拟用户主观（{name} · 第一人称）",
+        "",
+        narrative,
+        "",
+        f"- **还愿不愿意继续用：** {continue_use}",
+        f"- **愿不愿意推荐给朋友：** {recommend}",
+        "",
+    ]
 
 
 def render_markdown(payload: Mapping[str, Any]) -> str:
@@ -74,9 +122,11 @@ def render_markdown(payload: Mapping[str, Any]) -> str:
                 "",
                 f"**摘要：** {judge.get('summary') or '（无）'}",
                 "",
-                "### Friction",
             ]
         )
+        lines.extend(_journey_section(judge))
+        lines.extend(_persona_voice_section(persona, judge))
+        lines.append("### Friction")
         friction = judge.get("friction") or []
         if friction:
             for item in friction:
