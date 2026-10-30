@@ -1,0 +1,30 @@
+{
+  "id": "historypanel_analysis",
+  "tags": ["historypanel", "research", "factor", "returns", "where"],
+  "keywords": [
+    "怎么用 HistoryPanel 做数据分析",
+    "HistoryPanel 怎么算收益率",
+    "returns",
+    "volatility",
+    "research_preset",
+    "where mask",
+    "hp.where",
+    "因子分析",
+    "kline"
+  ],
+  "title": "HistoryPanel research transforms, not a full backtest",
+  "summary": "On an existing panel, compute research series—returns, volatility, kline indicators, where masks, ranks, and coarse portfolio checks. This is research, not Operator/Backtester.",
+  "narrative": "Once you have a HistoryPanel, this card covers research transforms on that panel.\n\nTime helpers include shift, diff, and pct_change. Price-aware helpers include returns and volatility (including adj columns such as close|b when the root resolves). Indicators come from hp.kline.*, research_preset, apply_ta, and candle_pattern. Cross-section tools include rank and zscore (cs/ts). where builds research masks. cum_return, normalize, and portfolio(..., benchmark=...) are coarse study helpers—they omit fees, settlement, and MOQ.\n\nassign and expr here mean derive research columns from existing ones. align_to and resample are hygiene before IC or portfolio work, not a lesson on creating the first panel.\n\nresearch_preset can add indicator columns in one call. Charting those columns is a separate plot topic: hp.plot() does not invent MACD or SMA columns for you.\n\nHistoryPanel research is not a full backtest. Fees, settlement, MOQ, and trade reports belong to Operator and Backtester. When you are ready for a formal run, switch to Plan and ask about built-in backtest; Ask will not emit a plan_id from this card.\n\nThis card does not teach 3-D shape or slice basics, and it does not walk the advanced 2.6–2.8 closed loops.",
+  "python_code": "import qteasy as qt\nhp = qt.get_kline(htypes='close', shares='000001.SZ, 000002.SZ', start='20230101', end='20230630', as_panel=True)\nr = hp.returns()\nprint(r.htypes)",
+  "risk_notes": "portfolio and cum_return are research aggregates. Do not treat them as audited backtest performance. Ask never invents return numbers.",
+  "type": "concept",
+  "manual_anchor": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
+  "topics": ["data-analysis"],
+  "relations": [
+    {"rel": "see_also", "to": "historypanel_basics"},
+    {"rel": "see_also", "to": "historypanel_plot"},
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "plan_handoff", "to": "backtest_intro"},
+    {"rel": "see_also", "to": "capability_map"}
+  ]
+}

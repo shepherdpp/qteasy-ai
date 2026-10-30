@@ -273,17 +273,56 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
         self.assertEqual(self.page.locator("#chat-log .msg-role", has_text="Result").count(), 0)
 
+    def test_rename_empty_session_before_first_message(self) -> None:
+        """空会话先改名再发首条：自定义名钉死，不被首条全文覆盖。"""
+
+        print("\n[TestWorkbenchBrowser] rename empty session before first message")
+        custom = "Pre-named empty"
+        query = "list built-in strategies"
+        session_id = self.session_id()
+        row = self.page.locator(f'[data-session-id="{session_id}"]')
+        row.hover()
+        row.locator("[data-session-rename]").click()
+        self.page.fill(".session-rename", custom)
+        self.page.press(".session-rename", "Enter")
+        self.page.wait_for_function(
+            "() => document.querySelector('#session-title').textContent.includes('Pre-named empty')",
+            timeout=10000,
+        )
+        title_before = self.page.locator("#session-title").inner_text()
+        print(" title before send:", title_before)
+        self.assertIn(custom, title_before)
+        self.send(query)
+        self.page.wait_for_selector("#btn-confirm", timeout=_PLAN_TIMEOUT_MS)
+        self.page.wait_for_function(
+            "() => document.querySelector('#session-title').textContent.includes('Pre-named empty')",
+            timeout=10000,
+        )
+        title = self.page.locator("#session-title").inner_text()
+        sid = row.locator(".sid").inner_text()
+        print(" title after send:", title, "sid:", sid)
+        self.assertIn(custom, title)
+        self.assertEqual(sid.strip(), custom)
+        self.assertNotEqual(sid.strip(), query)
+        self.assertTrue(self.harness.session_file_exists(session_id))
+
     def test_rename_then_delete_session(self) -> None:
-        """改名后删除。session 文件消失，runs/ 还在。"""
+        """改名后删除。session 文件与该会话 run 消失，无关 run 留下。"""
 
         print("\n[TestWorkbenchBrowser] rename then delete")
         self.send("list built-in strategies")
         self.page.wait_for_selector("#btn-confirm", timeout=_PLAN_TIMEOUT_MS)
         session_id = self.session_id()
         self.assertTrue(self.harness.session_file_exists(session_id))
-        runs_before = self.harness.run_names()
-        print(" session:", session_id, "runs:", runs_before)
+        runs_before = set(self.harness.run_names())
+        print(" session:", session_id, "runs:", sorted(runs_before))
         self.assertTrue(runs_before)
+        other = Path(self.harness.store.runs_dir) / "unrelated-keep.json"
+        other.write_text(
+            '{"plan":{"plan_id":"plan-keep"},"execution":{"status":"dry_run"},'
+            '"session":{"session_id":"other-session"}}',
+            encoding="utf-8",
+        )
         row = self.page.locator(f'[data-session-id="{session_id}"]')
         row.hover()
         row.locator("[data-session-rename]").click()
@@ -304,10 +343,12 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         )
         status = self.harness.session_status(session_id)
         file_exists = self.harness.session_file_exists(session_id)
-        runs_after = self.harness.run_names()
-        print(" GET:", status, "file:", file_exists, "runs after:", runs_after)
+        runs_after = set(self.harness.run_names())
+        print(" GET:", status, "file:", file_exists, "runs after:", sorted(runs_after))
         self.assertFalse(file_exists)
-        self.assertEqual(runs_after, runs_before)
+        for name in runs_before:
+            self.assertNotIn(name, runs_after)
+        self.assertIn("unrelated-keep.json", runs_after)
 
     def test_background_unlocks_composer(self) -> None:
         """Background 解开输入框，进度条还在。"""
@@ -354,3 +395,28 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         self.assertTrue(self.harness.hold.finished.wait(timeout=5))
         print(" hold reason:", self.harness.hold.reason)
         self.assertEqual(self.harness.hold.reason, "cancelled")
+
+    def test_attach_file_chip_and_remove(self) -> None:
+        """回形针选文件后芯片出现，× 后芯片清空。"""
+
+        print("\n[TestWorkbenchBrowser] attach file chip and remove")
+        send_label = self.page.locator("#btn-send").get_attribute("aria-label")
+        attach_label = self.page.locator("#btn-attach").get_attribute("aria-label")
+        print(" send aria:", send_label, "attach aria:", attach_label)
+        self.assertEqual(send_label, "Send")
+        self.assertEqual(attach_label, "Attach")
+        sample = Path(self.harness.temp_dir.name) / "browser_note.txt"
+        sample.write_text("hello attach\n", encoding="utf-8")
+        print(" sample:", sample)
+        self.page.set_input_files("#attach-input", str(sample))
+        self.page.wait_for_selector(".attach-chip", timeout=10000)
+        chip_text = self.page.locator(".attach-chip").inner_text()
+        print(" chip:", chip_text)
+        self.assertIn("browser_note.txt", chip_text)
+        self.page.locator(".attach-chip-remove").click()
+        self.page.wait_for_function(
+            "() => document.querySelectorAll('.attach-chip').length === 0",
+            timeout=10000,
+        )
+        print(" chips after remove:", self.page.locator(".attach-chip").count())
+        self.assertEqual(self.page.locator(".attach-chip").count(), 0)

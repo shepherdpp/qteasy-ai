@@ -1,0 +1,25 @@
+{
+  "id": "strategy_blender",
+  "tags": ["blender", "group", "group_merge_type", "mix"],
+  "keywords": [
+    "blender 是什么",
+    "what is blender",
+    "策略混合",
+    "set_blender",
+    "group_merge_type",
+    "信号混合"
+  ],
+  "title": "Group blender and group_merge_type",
+  "summary": "Same-timing strategies share a Group; blender mixes their outputs (pt default multiply, ps/vs default add). group_merge_type merges across Groups. This card does not define Position Target meaning.",
+  "narrative": "Strategies that share the same run timing land in one Group. That Group mixes member signals with a blender expression (s0, s1, ... in join order).\n\nDefaults by signal_type label (mixing algorithm only—not a definition of what the numbers mean):\n- pt: multiply member signals (any zero can veto the combined weight).\n- ps / vs: add member signals.\n\nCustom expressions use set_blender; operators include +, -, *, /, ^, and/or/not. Across Groups at the same bar, group_merge_type is None (independent), Or (sum), or And (product). Merging Groups that disagree on signal_type raises RuntimeError—keep one type or leave merge as None.\n\nThis card does not define the meaning of signal numbers (target weight versus order size)—that is the PT/PS/VS card. It does not own is_ready checks, and it does not teach where frequency belongs versus qt.run.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma, macd', signal_type='pt')\nop.set_blender('0.5*s0 + 0.5*s1')\nprint(op.view_blender())",
+  "risk_notes": "Blender defaults are mix rules. Do not treat 'pt multiplies' as a full PT semantics lesson.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/3. group_and_blender.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "pt_ps_vs"},
+    {"rel": "see_also", "to": "operator_create"},
+    {"rel": "see_also", "to": "strategy_overview"}
+  ]
+}

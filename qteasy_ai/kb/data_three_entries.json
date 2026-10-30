@@ -5,23 +5,29 @@
     "get_history_data",
     "get_reference_data",
     "get_static_data",
+    "get_kline",
     "history",
     "reference",
     "static",
     "三入口",
+    "三入口有什么区别",
     "历史数据",
     "参考数据",
     "静态数据"
   ],
   "title": "Three data entry points",
-  "summary": "qteasy reads data through history, reference, and static channels — not a single catch-all API.",
-  "narrative": "qteasy exposes three read-only data entries:\n\n- history: time-series bars via get_history_data (OHLCV and related htypes).\n- reference: auxiliary series via get_reference_data.\n- static: snapshot / classification tables via get_static_data (industry, name, etc.).\n\nAsk names the three doors. Plan `data.read` picks a channel from your wording. Do not invent a fourth mega-API.",
-  "python_code": "import qteasy as qt\n# history / reference / static are separate entries.\nprint('history', hasattr(qt, 'get_history_data'))\nprint('reference', hasattr(qt, 'get_reference_data'))\nprint('static', hasattr(qt, 'get_static_data'))",
+  "summary": "Prices and bars use get_history_data; macro and benchmarks use get_reference_data; attributes use get_static_data. get_kline is OHLCV sugar, not a fourth door.",
+  "narrative": "qteasy exposes three read-only data entries. They are not one catch-all API.\n\n- history: time × share series via get_history_data. Stock prices, valuations, and related htypes go here. get_kline is OHLCV sugar on the same history path; it is not a fourth entry.\n- reference: time-only series via get_reference_data. Macro series and benchmarks such as close-000300.SH go here. Do not pull GDP or a market benchmark through get_history_data \"on the side\".\n- static: share-only attributes via get_static_data. Industry, list_date, and names go here.\n\nHistory reads can later be gathered into a HistoryPanel for multi-share analysis; that container is a separate topic. Ask names the three doors. Plan data.read picks a channel from your wording. Mixing shapes in one call is not supported. Download and refill are a different Job from read.",
+  "python_code": "import qteasy as qt\nprint('history', hasattr(qt, 'get_history_data'), 'kline', hasattr(qt, 'get_kline'))\nprint('reference', hasattr(qt, 'get_reference_data'))\nprint('static', hasattr(qt, 'get_static_data'))",
   "risk_notes": "Mixing channels in one call is not supported. Download/refill is a different Job from read.",
   "type": "concept",
   "manual_anchor": "docs/source/manage_data/01. overview.md",
   "topics": ["data-analysis"],
   "relations": [
-    {"rel": "see_also", "to": "refill_bounded"}
+    {"rel": "see_also", "to": "refill_bounded"},
+    {"rel": "see_also", "to": "datatype_lookup"},
+    {"rel": "see_also", "to": "data_filter"},
+    {"rel": "see_also", "to": "historypanel_basics"},
+    {"rel": "see_also", "to": "capability_map"}
   ]
 }

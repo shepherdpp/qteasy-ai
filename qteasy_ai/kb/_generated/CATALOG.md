@@ -12,9 +12,37 @@
 - relations:
   - see_also -> what_is_qteasy
   - see_also -> capability_map
+  - see_also -> workbench_entry
 - questions:
   - run mode
   - 问答
+
+## backtest_config
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/2. run_backtest.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> backtest_result
+  - see_also -> backtest_trade_log
+  - see_also -> operator_run_freq
+  - see_also -> data_minimum
+- questions:
+  - 回测区间和成本怎么设
+  - backtest config
+
+## backtest_engine
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/6. backtest_engine_and_performance.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> lookahead_isolation
+- questions:
+  - 回测为什么按时间步走
+  - backtest engine
 
 ## backtest_intro
 
@@ -23,7 +51,12 @@
 - manual_anchor: docs/source/back_testing/1. overview.md
 - relations:
   - contrasts_with -> optimize_intro
+  - contrasts_with -> live_what
   - plan_handoff -> side_effects_safety
+  - see_also -> backtest_config
+  - see_also -> backtest_result
+  - see_also -> backtest_trade_log
+  - see_also -> backtest_engine
 - questions:
   - 如何用 qteasy 回测
   - 怎么回测
@@ -31,6 +64,47 @@
   - 回测入门
   - backtest intro
   - run backtest
+  - 回测是什么
+  - 帮我回测
+
+## backtest_result
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/3. result_structure.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> backtest_config
+  - see_also -> backtest_trade_log
+  - see_also -> common_errors_nan
+- questions:
+  - 回测结果看什么
+  - backtest result
+
+## backtest_trade_log
+
+- type: concept
+- topics: backtest
+- manual_anchor: docs/source/back_testing/4. trade_log.md
+- relations:
+  - see_also -> backtest_intro
+  - see_also -> backtest_config
+  - see_also -> backtest_result
+  - see_also -> strategy_trace
+- questions:
+  - 交易日志在哪
+  - trade_log file path
+
+## builtin_strategy_lookup
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/4. builtin_strategies.md
+- relations:
+  - see_also -> operator_create
+  - see_also -> strategy_overview
+- questions:
+  - 怎么查阅内置策略文档
 
 ## capability_map
 
@@ -62,6 +136,7 @@
 - manual_anchor: docs/source/back_testing/1. overview.md
 - relations:
   - see_also -> backtest_intro
+  - see_also -> backtest_result
 - questions:
   - missing bar
   - trade price
@@ -78,6 +153,43 @@
   - built-in parameter key
   - not a built-in parameter
 
+## data_channels
+
+- type: concept
+- topics: data-downloading
+- manual_anchor: docs/source/manage_data/10. data_channels.md
+- relations:
+  - see_also -> datasource_local
+  - see_also -> refill_bounded
+- questions:
+  - 数据通道是什么
+  - what is a data channel
+  - 下载时怎么指定数据通道
+
+## data_filter
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/manage_data/02. datatypes.md
+- relations:
+  - see_also -> datatype_lookup
+  - see_also -> data_three_entries
+  - see_also -> capability_map
+- questions:
+  - 怎么按行业筛选股票
+
+## data_minimum
+
+- type: concept
+- topics: data-downloading
+- manual_anchor: docs/source/tutorials/2.0-get-data.md
+- relations:
+  - see_also -> capability_map
+  - see_also -> refill_bounded
+  - see_also -> backtest_config
+- questions:
+  - 起步要下载哪些表
+
 ## data_three_entries
 
 - type: concept
@@ -85,11 +197,44 @@
 - manual_anchor: docs/source/manage_data/01. overview.md
 - relations:
   - see_also -> refill_bounded
+  - see_also -> datatype_lookup
+  - see_also -> data_filter
+  - see_also -> historypanel_basics
+  - see_also -> capability_map
 - questions:
   - 三入口
   - 历史数据
   - 参考数据
   - 静态数据
+  - 三入口有什么区别
+
+## datasource_local
+
+- type: concept
+- topics: data-downloading
+- manual_anchor: docs/source/manage_data/03. datasource.md
+- relations:
+  - see_also -> capability_map
+  - see_also -> data_channels
+  - see_also -> refill_bounded
+- questions:
+  - 什么是 DataSource
+  - local data source
+  - 怎么看本地已经有哪些数据
+
+## datatype_lookup
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/manage_data/02. datatypes.md
+- relations:
+  - see_also -> data_three_entries
+  - see_also -> data_filter
+  - see_also -> capability_map
+- questions:
+  - 什么是 DataType
+  - how to look up a data type
+  - 怎么查一个 DataType
 
 ## env_ready
 
@@ -145,6 +290,50 @@
   - 一分钟跑通
   - 端到端路线图
 
+## historypanel_analysis
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/tutorials/2.5-historypanel-data-analysis.md
+- relations:
+  - see_also -> historypanel_basics
+  - see_also -> historypanel_plot
+  - see_also -> data_three_entries
+  - plan_handoff -> backtest_intro
+  - see_also -> capability_map
+- questions:
+  - 怎么用 HistoryPanel 做数据分析
+  - HistoryPanel 怎么算收益率
+
+## historypanel_basics
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/tutorials/2.4-historypanel-basics.md
+- relations:
+  - see_also -> data_three_entries
+  - see_also -> historypanel_analysis
+  - see_also -> historypanel_plot
+  - see_also -> capability_map
+- questions:
+  - HistoryPanel 的三维是什么
+  - 什么是 HistoryPanel
+  - what is HistoryPanel shape
+
+## historypanel_plot
+
+- type: concept
+- topics: data-analysis
+- manual_anchor: docs/source/manage_data/02.6. historypanel_visual.md
+- relations:
+  - see_also -> historypanel_basics
+  - see_also -> historypanel_analysis
+  - see_also -> data_three_entries
+  - see_also -> capability_map
+- questions:
+  - HistoryPanel 怎么用 plotly 画图
+  - 怎么画 K 线
+
 ## install_and_env
 
 - type: concept
@@ -182,6 +371,33 @@
   - live trade
   - live plan
   - never auto
+  - 会不会自动下单
+
+## live_what
+
+- type: concept
+- topics: live_boundary
+- manual_anchor: docs/source/live_trading/1-overview.md
+- relations:
+  - contrasts_with -> backtest_intro
+  - see_also -> live_plan_only
+  - see_also -> qteasy_advantages
+- questions:
+  - 模拟实盘是什么
+  - what is simulated live
+
+## lookahead_isolation
+
+- type: concept
+- topics: overview
+- manual_anchor: docs/source/tutorials/3-start-first-strategy.md
+- relations:
+  - see_also -> qteasy_advantages
+  - see_also -> strategy_realize
+  - see_also -> backtest_engine
+- questions:
+  - qteasy 如何防止未来函数
+  - lookahead isolation
 
 ## notebook_cli
 
@@ -208,6 +424,18 @@
   - 用户知识库
   - 官方知识库
 
+## operator_create
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/2. operator.md
+- relations:
+  - see_also -> operator_run_freq
+  - see_also -> strategy_overview
+  - see_also -> strategy_blender
+- questions:
+  - 怎么创建 Operator
+
 ## operator_run_freq
 
 - type: concept
@@ -215,9 +443,38 @@
 - manual_anchor: docs/source/manage_strategies/2. operator.md
 - relations:
   - see_also -> common_errors_run_freq
+  - see_also -> operator_create
+  - see_also -> backtest_config
 - questions:
   - run timing
   - 运行频率
+
+## optimize_algorithms
+
+- type: concept
+- topics: optimize
+- manual_anchor: docs/source/optimization/3. optimization_algorithms.md
+- relations:
+  - see_also -> optimize_intro
+  - see_also -> optimize_config
+  - see_also -> optimize_result
+- questions:
+  - 网格搜索和蒙特卡洛怎么选
+  - grid vs montecarlo
+
+## optimize_config
+
+- type: concept
+- topics: optimize
+- manual_anchor: docs/source/optimization/2. run_optimization.md
+- relations:
+  - see_also -> optimize_intro
+  - see_also -> optimize_algorithms
+  - see_also -> optimize_result
+  - see_also -> backtest_config
+- questions:
+  - opti_sample_count 是什么
+  - opti_sample_count
 
 ## optimize_intro
 
@@ -227,24 +484,46 @@
 - relations:
   - contrasts_with -> backtest_intro
   - plan_handoff -> side_effects_safety
+  - see_also -> optimize_config
+  - see_also -> optimize_algorithms
+  - see_also -> optimize_result
 - questions:
   - 优化入门
   - how to optimize
   - 参数优化
   - optimize intro
   - parameter optimize
+  - 优化在做什么
+  - 帮我优化
+
+## optimize_result
+
+- type: concept
+- topics: optimize
+- manual_anchor: docs/source/optimization/4. optimization_result.md
+- relations:
+  - see_also -> optimize_intro
+  - see_also -> optimize_config
+  - see_also -> optimize_algorithms
+  - see_also -> backtest_intro
+- questions:
+  - 最优参数怎么读
+  - optimize result Top-K
 
 ## pt_ps_vs
 
 - type: concept
 - topics: strategy
-- manual_anchor: docs/source/manage_strategies/5. strategy_bases.md
+- manual_anchor: docs/source/manage_strategies/3. group_and_blender.md
 - relations:
   - see_also -> strategy_builder_intro
+  - see_also -> strategy_blender
+  - see_also -> strategy_bases
 - questions:
   - signal type
   - position target
   - value signal
+  - 什么是 PT
 
 ## qteasy_advantages
 
@@ -254,6 +533,8 @@
 - relations:
   - see_also -> what_is_qteasy
   - see_also -> library_map
+  - see_also -> lookahead_isolation
+  - see_also -> live_what
 - questions:
   - 为什么用 qteasy 而不是自己写回测
   - why use qteasy instead of writing your own backtest
@@ -266,11 +547,13 @@
 - relations:
   - see_also -> data_three_entries
   - see_also -> env_ready
+  - see_also -> data_minimum
   - plan_handoff -> side_effects_safety
 - questions:
   - download daily
   - 下载日线
   - 灌数据
+  - 帮我下载
 
 ## side_effects_safety
 
@@ -283,6 +566,31 @@
   - side effect
   - auto execute
 
+## strategy_bases
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/5. strategy_bases.md
+- relations:
+  - see_also -> pt_ps_vs
+  - see_also -> strategy_realize
+  - see_also -> strategy_overview
+- questions:
+  - 三种策略基类有什么区别
+  - 每只股票用不同参数怎么设
+
+## strategy_blender
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/3. group_and_blender.md
+- relations:
+  - see_also -> pt_ps_vs
+  - see_also -> operator_create
+  - see_also -> strategy_overview
+- questions:
+  - blender 是什么
+
 ## strategy_builder_intro
 
 - type: concept
@@ -290,12 +598,51 @@
 - manual_anchor: docs/source/manage_strategies/6. custom_strategy.md
 - relations:
   - see_also -> pt_ps_vs
+  - see_also -> strategy_realize
   - plan_handoff -> ask_plan_agent
 - questions:
   - generate a strategy
   - 写策略
   - 双均线
   - 金叉
+
+## strategy_overview
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/1. overview.md
+- relations:
+  - see_also -> operator_create
+  - see_also -> strategy_blender
+  - see_also -> strategy_bases
+  - see_also -> builtin_strategy_lookup
+- questions:
+  - 策略、Operator 和 Group 各管什么
+
+## strategy_realize
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/6. custom_strategy.md
+- relations:
+  - see_also -> strategy_builder_intro
+  - see_also -> strategy_trace
+  - see_also -> strategy_bases
+  - see_also -> operator_create
+  - see_also -> lookahead_isolation
+- questions:
+  - 自定义策略的 realize 要返回什么
+
+## strategy_trace
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/manage_strategies/7. trace strategy.md
+- relations:
+  - see_also -> strategy_realize
+  - see_also -> backtest_trade_log
+- questions:
+  - 怎么追踪策略中间变量
 
 ## what_is_qteasy
 
@@ -315,3 +662,16 @@
   - 什么是qteasy
   - qteasy是什么
   - qteasy 是什么
+
+## workbench_entry
+
+- type: concept
+- topics: onboarding
+- manual_anchor: 
+- relations:
+  - see_also -> ask_plan_agent
+- questions:
+  - Plan 在哪
+  - 点哪个按钮
+  - where is Plan mode
+  - 工作台怎么切到 Plan

@@ -965,10 +965,10 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" missing patch:", missing.status_code, missing.json())
             self.assertEqual(missing.status_code, 404)
 
-    def test_delete_session_keeps_runs(self) -> None:
-        """DELETE session 后列表无该 id，runs/ 原文件仍在。"""
+    def test_delete_session_removes_owned_runs(self) -> None:
+        """DELETE session 后列表无该 id，本会话 run / plan.md 消失，他会话留下。"""
 
-        print("\n[TestAiWorkbenchHttp] delete session keeps runs")
+        print("\n[TestAiWorkbenchHttp] delete session removes owned runs")
         with tempfile.TemporaryDirectory() as temp_dir:
             client, store, _asst = self._client(temp_dir)
             planned = client.post(
@@ -980,8 +980,19 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" plan status:", planned.status_code, "run_id:", run_id)
             self.assertTrue(run_id)
             run_path = store.runs_dir / f"{run_id}.json"
-            print(" run path exists before:", run_path.exists(), run_path)
+            plan_md = store.runs_dir / f"{run_id}.plan.md"
+            print(" run path exists before:", run_path.exists(), plan_md.exists())
             self.assertTrue(run_path.exists())
+            store.save_run(
+                "run-keep",
+                {
+                    "plan": {"plan_id": "plan-keep"},
+                    "execution": {"status": "dry_run"},
+                    "session": {"session_id": "other"},
+                },
+            )
+            keep_path = store.runs_dir / "run-keep.json"
+            self.assertTrue(keep_path.exists())
             deleted = client.delete("/v1/session/s-del")
             print(" delete status:", deleted.status_code, deleted.json())
             self.assertEqual(deleted.status_code, 200)
@@ -989,8 +1000,10 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             ids = [row.get("session_id") for row in client.get("/v1/sessions").json().get("sessions") or []]
             print(" ids after delete:", ids)
             self.assertNotIn("s-del", ids)
-            print(" run path exists after:", run_path.exists())
-            self.assertTrue(run_path.exists())
+            print(" owned run after:", run_path.exists(), "keep:", keep_path.exists())
+            self.assertFalse(run_path.exists())
+            self.assertFalse(plan_md.exists())
+            self.assertTrue(keep_path.exists())
             unknown = client.delete("/v1/session/no-such-session")
             print(" unknown delete:", unknown.status_code, unknown.json())
             self.assertEqual(unknown.status_code, 404)
@@ -998,6 +1011,36 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" unknown message:", message)
             self.assertTrue(message)
             self.assertNotIn("Traceback", message)
+
+    def test_delete_session_rejects_while_live_running(self) -> None:
+        """会话正在跑时 DELETE 得 409，session 与 run 文件都留着。"""
+
+        print("\n[TestAiWorkbenchHttp] delete session rejects while live")
+        from qteasy_ai.session import clear_live_running, register_live_running
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            planned = client.post(
+                "/v1/plan",
+                json={"query": "list built-in strategies", "session_id": "s-live-del"},
+            ).json()
+            run_id = str(planned.get("run_id") or "")
+            run_path = store.runs_dir / f"{run_id}.json"
+            print(" run_id:", run_id, "exists:", run_path.exists())
+            self.assertTrue(run_path.exists())
+            register_live_running("s-live-del")
+            try:
+                blocked = client.delete("/v1/session/s-live-del")
+                print(" blocked:", blocked.status_code, blocked.json())
+                self.assertEqual(blocked.status_code, 409)
+                code = str((blocked.json().get("error") or {}).get("code") or "")
+                self.assertEqual(code, "RUN_IN_PROGRESS")
+                self.assertTrue(run_path.exists())
+                from qteasy_ai.session import SessionStore
+
+                self.assertTrue(SessionStore(store).exists("s-live-del"))
+            finally:
+                clear_live_running("s-live-del")
 
     def test_live_running_locks_confirm_and_blocks_second_run_plan(self) -> None:
         """进程内 live 时 GET 为 running 且 Confirm 关；再 run-plan 得 409。"""

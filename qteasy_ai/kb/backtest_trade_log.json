@@ -1,0 +1,26 @@
+{
+  "id": "backtest_trade_log",
+  "tags": ["backtest", "trade_log", "csv"],
+  "keywords": [
+    "交易日志在哪",
+    "trade_log",
+    "交易明细",
+    "trade_log_file_path",
+    "trade_log_keep_days",
+    "回测 CSV"
+  ],
+  "title": "Backtest trade CSV and retention",
+  "summary": "trade_log=True writes backtest trade CSV under trade_log_file_path. Default keep_days is 3. This is not strategy self.trace, and not a live-trade log.",
+  "narrative": "Pass trade_log=True on qt.run(..., mode=1) to record each simulated fill. The files are backtest CSVs (trade_log_*, trade_summary_*, and related value_curve_* when enabled). The directory is trade_log_file_path (relative, absolute, or ~/...). Default trade_log_keep_days is 3: after a new process imports qteasy, older files in that directory are cleaned once. Set keep_days to None or <=0 to keep everything; call qt.rotate_trade_logs() for a manual cleanup.\n\nTypical columns cover time, symbol, side, price, size, amount, and fees. They line up with loop_result and oper_count on the result object.\n\nself.trace / trace_log records intermediate variables inside realize()—that is a strategy card, not this CSV. Simulated-live order logs are a live-boundary topic (later coverage), not this backtest file layout.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\nresult = qt.run(op, mode=1, asset_pool='000001.SZ', invest_start='2020-01-01', invest_end='2023-12-31', trade_log=True)\nprint('trade_log enabled')",
+  "risk_notes": "Ask explains file layout only. Writing logs still requires a confirmed backtest run.",
+  "type": "concept",
+  "manual_anchor": "docs/source/back_testing/4. trade_log.md",
+  "topics": ["backtest"],
+  "relations": [
+    {"rel": "see_also", "to": "backtest_intro"},
+    {"rel": "see_also", "to": "backtest_config"},
+    {"rel": "see_also", "to": "backtest_result"},
+    {"rel": "see_also", "to": "strategy_trace"}
+  ]
+}

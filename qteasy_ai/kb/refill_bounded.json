@@ -6,11 +6,12 @@
     "download daily",
     "灌数据",
     "下载日线",
+    "帮我下载",
     "date_range"
   ],
   "title": "Bounded data refill",
-  "summary": "Download/refill always needs an explicit start and end. Unbounded history is rejected.",
-  "narrative": "data.refill writes local tables over the network. The planner requires start and end (YYYYMMDD or a year range). Missing dates become clarify_required / date_range.\n\nA session can fill those dates on the next turn without re-classifying the Job. Full-market refill without symbols is expensive; say so in assumptions.",
+  "summary": "Ask only explains refill. Switch to Plan to download, and always give an explicit start and end. Unbounded history is rejected.",
+  "narrative": "data.refill writes local tables over the network. Ask only explains that path. To actually download, switch to Plan. The planner requires start and end (YYYYMMDD or a year range). Missing dates become clarify_required / date_range, not an unbounded refill. This Ask answer has no plan_id.\n\nA session can fill those dates on the next Plan turn without re-classifying the Job. Full-market refill without symbols is expensive; say so in assumptions. If a lookup returns an id but a read comes back empty, the usual cause is that the table or that date window was never downloaded — check the starter set and local overview before asking for another unbounded pull.",
   "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.plan('download A-share daily data to local datasource', response_style='raw')['plan']['steps'][0]['inputs']['fallback_action'])",
   "risk_notes": "Never run unbounded refill. Confirm before execute. allow_refill only gates agent_auto.",
   "type": "concept",
@@ -19,6 +20,7 @@
   "relations": [
     {"rel": "see_also", "to": "data_three_entries"},
     {"rel": "see_also", "to": "env_ready"},
+    {"rel": "see_also", "to": "data_minimum"},
     {"rel": "plan_handoff", "to": "side_effects_safety"}
   ]
 }

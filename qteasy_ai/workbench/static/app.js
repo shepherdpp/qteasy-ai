@@ -61,6 +61,8 @@ let shellReady = false;
 let codeCache = {};
 let filePreview = null;
 let sessions = [];
+/** @type {Record<string, string>} local_only 改名尚未 PATCH 到服务端时暂存 */
+let pendingSessionNames = {};
 let workspace = { artifacts: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
@@ -75,6 +77,14 @@ const PROCESS_KINDS = new Set(["executing", "mode_notice", "plan_ready", "clarif
 let livePoll = null;
 let executeSseOpen = false;
 let treeCollapsed = new Set();
+let sessionAttachments = [];
+let attachDragDepth = 0;
+let outputAgeTimer = null;
+let statusNoticeTimer = null;
+const COPY_ICON_SVG =
+  '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="2" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+const CHECK_ICON_SVG =
+  '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -257,8 +267,12 @@ function mountShell() {
         <div class="now-chips" id="now-chips"></div>
         <div class="mode-notice" id="mode-notice" hidden></div>
         <div class="chat-log" id="chat-log"></div>
-        <div class="composer">
+        <div class="composer" id="composer">
+          <div class="attach-chips" id="attach-chips" hidden></div>
+          <div class="attach-status err-text" id="attach-status" hidden></div>
           <textarea id="query-input" placeholder="Ask in natural language · Ctrl/⌘+Enter to send" rows="3"></textarea>
+          <input type="file" id="attach-input" multiple hidden
+            accept=".txt,.md,.py,.json,.csv,.yaml,.yml,.toml,.ini,.log,.html,.css,.js,.ts,.png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.docx,.xlsx,.pptx">
           <div class="composer-row">
             <div class="mode-dropdown">
               <button type="button" class="mode-badge btn-mode-menu mode-plan" data-testid="mode-badge" id="composer-mode" aria-haspopup="listbox" aria-expanded="false">Plan ▾</button>
@@ -276,7 +290,8 @@ function mountShell() {
               </div>
             </div>
             <span class="composer-row-spacer"></span>
-            <button type="button" class="primary" id="btn-send">Send</button>
+            <button type="button" class="icon-btn ghost attach-btn" id="btn-attach" title="Attach" aria-label="Attach">📎</button>
+            <button type="button" class="send-btn mode-plan" id="btn-send" title="Send" aria-label="Send">↑</button>
           </div>
         </div>
       </section>
@@ -297,6 +312,7 @@ function mountShell() {
       </aside>
     </div>
     <div class="statusbar" id="statusbar">
+      <span id="status-notice" class="status-notice" hidden></span>
       <span id="status-provider">Provider —</span>
       <span class="status-sep">·</span>
       <span id="status-env">Environment —</span>
@@ -452,6 +468,7 @@ function bindShell() {
       sendQuery(input.value);
     }
   });
+  bindComposerAttachments();
   $("btn-new-session").onclick = () => createSession();
   $("btn-toggle-rail").onclick = () => {
     railCollapsed = !railCollapsed;
@@ -688,6 +705,11 @@ function renderMode() {
     el.classList.remove("mode-ask", "mode-plan", "mode-agent");
     el.classList.add(`mode-${tone}`);
   });
+  const send = $("btn-send");
+  if (send) {
+    send.classList.remove("mode-ask", "mode-plan", "mode-agent");
+    send.classList.add(`mode-${tone}`);
+  }
   document.querySelectorAll("#mode-menu button[data-mode], #edit-mode-menu button[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
     btn.disabled = busy;
@@ -962,8 +984,10 @@ function setBusy(next) {
   }
   const input = $("query-input");
   const send = $("btn-send");
+  const attach = $("btn-attach");
   if (input) input.disabled = busy;
   if (send) send.disabled = busy;
+  if (attach) attach.disabled = busy;
   document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
@@ -1287,7 +1311,7 @@ async function confirmIdentityWrite(confirm) {
 
 function onChatClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
   const foldBtn = t.closest("button.process-toggle");
   if (foldBtn) {
     const key = Number(foldBtn.getAttribute("data-process-turn"));
@@ -1335,6 +1359,11 @@ function onChatClick(ev) {
   }
   if (t.closest("#edit-mode-menu") && t.dataset.mode) {
     setMode(t.dataset.mode);
+    return;
+  }
+  const copyBtn = t.closest("[data-copy-kind]");
+  if (copyBtn) {
+    handleCopyButton(copyBtn);
     return;
   }
   const editUser = t.closest("[data-edit-user]");
@@ -1534,7 +1563,12 @@ function onNowClick(ev) {
 
 function onArtifactClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
+  const copyBtn = t.closest("[data-copy-kind]");
+  if (copyBtn) {
+    handleCopyButton(copyBtn);
+    return;
+  }
   const toggle = t.closest("[data-tree-toggle]");
   if (toggle) {
     const key = toggle.getAttribute("data-tree-toggle") || "";
@@ -1658,16 +1692,33 @@ function beginRenameSession(id) {
   }
 }
 
+async function flushPendingSessionName(id) {
+  const key = String(id || "").trim();
+  const name = pendingSessionNames[key];
+  if (!key || !name) return false;
+  const dto = await api(`/v1/session/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (dto && dto.error) return false;
+  delete pendingSessionNames[key];
+  return true;
+}
+
 async function commitRenameSession(id, raw) {
   const name = String(raw || "").trim();
   renamingSessionId = "";
   const local = sessions.find((row) => row.session_id === id);
   const persisted = Boolean(local && !local.local_only);
   if (!persisted) {
+    const label = name || "New session";
     if (local) {
-      local.name = name || "New session";
-      local.title = local.name;
+      local.name = label;
+      local.title = label;
     }
+    if (label === "New session") delete pendingSessionNames[id];
+    else pendingSessionNames[id] = label;
     renderSessionList();
     return;
   }
@@ -1680,6 +1731,7 @@ async function commitRenameSession(id, raw) {
     renderSessionList();
     return;
   }
+  delete pendingSessionNames[id];
   await refreshSessions();
 }
 
@@ -1687,8 +1739,15 @@ async function deleteSession(id) {
   if (!id || busy) return;
   const row = sessions.find((item) => item.session_id === id);
   const label = sessionDisplayName(row) || id;
-  if (!window.confirm(`Delete session "${label}"? This cannot be undone.`)) return;
+  if (
+    !window.confirm(
+      `Delete session "${label}"? This also deletes its plans, runs, and artifacts. This cannot be undone.`
+    )
+  ) {
+    return;
+  }
   if (row && row.local_only) {
+    delete pendingSessionNames[id];
     if (id === sessionId) createSession();
     else {
       sessions = sessions.filter((item) => item.session_id !== id);
@@ -1697,7 +1756,14 @@ async function deleteSession(id) {
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (dto && dto.error) return;
+  if (dto && dto.error) {
+    const msg =
+      (dto.error && (dto.error.message || dto.error.next_action)) ||
+      "Could not delete this session.";
+    window.alert(String(msg));
+    return;
+  }
+  delete pendingSessionNames[id];
   if (id === sessionId) {
     await createSession();
     return;
@@ -1922,6 +1988,199 @@ async function onWorkspaceArtifactClick(ev) {
   if (art) openArtifactTab(art);
 }
 
+function attachIconFor(entry) {
+  const mime = String((entry && entry.mime_type) || "").toLowerCase();
+  const name = String((entry && entry.display_name) || "").toLowerCase();
+  if (mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/.test(name)) return "🖼";
+  if (mime.includes("pdf") || name.endsWith(".pdf")) return "📄";
+  if (/\.(docx?|xlsx?|pptx?)$/.test(name) || mime.includes("officedocument")) return "📊";
+  return "📝";
+}
+
+function setAttachStatus(text) {
+  const el = $("attach-status");
+  if (!el) return;
+  const msg = String(text || "").trim();
+  el.hidden = !msg;
+  el.textContent = msg;
+}
+
+function renderAttachChips() {
+  const host = $("attach-chips");
+  if (!host) return;
+  const rows = Array.isArray(sessionAttachments) ? sessionAttachments : [];
+  if (!rows.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = rows
+    .map((row) => {
+      const id = escapeHtml(String(row.id || ""));
+      const name = escapeHtml(String(row.display_name || row.source_path || "file"));
+      const icon = attachIconFor(row);
+      return `<span class="attach-chip" data-attach-id="${id}" title="${name}">` +
+        `<span class="attach-chip-icon">${icon}</span>` +
+        `<span class="attach-chip-name">${name}</span>` +
+        `<button type="button" class="attach-chip-remove" data-attach-remove="${id}" title="Remove" aria-label="Remove">×</button>` +
+        `</span>`;
+    })
+    .join("");
+}
+
+async function refreshAttachments() {
+  if (!sessionId) {
+    sessionAttachments = [];
+    renderAttachChips();
+    return;
+  }
+  const data = await api(`/v1/session/${encodeURIComponent(sessionId)}/attachments`);
+  if (data && data.error) {
+    sessionAttachments = [];
+  } else {
+    sessionAttachments = Array.isArray(data && data.attachments) ? data.attachments : [];
+  }
+  renderAttachChips();
+}
+
+async function ensureSessionForAttach() {
+  if (!sessionId) {
+    sessionId = newSessionId();
+    localStorage.setItem(STORAGE_SESSION, sessionId);
+  }
+  return sessionId;
+}
+
+async function uploadAttachmentFile(file) {
+  if (!file) return;
+  await ensureSessionForAttach();
+  const form = new FormData();
+  form.append("file", file, file.name || "paste.png");
+  const res = await fetch(`/v1/session/${encodeURIComponent(sessionId)}/attachments`, {
+    method: "POST",
+    body: form,
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (exc) {
+    data = {};
+  }
+  if (!res.ok || (data && data.ok === false)) {
+    const err = (data && data.error) || {};
+    setAttachStatus(err.message || "Attachment upload failed.");
+    return;
+  }
+  setAttachStatus("");
+  if (data.attachment) {
+    sessionAttachments = [...sessionAttachments, data.attachment];
+    renderAttachChips();
+  } else {
+    await refreshAttachments();
+  }
+  await refreshSessions();
+}
+
+async function uploadAttachmentFiles(fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  for (const file of files) {
+    await uploadAttachmentFile(file);
+  }
+}
+
+async function removeAttachment(attachmentId) {
+  const id = String(attachmentId || "").trim();
+  if (!id || !sessionId) return;
+  const data = await api(
+    `/v1/session/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (data && data.error) {
+    setAttachStatus((data.error && data.error.message) || "Could not remove attachment.");
+    return;
+  }
+  setAttachStatus("");
+  sessionAttachments = Array.isArray(data.attachments)
+    ? data.attachments
+    : sessionAttachments.filter((row) => String(row.id) !== id);
+  renderAttachChips();
+}
+
+function bindComposerAttachments() {
+  const composer = $("composer");
+  const input = $("query-input");
+  const fileInput = $("attach-input");
+  const btnAttach = $("btn-attach");
+  const chips = $("attach-chips");
+  if (!composer || !input || !fileInput || !btnAttach) return;
+
+  btnAttach.onclick = () => {
+    if (busy) return;
+    fileInput.value = "";
+    fileInput.click();
+  };
+  fileInput.onchange = () => {
+    uploadAttachmentFiles(fileInput.files);
+    fileInput.value = "";
+  };
+  if (chips) {
+    chips.onclick = (ev) => {
+      const btn = ev.target && ev.target.closest && ev.target.closest("[data-attach-remove]");
+      if (!btn) return;
+      removeAttachment(btn.getAttribute("data-attach-remove"));
+    };
+  }
+
+  input.addEventListener("paste", (ev) => {
+    const clipboard = ev.clipboardData;
+    if (!clipboard) return;
+    const files = [];
+    if (clipboard.files && clipboard.files.length) {
+      Array.from(clipboard.files).forEach((f) => files.push(f));
+    }
+    if (!files.length && clipboard.items) {
+      Array.from(clipboard.items).forEach((item) => {
+        if (item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      });
+    }
+    if (!files.length) return;
+    ev.preventDefault();
+    uploadAttachmentFiles(files);
+  });
+
+  const onDragEnter = (ev) => {
+    if (!ev.dataTransfer || !Array.from(ev.dataTransfer.types || []).includes("Files")) return;
+    ev.preventDefault();
+    attachDragDepth += 1;
+    composer.classList.add("composer-drop");
+  };
+  const onDragLeave = (ev) => {
+    if (!composer.classList.contains("composer-drop")) return;
+    attachDragDepth = Math.max(0, attachDragDepth - 1);
+    if (attachDragDepth === 0) composer.classList.remove("composer-drop");
+  };
+  const onDragOver = (ev) => {
+    if (!ev.dataTransfer || !Array.from(ev.dataTransfer.types || []).includes("Files")) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "copy";
+  };
+  const onDrop = (ev) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.files || !ev.dataTransfer.files.length) return;
+    ev.preventDefault();
+    attachDragDepth = 0;
+    composer.classList.remove("composer-drop");
+    uploadAttachmentFiles(ev.dataTransfer.files);
+  };
+  composer.addEventListener("dragenter", onDragEnter);
+  composer.addEventListener("dragleave", onDragLeave);
+  composer.addEventListener("dragover", onDragOver);
+  composer.addEventListener("drop", onDrop);
+}
+
 async function createSession() {
   stopLivePoll();
   dropRunWatch();
@@ -1943,6 +2202,9 @@ async function createSession() {
   state.artifacts = [];
   modeNotice = "";
   mode = "plan";
+  sessionAttachments = [];
+  renderAttachChips();
+  setAttachStatus("");
   renderPanes();
   await refreshSessions();
   focusComposer();
@@ -1967,6 +2229,7 @@ async function switchSession(id) {
   editingUserIndex = -1;
   await refreshWorkspace();
   await refreshProvider();
+  await refreshAttachments();
   renderPanes();
   applyRunningWatch(dto);
   focusComposer();
@@ -1975,9 +2238,19 @@ async function switchSession(id) {
 async function refreshSessions() {
   const data = await api("/v1/sessions");
   sessions = data.sessions || [];
+  const onServer = new Set(sessions.map((row) => row.session_id));
+  let flushed = false;
+  for (const id of Object.keys(pendingSessionNames)) {
+    if (onServer.has(id) && (await flushPendingSessionName(id))) flushed = true;
+  }
+  if (flushed) {
+    const again = await api("/v1/sessions");
+    sessions = again.sessions || [];
+  }
   if (sessionId && !sessions.some((row) => row.session_id === sessionId)) {
+    const label = pendingSessionNames[sessionId] || "New session";
     sessions = [
-      { session_id: sessionId, name: "New session", title: "New session", last_user: "", job: "", local_only: true },
+      { session_id: sessionId, name: label, title: label, last_user: "", job: "", local_only: true },
       ...sessions,
     ];
   }
@@ -2288,7 +2561,7 @@ function renderVisibleMessage(msg, index) {
     return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${resultArtifactButtons(msg)}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);
@@ -2297,7 +2570,7 @@ function renderVisibleMessage(msg, index) {
   if (msg.kind === "ask" || msg.kind === "ask_text") {
     const src = (msg.payload && msg.payload.sources) || state.sources || [];
     const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
-    return `<div class="msg prose"><div class="msg-role">Assistant</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${extra}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Assistant</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${extra}</div></div>`;
   }
   const src = (msg.payload && msg.payload.sources) || state.sources || [];
   const extra = src.length ? `<div class="warn">Sources: ${escapeHtml(src.join(", "))}</div>` : "";
@@ -2378,6 +2651,8 @@ function renderChat() {
   parts.push(renderClarification());
   parts.push(renderPlanCard());
   host.innerHTML = parts.join("");
+  decorateCodeBlocks(host);
+  ensureOutputAgeTimer();
   const rewind = $("rewind-text");
   if (rewind) {
     rewind.addEventListener("keydown", (ev) => {
@@ -2587,7 +2862,150 @@ function renderChatCodeBlock(source, info) {
   const label = token || "text";
   const key = label.toLowerCase();
   const body = CHAT_CODE_HIGHLIGHT_LANGS.has(key) ? highlightPython(source) : escapeHtml(source);
-  return `<div class="md-code"><div class="md-code-lang">${escapeHtml(label)}</div><pre><code>${body}</code></pre></div>`;
+  return `<div class="md-code"><div class="md-code-lang"><span class="md-code-lang-label">${escapeHtml(label)}</span></div><pre><code>${body}</code></pre></div>`;
+}
+
+function formatOutputAge(iso, nowMs) {
+  const raw = String(iso || "").trim();
+  if (!raw) return "";
+  const ts = Date.parse(raw);
+  if (!Number.isFinite(ts)) return "";
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  let s = Math.floor((now - ts) / 1000);
+  if (s < 0) s = 0;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} hr ago`;
+  const days = Math.floor(s / 86400);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 360) {
+    const months = Math.floor(days / 30);
+    return `${months} mo ago`;
+  }
+  const years = Math.floor(days / 360);
+  return `${years} yr${years === 1 ? "" : "s"} ago`;
+}
+
+function renderOutputMeta(msg, index) {
+  const age = formatOutputAge(msg && msg.created_at);
+  const ageHtml = age ? `<span class="output-age" data-created-at="${escapeHtml(String(msg.created_at || ""))}">${escapeHtml(age)}</span>` : "";
+  return `<div class="output-meta"><button type="button" class="icon-btn ghost md-code-copy" data-copy-kind="output" data-msg-index="${Number(index)}" title="Copy">${COPY_ICON_SVG}</button>${ageHtml}</div>`;
+}
+
+function copyButtonHtml() {
+  return `<button type="button" class="icon-btn ghost md-code-copy" data-copy-kind="code" title="Copy">${COPY_ICON_SVG}</button>`;
+}
+
+function decorateCodeBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll(".md-code").forEach((block) => {
+    const lang = block.querySelector(".md-code-lang");
+    if (!lang || lang.querySelector(".md-code-copy")) return;
+    lang.insertAdjacentHTML("beforeend", copyButtonHtml());
+  });
+  root.querySelectorAll("pre > code").forEach((code) => {
+    const pre = code.parentElement;
+    if (!pre || pre.closest(".md-code") || pre.closest(".mermaid")) return;
+    if (pre.classList.contains("report-text") || pre.classList.contains("code-highlight")) return;
+    if (pre.closest(".code-editor-wrap")) return;
+    const cls = String(code.className || "");
+    const match = cls.match(/language-([^\s]+)/i);
+    const label = (match && match[1]) || "text";
+    if (String(label).toLowerCase() === "mermaid") return;
+    const wrap = document.createElement("div");
+    wrap.className = "md-code";
+    const head = document.createElement("div");
+    head.className = "md-code-lang";
+    head.innerHTML = `<span class="md-code-lang-label">${escapeHtml(label)}</span>${copyButtonHtml()}`;
+    pre.replaceWith(wrap);
+    wrap.appendChild(head);
+    wrap.appendChild(pre);
+  });
+}
+
+function showStatusNotice(text, ms) {
+  const el = $("status-notice");
+  if (!el) return;
+  const delay = Number.isFinite(ms) ? Number(ms) : 5000;
+  el.textContent = String(text || "");
+  el.hidden = !el.textContent;
+  if (statusNoticeTimer != null) {
+    window.clearTimeout(statusNoticeTimer);
+    statusNoticeTimer = null;
+  }
+  if (!el.textContent) return;
+  statusNoticeTimer = window.setTimeout(() => {
+    statusNoticeTimer = null;
+    el.textContent = "";
+    el.hidden = true;
+  }, delay);
+}
+
+function flashCopied(btn) {
+  if (!btn) return;
+  if (btn._copyFlashTimer != null) {
+    window.clearTimeout(btn._copyFlashTimer);
+    btn._copyFlashTimer = null;
+  }
+  btn.innerHTML = CHECK_ICON_SVG;
+  btn.setAttribute("title", "Copied");
+  showStatusNotice("Text copied to clipboard");
+  btn._copyFlashTimer = window.setTimeout(() => {
+    btn._copyFlashTimer = null;
+    if (!btn.isConnected) return;
+    btn.innerHTML = COPY_ICON_SVG;
+    btn.setAttribute("title", "Copy");
+  }, 1500);
+}
+
+async function writeClipboard(text) {
+  const value = String(text || "");
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  ta.remove();
+}
+
+async function handleCopyButton(btn) {
+  const kind = btn.getAttribute("data-copy-kind") || "";
+  let text = "";
+  if (kind === "output") {
+    const index = Number(btn.getAttribute("data-msg-index"));
+    const msg = transcript[index];
+    text = msg && msg.text != null ? String(msg.text) : "";
+  } else {
+    const block = btn.closest(".md-code");
+    const code = block && block.querySelector("pre code");
+    text = code ? String(code.textContent || "") : "";
+  }
+  try {
+    await writeClipboard(text);
+    flashCopied(btn);
+  } catch (exc) {
+    window.alert("Could not copy to the clipboard.");
+  }
+}
+
+function refreshOutputAges() {
+  const now = Date.now();
+  document.querySelectorAll(".output-age[data-created-at]").forEach((el) => {
+    const next = formatOutputAge(el.getAttribute("data-created-at"), now);
+    if (next && el.textContent !== next) el.textContent = next;
+  });
+}
+
+function ensureOutputAgeTimer() {
+  if (outputAgeTimer != null) return;
+  outputAgeTimer = window.setInterval(refreshOutputAges, 30000);
 }
 
 function metricsCards(metrics) {
@@ -2869,6 +3287,7 @@ function renderArtifacts() {
   host.innerHTML = `<div class="tabs">${tabs}</div><div data-testid="artifact-panel"${fillPane ? ' class="fill-pane"' : ""}>${body}</div>`;
   bindTabsWheel(host);
   runMermaid(host);
+  decorateCodeBlocks(host);
   const ta = $("code-editor");
   if (ta) {
     ta.addEventListener("input", () => {
@@ -3174,6 +3593,7 @@ async function restoreCurrentSession() {
   await refreshSessions();
   await refreshWorkspace();
   await refreshProvider();
+  await refreshAttachments();
   renderPanes();
 }
 

@@ -18,9 +18,11 @@
   "python_code": "import qteasy as qt\n# PT / PS / VS is a Strategy / Group signal_type, not a qt.run() config key.\nop = qt.Operator(strategies=['macd'], signal_type='pt')\nprint(op.signal_type)",
   "risk_notes": "Do not treat PS/VS as target-weight rebalance. Same-bar cash reuse is PT-only under cash_delivery_period=0.",
   "type": "concept",
-  "manual_anchor": "docs/source/manage_strategies/5. strategy_bases.md",
+  "manual_anchor": "docs/source/manage_strategies/3. group_and_blender.md",
   "topics": ["strategy"],
   "relations": [
-    {"rel": "see_also", "to": "strategy_builder_intro"}
+    {"rel": "see_also", "to": "strategy_builder_intro"},
+    {"rel": "see_also", "to": "strategy_blender"},
+    {"rel": "see_also", "to": "strategy_bases"}
   ]
 }

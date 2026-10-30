@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -30,24 +31,97 @@ _ASK_SYSTEM_PROMPT = (
     "Reply in the same language as the user's Question "
     "(Chinese question → Chinese answer; English question → English answer). "
     "Keep qteasy identifiers, skill names, and code unchanged. "
+    "Commonsense risk points may be stated when helpful, but label them as a "
+    "general principle, not a handbook entry "
+    "(past returns do not guarantee future profit; do not tune and judge on the "
+    "same window; do not compare strategies by return alone). "
+    "A user-level definition may rephrase only the provided snippets; you may "
+    "mark it as a plain explanation with handbook semantics authoritative; "
+    "never invent entry names, slots, exception text, or performance numbers "
+    "absent from the snippets. "
+    "If this turn did not explain the concept the user asked about, do not imply "
+    "the concept was already answered (for example by saying they should already "
+    "use Ask); capability boundaries remain allowed (concepts in Ask, real runs "
+    "in Plan). "
+    "Switch to Plan only for actionable requests, not as a closing line for "
+    "concept questions. Do not treat assistant.preview as the only next step "
+    "for beginners; if the workbench entry card is not selected, say you do not "
+    "know where the web buttons are. "
     "If the snippets are insufficient, say so and suggest Plan mode."
+)
+
+_PLAIN_LANGUAGE_WRITER_CLAUSE = (
+    "先人话：优先用日常说法解释；标识符后置或省略，"
+    "除非用户明确要看符号或代码。"
+)
+_BACKTEST_OPTIMIZE_OOS_WRITER_CLAUSE = (
+    "When a selected card is about backtest or optimize, you may add one "
+    "annotated general principle: split history into an earlier window and a "
+    "later window and run each once; do not compare by return alone. "
+    "Do not invent a cut date, split ratio, or claim a handbook comparison protocol."
+)
+
+_PLAIN_LANGUAGE_SIGNALS = (
+    "不懂代码",
+    "外行",
+    "我妈能懂",
+    "别讲术语",
+    "别给代码",
+    "大白话",
+    "说人话",
+    "讲太复杂",
+    "别翻代码",
 )
 
 _TOPIC_SYSTEM_PROMPT = (
     "You select topics for a qteasy Ask question. "
     "Reply with one JSON object and no other text. "
     "When choosing topics, use only topic ids from the registry. "
-    "When naming earlier turns, use only turns and source ids from the history index."
+    "When naming earlier turns, use only turns and source ids from the history index. "
+    "Also set \"plain_language\": true when the user wants plain language or fewer "
+    "jargon terms first; listed substrings in the user prompt are reference signals "
+    "only, not the only signals—synonyms outside that list still count. "
+    "Omit the field or set false when they do not ask for that register. "
+    "Do not set plain_language when you reply with {\"uncertain\": true}."
 )
+
+
+def query_requests_plain_language(text: str) -> bool:
+    """无 Provider 路径：子串词表是否要求先人话（有 Provider 时不作代码硬门）。"""
+
+    blob = str(text or "")
+    if not blob:
+        return False
+    return any(token in blob for token in _PLAIN_LANGUAGE_SIGNALS)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _NEEDS_PROVIDER_MESSAGE = (
     "Follow-up questions, references to earlier turns, and relations need a configured language model. "
     "Without a provider, Ask only answers a self-contained question."
+)
+_NEEDS_PROVIDER_ANSWER_ZH = (
+    "追问、指代前文以及关联需要配置大模型。"
+    "未配置 Provider 时，Ask 只回答本句就能命中的自足问题。"
+)
+_NOT_FOUND_MESSAGE = "No matching knowledge snippet. Try Plan mode for executable requests."
+_NOT_FOUND_ANSWER_EN = (
+    "No matching qteasy knowledge snippet was found for this question. "
+    "Ask will not invent an answer from an empty knowledge base. "
+    "If you want to list strategies, download data, backtest, or optimize, "
+    "use Plan or preview instead of Ask."
+)
+_NOT_FOUND_ANSWER_ZH = (
+    "官方知识库中没有与这个问题匹配的条目。"
+    "Ask 不会在空库上编造答案。"
+    "若要列出策略、下载数据、回测或优化，请改用 Plan 或 preview。"
 )
 
 _CARD_SYSTEM_PROMPT = (
     "You select knowledge cards for a qteasy Ask question. "
     "Reply with one JSON object and no other text. "
-    "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select."
+    "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select. "
+    "When one question covers multiple matters, pick one card per matter you can cover "
+    "(still at most 3 ids). If a matter has no matching card, still select cards for the "
+    "matters that do; do not reply with {\"uncertain\": true} for the whole question."
 )
 
 _COMPOSE_CLAUSES = {
@@ -209,7 +283,7 @@ class AskResponse:
     raw : dict
         机器可读载荷（命中条目、检索上下文）。
     error : dict, optional
-        ``{code, message}``；用户可见 message 为英文。
+        ``{code, message}``；机器可读 message 为英文；用户可见答文在 answer。
     """
 
     mode: str = "ask"
@@ -267,12 +341,15 @@ class AskEngine:
         explanation_depth: str = "standard",
         session_context: str = "",
         ask_history: Optional[Sequence[AskHistoryCard]] = None,
+        plain_language: bool = False,
     ) -> AskResponse:
         """回答用户问题，不走 plan / skill。
 
         无 Provider 时只做单句检索，不读历史正文。有 Provider 时不把目录当第一跳：
         定主题、在主题菜单里点卡，作家只读通过校验的正文。已有成功 Ask 时，
         定主题提示只加一句话索引；模型点名轮次后，那些轮次的原话和答文才进入点卡。
+        ``raw['ask_plain_language']`` 仅表示本轮新判定（供 session 粘住）；作家是否
+        加降术语条款看 ``plain_language`` 参数或本轮判定。
 
         Parameters
         ----------
@@ -284,6 +361,8 @@ class AskEngine:
             已确认的 session 槽位文本，只附在作家 prompt 上。
         ask_history : sequence of AskHistoryCard, optional
             调用方从 ``messages[]`` 现算的成功 Ask 索引。本方法不读 session。
+        plain_language : bool, default False
+            调用方已粘住的语域布尔；为真时作家提示加先人话条款。
 
         Returns
         -------
@@ -295,19 +374,26 @@ class AskEngine:
         text = (query or "").strip()
         depth = explanation_depth if explanation_depth in {"brief", "standard", "deep"} else "standard"
         history = list(ask_history or [])
+        latched_plain = bool(plain_language)
         if not text:
-            return self._not_found(query=text, depth=depth)
+            return self._with_plain_flag(self._not_found(query=text, depth=depth), False)
         topic_ids: List[str] = []
+        turn_plain = False
         if self.provider is None:
+            turn_plain = query_requests_plain_language(text)
             hits = self.knowledge_base.retrieve(text)
             if not hits and history:
-                return self._not_found_needs_provider(query=text, depth=depth)
+                return self._with_plain_flag(
+                    self._not_found_needs_provider(query=text, depth=depth),
+                    turn_plain,
+                )
         else:
-            hits, topic_ids = self._select_with_provider(text, history)
+            hits, topic_ids, turn_plain = self._select_with_provider(text, history)
         if not hits:
-            return self._not_found(query=text, depth=depth)
+            return self._with_plain_flag(self._not_found(query=text, depth=depth), turn_plain)
 
         sources = [item.id for item in hits]
+        effective_plain = latched_plain or turn_plain
         if self.provider is not None:
             menu_ids = [
                 entry.id for entry in self.knowledge_base.menu_for_topics(topic_ids)
@@ -317,12 +403,13 @@ class AskEngine:
                 hits=hits,
                 session_context=session_context,
                 menu_ids=menu_ids,
+                plain_language=effective_plain,
             )
         else:
             answer = self._offline_answer(hits)
             if session_context:
                 answer = f"{answer}\n\nSession slots: {session_context}"
-        extra: Dict[str, Any] = {}
+        extra: Dict[str, Any] = {"ask_plain_language": bool(turn_plain)}
         if session_context:
             extra["session_context"] = session_context
         if topic_ids:
@@ -335,60 +422,62 @@ class AskEngine:
             depth=depth,
             ok=True,
             error=None,
-            extra_raw=extra or None,
+            extra_raw=extra,
         )
 
     def _select_with_provider(
             self,
             query: str,
             history: Sequence[AskHistoryCard],
-    ) -> Tuple[List[KbEntry], List[str]]:
+    ) -> Tuple[List[KbEntry], List[str], bool]:
         """定主题、点卡、校验。失败时不调用作家。
 
         Returns
         -------
         tuple
-            选中的条目，以及本轮主题 id。失败时两者都空。
+            选中的条目、本轮主题 id、本轮定主题 JSON 的 ``plain_language``。
+            失败时条目与主题为空，语域为 False。
         """
 
         resolved = self._resolve_topics(query, history)
         if resolved is None:
-            return [], []
-        topic_ids, named = resolved
+            return [], [], False
+        topic_ids, named, turn_plain = resolved
         if not topic_ids:
-            return [], []
+            return [], [], False
         menu = self.knowledge_base.menu_for_topics(topic_ids)
         if not menu:
-            return [], []
+            return [], [], False
         card_raw = self.provider.chat(
             self._card_user_prompt(query, menu, named_cards=named),
             system_prompt=_CARD_SYSTEM_PROMPT,
         )
         raw_ids = self._parse_ids_reply(str(card_raw))
         if raw_ids is None:
-            return [], []
+            return [], [], False
         menu_ids = {entry.id for entry in menu}
         accepted = self.knowledge_base.validate_card_ids(menu, raw_ids)
         primaries = [entry for entry in accepted if entry.id in menu_ids]
         primaries = self.knowledge_base.prefer_exclusive(primaries)
         if not primaries:
-            return [], []
+            return [], [], False
         meta = self.knowledge_base._maybe_strategy_meta(query)
         if meta is not None:
             primaries = list(primaries) + [meta]
-        return primaries, topic_ids
+        return primaries, topic_ids, bool(turn_plain)
 
     def _resolve_topics(
             self,
             query: str,
             history: Sequence[AskHistoryCard],
-    ) -> Optional[Tuple[List[str], List[AskHistoryCard]]]:
+    ) -> Optional[Tuple[List[str], List[AskHistoryCard], bool]]:
         """定主题。有历史时由模型 JSON 决定新问题或点名轮次。
 
         Returns
         -------
         tuple or None
-            主题 id，以及被点名的卡片。新问题时卡片列表为空。失败时为 ``None``。
+            主题 id、被点名的卡片、以及 ``plain_language`` 本轮判定。
+            新问题时卡片列表为空。失败或 ``uncertain`` 时为 ``None``（不置语域）。
         """
 
         topic_raw = self.provider.chat(
@@ -398,16 +487,21 @@ class AskEngine:
         payload = _json_object(str(topic_raw))
         if payload is None or payload.get("uncertain") is True:
             return None
+        turn_plain = payload.get("plain_language") is True
         has_topics = "topics" in payload
         has_prior = "prior" in payload
         if has_topics and has_prior:
             return None
         if has_prior:
-            return self._prior_topics(payload, history)
+            prior = self._prior_topics(payload, history)
+            if prior is None:
+                return None
+            topic_ids, named = prior
+            return topic_ids, named, turn_plain
         topic_ids = self._parse_topics_reply(str(topic_raw))
         if not topic_ids:
             return None
-        return topic_ids, []
+        return topic_ids, [], turn_plain
 
     def _prior_topics(
             self,
@@ -509,17 +603,25 @@ class AskEngine:
                     f"- turn {card.turn} kind=ask id={card.card_id} "
                     f"title={card.title} summary={card.summary}"
                 )
+        lines.append(
+            "Plain-language reference signals (hints only, not required): "
+            + "、".join(_PLAIN_LANGUAGE_SIGNALS)
+        )
         lines.append(f"Question: {query}")
         if history:
             lines.append(
-                'Reply with JSON only: {"topics": ["<id>"]} using 1 or 2 registry ids, '
-                'or {"prior": [{"turn": 1, "sources": ["<id>"]}]} naming only turns and '
-                'source ids from the index, or {"uncertain": true}.'
+                'Reply with JSON only: {"topics": ["<id>"], "plain_language": true|false} '
+                "using 1 or 2 registry ids, "
+                'or {"prior": [{"turn": 1, "sources": ["<id>"]}], "plain_language": true|false} '
+                "naming only turns and source ids from the index, "
+                'or {"uncertain": true}. '
+                "plain_language is optional; omit or false when not requested."
             )
         else:
             lines.append(
-                'Reply with JSON only: {"topics": ["<id>"]} using 1 or 2 registry ids, '
-                'or {"uncertain": true}.'
+                'Reply with JSON only: {"topics": ["<id>"], "plain_language": true|false} '
+                "using 1 or 2 registry ids, or {\"uncertain\": true}. "
+                "plain_language is optional; omit or false when not requested."
             )
         return "\n".join(lines)
 
@@ -600,17 +702,12 @@ class AskEngine:
         return [item.strip() for item in raw_ids]
 
     def _not_found(self, *, query: str, depth: str) -> AskResponse:
-        """KB 未命中：英文 not_found，建议 Plan，不调用 LLM。"""
+        """KB 未命中：静态答文跟问句语言，建议 Plan，不调用 LLM。"""
 
-        answer = (
-            "No matching qteasy knowledge snippet was found for this question. "
-            "Ask will not invent an answer from an empty knowledge base. "
-            "If you want to list strategies, download data, backtest, or optimize, "
-            "use Plan or preview instead of Ask."
-        )
+        answer = _NOT_FOUND_ANSWER_ZH if _CJK_RE.search(str(query or "")) else _NOT_FOUND_ANSWER_EN
         error = {
             "code": "NOT_FOUND",
-            "message": "No matching knowledge snippet. Try Plan mode for executable requests.",
+            "message": _NOT_FOUND_MESSAGE,
         }
         return self._pack(
             query=query,
@@ -625,19 +722,30 @@ class AskEngine:
     def _not_found_needs_provider(self, *, query: str, depth: str) -> AskResponse:
         """无 Provider 且已有成功 Ask，但本句自己未命中。不读历史正文。"""
 
+        answer = (
+            _NEEDS_PROVIDER_ANSWER_ZH
+            if _CJK_RE.search(str(query or ""))
+            else _NEEDS_PROVIDER_MESSAGE
+        )
         error = {
             "code": "NOT_FOUND",
             "message": _NEEDS_PROVIDER_MESSAGE,
         }
         return self._pack(
             query=query,
-            answer=_NEEDS_PROVIDER_MESSAGE,
+            answer=answer,
             hits=[],
             sources=[],
             depth=depth,
             ok=False,
             error=error,
         )
+
+    def _with_plain_flag(self, response: AskResponse, turn_plain: bool) -> AskResponse:
+        """把本轮语域判定写入 ``raw``，供 session 粘住；不改已粘住的会话字段。"""
+
+        response.raw["ask_plain_language"] = bool(turn_plain)
+        return response
 
     def _ask_llm(
             self,
@@ -646,6 +754,7 @@ class AskEngine:
             hits: List[KbEntry],
             session_context: str = "",
             menu_ids: Optional[Sequence[str]] = None,
+            plain_language: bool = False,
     ) -> str:
         """将主答卡正文与合编方式注入 prompt 后调用 Provider。"""
 
@@ -667,11 +776,20 @@ class AskEngine:
             "grounded in the snippets. "
             "Do not expand a card that is only mentioned as an invitation."
         )
+        system = _ASK_SYSTEM_PROMPT
+        if plain_language:
+            system = f"{system} {_PLAIN_LANGUAGE_WRITER_CLAUSE}"
+        if any(
+            topic in ("backtest", "optimize")
+            for item in hits
+            for topic in item.topics
+        ):
+            system = f"{system} {_BACKTEST_OPTIMIZE_OOS_WRITER_CLAUSE}"
         return str(
             self.provider.chat(
                 prompt,
                 system_prompt=prefix_system_prompt(
-                    _ASK_SYSTEM_PROMPT,
+                    system,
                     getattr(self, "identity_dir", None),
                 ),
             )

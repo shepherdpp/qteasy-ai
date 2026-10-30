@@ -1,0 +1,26 @@
+{
+  "id": "live_what",
+  "tags": ["live", "simulated", "intro"],
+  "keywords": [
+    "模拟实盘是什么",
+    "what is simulated live",
+    "模拟实盘",
+    "simulated live",
+    "mode=0",
+    "Trader",
+    "真实时钟"
+  ],
+  "title": "What simulated live is",
+  "summary": "Same Operator as backtest, but the clock is real time (mode=0). Ask explains only; it does not start Trader.",
+  "narrative": "Simulated live uses the same Operator and strategy logic as a backtest. The difference is the clock and who matches orders: backtest fast-forwards a historical window; simulated live advances on the real trading calendar (configure mode=0). Matching is usually a simulator Broker, not a real exchange desk yet.\n\nRoles to name only: Operator holds the strategies; Trader is the process that runs them on a schedule; Broker accepts orders and returns fills. This card does not list shell or terminal command sheets, does not give a qt.run startup block, and does not walk tutorial 8.\n\nAsk explains this boundary. It does not start Trader and does not submit orders. Whether live steps can ever auto-send is a separate boundary card. The unfinished deploy tutorial and the tutorial-8 walkthrough are not copied here as recipes.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('模拟实盘是什么', response_style='raw')['sources'])",
+  "risk_notes": "Ask never starts Trader. Simulated live is not automatic order sending; see live_plan_only.",
+  "type": "concept",
+  "manual_anchor": "docs/source/live_trading/1-overview.md",
+  "topics": ["live_boundary"],
+  "relations": [
+    {"rel": "contrasts_with", "to": "backtest_intro"},
+    {"rel": "see_also", "to": "live_plan_only"},
+    {"rel": "see_also", "to": "qteasy_advantages"}
+  ]
+}

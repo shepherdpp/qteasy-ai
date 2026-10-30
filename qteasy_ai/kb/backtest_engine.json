@@ -1,0 +1,24 @@
+{
+  "id": "backtest_engine",
+  "tags": ["backtest", "engine", "vectorize", "numba"],
+  "keywords": [
+    "回测为什么按时间步走",
+    "backtest engine",
+    "向量化",
+    "Numba",
+    "时间步进",
+    "backtest_step"
+  ],
+  "title": "Why the backtest steps in time and vectorizes symbols",
+  "summary": "Time advances bar by bar so cash, holdings, and settlement stay correct. Inside each bar, symbols are vectorized with NumPy and Numba. Window isolation is a separate card.",
+  "narrative": "The backtest engine advances along the trading schedule one step at a time. Cash, holdings, and settlement rules such as T+1 need that order. Inside a single step, buy/sell amounts, fees, and position updates run as array work across the asset pool (NumPy plus Numba-accelerated helpers such as backtest_step and batch steppers).\n\nOptimization can use a leaner path (backtest_flash_steps) that keeps less intermediate state per parameter set. That is still the same step-in-time model, not a full-timeline matrix rewrite.\n\nHow the engine keeps each step from seeing future bars is the lookahead-isolation card. Signal-number meanings (PT versus PS/VS) and blender mixing stay on the strategy cards. This card does not compare third-party vector backtesters.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='PT', run_freq='d')\n# mode=1 steps the schedule; symbol math inside each step is vectorized.\nprint(op.run_freq)",
+  "risk_notes": "Ask explains the stepping model only. It does not invent speed benchmarks or third-party scorecards.",
+  "type": "concept",
+  "manual_anchor": "docs/source/back_testing/6. backtest_engine_and_performance.md",
+  "topics": ["backtest"],
+  "relations": [
+    {"rel": "see_also", "to": "backtest_intro"},
+    {"rel": "see_also", "to": "lookahead_isolation"}
+  ]
+}

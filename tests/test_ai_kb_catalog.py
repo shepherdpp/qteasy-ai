@@ -481,7 +481,10 @@ class TestAiKbCatalog(unittest.TestCase):
         download_ids = [entry.id for entry in kb.menu_for_topics(["data-downloading"])]
         print(" live_boundary menu:", live_ids)
         print(" data-downloading menu:", download_ids)
-        self.assertEqual(live_ids, ["live_plan_only", "side_effects_safety"])
+        self.assertEqual(
+            live_ids,
+            ["live_plan_only", "live_what", "side_effects_safety"],
+        )
         self.assertIn("refill_bounded", download_ids)
         self.assertNotIn("data_three_entries", download_ids)
 

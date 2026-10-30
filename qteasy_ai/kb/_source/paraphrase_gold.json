@@ -21,7 +21,9 @@
         "how to backtest",
         "回测入门",
         "backtest intro",
-        "run backtest"
+        "run backtest",
+        "回测是什么",
+        "帮我回测"
       ],
       "paraphrases": [
         "如何用qteasy回测",
@@ -78,7 +80,8 @@
         "三入口",
         "历史数据",
         "参考数据",
-        "静态数据"
+        "静态数据",
+        "三入口有什么区别"
       ],
       "paraphrases": [
         "取历史、参考和静态是三条不同的路"
@@ -123,13 +126,27 @@
       "gold": [
         "live trade",
         "live plan",
-        "never auto"
+        "never auto",
+        "会不会自动下单"
       ],
       "paraphrases": [
         "模拟交易会不会自动发出委托"
       ],
       "expect_ids": [
         "live_plan_only"
+      ]
+    },
+    {
+      "id": "live_what",
+      "gold": [
+        "模拟实盘是什么",
+        "what is simulated live"
+      ],
+      "paraphrases": [
+        "按真实时钟跑策略算什么"
+      ],
+      "expect_ids": [
+        "live_what"
       ]
     },
     {
@@ -181,7 +198,9 @@
         "how to optimize",
         "参数优化",
         "optimize intro",
-        "parameter optimize"
+        "parameter optimize",
+        "优化在做什么",
+        "帮我优化"
       ],
       "paraphrases": [
         "怎样找出一组更好的参数组合"
@@ -195,7 +214,8 @@
       "gold": [
         "signal type",
         "position target",
-        "value signal"
+        "value signal",
+        "什么是 PT"
       ],
       "paraphrases": [
         "目标仓位和按比例下单的信号有什么差别"
@@ -209,7 +229,8 @@
       "gold": [
         "download daily",
         "下载日线",
-        "灌数据"
+        "灌数据",
+        "帮我下载"
       ],
       "paraphrases": [
         "只补一段指定日期里的日线"
@@ -339,6 +360,317 @@
       ],
       "expect_ids": [
         "get_help"
+      ]
+    },
+    {
+      "id": "datatype_lookup",
+      "gold": [
+        "什么是 DataType",
+        "how to look up a data type",
+        "怎么查一个 DataType"
+      ],
+      "paraphrases": [
+        "信息 ID 和表里的列名是一回事吗"
+      ],
+      "expect_ids": [
+        "datatype_lookup"
+      ]
+    },
+    {
+      "id": "data_filter",
+      "gold": [
+        "怎么按行业筛选股票"
+      ],
+      "paraphrases": [
+        "上市日能不能用来缩小股票池"
+      ],
+      "expect_ids": [
+        "data_filter"
+      ]
+    },
+    {
+      "id": "datasource_local",
+      "gold": [
+        "什么是 DataSource",
+        "local data source",
+        "怎么看本地已经有哪些数据"
+      ],
+      "paraphrases": [
+        "本地数据源和预定义表是什么关系"
+      ],
+      "expect_ids": [
+        "datasource_local"
+      ]
+    },
+    {
+      "id": "data_channels",
+      "gold": [
+        "数据通道是什么",
+        "what is a data channel",
+        "下载时怎么指定数据通道"
+      ],
+      "paraphrases": [
+        "tushare 和 akshare 在下载里扮演什么角色"
+      ],
+      "expect_ids": [
+        "data_channels"
+      ]
+    },
+    {
+      "id": "data_minimum",
+      "gold": [
+        "起步要下载哪些表"
+      ],
+      "paraphrases": [
+        "玩数据之前最少要准备哪些本地表"
+      ],
+      "expect_ids": [
+        "data_minimum"
+      ]
+    },
+    {
+      "id": "historypanel_basics",
+      "gold": [
+        "HistoryPanel 的三维是什么",
+        "什么是 HistoryPanel",
+        "what is HistoryPanel shape"
+      ],
+      "paraphrases": [
+        "HistoryPanel 的 shape 三个轴分别代表什么"
+      ],
+      "expect_ids": [
+        "historypanel_basics"
+      ]
+    },
+    {
+      "id": "historypanel_analysis",
+      "gold": [
+        "怎么用 HistoryPanel 做数据分析",
+        "HistoryPanel 怎么算收益率"
+      ],
+      "paraphrases": [
+        "在面板上怎么算波动率和截面排名"
+      ],
+      "expect_ids": [
+        "historypanel_analysis"
+      ]
+    },
+    {
+      "id": "historypanel_plot",
+      "gold": [
+        "HistoryPanel 怎么用 plotly 画图",
+        "怎么画 K 线"
+      ],
+      "paraphrases": [
+        "HistoryPanel 交互图画蜡烛怎么开"
+      ],
+      "expect_ids": [
+        "historypanel_plot"
+      ]
+    },
+    {
+      "id": "strategy_overview",
+      "gold": [
+        "策略、Operator 和 Group 各管什么"
+      ],
+      "paraphrases": [
+        "策略容器和策略组分别扮演什么角色"
+      ],
+      "expect_ids": [
+        "strategy_overview"
+      ]
+    },
+    {
+      "id": "operator_create",
+      "gold": [
+        "怎么创建 Operator"
+      ],
+      "paraphrases": [
+        "Operator 里怎样添加策略并设置参数"
+      ],
+      "expect_ids": [
+        "operator_create"
+      ]
+    },
+    {
+      "id": "strategy_blender",
+      "gold": [
+        "blender 是什么"
+      ],
+      "paraphrases": [
+        "同组多个策略的信号怎么合并"
+      ],
+      "expect_ids": [
+        "strategy_blender"
+      ]
+    },
+    {
+      "id": "builtin_strategy_lookup",
+      "gold": [
+        "怎么查阅内置策略文档"
+      ],
+      "paraphrases": [
+        "内置策略的说明文档从哪个接口读"
+      ],
+      "expect_ids": [
+        "builtin_strategy_lookup"
+      ]
+    },
+    {
+      "id": "strategy_bases",
+      "gold": [
+        "三种策略基类有什么区别",
+        "每只股票用不同参数怎么设"
+      ],
+      "paraphrases": [
+        "择时选股通用三类基类分别什么时候用"
+      ],
+      "expect_ids": [
+        "strategy_bases"
+      ]
+    },
+    {
+      "id": "strategy_realize",
+      "gold": [
+        "自定义策略的 realize 要返回什么"
+      ],
+      "paraphrases": [
+        "手写策略时参数和数据窗怎么接到 realize"
+      ],
+      "expect_ids": [
+        "strategy_realize"
+      ]
+    },
+    {
+      "id": "strategy_trace",
+      "gold": [
+        "怎么追踪策略中间变量"
+      ],
+      "paraphrases": [
+        "realize 里怎样把中间结果记下来事后查看"
+      ],
+      "expect_ids": [
+        "strategy_trace"
+      ]
+    },
+    {
+      "id": "backtest_config",
+      "gold": [
+        "回测区间和成本怎么设",
+        "backtest config"
+      ],
+      "paraphrases": [
+        "回测的资产池和手续费在哪设"
+      ],
+      "expect_ids": [
+        "backtest_config"
+      ]
+    },
+    {
+      "id": "backtest_result",
+      "gold": [
+        "回测结果看什么",
+        "backtest result"
+      ],
+      "paraphrases": [
+        "回测跑完看哪些指标"
+      ],
+      "expect_ids": [
+        "backtest_result"
+      ]
+    },
+    {
+      "id": "backtest_trade_log",
+      "gold": [
+        "交易日志在哪",
+        "trade_log file path"
+      ],
+      "paraphrases": [
+        "回测成交记录存在哪里"
+      ],
+      "expect_ids": [
+        "backtest_trade_log"
+      ]
+    },
+    {
+      "id": "backtest_engine",
+      "gold": [
+        "回测为什么按时间步走",
+        "backtest engine"
+      ],
+      "paraphrases": [
+        "qteasy 回测是怎么按 bar 推进的"
+      ],
+      "expect_ids": [
+        "backtest_engine"
+      ]
+    },
+    {
+      "id": "optimize_config",
+      "gold": [
+        "opti_sample_count 是什么",
+        "opti_sample_count"
+      ],
+      "paraphrases": [
+        "优化时采样次数怎么设"
+      ],
+      "expect_ids": [
+        "optimize_config"
+      ]
+    },
+    {
+      "id": "optimize_algorithms",
+      "gold": [
+        "网格搜索和蒙特卡洛怎么选",
+        "grid vs montecarlo"
+      ],
+      "paraphrases": [
+        "优化算法 grid 和 montecarlo 怎么选"
+      ],
+      "expect_ids": [
+        "optimize_algorithms"
+      ]
+    },
+    {
+      "id": "optimize_result",
+      "gold": [
+        "最优参数怎么读",
+        "optimize result Top-K"
+      ],
+      "paraphrases": [
+        "优化结果 Top-K 怎么用"
+      ],
+      "expect_ids": [
+        "optimize_result"
+      ]
+    },
+    {
+      "id": "lookahead_isolation",
+      "gold": [
+        "qteasy 如何防止未来函数",
+        "lookahead isolation"
+      ],
+      "paraphrases": [
+        "回测里怎么避免用到未来数据"
+      ],
+      "expect_ids": [
+        "lookahead_isolation"
+      ]
+    },
+    {
+      "id": "workbench_entry",
+      "gold": [
+        "Plan 在哪",
+        "点哪个按钮",
+        "where is Plan mode",
+        "工作台怎么切到 Plan"
+      ],
+      "paraphrases": [
+        "网页上 Ask 和 Plan 怎么切换",
+        "确认按钮在哪里"
+      ],
+      "expect_ids": [
+        "workbench_entry"
       ]
     }
   ]

@@ -1,0 +1,25 @@
+{
+  "id": "operator_create",
+  "tags": ["operator", "add_strategy", "set_parameter", "is_ready"],
+  "keywords": [
+    "怎么创建 Operator",
+    "create Operator",
+    "add_strategy",
+    "set_parameter",
+    "is_ready",
+    "Operator 怎么加策略"
+  ],
+  "title": "Create and configure an Operator",
+  "summary": "Build Operator with strategies and construction knobs, add_strategy / set_parameter for shared parameter names, and is_ready. False from is_ready before a backtest fills buffers can be normal. Frequency routing and signal-number meanings are other cards.",
+  "narrative": "Create an Operator with qt.Operator(...). You may pass strategies (id string, list, or instances) plus construction knobs such as signal_type. Add more with add_strategy / add_strategies. Use set_parameter(stg_id, pars={parameter_name: value, ...}) to set one shared parameter set for a strategy by parameter name—not a per-share code map.\n\nis_ready() (or op.ready) checks whether the Operator can emit signals. Before a backtest or live run fills the share pool, data buffers, and timing tables, False is normal; those pieces are filled by the run pipeline. Pass tell_me_why=True to print the missing pieces.\n\nThis card does not explain where run timing belongs versus qt.run, and it does not define what PT / PS / VS numbers mean. Mixing several strategies inside a Group is the blender card.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(signal_type='pt')\nop.add_strategy('dma')\nop.set_parameter('dma', pars={'short_period': 5, 'long_period': 20})\nprint(op.is_ready(tell_me_why=True))",
+  "risk_notes": "Ask does not call qt.run. A False is_ready before buffers exist is often expected, not a broken Operator.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/2. operator.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "operator_run_freq"},
+    {"rel": "see_also", "to": "strategy_overview"},
+    {"rel": "see_also", "to": "strategy_blender"}
+  ]
+}

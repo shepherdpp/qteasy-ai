@@ -1,0 +1,29 @@
+{
+  "id": "historypanel_basics",
+  "tags": ["historypanel", "shape", "panel", "container"],
+  "keywords": [
+    "HistoryPanel 的三维是什么",
+    "什么是 HistoryPanel",
+    "what is HistoryPanel shape",
+    "shape",
+    "shares",
+    "hdates",
+    "htypes",
+    "subpanel",
+    "三维"
+  ],
+  "title": "HistoryPanel is a 3-D history container",
+  "summary": "HistoryPanel holds shares × hdates × htypes; shape is (M, L, N). Use it to obtain, slice, rename, and restructure the panel—not to invent research factors or chart settings.",
+  "narrative": "HistoryPanel is qteasy's in-memory 3-D History container. The three axes are shares (symbols), hdates (time), and htypes (series names). shape is (M, L, N) for those axes in that order.\n\nOnly History-shaped series belong here. Macro and benchmarks stay on get_reference_data; industry and list_date stay on get_static_data. Obtain a panel with get_kline(..., as_panel=True) or get_history_data(..., as_data_frame=False). You can also build one for teaching with values, levels, rows, and columns.\n\nInspect with shares / hdates / htypes, print(hp), head/tail, and to_share_frame. Prefer subpanel, loc, and indexing over the deprecated slice / segment / isegment names. drop and rename change labels. Column access, assign, and simple expr add or rewrite columns as structure ops—they are not the research-factor lesson.\n\nalign_to enforces matching htypes before you merge two panels. Export with to_df_dict or MultiIndex helpers. Watch inplace defaults on fill helpers so you do not mutate a panel you still need.\n\nThis card does not teach returns, where masks, or hp.plot() parameters. Those are separate HistoryPanel topics.",
+  "python_code": "import qteasy as qt\nhp = qt.get_kline(htypes='open, high, low, close, vol', shares='000300.SH', start='20230101', end='20230131', as_panel=True)\nprint(hp.shape, hp.shares, hp.htypes)",
+  "risk_notes": "Reference and Static shapes are not panel axes. Adj names such as close|b are still History columns; look them up as DataTypes when unsure.",
+  "type": "concept",
+  "manual_anchor": "docs/source/tutorials/2.4-historypanel-basics.md",
+  "topics": ["data-analysis"],
+  "relations": [
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "see_also", "to": "historypanel_analysis"},
+    {"rel": "see_also", "to": "historypanel_plot"},
+    {"rel": "see_also", "to": "capability_map"}
+  ]
+}

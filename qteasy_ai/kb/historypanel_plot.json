@@ -1,0 +1,27 @@
+{
+  "id": "historypanel_plot",
+  "tags": ["historypanel", "plot", "plotly", "candle", "chart"],
+  "keywords": [
+    "HistoryPanel 怎么用 plotly 画图",
+    "怎么画 K 线",
+    "hp.plot",
+    "plotly",
+    "interactive",
+    "candle",
+    "画图"
+  ],
+  "title": "Plot a HistoryPanel with hp.plot()",
+  "summary": "hp.plot() is the single chart entry. Candles need a full OHLC family already on the panel. interactive=True uses Plotly; plot does not invent indicator columns.",
+  "narrative": "The recommended chart entry is HistoryPanel.plot(). Chart type follows the htypes already on the panel: a full OHLC family can render as candles; otherwise you typically get lines. plot does not invent indicator columns—build MACD, SMA, or other series first (research_preset or kline on the analysis card), then plot.\n\ninteractive=False (default) uses matplotlib for static figures. interactive=True uses Plotly for zoom and hover. In Jupyter, FigureWidget is preferred when anywidget and ipywidgets are available; otherwise an HTML wrapper may appear.\n\nlayout chooses overlay, stack, or auto for multiple shares. shares subsets the symbols. highlight can mark max/min or a condition mask. plotly_backend_app selects auto, FigureWidget, or html when interactive is on. Many shares may be capped with a warning to avoid overcrowding.\n\nAsking how to draw a K-line at explain level means: put open/high/low/close on the panel, then call hp.plot(). This card does not teach panel creation or factor math, and it does not walk advanced 2.6–2.8 demo loops.",
+  "python_code": "import qteasy as qt\nhp = qt.get_kline(htypes='open, high, low, close, vol', shares='000300.SH', rows=120, as_panel=True)\nfig = hp.plot()\n# fig2 = hp.plot(interactive=True)  # Plotly when installed",
+  "risk_notes": "Incomplete OHLC will not produce a candle chart. Adj OHLC families such as open|b..close|b must be complete as a set for candles.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/02.6. historypanel_visual.md",
+  "topics": ["data-analysis"],
+  "relations": [
+    {"rel": "see_also", "to": "historypanel_basics"},
+    {"rel": "see_also", "to": "historypanel_analysis"},
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "see_also", "to": "capability_map"}
+  ]
+}

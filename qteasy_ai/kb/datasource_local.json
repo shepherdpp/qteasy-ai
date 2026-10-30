@@ -1,0 +1,25 @@
+{
+  "id": "datasource_local",
+  "tags": ["datasource", "local", "datatable", "overview"],
+  "keywords": [
+    "什么是 DataSource",
+    "local data source",
+    "怎么看本地已经有哪些数据",
+    "DataSource",
+    "overview",
+    "get_table_info"
+  ],
+  "title": "Local DataSource holds predefined tables",
+  "summary": "A DataSource is the local store of predefined DataTables. Use overview or get_table_info to see what is present. Tables are storage, not DataTypes.",
+  "narrative": "A DataSource is qteasy's local data store. It can be file-based (csv / hdf / feather under a path) or a MySQL database. Inside it are predefined DataTables. A table is storage. A DataType is the information ID you read through the three entries. Daily reads still go through get_history_data, get_reference_data, or get_static_data, not through inventing a fourth API.\n\nTo see what is already local, call overview() for a summary of tables with data, or get_table_info(table) for one table's size, primary keys, and schema. Empty reads are often a missing table or a date window that was never filled — check overview before re-downloading everything.\n\nThe built-in default source and a DataSource you construct yourself are separate unless they point at the same path or database. Deleting data drops a whole table. Partial deletes are not supported, and a drop cannot be undone.\n\nThis card does not walk through manual update_table_data steps.",
+  "python_code": "import qteasy as qt\nds = qt.DataSource()\nprint(ds)\nprint(ds.get_table_info('stock_basic'))",
+  "risk_notes": "drop_table_data removes an entire table and cannot be undone. Set allow_drop_table only when you intend that.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/03. datasource.md",
+  "topics": ["data-downloading"],
+  "relations": [
+    {"rel": "see_also", "to": "capability_map"},
+    {"rel": "see_also", "to": "data_channels"},
+    {"rel": "see_also", "to": "refill_bounded"}
+  ]
+}

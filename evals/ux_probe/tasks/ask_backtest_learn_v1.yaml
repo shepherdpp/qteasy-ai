@@ -1,0 +1,16 @@
+# Semi-pro backtest learning Ask path — aligned with BJ-LEARN spirit, not gold_paths gate.
+id: ask_backtest_learn_v1
+persona_id: zhou_jie
+channel: ask
+min_product: "0.3-ask"
+goal: >
+  半懂用户搞清回测是什么、和优化差别、结果大概看什么；办事「帮我回测」只解释切 Plan、无 plan_id。
+turns:
+  - id: T1
+    text: 回测到底是在干嘛？别整成论文腔，说人话。
+  - id: T2
+    text: 那回测和优化有什么差别？我老分不清。
+  - id: T3
+    text: 回测跑完结果我该看哪些数？最大回撤这类。
+  - id: T4
+    text: 行，那就帮我回测一下吧。

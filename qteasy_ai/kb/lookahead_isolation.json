@@ -1,0 +1,25 @@
+{
+  "id": "lookahead_isolation",
+  "tags": ["overview", "lookahead", "window", "未来函数"],
+  "keywords": [
+    "qteasy 如何防止未来函数",
+    "lookahead",
+    "未来函数",
+    "window_length",
+    "use_latest_data_cycle",
+    "数据窗口隔离"
+  ],
+  "title": "Lookahead isolation: per-step data windows",
+  "summary": "The engine injects only the window visible at the current step. get_data sees that window; window_length is lookback length; use_latest_data_cycle controls whether the current bar is included.",
+  "narrative": "qteasy prevents lookahead by isolating history per step. Before realize() runs, the engine injects the data window that belongs to the current bar. Inside realize(), get_data(dtype_id) returns only that window—not the full series through a later date.\n\nwindow_length is how many past periods that window spans. use_latest_data_cycle decides whether the window may include the current bar (True) or only already-closed bars (False). That switch is a modeling choice the framework exposes; this card does not invent profit impact numbers for it.\n\nDeclaring which DataTypes and windows a custom strategy needs, and what realize() must return, is the custom-strategy realize card. Why people pick qteasy over a hand-written pandas loop is the advantages card—this card is the mechanism.",
+  "python_code": "import qteasy as qt\nfrom qteasy import RuleIterator\n# window_length and use_latest_data_cycle are declared on the strategy;\n# the engine injects the matching window each step before realize().\nprint('window_length lookback; use_latest_data_cycle toggles current bar')",
+  "risk_notes": "Ask explains window isolation only. It does not invent return differences from use_latest_data_cycle.",
+  "type": "concept",
+  "manual_anchor": "docs/source/tutorials/3-start-first-strategy.md",
+  "topics": ["overview"],
+  "relations": [
+    {"rel": "see_also", "to": "qteasy_advantages"},
+    {"rel": "see_also", "to": "strategy_realize"},
+    {"rel": "see_also", "to": "backtest_engine"}
+  ]
+}

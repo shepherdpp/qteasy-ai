@@ -11,7 +11,7 @@
 """闭合 Job 的多轮会话状态。
 
 权威字段：``session_id`` / ``task`` / ``messages`` / ``attachments`` / ``agent_auto``
-加可选用户标签 ``name``（不是 DTO 投影）。
+/ ``ask_plain_language`` 加可选用户标签 ``name``（不是 DTO 投影）。
 """
 
 from __future__ import annotations
@@ -21,17 +21,27 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .human_card import HUMAN_CARD_KINDS, SKIP_MESSAGE_KINDS, normalize_card_kind
 from .memory_store import MemoryStore, _json_safe
+from .session_attachments import normalize_attachment, remove_session_blob_dir
 
 SLOT_SOURCES = frozenset({"user", "profile", "env_facts", "default", "extracted"})
 VISIBLE_MESSAGE_KINDS = HUMAN_CARD_KINDS
 _SKIP_MESSAGE_KINDS = SKIP_MESSAGE_KINDS
 TASK_STATUSES = frozenset({"clarifying", "ready", "running", "done", "cancelled"})
-STATE_KEYS = frozenset({"session_id", "task", "messages", "attachments", "agent_auto", "name"})
+STATE_KEYS = frozenset({
+    "session_id",
+    "task",
+    "messages",
+    "attachments",
+    "agent_auto",
+    "ask_plain_language",
+    "name",
+})
 _NAME_MAX = 80
 STALE_RUNNING_NOTICE = "Execution interrupted. Confirm again to retry, or start a new topic."
 
@@ -367,8 +377,14 @@ def _new_task_id() -> str:
     return "task_" + uuid.uuid4().hex[:12]
 
 
+def _utc_now_iso() -> str:
+    """UTC ISO 秒精度，末尾 ``Z``（与 ``saved_at`` 同写法）。"""
+
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
 def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
-    """把一条可见对话规范成 ``kind`` / ``text`` / ``payload``。
+    """把一条可见对话规范成 ``kind`` / ``text`` / ``payload``，可选 ``created_at``。
 
     Parameters
     ----------
@@ -390,7 +406,11 @@ def normalize_message(raw: Any) -> Optional[Dict[str, Any]]:
         return None
     text = str(raw.get("text") or "")
     payload = dict(raw.get("payload") or {}) if isinstance(raw.get("payload"), dict) else {}
-    return {"kind": kind, "text": text, "payload": payload}
+    out: Dict[str, Any] = {"kind": kind, "text": text, "payload": payload}
+    created = str(raw.get("created_at") or "").strip()
+    if created:
+        out["created_at"] = created
+    return out
 
 
 def _coerce_messages(raw: Any) -> List[Dict[str, Any]]:
@@ -627,6 +647,7 @@ class ConversationState:
     messages: List[Dict[str, Any]] = field(default_factory=list)
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     agent_auto: bool = False
+    ask_plain_language: bool = False
     name: str = ""
 
     @classmethod
@@ -644,6 +665,7 @@ class ConversationState:
             "messages": list(self.messages),
             "attachments": list(self.attachments),
             "agent_auto": bool(self.agent_auto),
+            "ask_plain_language": bool(self.ask_plain_language),
             "name": clip_session_name(self.name),
         }
 
@@ -653,17 +675,12 @@ class ConversationState:
 
         data = raw if isinstance(raw, dict) else {}
         sid = str(data.get("session_id") or session_id or "").strip() or "default"
+        # attachments：会话上下文槽；Ask/Plan/Agent 消费层本阶段未接线。
         attachments: List[Dict[str, Any]] = []
         for item in data.get("attachments") or []:
-            if not isinstance(item, dict):
-                continue
-            path = str(item.get("source_path") or "").strip()
-            if not path:
-                continue
-            att: Dict[str, Any] = {"source_path": path}
-            if item.get("summary"):
-                att["summary"] = str(item.get("summary"))
-            attachments.append(att)
+            att = normalize_attachment(item)
+            if att is not None:
+                attachments.append(att)
         task = Task.from_dict(data.get("task"))
         if task is None:
             task = _migrate_task_from_flat(data)
@@ -677,6 +694,7 @@ class ConversationState:
             messages=_coerce_messages(data.get("messages")),
             attachments=attachments,
             agent_auto=bool(data.get("agent_auto", False)),
+            ask_plain_language=bool(data.get("ask_plain_language", False)),
             name=clip_session_name(data.get("name")),
         )
 
@@ -776,6 +794,8 @@ class ConversationState:
                 continue
             if not str(item.get("text") or "") and item.get("kind") != "error":
                 continue
+            if not str(item.get("created_at") or "").strip():
+                item["created_at"] = _utc_now_iso()
             if str(item.get("kind") or "") == "plan_ready":
                 pid = str((item.get("payload") or {}).get("plan_id") or "")
                 replaced = False
@@ -919,11 +939,36 @@ class SessionStore:
         return self.path_for(session_id).is_file()
 
     def delete(self, session_id: str) -> bool:
-        """删除 session JSON 与旁路 transcript；不碰 ``runs/``。"""
+        """删除 session JSON、旁路目录，以及该会话拥有的 run / plan / pinned / PNG。"""
 
         path = self.path_for(session_id)
         if not path.is_file():
             return False
+        extra_run_ids: List[str] = []
+        extra_plan_ids: List[str] = []
+        try:
+            conv = self.load(session_id)
+        except Exception:
+            conv = None
+        if conv is not None:
+            for row in conv.messages:
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                rid = str(payload.get("run_id") or "").strip()
+                pid = str(payload.get("plan_id") or "").strip()
+                if rid:
+                    extra_run_ids.append(rid)
+                if pid:
+                    extra_plan_ids.append(pid)
+            if conv.task is not None:
+                if str(conv.task.run_id or "").strip():
+                    extra_run_ids.append(str(conv.task.run_id).strip())
+                if str(conv.task.plan_id or "").strip():
+                    extra_plan_ids.append(str(conv.task.plan_id).strip())
+        self.memory_store.delete_session_owned_runs(
+            session_id,
+            extra_run_ids=extra_run_ids,
+            extra_plan_ids=extra_plan_ids,
+        )
         try:
             path.unlink()
         except OSError:
@@ -934,6 +979,7 @@ class SessionStore:
                 transcript.unlink()
             except OSError:
                 pass
+        remove_session_blob_dir(self.memory_store, session_id)
         return True
 
     def summarize_one(self, state: ConversationState) -> Dict[str, Any]:

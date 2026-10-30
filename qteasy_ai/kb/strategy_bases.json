@@ -1,0 +1,27 @@
+{
+  "id": "strategy_bases",
+  "tags": ["RuleIterator", "FactorSorter", "GeneralStg", "base class"],
+  "keywords": [
+    "三种策略基类有什么区别",
+    "每只股票用不同参数怎么设",
+    "RuleIterator",
+    "FactorSorter",
+    "GeneralStg",
+    "策略基类",
+    "per-share parameters",
+    "每股参数"
+  ],
+  "title": "Three strategy base classes and per-share parameters",
+  "summary": "Pick RuleIterator (timing rules), FactorSorter (cross-section rank), or GeneralStg (flexible shapes). Per-share parameter maps use share codes as keys (optional default)—that map is not a signal type.",
+  "narrative": "Custom strategies usually inherit one of three bases:\n\n- RuleIterator: single-rule or single-share timing loops (moving-average style). Output is often a scalar or 1-D position-like signal.\n- FactorSorter: score many shares on a factor, then keep top/bottom N (max_sel_count, sort_ascending).\n- GeneralStg: flexible multi-asset or multi-rule shapes when the first two do not fit.\n\nPer-share parameters: after set_shares, pass a mapping {share_code: parameter_tuple, ...} via update_par_values or Operator.set_parameter(..., par_values=...). Keys must match share strings exactly. An optional \"default\" key supplies the tuple for shares not listed—there is no others / rest magic key. A plain tuple at init means one shared parameter set for all shares. That per-share mapping is a parameter table, not a signal type and not set_parameter(..., pars={parameter_name: value}).\n\nThis card may sketch return shapes. Parameter declarations, data windows, and get_data / get_pars contracts belong to the realize card. What PT / PS / VS numbers mean belongs to the signal-types card.",
+  "python_code": "from qteasy import RuleIterator, Parameter\n\nclass DemoTiming(RuleIterator):\n    def __init__(self):\n        super().__init__(pars=[Parameter('period', 20)])\n    def realize(self):\n        close = self.get_data('close')\n        period = self.get_pars()['period']\n        return float(close[-1] > close[-period:].mean())",
+  "risk_notes": "Per-share dict keys are share codes. Do not confuse them with PT target-weight signals or with pars={name: value}.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/5. strategy_bases.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "pt_ps_vs"},
+    {"rel": "see_also", "to": "strategy_realize"},
+    {"rel": "see_also", "to": "strategy_overview"}
+  ]
+}

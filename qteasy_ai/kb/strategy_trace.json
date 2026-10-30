@@ -1,0 +1,24 @@
+{
+  "id": "strategy_trace",
+  "tags": ["trace", "trace_log", "debug", "realize"],
+  "keywords": [
+    "怎么追踪策略中间变量",
+    "trace 中间变量",
+    "trace_log",
+    "self.trace",
+    "追踪策略",
+    "trace_result"
+  ],
+  "title": "Trace intermediate variables in realize()",
+  "summary": "Use self.trace(name, var) under trace_log to record scalars while realize() runs. Tracing is not a run mode. FactorSorter and GeneralStg are not adapted yet.",
+  "narrative": "Tracing records intermediate values while a strategy's realize() runs so you can inspect them after a backtest.\n\nCall self.trace(name, var) inside realize(). Only int, float, bool, and str (including matching numpy scalars) are accepted—lists and arrays raise TypeError. Enable via QT_CONFIG['trace_log'] (default True); the backtester calls Operator.enable_tracing(). When tracing is off, trace() is a silent no-op.\n\nColumn names look like {strategy_id}_{variable}. Read results from Strategy.get_trace_data() or Backtester.trace_result_df after a run.\n\nLimits: FactorSorter and GeneralStg are not adapted yet (vector returns versus scalar trace). Tracing is not a run mode—do not use mode=3 (forecast stats) or mode=4 (invalid) as a \"trace mode\"; use trace_log.\n\nHow to declare Parameter / get_data belongs to the realize card.",
+  "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='pt')\nstg = op.strategies[0]\nstg.enable_tracing(max_steps=3)\nfor i in range(3):\n    stg.update_trace_step(i)\n    stg.trace('note', f'step-{i}')\nprint(stg.get_trace_data())",
+  "risk_notes": "Tracing adds memory. Empty tables usually mean trace_log is off or FactorSorter/GeneralStg was used.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_strategies/7. trace strategy.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "strategy_realize"},
+    {"rel": "see_also", "to": "backtest_trade_log"}
+  ]
+}

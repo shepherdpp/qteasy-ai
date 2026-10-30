@@ -5,13 +5,14 @@
     "live trade",
     "实盘",
     "live plan",
-    "never auto"
+    "never auto",
+    "会不会自动下单"
   ],
   "title": "Live trade is plan-only",
-  "summary": "Live-trade steps stay a checklist. They are never auto-executed.",
-  "narrative": "Mentioning 实盘 / live trade routes to `qt.ai.pipeline.live_trade_plan_only`. The skill writes a checklist and forbids sending orders.\n\nEven when session.agent_auto is true and every allow_* flag is true, live steps stay dry-run. There is no allow_live.",
+  "summary": "Live-trade steps stay a checklist. They are never auto-executed. Ask does not start Trader.",
+  "narrative": "Mentioning 实盘 / live trade routes to `qt.ai.pipeline.live_trade_plan_only`. The skill writes a checklist and forbids sending orders.\n\nEven when session.agent_auto is true and every allow_* flag is true, live steps stay dry-run. There is no allow_live.\n\nAsk answers about this boundary only. It does not start Trader. Answers must never claim an order was already placed, and must never tell the user to go monitor a live session as if one had started.\n\nTutorial 8 is a broker/risk walkthrough; the deploy tutorial is unfinished. Neither is copied here as a command recipe—Ask only states the plan-only boundary. General side-effect labels and confirmation for download/backtest/optimize are a separate card.",
   "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('准备实盘交易', response_style='raw')\nprint(plan['plan']['steps'][0]['skill_name'])",
-  "risk_notes": "Never treat a live checklist as an order ticket.",
+  "risk_notes": "Never treat a live checklist as an order ticket. Never claim orders were placed or send the user to monitor.",
   "type": "boundary",
   "manual_anchor": "docs/source/tutorials/8-live-trade-risk-and-broker-walkthrough.md",
   "topics": ["live_boundary"],

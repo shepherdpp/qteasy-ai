@@ -33,7 +33,7 @@ import re
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from .config import (
     DEFAULT_PROVIDER_TIMEOUT,
@@ -839,6 +839,126 @@ class MemoryStore:
         """返回 pinned run_id 列表。"""
 
         return sorted(path.stem.split("__", 1)[0] for path in self.pinned_dir.glob("*.json"))
+
+    def collect_run_ids_for_session(
+        self,
+        session_id: str,
+        *,
+        extra_run_ids: Optional[List[str]] = None,
+        extra_plan_ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        """收集属于该会话的 ``run_id``（含孤儿与消息引用）。
+
+        Parameters
+        ----------
+        session_id : str
+            会话 id。
+        extra_run_ids : list of str, optional
+            消息 / task 上仍引用的 run_id。
+        extra_plan_ids : list of str, optional
+            消息 / task 上的 plan_id；扫 ``runs/*.json`` 对上的也并入。
+
+        Returns
+        -------
+        list of str
+            去重后的 run_id，按字典序。
+        """
+
+        sid = str(session_id or "").strip()
+        wanted: Set[str] = set()
+        plan_ids = {str(item or "").strip() for item in (extra_plan_ids or []) if str(item or "").strip()}
+        for path in self.runs_dir.glob("*.json"):
+            payload = self._read_json(path, default={})
+            if not isinstance(payload, dict):
+                continue
+            session_block = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+            if sid and str(session_block.get("session_id") or "").strip() == sid:
+                wanted.add(path.stem)
+                continue
+            plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
+            pid = str(plan.get("plan_id") or "").strip()
+            if pid and pid in plan_ids:
+                wanted.add(path.stem)
+        for rid in extra_run_ids or []:
+            text = str(rid or "").strip()
+            if text:
+                wanted.add(text)
+        return sorted(wanted)
+
+    def delete_run_owned_files(self, run_id: str) -> List[str]:
+        """删除单个 run 的 JSON、plan.md、pinned 副本与 run 专属回测 PNG。
+
+        不删 ``strategies/`` 或 ``user_kb/``。路径须落在 ``base_dir`` 内。
+
+        Parameters
+        ----------
+        run_id : str
+            执行记录 id。
+
+        Returns
+        -------
+        list of str
+            已删除的文件名（相对 ``base_dir`` 或 basename）。
+        """
+
+        rid = str(run_id or "").strip()
+        if not rid:
+            return []
+        deleted: List[str] = []
+        candidates: List[Path] = [
+            self.runs_dir / f"{rid}.json",
+            self.runs_dir / f"{rid}.plan.md",
+            self.base_dir / "artifacts" / f"backtest_{rid}.png",
+        ]
+        candidates.extend(sorted(self.pinned_dir.glob(f"{rid}.json")))
+        candidates.extend(sorted(self.pinned_dir.glob(f"{rid}__*.json")))
+        for path in candidates:
+            resolved = self.resolve_under_base(str(path))
+            if resolved is None or not resolved.is_file():
+                continue
+            try:
+                resolved.unlink()
+            except OSError:
+                continue
+            try:
+                deleted.append(str(resolved.relative_to(self.base_dir.resolve())))
+            except ValueError:
+                deleted.append(resolved.name)
+        return deleted
+
+    def delete_session_owned_runs(
+        self,
+        session_id: str,
+        *,
+        extra_run_ids: Optional[List[str]] = None,
+        extra_plan_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """删除该会话拥有的全部 run 相关文件。
+
+        Parameters
+        ----------
+        session_id : str
+            会话 id。
+        extra_run_ids : list of str, optional
+            消息 / task 仍引用的 run_id。
+        extra_plan_ids : list of str, optional
+            消息 / task 上的 plan_id。
+
+        Returns
+        -------
+        dict
+            ``run_ids`` 与 ``deleted_files``。
+        """
+
+        run_ids = self.collect_run_ids_for_session(
+            session_id,
+            extra_run_ids=extra_run_ids,
+            extra_plan_ids=extra_plan_ids,
+        )
+        deleted: List[str] = []
+        for rid in run_ids:
+            deleted.extend(self.delete_run_owned_files(rid))
+        return {"run_ids": run_ids, "deleted_files": sorted(set(deleted))}
 
     def pin_run(self, run_id: str, *, tag: str = "") -> str:
         """将 runs 中记录钉住到 pinned。"""
