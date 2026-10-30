@@ -1009,9 +1009,19 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotEqual(status, "partial_failed")
             self.assertIsInstance(session.task.pending_clarification, dict)
             self.assertNotEqual(session.task.status, "done")
-            prompt = str((session.task.pending_clarification or {}).get("confirm_prompt") or "")
+            pending_blob = session.task.pending_clarification or {}
+            prompt = str(pending_blob.get("confirm_prompt") or "")
+            pending_rows = [item for item in (pending_blob.get("pending") or []) if isinstance(item, dict)]
             print(" prompt:", prompt)
+            print(" step:", pending_blob.get("step_index"), pending_blob.get("step_total"))
+            print(" pending options:", [(item.get("name"), [o.get("id") for o in (item.get("options") or [])]) for item in pending_rows])
             self.assertIn("strategy", prompt.lower())
+            self.assertNotIn("type skip", prompt.lower())
+            self.assertNotIn("options", pending_blob)
+            self.assertEqual(int(pending_blob.get("step_index") or 0), 1)
+            strategy = next((item for item in pending_rows if item.get("name") == "strategy_id"), None)
+            self.assertIsNotNone(strategy)
+            self.assertTrue(any(str(o.get("id") or "") == "macd" for o in ((strategy or {}).get("options") or [])))
             filled = asst.run("macd", response_style="raw", session_id="s-clar")
             filled_session = asst.session_store.load("s-clar")
             fill_steps = (filled.get("execution") or {}).get("steps") or []

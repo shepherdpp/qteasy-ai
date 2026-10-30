@@ -60,8 +60,14 @@ class TestAiSessionGate(unittest.TestCase):
         session.task.set_pending(
             {
                 "confirm_prompt": "Which strategy?",
-                "options": [{"id": "bband", "label": "Bollinger Band"}],
-                "pending": [{"name": "strategy_id"}],
+                "step_index": 1,
+                "step_total": 1,
+                "pending": [
+                    {
+                        "name": "strategy_id",
+                        "options": [{"id": "bband", "label": "Bollinger Band"}],
+                    }
+                ],
             }
         )
         print(" status:", session.task_status(), "answers:", answers_pending_slot(session, "bband"))

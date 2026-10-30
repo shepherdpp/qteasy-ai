@@ -48,6 +48,15 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertIn("restatement", clarification)
             self.assertTrue(clarification.get("pending"))
             self.assertTrue(clarification.get("confirm_prompt"))
+            pending = [item for item in (clarification.get("pending") or []) if isinstance(item, dict)]
+            names = [str(item.get("name") or "") for item in pending]
+            print(" pending names:", names)
+            print(" step_index:", clarification.get("step_index"), "step_total:", clarification.get("step_total"))
+            self.assertEqual(names, ["start", "end"])
+            self.assertEqual(int(clarification.get("step_index") or 0), 1)
+            self.assertEqual(int(clarification.get("step_total") or 0), 2)
+            self.assertNotIn("options", clarification)
+            self.assertNotIn("type skip", str(clarification.get("confirm_prompt") or "").lower())
             self.assertEqual(first["session"]["clarify_round"], 1)
 
             second = assistant.plan(

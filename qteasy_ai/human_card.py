@@ -338,10 +338,13 @@ def project_human_cards(
     if clar:
         text = str(clar.get("confirm_prompt") or clar.get("restatement") or "Clarification required.").strip()
         pending = list(clar.get("pending") or []) if isinstance(clar.get("pending"), list) else []
-        options = list(clar.get("options") or []) if isinstance(clar.get("options"), list) else []
         blob = dict(clar)
         blob["pending"] = pending
-        blob["options"] = options
+        blob.pop("options", None)
+        if "step_total" not in blob:
+            blob["step_total"] = len(pending)
+        if "step_index" not in blob:
+            blob["step_index"] = 1 if pending else 0
         plan_id = str(plan.get("plan_id") or raw.get("plan_id") or "")
         if plan_id:
             blob["plan_id"] = plan_id
