@@ -57,7 +57,7 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(int(clarification.get("step_total") or 0), 2)
             self.assertNotIn("options", clarification)
             self.assertNotIn("type skip", str(clarification.get("confirm_prompt") or "").lower())
-            self.assertEqual(first["session"]["clarify_round"], 1)
+            self.assertEqual(first["session"]["clarify_round"], 0)
 
             second = assistant.plan(
                 "20240101 到 20241231",
@@ -91,28 +91,77 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertNotEqual(confirm["plan"]["planner_trace"].get("source"), "session")
             self.assertNotEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
-    def test_clarify_round_caps_at_three(self) -> None:
-        """同一 Task 上控件补槽仍缺必填：第 4 次 round 停在 3。"""
+    def test_clarify_submit_round_streak_warn_and_fail(self) -> None:
+        """提交轮次 streak：首卡 0；第 3 次 last chance；第 4 次失败收口。"""
 
-        print("\n[TestAiPlannerF] clarify round cap")
+        print("\n[TestAiPlannerF] clarify submit_round_streak warn@3 fail@4")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = self._assistant(temp_dir)
             sid = "s-cap"
             first = assistant.plan("帮我下载日线", response_style="raw", session_id=sid)
             print(" first round:", (first.get("session") or {}).get("clarify_round"))
-            self.assertEqual((first.get("session") or {}).get("clarify_round"), 1)
-            second = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240101"})
-            print(" second round:", (second.get("session") or {}).get("clarify_round"), (second.get("session") or {}).get("missing"))
-            third = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240201"})
-            print(" third round:", (third.get("session") or {}).get("clarify_round"), (third.get("session") or {}).get("missing"))
-            fourth = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240301"})
-            print(" fourth session:", fourth.get("session"))
-            print(" fourth skill:", fourth["plan"]["steps"][0]["skill_name"])
-            print(" fourth action:", fourth["plan"]["steps"][0]["inputs"].get("fallback_action"))
-            self.assertEqual(fourth["session"]["clarify_round"], 3)
-            self.assertIn("end", fourth["session"]["missing"])
-            self.assertEqual(fourth["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
-            self.assertEqual(fourth["plan"]["steps"][0]["inputs"].get("fallback_action"), "clarify_required")
+            self.assertEqual((first.get("session") or {}).get("clarify_round"), 0)
+
+            r1 = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240101"})
+            print(" after wrong#1:", (r1.get("session") or {}).get("clarify_round"), (r1.get("session") or {}).get("missing"))
+            self.assertEqual((r1.get("session") or {}).get("clarify_round"), 1)
+            self.assertIn("end", (r1.get("session") or {}).get("missing") or [])
+
+            r2 = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240201"})
+            print(" after wrong#2:", (r2.get("session") or {}).get("clarify_round"), (r2.get("session") or {}).get("missing"))
+            self.assertEqual((r2.get("session") or {}).get("clarify_round"), 2)
+
+            r3 = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240301"})
+            clar3 = r3.get("clarification") or ((r3.get("plan") or {}).get("assumptions") or {}).get("clarification")
+            prompt3 = str((clar3 or {}).get("confirm_prompt") or "")
+            print(" after wrong#3:", (r3.get("session") or {}).get("clarify_round"), "prompt:", prompt3)
+            self.assertEqual((r3.get("session") or {}).get("clarify_round"), 3)
+            self.assertIn("Last chance:", prompt3)
+            self.assertEqual(r3["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
+            self.assertEqual(r3["plan"]["steps"][0]["inputs"].get("fallback_action"), "clarify_required")
+
+            r4 = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240401"})
+            err = r4.get("error") or {}
+            print(" after wrong#4 error:", err)
+            print(" after wrong#4 session:", r4.get("session"))
+            self.assertEqual(err.get("code"), "CLARIFICATION_FAILED")
+            self.assertIn("too many invalid answers", str(err.get("message") or ""))
+            self.assertNotIn("Clarification skipped", str(err.get("message") or ""))
+            self.assertNotIn("plan", r4)
+            store = SessionStore(assistant.memory_store)
+            done = store.load(sid)
+            print(" task status:", done.task.status if done.task else None)
+            print(" task round:", done.task.clarify_round if done.task else None)
+            self.assertEqual(done.task.status, "done")
+            self.assertEqual(done.task.clarify_round, 4)
+            self.assertFalse(done.task.missing)
+            self.assertIsNone(done.task.pending_clarification)
+
+    def test_clarify_multi_patches_streak_plus_one(self) -> None:
+        """一次多槽 patches 仍缺时只 +1（按提交轮次，非每槽）。"""
+
+        print("\n[TestAiPlannerF] multi patches streak +1 once")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self._assistant(temp_dir)
+            sid = "s-multi"
+            first = assistant.plan("帮我下载日线", response_style="raw", session_id=sid)
+            print(" first round:", (first.get("session") or {}).get("clarify_round"))
+            self.assertEqual((first.get("session") or {}).get("clarify_round"), 0)
+            # 两缺时只交 start，仍缺 end → 一轮只 +1（不是按剩余槽数 +2）
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"start": "20240101"},
+            )
+            missing = list((second.get("session") or {}).get("missing") or [])
+            print(
+                " after one submit:",
+                (second.get("session") or {}).get("clarify_round"),
+                missing,
+            )
+            self.assertEqual((second.get("session") or {}).get("clarify_round"), 1)
+            self.assertEqual(missing, ["end"])
 
     def test_builder_followup_changes_slow_with_session(self) -> None:
         """ready 后 Composer「改慢线」是新 Task，不是 session 修订。"""

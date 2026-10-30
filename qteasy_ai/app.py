@@ -105,6 +105,14 @@ from .skills import (
 )
 
 
+_LAST_CHANCE_PROMPT = (
+    "Last chance: please provide valid values for the remaining fields."
+)
+_CLARIFICATION_FAILED_MESSAGE = (
+    "Clarification failed: too many invalid answers. This request ended."
+)
+
+
 def _normalize_patches(patches: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """去掉空键空值的结构化槽补丁。
 
@@ -564,6 +572,15 @@ class QteasyAssistant:
             agent_auto=agent_auto,
             patches=structured or None,
         )
+        failed = self._clarification_failed_result(
+            plan,
+            session,
+            query=query,
+            requested_mode="plan",
+            response_style=response_style,
+        )
+        if failed is not None:
+            return failed
         if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
             return self.ask(
                 query,
@@ -635,6 +652,15 @@ class QteasyAssistant:
             session_id=session_id,
             agent_auto=agent_auto,
         )
+        failed = self._clarification_failed_result(
+            plan,
+            session,
+            query=query,
+            requested_mode="run",
+            response_style=response_style,
+        )
+        if failed is not None:
+            return failed
         if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
             return self.ask(
                 query,
@@ -1159,6 +1185,55 @@ class QteasyAssistant:
     ) -> Dict[str, Any] | AssistantOutput:
         """skip 澄清：本句失败结束。"""
 
+        return self._close_clarification_result(
+            session,
+            query=query,
+            requested_mode=requested_mode,
+            response_style=response_style,
+            include_user_text=include_user_text,
+            code="CLARIFICATION_SKIPPED",
+            message="Clarification skipped. This request ended.",
+            next_action="Start a new question, or provide the missing field next time.",
+        )
+
+    def _clarification_failed_result(
+        self,
+        plan: Any,
+        session: Optional[ConversationState],
+        *,
+        query: str,
+        requested_mode: str,
+        response_style: str,
+    ) -> Dict[str, Any] | AssistantOutput | None:
+        """答错耗尽时短路为 G.9 失败收口；否则返回 None。"""
+
+        if session is None or not bool((getattr(plan, "assumptions", None) or {}).get("clarification_failed")):
+            return None
+        return self._close_clarification_result(
+            session,
+            query=query,
+            requested_mode=requested_mode,
+            response_style=response_style,
+            include_user_text=False,
+            code="CLARIFICATION_FAILED",
+            message=_CLARIFICATION_FAILED_MESSAGE,
+            next_action="Start a new question with clearer values for the required fields.",
+        )
+
+    def _close_clarification_result(
+        self,
+        session: ConversationState,
+        *,
+        query: str,
+        requested_mode: str,
+        response_style: str,
+        code: str,
+        message: str,
+        next_action: str,
+        include_user_text: bool = True,
+    ) -> Dict[str, Any] | AssistantOutput:
+        """澄清失败收口（End skip 与答错耗尽共用骨架）。"""
+
         session.close_open_card(query, status="skipped")
         if session.task is not None:
             session.task.set_pending(None)
@@ -1170,9 +1245,9 @@ class QteasyAssistant:
             requested_mode=requested_mode,
             response_style=response_style,
             session=session,
-            code="CLARIFICATION_SKIPPED",
-            message="Clarification skipped. This request ended.",
-            next_action="Start a new question, or provide the missing field next time.",
+            code=code,
+            message=message,
+            next_action=next_action,
             include_user_text=include_user_text,
         )
 
@@ -1296,6 +1371,7 @@ class QteasyAssistant:
         asked = str(query or "").strip()
         skip_classify = False
         topic_skipped = False
+        user_answered = False
         keep_plan_id = ""
         slot_revision: Optional[Dict[str, Any]] = None
         slot_changes: List[Dict[str, Any]] = []
@@ -1310,6 +1386,7 @@ class QteasyAssistant:
             answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
             if state.task is not None and (state.task.pending_clarification or state.task.missing):
                 state.close_open_card(answer, status="answered")
+                user_answered = True
             skip_classify = bool(state.task and state.task.job)
             keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
             slot_revision = dict(structured)
@@ -1325,6 +1402,7 @@ class QteasyAssistant:
             if gate.kind == "fill_slot":
                 merge_facts(state, gate.patches, source="user", confirmed=True)
                 state.close_open_card(asked, status="answered")
+                user_answered = True
                 skip_classify = bool(state.task and state.task.job)
             elif gate.kind == "new_intent":
                 peek = self.planner.intent_engine.classify(asked)
@@ -1373,6 +1451,7 @@ class QteasyAssistant:
             plan.assumptions["slot_changes"] = list(slot_changes)
             plan.assumptions["revision"] = int(getattr(state.task, "revision", 0) or 0) if state.task else 0
         self._sync_session_from_plan(state, plan, query=asked or query, skip_classify=skip_classify)
+        self._apply_clarify_answer_streak(state, plan, user_answered=user_answered)
         self.session_store.save(state)
         return plan, state
 
@@ -1564,8 +1643,6 @@ class QteasyAssistant:
         if state.task is None:
             return
         if missing:
-            if state.task.clarify_round < 3:
-                state.task.clarify_round += 1
             state.task.set_missing(missing)
             if isinstance(clarification, dict):
                 state.task.set_pending(clarification)
@@ -1576,6 +1653,44 @@ class QteasyAssistant:
             else:
                 state.task.set_pending(None)
         state.task.plan_id = str(getattr(plan, "plan_id", "") or "")
+
+    @staticmethod
+    def _apply_clarify_answer_streak(
+        state: ConversationState,
+        plan: Any,
+        *,
+        user_answered: bool,
+    ) -> None:
+        """用户提交后仍缺才升 clarify_round；3=last chance；4=失败标记。"""
+
+        if not user_answered or state.task is None:
+            return
+        if not state.task.missing:
+            return
+        state.task.clarify_round = int(state.task.clarify_round or 0) + 1
+        assumptions = dict(getattr(plan, "assumptions", None) or {})
+        if state.task.clarify_round >= 4:
+            assumptions["clarification_failed"] = True
+            assumptions.pop("clarification", None)
+            assumptions["session_missing"] = []
+            plan.assumptions = assumptions
+            state.task.set_pending(None)
+            state.task.set_missing([])
+            return
+        if state.task.clarify_round == 3:
+            clar = assumptions.get("clarification")
+            if isinstance(clar, dict):
+                clar = dict(clar)
+                prompt = str(clar.get("confirm_prompt") or "").strip()
+                if _LAST_CHANCE_PROMPT not in prompt:
+                    clar["confirm_prompt"] = (
+                        f"{prompt} {_LAST_CHANCE_PROMPT}".strip()
+                        if prompt
+                        else _LAST_CHANCE_PROMPT
+                    )
+                assumptions["clarification"] = clar
+                plan.assumptions = assumptions
+                state.task.set_pending(clar)
 
     @staticmethod
     def _slot_summary(state: ConversationState) -> str:
