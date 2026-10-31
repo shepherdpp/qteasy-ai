@@ -990,7 +990,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotIn("plan_ready", kinds)
 
     def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
-        """缺 strategy_id：clarify 不 partial_failed；macd 走 get；skip 失败收口。"""
+        """CLI：缺 strategy_id 出 clarify；打字 macd 走 get；typed skip 失败收口。"""
 
         print("\n[TestAiJobLifecycleG9] clarify params")
         with tempfile.TemporaryDirectory() as temp_dir:

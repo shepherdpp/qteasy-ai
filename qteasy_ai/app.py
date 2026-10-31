@@ -70,6 +70,7 @@ from .session import (
     task_was_cancelled,
 )
 from .session_gate import (
+    GateDecision,
     SessionGate,
     extract_patches,
     extract_plan_id,
@@ -513,6 +514,7 @@ class QteasyAssistant:
         agent_auto: Optional[bool] = None,
         patches: Optional[Dict[str, Any]] = None,
         skip: bool = False,
+        allow_composer_slot_fill: bool = True,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 模式：生成 dry_run 计划。
 
@@ -522,6 +524,7 @@ class QteasyAssistant:
 
         非空 ``patches`` 为同一 Job 改槽回执：``query`` 可空，不跑跟进句分类。
         ``skip=True`` 为控件跳过澄清，不写 ``user_text``。
+        ``allow_composer_slot_fill=False``（Web）：clarifying 下 Composer 非空只换题，不填槽。
         """
 
         structured = _normalize_patches(patches)
@@ -554,23 +557,32 @@ class QteasyAssistant:
             )
             if identity is not None:
                 return identity
-            hatched = self._maybe_hatch_mode_gap(
-                query,
-                session_id=session_id,
-                requested_mode="plan",
-                response_style=response_style,
-                persist=persist,
-                keep=keep,
-                explanation_depth=explanation_depth,
-                agent_auto=agent_auto,
-            )
-            if hatched is not None:
-                return hatched
+            # Web clarifying：跳过 typed skip / discuss / execute，交给 assemble 换题。
+            skip_hatch = False
+            if not allow_composer_slot_fill:
+                sid = str(session_id or "").strip()
+                if sid:
+                    peek = self.session_store.load(sid)
+                    skip_hatch = peek.task_status() == "clarifying"
+            if not skip_hatch:
+                hatched = self._maybe_hatch_mode_gap(
+                    query,
+                    session_id=session_id,
+                    requested_mode="plan",
+                    response_style=response_style,
+                    persist=persist,
+                    keep=keep,
+                    explanation_depth=explanation_depth,
+                    agent_auto=agent_auto,
+                )
+                if hatched is not None:
+                    return hatched
         plan, session = self._assemble_plan(
             query,
             session_id=session_id,
             agent_auto=agent_auto,
             patches=structured or None,
+            allow_composer_slot_fill=allow_composer_slot_fill,
         )
         failed = self._clarification_failed_result(
             plan,
@@ -1354,6 +1366,7 @@ class QteasyAssistant:
         session_id: str | None,
         agent_auto: Optional[bool],
         patches: Optional[Dict[str, Any]] = None,
+        allow_composer_slot_fill: bool = True,
     ) -> Tuple[Any, Optional[ConversationState]]:
         """Composer 先记 user_text，再按 Task 转移表路由。"""
 
@@ -1395,7 +1408,16 @@ class QteasyAssistant:
                 if state.task.status in {"done", "cancelled", ""}:
                     state.task.mark_ready()
         else:
-            gate = self.session_gate.classify(state, asked)
+            # Web clarifying：Composer 一律换题，不走 answers_pending_slot。
+            web_clarify_composer = (
+                not allow_composer_slot_fill
+                and state.task_status() == "clarifying"
+                and bool(asked)
+            )
+            if web_clarify_composer:
+                gate = GateDecision(kind="new_intent", rationale="web_clarify_composer_new_task")
+            else:
+                gate = self.session_gate.classify(state, asked)
             if gate.kind == "block_running":
                 self.session_store.save(state)
                 return self._block_running_plan(asked), state

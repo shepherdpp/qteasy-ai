@@ -30,7 +30,7 @@ class TestAiPlannerF(unittest.TestCase):
         return QteasyAssistant(memory_store=store, registry=build_default_registry())
 
     def test_refill_clarify_then_fill_same_job(self) -> None:
-        """无日期下载先澄清，跟进日期后仍是同一 refill Job。"""
+        """CLI：无日期下载先澄清，打字跟进日期后仍是同一 refill Job。"""
 
         print("\n[TestAiPlannerF] refill clarify then fill")
         with tempfile.TemporaryDirectory() as temp_dir:

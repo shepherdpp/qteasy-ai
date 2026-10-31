@@ -5,11 +5,14 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# Unittest for SessionGate：填槽 / 新 Task 转移表
+# Unittest for SessionGate：填槽 / 新 Task 转移表；S5 Web card_only
 # ======================================
 
+import tempfile
 import unittest
 
+from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState
 from qteasy_ai.session_gate import SessionGate, answers_pending_slot, merge_facts
 
@@ -33,10 +36,10 @@ def _backtest_session(*, complete: bool = False, clarifying: bool = True) -> Con
 
 
 class TestAiSessionGate(unittest.TestCase):
-    """Composer 转移表：clarifying 填槽，ready/done 一律新 Task。"""
+    """CLI / 默认允许 Composer 填槽；ready/done 一律新 Task。"""
 
     def test_fill_slot_end_year_no_classify(self) -> None:
-        """缺 end 时「到 2023 年」为 fill_slot。"""
+        """CLI：缺 end 时「到 2023 年」为 fill_slot。"""
 
         print("\n[TestAiSessionGate] fill_slot end year")
         gate = SessionGate(provider=None)
@@ -50,7 +53,7 @@ class TestAiSessionGate(unittest.TestCase):
         self.assertEqual(decision.source, "rule")
 
     def test_bband_fills_strategy_id_when_clarifying(self) -> None:
-        """pending strategy_id 时「bband」填槽。"""
+        """CLI：pending strategy_id 时「bband」填槽。"""
 
         print("\n[TestAiSessionGate] bband fills strategy_id")
         gate = SessionGate(provider=None)
@@ -148,7 +151,7 @@ class TestAiSessionGate(unittest.TestCase):
         self.assertEqual(talk.kind, "discuss_only")
 
     def test_skip_clarify_utterance(self) -> None:
-        """澄清中 skip → skip_clarify。"""
+        """CLI：澄清中 typed skip → skip_clarify。"""
 
         print("\n[TestAiSessionGate] skip clarify")
         gate = SessionGate(provider=None)
@@ -198,6 +201,210 @@ class TestAiSessionGate(unittest.TestCase):
         decision = gate.classify(session, "再帮我优化参数")
         print(" kind:", decision.kind)
         self.assertEqual(decision.kind, "new_intent")
+
+
+class TestAiWebClarifyComposerGate(unittest.TestCase):
+    """S5：Web clarifying 只认 patches/skip；Composer 非空=换题。"""
+
+    def test_web_composer_bband_is_new_task_not_fill(self) -> None:
+        """allow_composer_slot_fill=False：澄清中「bband」换题，不填槽。"""
+
+        print("\n[TestAiWebClarifyComposerGate] web bband new task")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-web-bband"
+            first = asst.plan(
+                "请帮我列出内置交易策略的参数",
+                response_style="raw",
+                session_id=sid,
+            )
+            session = asst.session_store.load(sid)
+            kinds1 = [item["kind"] for item in (first.get("human_cards") or [])]
+            print(" first kinds:", kinds1)
+            print(" status:", session.task.status if session.task else None)
+            print(" missing:", session.task.missing if session.task else None)
+            self.assertIn("clarify", kinds1)
+            self.assertEqual(session.task.status, "clarifying")
+            old_task_id = session.task.id
+
+            second = asst.plan(
+                "bband",
+                response_style="raw",
+                session_id=sid,
+                allow_composer_slot_fill=False,
+            )
+            after = asst.session_store.load(sid)
+            kinds2 = [item["kind"] for item in (second.get("human_cards") or [])]
+            notice = next((item for item in kinds2 if item == "mode_notice"), None)
+            notice_card = next(
+                (item for item in (second.get("human_cards") or []) if item.get("kind") == "mode_notice"),
+                None,
+            )
+            print(" second kinds:", kinds2)
+            print(" notice:", None if notice_card is None else notice_card.get("text"))
+            print(" old task:", old_task_id, "new task:", after.task.id if after.task else None)
+            print(" new status:", after.task.status if after.task else None)
+            print(" strategy slot:", after.task.slots.get("strategy_id") if after.task else None)
+            self.assertIsNotNone(notice_card)
+            self.assertIn("Previous topic skipped.", str((notice_card or {}).get("text") or ""))
+            self.assertNotEqual(after.task.id, old_task_id)
+            # 未把 bband 填进原澄清槽（换题后新 Task 不应继承已答 strategy_id=bband 为 confirmed 填槽路径）
+            slot = after.task.slots.get("strategy_id") if after.task else None
+            if slot is not None:
+                print(" strategy value/confirmed:", slot.value, slot.confirmed)
+            self.assertNotIn("CLARIFICATION_SKIPPED", str(second.get("error") or {}))
+
+    def test_web_composer_typed_skip_is_new_task(self) -> None:
+        """Web clarifying：Composer「跳过」不是 CLARIFICATION_SKIPPED，而是换题。"""
+
+        print("\n[TestAiWebClarifyComposerGate] web typed skip new task")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-web-skip"
+            asst.plan("请帮我列出内置交易策略的参数", response_style="raw", session_id=sid)
+            before = asst.session_store.load(sid)
+            self.assertEqual(before.task.status, "clarifying")
+            old_id = before.task.id
+            payload = asst.plan(
+                "跳过",
+                response_style="raw",
+                session_id=sid,
+                allow_composer_slot_fill=False,
+            )
+            after = asst.session_store.load(sid)
+            kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
+            err = payload.get("error") or {}
+            notice = next(
+                (item for item in (payload.get("human_cards") or []) if item.get("kind") == "mode_notice"),
+                None,
+            )
+            print(" kinds:", kinds)
+            print(" error:", err)
+            print(" notice:", None if notice is None else notice.get("text"))
+            print(" task:", old_id, "->", after.task.id if after.task else None, after.task.status if after.task else None)
+            self.assertNotEqual(str(err.get("code") or ""), "CLARIFICATION_SKIPPED")
+            self.assertNotIn("Clarification skipped", str(err.get("message") or ""))
+            self.assertIsNotNone(notice)
+            self.assertIn("Previous topic skipped.", str((notice or {}).get("text") or ""))
+            self.assertNotEqual(after.task.id, old_id)
+
+    def test_web_control_patches_still_fill(self) -> None:
+        """控件 patches 仍填槽，不写 user_text 为填槽证据。"""
+
+        print("\n[TestAiWebClarifyComposerGate] patches fill")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-web-patches"
+            asst.plan("请帮我列出内置交易策略的参数", response_style="raw", session_id=sid)
+            before = asst.session_store.load(sid)
+            users_before = [m for m in before.messages if m.get("kind") == "user_text"]
+            print(" clarifying:", before.task.status, "users:", len(users_before))
+            self.assertEqual(before.task.status, "clarifying")
+            filled = asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"strategy_id": "macd"},
+                allow_composer_slot_fill=False,
+            )
+            after = asst.session_store.load(sid)
+            users_after = [m for m in after.messages if m.get("kind") == "user_text"]
+            kinds = [item["kind"] for item in (filled.get("human_cards") or [])]
+            slot = after.task.slots.get("strategy_id") if after.task else None
+            print(" kinds:", kinds)
+            print(" users after:", len(users_after), "slot:", None if slot is None else slot.to_dict())
+            print(" status:", after.task.status if after.task else None)
+            self.assertEqual(len(users_after), len(users_before))
+            self.assertIsNotNone(slot)
+            self.assertEqual(slot.value, "macd")
+            self.assertTrue(slot.confirmed)
+            notice = next(
+                (item for item in (filled.get("human_cards") or []) if item.get("kind") == "mode_notice"),
+                None,
+            )
+            print(" notice:", None if notice is None else notice.get("text"))
+            self.assertTrue(
+                notice is None or "Previous topic skipped." not in str(notice.get("text") or "")
+            )
+
+    def test_cli_default_still_fills_bband(self) -> None:
+        """默认 allow_composer_slot_fill=True：澄清中 bband 仍填槽。"""
+
+        print("\n[TestAiWebClarifyComposerGate] cli default fill")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-cli-bband"
+            asst.plan("请帮我列出内置交易策略的参数", response_style="raw", session_id=sid)
+            before = asst.session_store.load(sid)
+            old_id = before.task.id
+            filled = asst.plan("bband", response_style="raw", session_id=sid)
+            after = asst.session_store.load(sid)
+            slot = after.task.slots.get("strategy_id") if after.task else None
+            print(" task id:", old_id, after.task.id if after.task else None)
+            print(" status:", after.task.status if after.task else None)
+            print(" slot:", None if slot is None else slot.to_dict())
+            self.assertEqual(after.task.id, old_id)
+            self.assertIsNotNone(slot)
+            self.assertEqual(str(slot.value), "bband")
+            self.assertTrue(slot.confirmed)
+            notice = next(
+                (item for item in (filled.get("human_cards") or []) if item.get("kind") == "mode_notice"),
+                None,
+            )
+            print(" notice:", None if notice is None else notice.get("text"))
+            self.assertTrue(
+                notice is None or "Previous topic skipped." not in str(notice.get("text") or "")
+            )
+
+    def test_http_plan_composer_while_clarifying_is_new_task(self) -> None:
+        """POST /v1/plan 无 patches：clarifying 下 Composer 换题。"""
+
+        print("\n[TestAiWebClarifyComposerGate] http composer new task")
+        from starlette.testclient import TestClient
+
+        from qteasy_ai.workbench.http_app import create_app
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            asst = QteasyAssistant(memory_store=store, registry=build_default_registry())
+            app = create_app(assistant=asst)
+            client = TestClient(app)
+            sid = "s-http-web"
+            first = client.post("/v1/plan", json={"query": "请帮我列出内置交易策略的参数", "session_id": sid})
+            self.assertEqual(first.status_code, 200)
+            before = asst.session_store.load(sid)
+            print(" first status:", before.task.status if before.task else None)
+            self.assertEqual(before.task.status, "clarifying")
+            old_id = before.task.id
+            second = client.post("/v1/plan", json={"query": "bband", "session_id": sid})
+            self.assertEqual(second.status_code, 200)
+            body = second.json()
+            after = asst.session_store.load(sid)
+            cards = body.get("human_cards") or body.get("messages") or []
+            # DTO 可能把卡放在 messages
+            if not any(isinstance(c, dict) and c.get("kind") == "mode_notice" for c in cards):
+                cards = [m for m in after.messages if isinstance(m, dict)]
+            notice_texts = [
+                str(c.get("text") or "")
+                for c in cards
+                if isinstance(c, dict) and c.get("kind") == "mode_notice"
+            ]
+            print(" notice texts:", notice_texts)
+            print(" task:", old_id, "->", after.task.id if after.task else None)
+            self.assertTrue(any("Previous topic skipped." in t for t in notice_texts))
+            self.assertNotEqual(after.task.id, old_id)
 
 
 if __name__ == "__main__":
