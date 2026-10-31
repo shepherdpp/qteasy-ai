@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .planner import Planner
 from .provider import BaseLLMProvider
@@ -107,7 +107,14 @@ def answers_pending_slot(session: ConversationState, text: str) -> bool:
     task = session.task
     pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
     missing = [str(item) for item in ((task.missing if task is not None else []) or [])]
-    options = pending.get("options") if isinstance(pending.get("options"), list) else []
+    options: List[Any] = []
+    top = pending.get("options") if isinstance(pending.get("options"), list) else []
+    options.extend(top)
+    for item in pending.get("pending") or []:
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("options") if isinstance(item.get("options"), list) else []
+        options.extend(nested)
     compact = raw.lower()
     for opt in options:
         if not isinstance(opt, dict):

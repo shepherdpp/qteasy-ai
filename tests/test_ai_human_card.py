@@ -990,7 +990,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotIn("plan_ready", kinds)
 
     def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
-        """缺 strategy_id：clarify 不 partial_failed；macd 走 get；skip 失败收口。"""
+        """CLI：缺 strategy_id 出 clarify；打字 macd 走 get；typed skip 失败收口。"""
 
         print("\n[TestAiJobLifecycleG9] clarify params")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1009,9 +1009,19 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotEqual(status, "partial_failed")
             self.assertIsInstance(session.task.pending_clarification, dict)
             self.assertNotEqual(session.task.status, "done")
-            prompt = str((session.task.pending_clarification or {}).get("confirm_prompt") or "")
+            pending_blob = session.task.pending_clarification or {}
+            prompt = str(pending_blob.get("confirm_prompt") or "")
+            pending_rows = [item for item in (pending_blob.get("pending") or []) if isinstance(item, dict)]
             print(" prompt:", prompt)
+            print(" step:", pending_blob.get("step_index"), pending_blob.get("step_total"))
+            print(" pending options:", [(item.get("name"), [o.get("id") for o in (item.get("options") or [])]) for item in pending_rows])
             self.assertIn("strategy", prompt.lower())
+            self.assertNotIn("type skip", prompt.lower())
+            self.assertNotIn("options", pending_blob)
+            self.assertEqual(int(pending_blob.get("step_index") or 0), 1)
+            strategy = next((item for item in pending_rows if item.get("name") == "strategy_id"), None)
+            self.assertIsNotNone(strategy)
+            self.assertTrue(any(str(o.get("id") or "") == "macd" for o in ((strategy or {}).get("options") or [])))
             filled = asst.run("macd", response_style="raw", session_id="s-clar")
             filled_session = asst.session_store.load("s-clar")
             fill_steps = (filled.get("execution") or {}).get("steps") or []
@@ -1450,6 +1460,146 @@ class TestAiHumanCardPolish(unittest.TestCase):
         blown_text = next(item for item in blown if item["kind"] == "result")["text"]
         print(" exception fallback matches:", blown_text == result["text"])
         self.assertEqual(blown_text, result["text"])
+
+    def test_clarify_polish_rewrites_option_labels_and_keeps_ids(self) -> None:
+        """中文问句：clarify 改 text 与 options[].label，id / name 不变。"""
+
+        print("\n[TestAiHumanCardPolish] clarify option labels")
+        cards = [
+            {
+                "kind": "clarify",
+                "text": "Which strategy_id should we use?",
+                "payload": {
+                    "pending": [
+                        {
+                            "name": "strategy_id",
+                            "label": "Strategy",
+                            "hint": "Pick one",
+                            "options": [
+                                {"id": "macd", "label": "MACD crossover"},
+                                {"id": "dma", "label": "DMA dual"},
+                            ],
+                        }
+                    ],
+                    "step_index": 1,
+                    "step_total": 1,
+                },
+            }
+        ]
+        reply = (
+            "TEXT:\n"
+            "请选择要用的 strategy_id？\n"
+            "LABELS:\n"
+            "macd|MACD 交叉\n"
+            "dma|DMA 双均线\n"
+        )
+        provider = FakeLLMProvider(replies=[reply])
+        polished = polish_human_cards(cards, provider=provider, query="列出策略参数")
+        out = next(item for item in polished if item["kind"] == "clarify")
+        opts = (out["payload"]["pending"][0].get("options") or [])
+        print(" text:", out["text"])
+        print(" ids:", [o.get("id") for o in opts])
+        print(" labels:", [o.get("label") for o in opts])
+        print(" prompt head:", (provider.prompts[0] or "")[:120])
+        self.assertEqual(out["text"], "请选择要用的 strategy_id？")
+        self.assertEqual(out["payload"]["pending"][0]["name"], "strategy_id")
+        self.assertEqual([o.get("id") for o in opts], ["macd", "dma"])
+        self.assertEqual([o.get("label") for o in opts], ["MACD 交叉", "DMA 双均线"])
+        self.assertIn("TEXT:", provider.prompts[0])
+        self.assertIn("macd|MACD crossover", provider.prompts[0])
+
+    def test_clarify_polish_rejects_id_or_number_change(self) -> None:
+        """改 option id 或 label 内数字 → 整卡英文原件。"""
+
+        print("\n[TestAiHumanCardPolish] clarify label rollback")
+        cards = [
+            {
+                "kind": "clarify",
+                "text": "Pick a lookback of 20 bars.",
+                "payload": {
+                    "pending": [
+                        {
+                            "name": "window",
+                            "options": [
+                                {"id": "w20", "label": "20 bars"},
+                                {"id": "w60", "label": "60 bars"},
+                            ],
+                        }
+                    ],
+                    "step_index": 1,
+                    "step_total": 1,
+                },
+            }
+        ]
+        bad_id = (
+            "TEXT:\n"
+            "请选择回看窗口。\n"
+            "LABELS:\n"
+            "w20x|20 根K线\n"
+            "w60|60 根K线\n"
+        )
+        bad_num = (
+            "TEXT:\n"
+            "请选择回看窗口。\n"
+            "LABELS:\n"
+            "w20|30 根K线\n"
+            "w60|60 根K线\n"
+        )
+        provider = FakeLLMProvider(replies=[bad_id, bad_num])
+        first = polish_human_cards(cards, provider=provider, query="帮我选窗口")
+        first_out = next(item for item in first if item["kind"] == "clarify")
+        print(" bad id text:", first_out["text"])
+        print(" bad id labels:", [o.get("label") for o in first_out["payload"]["pending"][0]["options"]])
+        self.assertEqual(first_out["text"], cards[0]["text"])
+        self.assertEqual(
+            [o.get("id") for o in first_out["payload"]["pending"][0]["options"]],
+            ["w20", "w60"],
+        )
+        self.assertEqual(
+            [o.get("label") for o in first_out["payload"]["pending"][0]["options"]],
+            ["20 bars", "60 bars"],
+        )
+        second = polish_human_cards(cards, provider=provider, query="帮我选窗口")
+        second_out = next(item for item in second if item["kind"] == "clarify")
+        print(" bad num text:", second_out["text"])
+        print(" bad num labels:", [o.get("label") for o in second_out["payload"]["pending"][0]["options"]])
+        self.assertEqual(second_out["text"], cards[0]["text"])
+        self.assertEqual(
+            [o.get("label") for o in second_out["payload"]["pending"][0]["options"]],
+            ["20 bars", "60 bars"],
+        )
+
+    def test_clarify_polish_rewrites_last_chance_without_options(self) -> None:
+        """无 options 时 last chance 随 text 润色，数字保留。"""
+
+        print("\n[TestAiHumanCardPolish] clarify last chance text")
+        cards = [
+            {
+                "kind": "clarify",
+                "text": (
+                    "Still missing start_date.\n"
+                    "Last chance: please provide valid values for the remaining fields."
+                ),
+                "payload": {
+                    "pending": [{"name": "start_date", "label": "Start", "hint": "YYYYMMDD"}],
+                    "step_index": 1,
+                    "step_total": 1,
+                },
+            }
+        ]
+        zh = (
+            "仍缺少 start_date。\n"
+            "最后一次机会：请为剩余字段提供有效值。"
+        )
+        provider = FakeLLMProvider(replies=[zh])
+        polished = polish_human_cards(cards, provider=provider, query="帮我下载日线")
+        out = next(item for item in polished if item["kind"] == "clarify")
+        print(" text:", out["text"])
+        print(" pending name:", out["payload"]["pending"][0]["name"])
+        self.assertEqual(out["text"], zh)
+        self.assertIn("start_date", out["text"])
+        self.assertEqual(out["payload"]["pending"][0]["name"], "start_date")
+        self.assertNotIn("TEXT:", provider.prompts[0])
 
     def test_attach_human_cards_stores_chinese_plan_ready(self) -> None:
         """装配层把通过校验的中文 plan_ready 写入 session。"""

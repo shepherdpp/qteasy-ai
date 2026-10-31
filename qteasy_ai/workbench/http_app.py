@@ -555,11 +555,14 @@ class WorkbenchHttp:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
         if patches and not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id with patches.", 400)
+        # Web Composer：clarifying 只认控件 patches/skip；打字=换题。
+        allow_fill = bool(patches)
         payload = self.assistant.plan(
             query,
             response_style="raw",
             session_id=session_id or None,
             patches=patches or None,
+            allow_composer_slot_fill=allow_fill,
         )
         return JSONResponse(
             self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)

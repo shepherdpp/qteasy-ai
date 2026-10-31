@@ -3,6 +3,15 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
+## 0.3.1 (2026-10-31)
+
+### Changed
+
+- Workbench clarification is a step-by-step wizard (`< X of N >`): one slot at a time, up to five options per step, submit once all drafts are ready; End this request uses an in-card confirm.
+- Clarify and plan-ready share a fixed-height card with letter-row options and short footer labels.
+- While clarifying in the workbench, typing in the composer starts a new topic instead of filling slots or skipping; use the card controls. CLI typed slot-fill is unchanged.
+- After three invalid clarification submits, the next card is a last chance; a fourth invalid submit ends the request with fail-close copy distinct from End this request.
+
 ## 0.3.0 (2026-10-28)
 
 ### Added
