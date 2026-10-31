@@ -51,7 +51,7 @@ Composer 底部右侧：回形针与圆形向上箭头发送按钮（约与 Mode
 
 ## 5. 交互卡（澄清 / Plan ready）
 
-Session 栏里两张活交互卡共用 `ix-card` 壳：固定高度 300px、横贯内容区宽度、不可拖拽缩放。结构为标题栏 / 可滚动中部 / 底栏。
+Session 栏里两张活交互卡共用 `ix-card` 壳：固定高度 260px、横贯内容区宽度、不可拖拽缩放。结构为标题栏 / 可滚动中部 / 底栏。澄清卡与 Plan ready（含改参数）共用同一套字号与行距：正文 13px、`line-height: 1.55`（与 Result `.chat-md` 一致），段落 / 行间距 `0.6em`；标题栏与底栏等高。卡内不再沿用全局 `.warn` 的 12px。
 
 - **标题栏**：左标题；澄清卡右侧有 `< X of N >` 翻页。Plan ready 右侧留空。
 - **底栏**：靠右。最右是实心强调色主按钮（Submit / Confirm / Apply）。其余是无边框纯文字短标签（End、Back、View、Change、Cancel），悬停 `title` 显示全称。Cancel 不用错误色。
