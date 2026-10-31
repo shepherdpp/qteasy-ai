@@ -1016,7 +1016,10 @@ function setBusy(next) {
     const el = $(id);
     if (el) el.disabled = busy;
   });
-  document.querySelectorAll(".clarify-chip").forEach((el) => {
+  document.querySelectorAll(".clarify-option[data-clarify-option]").forEach((el) => {
+    el.disabled = busy;
+  });
+  document.querySelectorAll("input[data-clarify-open]").forEach((el) => {
     el.disabled = busy;
   });
   renderChat();
@@ -1395,9 +1398,16 @@ function onChatClick(ev) {
     }
     return;
   }
-  if (t.dataset.clarifyOption != null) {
-    const slot = String(t.dataset.clarifySlot || "").trim();
-    const oid = String(t.dataset.clarifyOption || "").trim();
+  const openRow = t.closest(".clarify-option-open");
+  if (openRow) {
+    const input = openRow.querySelector("input[data-clarify-open]");
+    if (input && t !== input && !busy) input.focus();
+    return;
+  }
+  const optionEl = t.closest("[data-clarify-option]");
+  if (optionEl) {
+    const slot = String(optionEl.getAttribute("data-clarify-slot") || "").trim();
+    const oid = String(optionEl.getAttribute("data-clarify-option") || "").trim();
     if (slot && oid) {
       clarifyWizard.drafts[slot] = { kind: "chip", value: oid };
       clarifyWizard.ending = false;
@@ -2792,7 +2802,12 @@ function renderChat() {
         delete clarifyWizard.drafts[slot];
       }
       clarifyWizard.ending = false;
-      document.querySelectorAll(".clarify-chip.selected").forEach((el) => el.classList.remove("selected"));
+      document.querySelectorAll(".clarify-option.selected").forEach((el) => el.classList.remove("selected"));
+      const openRow = clarifyOpen.closest(".clarify-option-open");
+      if (openRow) {
+        if (value.trim()) openRow.classList.add("selected");
+        else openRow.classList.remove("selected");
+      }
       syncClarifyWizardControls();
     });
   }
@@ -2818,24 +2833,36 @@ function latestClarify() {
   return null;
 }
 
+function clarifyLetter(index) {
+  return String.fromCharCode(65 + index);
+}
+
 function renderClarifyStepOptions(row, slotName, lock) {
   const raw = (row && row.options) || [];
-  const selected = clarifyDraftValue(slotName);
   const draft = clarifyWizard.drafts[slotName];
-  const chipSelected = draft && draft.kind === "chip" ? selected : "";
-  const chips = raw
-    .map((item) => {
-      if (!item || typeof item !== "object") return "";
-      const id = String(item.id || item.label || "").trim();
-      const label = String(item.label || item.id || "").trim();
-      if (!id) return "";
-      const active = chipSelected && chipSelected === id ? " selected" : "";
-      return `<button type="button" class="chip clarify-chip${active}" data-clarify-option="${escapeHtml(id)}" data-clarify-slot="${escapeHtml(slotName)}" ${lock}>${escapeHtml(label)}</button>`;
+  const chipSelected = draft && draft.kind === "chip" ? String(draft.value || "") : "";
+  const openSelected = draft && draft.kind === "open";
+  const openValue = openSelected ? String(draft.value || "") : "";
+  const items = [];
+  raw.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const id = String(item.id || item.label || "").trim();
+    const label = String(item.label || item.id || "").trim();
+    if (!id) return;
+    items.push({ id, label });
+  });
+  const rows = items
+    .map((item, index) => {
+      const active = chipSelected && chipSelected === item.id ? " selected" : "";
+      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-slot="${escapeHtml(slotName)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
     })
-    .filter(Boolean)
     .join("");
-  if (!chips) return "";
-  return `<div class="clarify-options" data-testid="clarify-options">${chips}</div>`;
+  const openLetter = clarifyLetter(items.length);
+  const openActive = openSelected ? " selected" : "";
+  const openRow = slotName
+    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="请输入 / Please input..." ${lock} /></div>`
+    : "";
+  return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}</div>`;
 }
 
 function renderClarification() {
@@ -2854,51 +2881,42 @@ function renderClarification() {
   clarifyWizard.step = step;
   const row = pendingItems[step - 1] || null;
   const slotName = row ? String(row.name || row || "") : "";
-  const draft = slotName ? clarifyWizard.drafts[slotName] : null;
-  const openValue = draft && draft.kind === "open" ? String(draft.value || "") : "";
   const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
   const allReady = clarifyAllDraftsReady(pendingItems);
   const lock = busy ? "disabled" : "";
   const prevDisabled = busy || n <= 1 || step <= 1 ? "disabled" : "";
   const nextDisabled = busy || n <= 1 || step >= n || !hasDraft ? "disabled" : "";
   const submitDisabled = busy || !allReady ? "disabled" : "";
-  const label = row && row.label ? String(row.label) : slotLabel(slotName);
   const hint = row && typeof row === "object" ? String(row.hint || "") : "";
   const error = row && typeof row === "object" ? String(row.error || "") : "";
-  const hintHtml = hint ? `<span class="slot-hint">${escapeHtml(hint)}</span>` : "";
-  const errorHtml = error ? `<span class="slot-error">${escapeHtml(error)}</span>` : "";
-  const optionChips = renderClarifyStepOptions(row, slotName, lock);
-  const openInput = slotName
-    ? `<div class="slot-row"><label>${escapeHtml(label)}<input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" ${lock} /></label>${hintHtml}${errorHtml}</div>`
-    : "";
-  const nav = `<div class="clarify-nav" data-testid="clarify-nav">
+  const hintHtml = hint ? `<span class="slot-hint ix-card-meta">${escapeHtml(hint)}</span>` : "";
+  const errorHtml = error ? `<span class="slot-error ix-card-meta">${escapeHtml(error)}</span>` : "";
+  const optionRows = renderClarifyStepOptions(row, slotName, lock);
+  const pager = `<div class="ix-card-pager" data-testid="clarify-nav">
       <button type="button" class="ghost" id="btn-clarify-prev" ${prevDisabled}>&lt;</button>
       <span class="clarify-step" data-testid="clarify-step">${step} of ${n}</span>
       <button type="button" class="ghost" id="btn-clarify-next" ${nextDisabled}>&gt;</button>
     </div>`;
-  let endBlock = "";
+  let foot = "";
   if (clarifyWizard.ending) {
-    endBlock = `<div class="actions clarify-end-confirm" data-testid="clarify-end-confirm">
-      <button type="button" class="danger" id="btn-clarify-end-confirm" ${lock}>Confirm end</button>
-      <button type="button" class="ghost" id="btn-clarify-end-back" ${lock}>Back</button>
+    foot = `<div class="ix-card-foot" data-testid="clarify-end-confirm">
+      <button type="button" class="ix-text-btn" id="btn-clarify-end-back" ${lock}>Back</button>
+      <button type="button" class="primary" id="btn-clarify-end-confirm" title="Confirm end" ${lock}>Confirm</button>
     </div>`;
   } else {
-    endBlock = `<button type="button" class="ghost" id="btn-clarify-end" ${lock}>End this request</button>`;
+    foot = `<div class="ix-card-foot">
+      <button type="button" class="ix-text-btn" id="btn-clarify-end" title="End this request" ${lock}>End</button>
+      <button type="button" class="primary" id="btn-clarify" ${submitDisabled}>Submit</button>
+    </div>`;
   }
   const prompt = clar
     ? `<p>${escapeHtml(clar.text || "")}</p>`
     : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
-  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${nav}${optionChips}${openInput}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${submitDisabled}>Submit</button>${endBlock}</div></div>`;
-}
-
-function renderDecisionActions(extra = "") {
-  const lock = busy ? "disabled" : "";
-  return `<div class="actions decision-actions">
-      <button type="button" class="primary" id="btn-confirm" ${lock}>Confirm</button>
-      <button type="button" id="btn-edit" ${lock}>Change params</button>
-      <button type="button" class="danger" id="btn-cancel" ${lock}>Cancel</button>
-      ${extra}
-    </div>`;
+  return `<div class="ix-card" data-testid="clarification-form">
+    <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3>${pager}</div>
+    <div class="ix-card-body">${prompt}${hintHtml}${errorHtml}${optionRows}</div>
+    ${foot}
+  </div>`;
 }
 
 function renderPlanCard() {
@@ -2906,7 +2924,9 @@ function renderPlanCard() {
   const missing = (state.sidebar && state.sidebar.missing) || [];
   if (!card || !card.confirmable || mode === "ask" || missing.length) return "";
   const job = (state.sidebar && state.sidebar.active_intent && state.sidebar.active_intent.job) || "";
-  let editor = "";
+  const lock = busy ? "disabled" : "";
+  let body = "";
+  let foot = "";
   if (editingParams) {
     const slots = (state.sidebar && state.sidebar.slots) || [];
     const rows = slots.length
@@ -2917,19 +2937,32 @@ function renderPlanCard() {
           )
           .join("")
       : `<div class="slot-row"><label>Follow-up<input data-edit-slot="note" placeholder="Describe the change" /></label></div>`;
-    editor = `${rows}<div class="actions"><button type="button" class="primary" id="btn-edit-submit">Apply changes</button><button type="button" id="btn-edit-cancel">Back</button></div>`;
-  }
-  const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
-  const rid = currentPlanRunId();
-  const openBtn = rid
-    ? `<button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button>`
-    : "";
-  return `<div class="card compact" data-testid="plan-card"><h3>Plan ready</h3>
-    ${jobLine}
+    body = rows;
+    foot = `<div class="ix-card-foot">
+      <button type="button" class="ix-text-btn" id="btn-edit-cancel" ${lock}>Back</button>
+      <button type="button" class="primary" id="btn-edit-submit" title="Apply changes" ${lock}>Apply</button>
+    </div>`;
+  } else {
+    const jobLine = job ? `<p class="job-line">Job: ${escapeHtml(job)}</p>` : "";
+    const rid = currentPlanRunId();
+    const viewBtn = rid
+      ? `<button type="button" class="ix-text-btn" data-open-plan="${escapeHtml(rid)}" title="View Plan">View</button>`
+      : "";
+    body = `${jobLine}
     <p class="warn">Plan ${escapeHtml(card.plan_id)}</p>
-    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>
-    ${editor}
-    ${renderDecisionActions(openBtn)}</div>`;
+    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>`;
+    foot = `<div class="ix-card-foot">
+      ${viewBtn}
+      <button type="button" class="ix-text-btn" id="btn-edit" title="Change params" ${lock}>Change</button>
+      <button type="button" class="ix-text-btn" id="btn-cancel" ${lock}>Cancel</button>
+      <button type="button" class="primary" id="btn-confirm" ${lock}>Confirm</button>
+    </div>`;
+  }
+  return `<div class="ix-card" data-testid="plan-card">
+    <div class="ix-card-head"><h3 class="ix-card-title">Plan ready</h3></div>
+    <div class="ix-card-body">${body}</div>
+    ${foot}
+  </div>`;
 }
 
 function renderSteps() {
