@@ -63,6 +63,13 @@ let filePreview = null;
 let sessions = [];
 /** @type {Record<string, string>} local_only 改名尚未 PATCH 到服务端时暂存 */
 let pendingSessionNames = {};
+/** 澄清卡本地向导：翻页与草稿不打服务端，签名变了整卡重置 */
+let clarifyWizard = {
+  signature: "",
+  step: 1,
+  drafts: {},
+  ending: false,
+};
 let workspace = { artifacts: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
@@ -995,7 +1002,17 @@ function setBusy(next) {
     const badge = $(id);
     if (badge) badge.disabled = busy;
   });
-  ["btn-confirm", "btn-cancel", "btn-edit", "btn-clarify", "btn-clarify-skip"].forEach((id) => {
+  [
+    "btn-confirm",
+    "btn-cancel",
+    "btn-edit",
+    "btn-clarify",
+    "btn-clarify-end",
+    "btn-clarify-end-confirm",
+    "btn-clarify-end-back",
+    "btn-clarify-prev",
+    "btn-clarify-next",
+  ].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy;
   });
@@ -1341,15 +1358,51 @@ function onChatClick(ev) {
     renderChat();
   }
   if (t.id === "btn-edit-submit") submitParamEdits();
-  if (t.id === "btn-clarify") submitClarification();
-  if (t.id === "btn-clarify-skip") {
+  if (t.id === "btn-clarify") {
+    submitClarification();
+    return;
+  }
+  if (t.id === "btn-clarify-end") {
+    clarifyWizard.ending = true;
+    renderChat();
+    return;
+  }
+  if (t.id === "btn-clarify-end-back") {
+    clarifyWizard.ending = false;
+    renderChat();
+    return;
+  }
+  if (t.id === "btn-clarify-end-confirm") {
     sendControlSkip();
     return;
   }
+  if (t.id === "btn-clarify-prev") {
+    if (clarifyWizard.step > 1) {
+      clarifyWizard.step -= 1;
+      clarifyWizard.ending = false;
+      renderChat();
+    }
+    return;
+  }
+  if (t.id === "btn-clarify-next") {
+    const pending = clarifyPendingItems(liveClarifyMessage() || latestClarify());
+    const cur = pending[clarifyWizard.step - 1];
+    const name = cur && (cur.name || cur);
+    if (name && clarifyDraftValue(String(name)) && clarifyWizard.step < pending.length) {
+      clarifyWizard.step += 1;
+      clarifyWizard.ending = false;
+      renderChat();
+    }
+    return;
+  }
   if (t.dataset.clarifyOption != null) {
-    const missing = (state.sidebar && state.sidebar.missing) || [];
-    const key = missing[0] || "strategy_id";
-    sendControlPatches({ [key]: t.dataset.clarifyOption });
+    const slot = String(t.dataset.clarifySlot || "").trim();
+    const oid = String(t.dataset.clarifyOption || "").trim();
+    if (slot && oid) {
+      clarifyWizard.drafts[slot] = { kind: "chip", value: oid };
+      clarifyWizard.ending = false;
+      renderChat();
+    }
     return;
   }
   if (t.id === "edit-mode") {
@@ -1407,16 +1460,77 @@ function onChatClick(ev) {
   }
 }
 
+function clarifyPendingItems(clar) {
+  const raw = (clar && clar.payload && clar.payload.pending) || [];
+  return raw.filter(Boolean);
+}
+
+function clarifySignature(clar) {
+  const pending = clarifyPendingItems(clar);
+  const names = pending.map((item) => String((item && item.name) || item || "")).join(",");
+  const text = clar ? String(clar.text || "") : "";
+  return `${names}|${text}`;
+}
+
+function ensureClarifyWizard(clar) {
+  const sig = clarifySignature(clar);
+  if (clarifyWizard.signature !== sig) {
+    clarifyWizard = { signature: sig, step: 1, drafts: {}, ending: false };
+  }
+  const pending = clarifyPendingItems(clar);
+  const n = pending.length || 1;
+  if (clarifyWizard.step < 1) clarifyWizard.step = 1;
+  if (clarifyWizard.step > n) clarifyWizard.step = n;
+}
+
+function clarifyDraftValue(slotName) {
+  const draft = clarifyWizard.drafts[slotName];
+  if (!draft) return "";
+  return String(draft.value || "").trim();
+}
+
+function clarifyAllDraftsReady(pending) {
+  if (!pending.length) return false;
+  return pending.every((item) => {
+    const name = String((item && item.name) || item || "").trim();
+    return Boolean(name && clarifyDraftValue(name));
+  });
+}
+
 function submitClarification() {
+  const clar = liveClarifyMessage() || latestClarify();
+  ensureClarifyWizard(clar);
+  const pending = clarifyPendingItems(clar);
+  if (!clarifyAllDraftsReady(pending)) return;
   const patches = {};
-  Array.from(document.querySelectorAll("#chat-log input[data-slot]")).forEach((el) => {
-    const name = el.getAttribute("data-slot");
-    const value = String(el.value || "").trim();
-    if (!name || !value) return;
-    patches[name] = value;
+  pending.forEach((item) => {
+    const name = String((item && item.name) || item || "").trim();
+    const value = clarifyDraftValue(name);
+    if (name && value) patches[name] = value;
   });
   if (!Object.keys(patches).length) return;
   sendControlPatches(patches);
+}
+
+function syncClarifyWizardControls() {
+  const clar = liveClarifyMessage() || latestClarify();
+  if (!shouldShowLiveClarify() || !clar) return;
+  ensureClarifyWizard(clar);
+  const pending = clarifyPendingItems(clar);
+  const n = pending.length || 1;
+  const step = clarifyWizard.step;
+  const cur = pending[step - 1];
+  const slotName = cur ? String(cur.name || cur || "") : "";
+  const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
+  const allReady = clarifyAllDraftsReady(pending);
+  const prev = $("btn-clarify-prev");
+  const next = $("btn-clarify-next");
+  const submit = $("btn-clarify");
+  if (prev) prev.disabled = busy || n <= 1 || step <= 1;
+  if (next) next.disabled = busy || n <= 1 || step >= n || !hasDraft;
+  if (submit) submit.disabled = busy || !allReady;
+  const open = document.querySelector("#chat-log input[data-clarify-open]");
+  if (open) open.disabled = busy;
 }
 
 async function submitParamEdits() {
@@ -2666,6 +2780,23 @@ function renderChat() {
     rewind.focus();
     rewind.setSelectionRange(rewind.value.length, rewind.value.length);
   }
+  const clarifyOpen = host.querySelector("input[data-clarify-open]");
+  if (clarifyOpen) {
+    clarifyOpen.addEventListener("input", () => {
+      const slot = String(clarifyOpen.getAttribute("data-clarify-open") || "").trim();
+      if (!slot) return;
+      const value = String(clarifyOpen.value || "");
+      if (value.trim()) {
+        clarifyWizard.drafts[slot] = { kind: "open", value };
+      } else {
+        delete clarifyWizard.drafts[slot];
+      }
+      clarifyWizard.ending = false;
+      document.querySelectorAll(".clarify-chip.selected").forEach((el) => el.classList.remove("selected"));
+      syncClarifyWizardControls();
+    });
+  }
+  syncClarifyWizardControls();
   renderMode();
   if (stick || busy) host.scrollTop = host.scrollHeight;
 }
@@ -2687,15 +2818,19 @@ function latestClarify() {
   return null;
 }
 
-function renderClarifyOptions(clar, lock) {
-  const raw = (clar && clar.payload && clar.payload.options) || [];
+function renderClarifyStepOptions(row, slotName, lock) {
+  const raw = (row && row.options) || [];
+  const selected = clarifyDraftValue(slotName);
+  const draft = clarifyWizard.drafts[slotName];
+  const chipSelected = draft && draft.kind === "chip" ? selected : "";
   const chips = raw
     .map((item) => {
       if (!item || typeof item !== "object") return "";
       const id = String(item.id || item.label || "").trim();
       const label = String(item.label || item.id || "").trim();
       if (!id) return "";
-      return `<button type="button" class="chip clarify-chip" data-clarify-option="${escapeHtml(id)}" ${lock}>${escapeHtml(label)}</button>`;
+      const active = chipSelected && chipSelected === id ? " selected" : "";
+      return `<button type="button" class="chip clarify-chip${active}" data-clarify-option="${escapeHtml(id)}" data-clarify-slot="${escapeHtml(slotName)}" ${lock}>${escapeHtml(label)}</button>`;
     })
     .filter(Boolean)
     .join("");
@@ -2709,30 +2844,51 @@ function renderClarification() {
   const clar = live || (missing.length ? latestClarify() : null);
   if (!shouldShowLiveClarify()) return "";
   if (!clar && !missing.length) return "";
-  const pendingItems = ((clar && clar.payload && clar.payload.pending) || []).filter(Boolean);
-  const pending = pendingItems.map((item) => item.name || item).filter(Boolean);
-  const fields = missing.length ? missing : pending;
-  const lock = busy ? "disabled" : "";
-  const skipBtn = `<button type="button" class="ghost" id="btn-clarify-skip" ${lock}>Skip</button>`;
-  const optionChips = renderClarifyOptions(clar, lock);
-  if (!fields.length && clar) {
-    return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3><p>${escapeHtml(clar.text || "")}</p>${optionChips}<div class="actions">${skipBtn}</div></div>`;
+  ensureClarifyWizard(clar);
+  let pendingItems = clarifyPendingItems(clar);
+  if (!pendingItems.length && missing.length) {
+    pendingItems = missing.map((name) => ({ name: String(name) }));
   }
-  const inputs = fields
-    .map((name) => {
-      const current = ((state.sidebar && state.sidebar.slots) || []).find((s) => s.name === name);
-      const value = current && current.value != null ? String(current.value) : "";
-      const row = pendingItems.find((item) => (item.name || item) === name);
-      const hint = row && typeof row === "object" ? row.hint || "" : "";
-      const label = row && row.label ? String(row.label) : slotLabel(name);
-      const error = row && row.error ? String(row.error) : "";
-      const hintHtml = hint ? `<span class="slot-hint">${escapeHtml(hint)}</span>` : "";
-      const errorHtml = error ? `<span class="slot-error">${escapeHtml(error)}</span>` : "";
-      return `<div class="slot-row"><label>${escapeHtml(label)}<input data-slot="${escapeHtml(name)}" value="${escapeHtml(value)}" /></label>${hintHtml}${errorHtml}</div>`;
-    })
-    .join("");
-  const prompt = clar ? `<p>${escapeHtml(clar.text || "")}</p>` : "<p>Fill the missing fields, then submit. Skip ends this request.</p>";
-  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${optionChips}${inputs}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${lock}>Submit slots</button>${skipBtn}</div></div>`;
+  const n = pendingItems.length || 1;
+  const step = Math.min(Math.max(clarifyWizard.step, 1), n);
+  clarifyWizard.step = step;
+  const row = pendingItems[step - 1] || null;
+  const slotName = row ? String(row.name || row || "") : "";
+  const draft = slotName ? clarifyWizard.drafts[slotName] : null;
+  const openValue = draft && draft.kind === "open" ? String(draft.value || "") : "";
+  const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
+  const allReady = clarifyAllDraftsReady(pendingItems);
+  const lock = busy ? "disabled" : "";
+  const prevDisabled = busy || n <= 1 || step <= 1 ? "disabled" : "";
+  const nextDisabled = busy || n <= 1 || step >= n || !hasDraft ? "disabled" : "";
+  const submitDisabled = busy || !allReady ? "disabled" : "";
+  const label = row && row.label ? String(row.label) : slotLabel(slotName);
+  const hint = row && typeof row === "object" ? String(row.hint || "") : "";
+  const error = row && typeof row === "object" ? String(row.error || "") : "";
+  const hintHtml = hint ? `<span class="slot-hint">${escapeHtml(hint)}</span>` : "";
+  const errorHtml = error ? `<span class="slot-error">${escapeHtml(error)}</span>` : "";
+  const optionChips = renderClarifyStepOptions(row, slotName, lock);
+  const openInput = slotName
+    ? `<div class="slot-row"><label>${escapeHtml(label)}<input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" ${lock} /></label>${hintHtml}${errorHtml}</div>`
+    : "";
+  const nav = `<div class="clarify-nav" data-testid="clarify-nav">
+      <button type="button" class="ghost" id="btn-clarify-prev" ${prevDisabled}>&lt;</button>
+      <span class="clarify-step" data-testid="clarify-step">${step} of ${n}</span>
+      <button type="button" class="ghost" id="btn-clarify-next" ${nextDisabled}>&gt;</button>
+    </div>`;
+  let endBlock = "";
+  if (clarifyWizard.ending) {
+    endBlock = `<div class="actions clarify-end-confirm" data-testid="clarify-end-confirm">
+      <button type="button" class="danger" id="btn-clarify-end-confirm" ${lock}>Confirm end</button>
+      <button type="button" class="ghost" id="btn-clarify-end-back" ${lock}>Back</button>
+    </div>`;
+  } else {
+    endBlock = `<button type="button" class="ghost" id="btn-clarify-end" ${lock}>End this request</button>`;
+  }
+  const prompt = clar
+    ? `<p>${escapeHtml(clar.text || "")}</p>`
+    : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
+  return `<div class="card" data-testid="clarification-form"><h3>Clarification</h3>${prompt}${nav}${optionChips}${openInput}<div class="actions"><button type="button" class="primary" id="btn-clarify" ${submitDisabled}>Submit</button>${endBlock}</div></div>`;
 }
 
 function renderDecisionActions(extra = "") {

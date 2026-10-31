@@ -352,6 +352,28 @@ button.chip.clarify-chip {
   padding: 3px 10px;
   border-radius: 10px;
 }
+button.chip.clarify-chip.selected {
+  background: var(--accent);
+  color: #fff;
+}
+.clarify-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.clarify-nav .clarify-step {
+  min-width: 4.5em;
+  text-align: center;
+  color: var(--text-bright);
+}
+.clarify-end-confirm {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 6px;
+}
 .mode-notice {
   margin: 0;
   padding: 6px 10px;

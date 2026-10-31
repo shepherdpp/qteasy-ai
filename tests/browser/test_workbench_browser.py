@@ -165,16 +165,18 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         self.assertIn("run_", body)
 
     def test_unbounded_refill_skip_ends_failed(self) -> None:
-        """无界下载出现澄清；Skip 后失败结束，不执行。"""
+        """无界下载出现澄清；End this request 两步确认后失败结束，不执行。"""
 
-        print("\n[TestWorkbenchBrowser] unbounded refill skip")
+        print("\n[TestWorkbenchBrowser] unbounded refill end this request")
         self.send("download A-share daily data to local datasource")
         self.page.wait_for_selector("[data-testid='clarification-form']", timeout=_PLAN_TIMEOUT_MS)
-        self.assertTrue(self.page.locator("#btn-clarify-skip").is_visible())
-        self.page.click("#btn-clarify-skip")
+        self.assertTrue(self.page.locator("#btn-clarify-end").is_visible())
+        self.page.click("#btn-clarify-end")
+        self.page.wait_for_selector("#btn-clarify-end-confirm", timeout=_PLAN_TIMEOUT_MS)
+        self.page.click("#btn-clarify-end-confirm")
         self.page.wait_for_selector("text=Clarification skipped. This request ended.", timeout=_PLAN_TIMEOUT_MS)
         body = self.page.locator("#chat-log").inner_text()
-        print(" after skip:", body[:400])
+        print(" after end:", body[:400])
         self.assertIn("Clarification skipped. This request ended.", body)
         self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
         self.assertNotIn("refill", body.lower())
