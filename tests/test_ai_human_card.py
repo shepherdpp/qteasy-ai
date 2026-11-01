@@ -1200,7 +1200,7 @@ class TestAiHumanCardPolish(unittest.TestCase):
                     "status": "success",
                     "steps": [
                         {
-                            "skill_name": "qt.ai.visual.export_kline",
+                            "skill_name": "qt.ai.hp.plot",
                             "result": {
                                 "ok": True,
                                 "metrics": {"close_min": 1.0},

@@ -2,7 +2,7 @@
 
 **状态：E.4 起草；Phase E 已关单（2026-09-05）。** G.5 自动化对照（2026-09-07）无 P0 缺口。**1.0 标签仍由 Jackie 打。** 不升版。
 
-对照：产品顶层 §3.8 / §3.9；意图门 **H′**；Registry = `build_default_registry()`（22 个 skill）。本目录按 **Job 出图**，不是扁平 skill 菜单。
+对照：产品顶层 §3.8 / §3.9；意图门 **H′**；Registry = `build_default_registry()`（24 个 skill，0.4 A0 后）。本目录按 **Job 出图**，不是扁平 skill 菜单。
 
 | 项 | 说明 |
 |----|------|
@@ -22,8 +22,8 @@
 | `env.ready` | Plan | `qt.ai.env.check_tushare` → `qt.ai.env.overview_tables` | 只读 guide | `getting_started.md`；`tutorials/1-get-started.md` | BJ-ENV |
 | `data.refill` | Plan | `qt.ai.data.refill_basic_equity_and_index` | 网络 + 写库；无日期 → clarify | `tutorials/2.0-get-data.md` | BJ-REFILL；缺槽 BJ-REFILL-C |
 | `data.read` | Plan | `qt.ai.data.read`（`channel`∈history / reference / static） | 只读三入口 | `2.0-get-data.md`；DataType 三入口 | BJ-READ-H / R / S |
-| `data.summary` | Plan | `qt.ai.data.summary_kline` | 只读 | `2.4-historypanel-basics.md`；`2.5-historypanel-data-analysis.md` | BJ-SUM |
-| `data.export` | Plan | `qt.ai.visual.export_kline` | 写图文件 | 同上 / getting started 看 K 线 | BJ-EXP |
+| `data.summary` | Plan | `qt.ai.data.kline` → `qt.ai.hp.volatility` 与 `qt.ai.hp.describe` | 只读 | `2.4-historypanel-basics.md`；`2.5-historypanel-data-analysis.md` | BJ-SUM |
+| `data.export` | Plan | `qt.ai.data.kline` → `qt.ai.hp.plot` | 写图文件 | 同上 / getting started 看 K 线 | BJ-EXP |
 | `research.screen` | Plan | `universe_filter` → 可选 `price_predicate` → `project_universe` | 只读；**无**申万 DSL | 2.5 入门 | BJ-SCR（有阈值） |
 | `research.factor_ic` | Plan | `qt.ai.research.factor_ic_summary` | 只读；缺代码/日期/列名 → clarify | 2.5 / `qteasy.research` | BJ-IC |
 | `strategy.meta` | Plan | `strategy_meta.list` 或 `.get` | 只读 | `3-start-first-strategy.md`；`4-build-in-strategies.md` | BJ-META-L / G |
@@ -51,7 +51,7 @@
 
 ---
 
-## 3. Registry skill（22）
+## 3. Registry skill（24）
 
 | # | skill | 层 | 副作用摘要 | 由哪个 Job 带出 |
 |---|-------|----|------------|-----------------|
@@ -59,24 +59,26 @@
 | 2 | `qt.ai.env.overview_tables` | L1 guide | 只读 | `env.ready` |
 | 3 | `qt.ai.strategy_meta.list` | L1 | 只读 | `strategy.meta` |
 | 4 | `qt.ai.strategy_meta.get` | L1 | 只读 | `strategy.meta` |
-| 5 | `qt.ai.data.summary_kline` | L1 | 只读 | `data.summary` |
-| 6 | `qt.ai.data.read` | L1 | 只读 | `data.read` |
-| 7 | `qt.ai.visual.export_kline` | L1 | 写图 | `data.export` |
-| 8 | `qt.ai.data.refill_basic_equity_and_index` | L2 | 网络+写库 | `data.refill` |
-| 9 | `qt.ai.research.factor_ic_summary` | L1 | 只读 | `research.factor_ic` |
-| 10 | `qt.ai.research.universe_filter` | L1 | 只读 | `research.screen` |
-| 11 | `qt.ai.research.price_predicate` | L1 | 只读 | `research.screen`（有阈值） |
-| 12 | `qt.ai.research.project_universe` | L1 | 只读 | `research.screen` |
-| 13 | `qt.ai.research.screen_stocks` | 遗留 L2 | — | **菜谱不再出图**（负例） |
-| 14 | `qt.ai.backtest.run_builtin` | L2 | 写 trade_log / 曲线 | `backtest.builtin`；builder 可选末步 |
-| 15 | `qt.ai.insight.summarize_backtest` | L3 | 只读 | `insight.last_backtest`；P0 第二步 |
-| 16 | `qt.ai.optimize.run_builtin` | L2 | 重计算 | `optimize.builtin` |
-| 17 | `qt.ai.strategy.spec_from_nl` | L2 | 只读 | `strategy.builder` |
-| 18 | `qt.ai.strategy.codegen_hybrid` | L2 | 写 `.py` | `strategy.builder` |
-| 19 | `qt.ai.strategy.sanity_check` | L2 | 只读 | `strategy.builder` |
-| 20 | `qt.ai.operator.build_from_spec` | L2 | 内存组装 | `strategy.builder` |
-| 21 | `qt.ai.pipeline.live_trade_plan_only` | L2 | 只读清单 | `live.plan_only` |
-| 22 | `qt.ai.system.fallback` | 系统 | 只读 | 系统出口 / 缺槽 |
+| 5 | `qt.ai.data.kline` | L1 | 只读 | `data.summary`；`data.export` |
+| 6 | `qt.ai.hp.volatility` | L1 | 只读 | `data.summary` |
+| 7 | `qt.ai.hp.describe` | L1 | 只读 | `data.summary` |
+| 8 | `qt.ai.hp.plot` | L1 | 写图 | `data.export` |
+| 9 | `qt.ai.data.read` | L1 | 只读 | `data.read` |
+| 10 | `qt.ai.data.refill_basic_equity_and_index` | L2 | 网络+写库 | `data.refill` |
+| 11 | `qt.ai.research.factor_ic_summary` | L1 | 只读 | `research.factor_ic` |
+| 12 | `qt.ai.research.universe_filter` | L1 | 只读 | `research.screen` |
+| 13 | `qt.ai.research.price_predicate` | L1 | 只读 | `research.screen`（有阈值） |
+| 14 | `qt.ai.research.project_universe` | L1 | 只读 | `research.screen` |
+| 15 | `qt.ai.research.screen_stocks` | 遗留 L2 | — | **菜谱不再出图**（负例） |
+| 16 | `qt.ai.backtest.run_builtin` | L2 | 写 trade_log / 曲线 | `backtest.builtin`；builder 可选末步 |
+| 17 | `qt.ai.insight.summarize_backtest` | L3 | 只读 | `insight.last_backtest`；P0 第二步 |
+| 18 | `qt.ai.optimize.run_builtin` | L2 | 重计算 | `optimize.builtin` |
+| 19 | `qt.ai.strategy.spec_from_nl` | L2 | 只读 | `strategy.builder` |
+| 20 | `qt.ai.strategy.codegen_hybrid` | L2 | 写 `.py` | `strategy.builder` |
+| 21 | `qt.ai.strategy.sanity_check` | L2 | 只读 | `strategy.builder` |
+| 22 | `qt.ai.operator.build_from_spec` | L2 | 内存组装 | `strategy.builder` |
+| 23 | `qt.ai.pipeline.live_trade_plan_only` | L2 | 只读清单 | `live.plan_only` |
+| 24 | `qt.ai.system.fallback` | 系统 | 只读 | 系统出口 / 缺槽 |
 
 门禁插步（token / 缺表）**不是** Job。
 
@@ -85,6 +87,7 @@
 ## 4. 不要用 / 不进 0.2.0
 
 - **不要用**：`qt.ai.research.screen_stocks`（选股已拆 L1 DAG）。
+- **已移出默认注册表**：`qt.ai.data.summary_kline`、`qt.ai.visual.export_kline`（0.4 A0 改由 `data.kline` + `hp.*` 菜谱出图）。
 - **不进 0.2.0**：申万 / PE DSL、无界下载、HP 2.6+ 深 skill、导入任意 `.py`、多模板 codegen 族、场景三、长文本 ingest、全文档 KB 镜像。
 - **Beginner 不做**：`live.plan_only`、`unsafe`、`not_supported`、`open`、无阈值枚举筛股（见 QAI5 `E-SCR-EN`）、Mode-D 改写（E.8 语料）。
 
