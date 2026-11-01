@@ -49,6 +49,17 @@ Enter 换行。Ctrl 或 ⌘ 加 Enter 发送。确认计划是可选快捷，不
 
 Composer 底部右侧：回形针与圆形向上箭头发送按钮（约与 Mode / Provider 徽章同高）。发送钮颜色跟模式：Ask 绿、Plan 黄、Agent 白（浅色主题用同色系深底）。已挂附件时，在输入框上方显示文件芯片（类型图标、文件名、× 移除）。拖文件到 Composer 区域时边框虚线高亮。
 
-## 5. 不做
+## 5. 交互卡（澄清 / Plan ready）
+
+Session 栏里两张活交互卡共用 `ix-card` 壳：固定高度 260px、横贯内容区宽度、不可拖拽缩放。结构为标题栏 / 可滚动中部 / 底栏。澄清卡与 Plan ready（含改参数）共用同一套字号与行距：正文 13px、`line-height: 1.55`（与 Result `.chat-md` 一致），段落 / 行间距 `0.6em`；标题栏与底栏等高。卡内不再沿用全局 `.warn` 的 12px。
+
+- **标题栏**：左标题；澄清卡右侧有 `< X of N >` 翻页。Plan ready 右侧留空。
+- **底栏**：靠右。最右是实心强调色主按钮（Submit / Confirm / Apply）。其余是无边框纯文字短标签（End、Back、View、Change、Cancel），悬停 `title` 显示全称。Cancel 不用错误色。
+- **澄清卡中部**：问题正文；其下为 hint / 拒因；选项按行冠 A/B/C，字母在小方框里，选中只填满该方框。末行永远是开放输入（下一字母 +「请输入 / Please input...」），无边框，行高与其它选项一致。字母不进提交值。
+- **Plan ready 中部**：Job / plan id / hint；改参数时为带边框的槽位表单。
+
+Ask / Result 无边气泡、过程折叠、产物栏不套此壳。
+
+## 6. 不做
 
 不做移动端折叠。不绑定 AG Grid 或 Monaco。视觉可以再改，编排仍是薄 HTTP 和同一套数据。

@@ -69,7 +69,18 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertIn("shares", missing)
         self.assertIn("htype", missing)
         self.assertNotIn("qt.ai.research.factor_ic_summary", names)
-        self.assertTrue((plan.assumptions or {}).get("clarification"))
+        clar = (plan.assumptions or {}).get("clarification") or {}
+        self.assertTrue(clar)
+        pending = [item for item in (clar.get("pending") or []) if isinstance(item, dict)]
+        pending_names = [str(item.get("name") or "") for item in pending]
+        print(" pending names:", pending_names)
+        print(" step_index:", clar.get("step_index"), "step_total:", clar.get("step_total"))
+        self.assertGreaterEqual(len(pending), 2)
+        self.assertEqual(int(clar.get("step_index") or 0), 1)
+        self.assertEqual(int(clar.get("step_total") or 0), len(pending))
+        self.assertNotIn("options", clar)
+        self.assertNotIn("X of N", str(clar.get("confirm_prompt") or ""))
+        self.assertNotIn("N more after this", str(clar.get("confirm_prompt") or ""))
         self.assertFalse((plan.assumptions or {}).get("design_loop"))
 
     def test_factor_ic_unknown_column_clarifies(self) -> None:
@@ -464,6 +475,69 @@ class TestAiOpenWorkflow(unittest.TestCase):
             self.assertIn("hypothesis: short-term reversal on hs300", users)
             self.assertFalse(hasattr(state, "active_design"))
             self.assertNotIn("active_design", state.to_dict())
+
+
+class TestAiClarifyEmitS1(unittest.TestCase):
+    """Path A S1：出卡载荷 step 字段、per-step options、无顶层 options。"""
+
+    def test_finalize_truncates_options_and_sets_steps(self) -> None:
+        """options>5 只留前 5，并写 step_index/total；去掉顶层 options。"""
+
+        print("\n[TestAiClarifyEmitS1] finalize truncates options")
+        from qteasy_ai.slot_decl import finalize_clarification_for_emit
+
+        opts = [{"id": f"id{i}", "label": f"L{i}"} for i in range(7)]
+        blob = finalize_clarification_for_emit(
+            {
+                "confirm_prompt": "Pick one.",
+                "options": [{"id": "top", "label": "Top"}],
+                "pending": [
+                    {"name": "strategy_id", "hint": "Pick.", "options": opts},
+                    {"name": "start", "hint": "YYYYMMDD."},
+                ],
+            }
+        )
+        pending = blob["pending"]
+        print(" step:", blob.get("step_index"), blob.get("step_total"))
+        print(" strategy options:", [item.get("id") for item in pending[0].get("options") or []])
+        print(" hint:", pending[0].get("hint"))
+        print(" top options key:", "options" in blob)
+        self.assertEqual(blob["step_index"], 1)
+        self.assertEqual(blob["step_total"], 2)
+        self.assertNotIn("options", blob)
+        self.assertEqual(len(pending[0]["options"]), 5)
+        self.assertEqual(pending[0]["options"][0]["id"], "id0")
+        self.assertEqual(pending[0]["options"][-1]["id"], "id4")
+        self.assertIn("open input", str(pending[0].get("hint") or "").lower())
+        self.assertNotIn("options", pending[1])
+
+    def test_strategy_clarify_options_on_pending_no_type_skip(self) -> None:
+        """策略澄清：chips 在 pending 项上；正文无 type skip；无顶层 options。"""
+
+        print("\n[TestAiClarifyEmitS1] strategy clarify emit shape")
+        from qteasy_ai.app import build_default_registry
+
+        plan = Planner(build_default_registry(), env_facts={}).build_plan(
+            "请帮我列出内置交易策略的参数",
+            mode="plan",
+        )
+        clar = (plan.assumptions or {}).get("clarification") or {}
+        pending = [item for item in (clar.get("pending") or []) if isinstance(item, dict)]
+        print(" intent:", plan.planner_trace.get("intent_job"))
+        print(" pending:", pending)
+        print(" prompt:", clar.get("confirm_prompt"))
+        print(" step:", clar.get("step_index"), clar.get("step_total"))
+        self.assertTrue(clar)
+        self.assertNotIn("options", clar)
+        self.assertNotIn("type skip", str(clar.get("confirm_prompt") or "").lower())
+        strategy = next((item for item in pending if item.get("name") == "strategy_id"), None)
+        self.assertIsNotNone(strategy)
+        options = list((strategy or {}).get("options") or [])
+        print(" options:", [item.get("id") for item in options])
+        self.assertLessEqual(len(options), 5)
+        self.assertTrue(any(str(item.get("id") or "") == "macd" for item in options))
+        self.assertEqual(int(clar.get("step_index") or 0), 1)
+        self.assertEqual(int(clar.get("step_total") or 0), len(pending))
 
 
 if __name__ == "__main__":

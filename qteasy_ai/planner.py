@@ -34,7 +34,11 @@ from .intents.recipes import compose_recipe
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
-from .slot_decl import clarification_prompt, interpret_declared_slots
+from .slot_decl import (
+    clarification_prompt,
+    finalize_clarification_for_emit,
+    interpret_declared_slots,
+)
 
 
 class RuleValidator:
@@ -307,9 +311,11 @@ class Planner:
             assumptions["input_sources"] = input_sources
         missing = self._required_missing(decision.job, steps, session)
         if missing:
-            assumptions["clarification"] = self._factor_ic_clarification(
-                self._session_clarification(user_query, missing),
-                steps,
+            assumptions["clarification"] = finalize_clarification_for_emit(
+                self._factor_ic_clarification(
+                    self._session_clarification(user_query, missing),
+                    steps,
+                )
             )
             assumptions["session_missing"] = missing
         intent_flags = dict(decision.flags or {})
@@ -615,27 +621,28 @@ class Planner:
 
     @staticmethod
     def _session_clarification(query: str, missing: List[str]) -> Dict[str, Any]:
-        """结构化澄清载荷（英文用户文案）。"""
+        """结构化澄清载荷（英文用户文案）。
 
-        pending = [{"name": name, "hint": f"Please provide {name}."} for name in missing]
-        options: List[Dict[str, str]] = []
+        芯片挂在对应 ``pending`` 项的 ``options``；出卡前再经
+        ``finalize_clarification_for_emit`` 截断并写 step 字段。
+        """
+
+        strategy_ids = ("macd", "dma", "bband", "rsi", "kdj")
+        pending: List[Dict[str, Any]] = []
+        for name in missing:
+            row: Dict[str, Any] = {"name": name, "hint": f"Please provide {name}."}
+            if name == "strategy_id":
+                row["options"] = [{"id": sid, "label": sid} for sid in strategy_ids]
+            pending.append(row)
         if "strategy_id" in missing:
-            for sid in ("macd", "dma", "bband", "rsi", "kdj"):
-                options.append({"id": sid, "label": sid})
-            prompt = (
-                "Which built-in strategy? Reply with an id such as macd, "
-                "or type skip to end this question."
-            )
+            prompt = "Which built-in strategy? Reply with an id such as macd."
         else:
             prompt = "Reply with the missing fields, or say yes if the restatement is correct."
-        blob: Dict[str, Any] = {
+        return {
             "restatement": f"You asked: {query}",
             "pending": pending,
             "confirm_prompt": prompt,
         }
-        if options:
-            blob["options"] = options
-        return blob
 
     @staticmethod
     def _factor_ic_clarification(blob: Dict[str, Any], steps: List[ToolStep]) -> Dict[str, Any]:

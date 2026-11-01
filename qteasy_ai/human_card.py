@@ -338,10 +338,13 @@ def project_human_cards(
     if clar:
         text = str(clar.get("confirm_prompt") or clar.get("restatement") or "Clarification required.").strip()
         pending = list(clar.get("pending") or []) if isinstance(clar.get("pending"), list) else []
-        options = list(clar.get("options") or []) if isinstance(clar.get("options"), list) else []
         blob = dict(clar)
         blob["pending"] = pending
-        blob["options"] = options
+        blob.pop("options", None)
+        if "step_total" not in blob:
+            blob["step_total"] = len(pending)
+        if "step_index" not in blob:
+            blob["step_index"] = 1 if pending else 0
         plan_id = str(plan.get("plan_id") or raw.get("plan_id") or "")
         if plan_id:
             blob["plan_id"] = plan_id
@@ -446,6 +449,20 @@ _CARD_SYSTEM_PROMPT = (
     "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
     "Output the rewritten card text only."
 )
+_CLARIFY_OPTIONS_SYSTEM_PROMPT = (
+    "Rewrite this qteasy-ai clarification card into Simplified Chinese. "
+    "The input has TEXT and LABELS sections. LABELS lines are option_id|label. "
+    "Change only tone and language of the card text and of each label. "
+    "Keep every option id exactly as written. Do not add, drop, or rename option ids. "
+    "Keep every qt.ai skill id, plan_id, error code, parameter, and number exactly as written. "
+    "Do not add steps, returns, drawdowns, hit counts, or any number that is not already present. "
+    "Output exactly two sections:\n"
+    "TEXT:\n"
+    "<rewritten card text>\n"
+    "LABELS:\n"
+    "<option_id>|<rewritten label>\n"
+    "with one LABELS line per input option, same ids, same order."
+)
 _RESULT_SYSTEM_PROMPT = (
     "Rewrite this qteasy-ai result card into Simplified Chinese. "
     "Keep the sentences. Translate the wording, not the facts. "
@@ -492,8 +509,9 @@ def polish_human_cards(
 ) -> List[Dict[str, Any]]:
     """在确定性英文卡之上按语气改写。未配置模型或问句不含中文时原样返回。
 
-    只改 ``clarify`` / ``plan_ready`` / ``error`` / ``result`` 的 ``text``。
-    校验失败、模型报错或空回复时保留该卡英文。``payload`` 不改。
+    改 ``clarify`` / ``plan_ready`` / ``error`` / ``result`` 的 ``text``。
+    ``clarify`` 另可改 ``pending[i].options[].label``；禁止改 ``id`` / ``pending[].name`` /
+    数值；失败整卡回滚为英文。其余 kind 的 ``payload`` 不改。
     result 只读 ``payload.next_mode``：``open`` 时允许改写最后一句 Next，``job`` 只翻译。
 
     Parameters
@@ -528,6 +546,14 @@ def polish_human_cards(
             out.append(item)
             continue
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if kind == "clarify":
+            polished = _polish_clarify_card(
+                item,
+                provider=provider,
+                identity_dir=identity_dir,
+            )
+            out.append(polished)
+            continue
         rewritten = _rewrite_card_text(
             provider,
             text,
@@ -543,6 +569,201 @@ def polish_human_cards(
             continue
         out.append(item)
     return out
+
+
+def _clarify_option_rows(payload: Dict[str, Any]) -> List[Tuple[str, str, Dict[str, Any], int, int]]:
+    """收集 clarify pending 上的 options，返回 (id, label, opt_dict, pending_idx, opt_idx)。"""
+
+    rows: List[Tuple[str, str, Dict[str, Any], int, int]] = []
+    pending = payload.get("pending") if isinstance(payload.get("pending"), list) else []
+    for p_idx, item in enumerate(pending):
+        if not isinstance(item, dict):
+            continue
+        options = item.get("options") if isinstance(item.get("options"), list) else []
+        for o_idx, opt in enumerate(options):
+            if not isinstance(opt, dict):
+                continue
+            oid = str(opt.get("id") or "").strip()
+            label = str(opt.get("label") or "").strip()
+            if not oid:
+                continue
+            rows.append((oid, label, opt, p_idx, o_idx))
+    return rows
+
+
+def _format_clarify_polish_prompt(text: str, option_rows: Sequence[Tuple[str, str, Dict[str, Any], int, int]]) -> str:
+    """拼 TEXT + LABELS 输入给 Provider。"""
+
+    lines = ["TEXT:", str(text or "").rstrip(), "", "LABELS:"]
+    for oid, label, _opt, _p, _o in option_rows:
+        lines.append(f"{oid}|{label}")
+    return "\n".join(lines)
+
+
+def _parse_clarify_polish_reply(
+    raw: str,
+    *,
+    expected_ids: Sequence[str],
+) -> Optional[Tuple[str, Dict[str, str]]]:
+    """解析 TEXT:/LABELS: 两段回复。失败返回 None。"""
+
+    body = str(raw or "").strip()
+    fenced = _FENCE_RE.match(body)
+    if fenced:
+        body = str(fenced.group(1) or "").strip()
+    if not body:
+        return None
+    upper = body.upper()
+    text_mark = upper.find("TEXT:")
+    labels_mark = upper.find("LABELS:")
+    if text_mark < 0 or labels_mark < 0 or labels_mark <= text_mark:
+        return None
+    text_body = body[text_mark + len("TEXT:") : labels_mark].strip()
+    labels_body = body[labels_mark + len("LABELS:") :].strip()
+    if not text_body:
+        return None
+    labels: Dict[str, str] = {}
+    for line in labels_body.splitlines():
+        row = str(line or "").strip()
+        if not row or "|" not in row:
+            continue
+        oid, _, label = row.partition("|")
+        oid = oid.strip()
+        label = label.strip()
+        if not oid or not label:
+            return None
+        if oid in labels:
+            return None
+        labels[oid] = label
+    expected = [str(item) for item in expected_ids]
+    if set(labels.keys()) != set(expected) or len(labels) != len(expected):
+        return None
+    return text_body, labels
+
+
+def _option_label_rewrite_ok(source_label: str, rewritten_label: str) -> bool:
+    """单条 option label：非空且数字集合不变。"""
+
+    body = str(rewritten_label or "").strip()
+    if not body:
+        return False
+    if set(_NUMBER_RE.findall(body)) != set(_NUMBER_RE.findall(str(source_label or ""))):
+        return False
+    return True
+
+
+def _apply_clarify_option_labels(
+    payload: Dict[str, Any],
+    labels_by_id: Dict[str, str],
+) -> Optional[Dict[str, Any]]:
+    """深拷贝 pending，只改匹配 id 的 label。冻结 id/name；失败返回 None。"""
+
+    pending = payload.get("pending") if isinstance(payload.get("pending"), list) else []
+    new_pending: List[Any] = []
+    for item in pending:
+        if not isinstance(item, dict):
+            new_pending.append(item)
+            continue
+        row = dict(item)
+        name = row.get("name")
+        options = row.get("options") if isinstance(row.get("options"), list) else None
+        if options is None:
+            new_pending.append(row)
+            continue
+        new_opts: List[Any] = []
+        for opt in options:
+            if not isinstance(opt, dict):
+                new_opts.append(opt)
+                continue
+            cloned = dict(opt)
+            oid = str(cloned.get("id") or "").strip()
+            if oid and oid in labels_by_id:
+                src_label = str(cloned.get("label") or "")
+                new_label = labels_by_id[oid]
+                if not _option_label_rewrite_ok(src_label, new_label):
+                    return None
+                cloned["label"] = new_label
+                if str(cloned.get("id") or "").strip() != oid:
+                    return None
+            new_opts.append(cloned)
+        row["options"] = new_opts
+        if row.get("name") != name:
+            return None
+        new_pending.append(row)
+    out = dict(payload)
+    out["pending"] = new_pending
+    return out
+
+
+def _polish_clarify_card(
+    item: Dict[str, Any],
+    *,
+    provider: Any,
+    identity_dir: Any = None,
+) -> Dict[str, Any]:
+    """润色一张 clarify：text + options[].label；任一失败整卡回滚。"""
+
+    text = str(item.get("text") or "")
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    option_rows = _clarify_option_rows(payload)
+    if not option_rows:
+        rewritten = _rewrite_card_text(
+            provider,
+            text,
+            kind="clarify",
+            identity_dir=identity_dir,
+        )
+        if rewritten and _card_rewrite_ok(text, rewritten, kind="clarify"):
+            cloned = dict(item)
+            cloned["payload"] = dict(payload)
+            cloned["text"] = rewritten
+            return cloned
+        return item
+
+    expected_ids = [oid for oid, _label, _opt, _p, _o in option_rows]
+    prompt_body = _format_clarify_polish_prompt(text, option_rows)
+    try:
+        raw = provider.chat(
+            prompt_body,
+            system_prompt=prefix_system_prompt(_CLARIFY_OPTIONS_SYSTEM_PROMPT, identity_dir),
+        )
+    except Exception:
+        return item
+    parsed = _parse_clarify_polish_reply(str(raw or ""), expected_ids=expected_ids)
+    if parsed is None:
+        return item
+    new_text, labels_by_id = parsed
+    if not _card_rewrite_ok(text, new_text, kind="clarify"):
+        return item
+    for oid, src_label, _opt, _p, _o in option_rows:
+        if not _option_label_rewrite_ok(src_label, labels_by_id[oid]):
+            return item
+    new_payload = _apply_clarify_option_labels(payload, labels_by_id)
+    if new_payload is None:
+        return item
+    # 冻结 pending[].name 与 options[].id
+    src_pending = payload.get("pending") if isinstance(payload.get("pending"), list) else []
+    dst_pending = new_payload.get("pending") if isinstance(new_payload.get("pending"), list) else []
+    if len(src_pending) != len(dst_pending):
+        return item
+    for src_item, dst_item in zip(src_pending, dst_pending):
+        if not isinstance(src_item, dict) or not isinstance(dst_item, dict):
+            continue
+        if src_item.get("name") != dst_item.get("name"):
+            return item
+        src_opts = src_item.get("options") if isinstance(src_item.get("options"), list) else []
+        dst_opts = dst_item.get("options") if isinstance(dst_item.get("options"), list) else []
+        if len(src_opts) != len(dst_opts):
+            return item
+        for s_opt, d_opt in zip(src_opts, dst_opts):
+            if not isinstance(s_opt, dict) or not isinstance(d_opt, dict):
+                continue
+            if str(s_opt.get("id") or "") != str(d_opt.get("id") or ""):
+                return item
+    cloned = dict(item)
+    cloned["text"] = new_text
+    cloned["payload"] = new_payload
+    return cloned
 
 
 def _rewrite_card_text(
