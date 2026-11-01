@@ -142,21 +142,9 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             planner._make_step(step_id="step_2", skill_name="qt.ai.env.overview_tables", inputs={}),
         ]
     if job == "data.summary":
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.data.summary_kline",
-                inputs=planner._market_inputs(query),
-            )
-        ]
+        return _summary_steps(planner, query)
     if job == "data.export":
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.visual.export_kline",
-                inputs=planner._export_kline_inputs(query),
-            )
-        ]
+        return _export_steps(planner, query)
     if job == "data.refill":
         steps = planner._infer_refill_steps(query=query, q_lower=q_lower, skip_query_guard=True)
         return steps if steps is not None else _not_supported(planner, query)
@@ -347,6 +335,50 @@ def _extract_dtype_names(query: str) -> str:
         if name in lower:
             return name
     return ""
+
+
+def _summary_steps(planner: "Planner", query: str) -> List["ToolStep"]:
+    """K 线摘要：取面板、滚动波动率、结构行数。"""
+
+    market = planner._market_inputs(query)
+    return [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.kline",
+            inputs=market,
+        ),
+        planner._make_step(
+            step_id="step_2",
+            skill_name="qt.ai.hp.volatility",
+            inputs={},
+            depends_on=["step_1"],
+        ),
+        planner._make_step(
+            step_id="step_3",
+            skill_name="qt.ai.hp.describe",
+            inputs={"view": "shape"},
+            depends_on=["step_1"],
+        ),
+    ]
+
+
+def _export_steps(planner: "Planner", query: str) -> List["ToolStep"]:
+    """K 线导出：取面板后画一页静态图。不传 plot_type。"""
+
+    market = planner._market_inputs(query)
+    return [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.kline",
+            inputs=market,
+        ),
+        planner._make_step(
+            step_id="step_2",
+            skill_name="qt.ai.hp.plot",
+            inputs={},
+            depends_on=["step_1"],
+        ),
+    ]
 
 
 def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolStep"]:

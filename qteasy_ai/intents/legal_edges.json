@@ -3,7 +3,9 @@
   "allowed_skills": [
     "qt.ai.strategy_meta.list",
     "qt.ai.strategy_meta.get",
-    "qt.ai.data.summary_kline",
+    "qt.ai.data.kline",
+    "qt.ai.hp.describe",
+    "qt.ai.hp.volatility",
     "qt.ai.data.read",
     "qt.ai.env.check_tushare",
     "qt.ai.env.overview_tables",
@@ -18,6 +20,7 @@
     "qt.ai.optimize.run_builtin",
     "qt.ai.strategy.codegen_hybrid",
     "qt.ai.pipeline.live_trade_plan_only",
-    "qt.ai.visual.export_kline"
+    "qt.ai.visual.export_kline",
+    "qt.ai.hp.plot"
   ]
 }

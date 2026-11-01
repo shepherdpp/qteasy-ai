@@ -36,15 +36,15 @@
       "query": "show summary of 000300.SH from 20240101 to 20241231",
       "mode": "plan",
       "also_run": true,
-      "expected_skill": "qt.ai.data.summary_kline",
-      "notes": "run metrics must include n_trading_days and volatility_daily"
+      "expected_skill": "qt.ai.data.kline",
+      "notes": "first step is data.kline; volatility and row count are the following atoms"
     },
     {
       "id": "B2",
       "group": "G1",
       "query": "kline summary of 000300.SH",
       "mode": "plan",
-      "expected_skill": "qt.ai.data.summary_kline",
+      "expected_skill": "qt.ai.data.kline",
       "notes": "must NOT route to visual.export_kline"
     },
     {
@@ -52,7 +52,7 @@
       "group": "G1",
       "query": "沪深300今年波动率和交易天数 000300.SH",
       "mode": "plan",
-      "expected_skill": "qt.ai.data.summary_kline"
+      "expected_skill": "qt.ai.data.kline"
     },
     {
       "id": "C1",
@@ -60,7 +60,7 @@
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
       "also_run": true,
-      "expected_skill": "qt.ai.visual.export_kline",
+      "expected_skill": "qt.ai.data.kline",
       "notes": "plan must not write png; run must return artifact path"
     },
     {
@@ -202,7 +202,7 @@
       "query": "summary 999999.SH from 20240101 to 20240110",
       "mode": "run",
       "expected_error_codes": [
-        "KLINE_SUMMARY_FAILED"
+        "KLINE_FETCH_FAILED"
       ]
     },
     {

@@ -124,6 +124,8 @@ def _json_safe(value: Any) -> Any:
         return value
     if value is None or isinstance(value, (str, int, bool)):
         return value
+    if type(value).__name__ == "HistoryPanel":
+        return {"omitted": "history_panel"}
     if isinstance(value, datetime):
         return value.replace(microsecond=0).isoformat() + ("Z" if value.tzinfo is None else "")
     if isinstance(value, date):

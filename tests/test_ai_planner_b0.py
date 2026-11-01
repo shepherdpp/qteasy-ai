@@ -52,39 +52,58 @@ class TestAiPlannerB0(unittest.TestCase):
             query="导出 000300.SH 折线",
             q_lower="导出 000300.SH 折线",
         )
-        print(" candle inputs:", candle.steps[0].inputs)
-        print(" line inputs:", line.steps[0].inputs)
-        print(" legacy candle:", legacy_candle[0].inputs)
-        print(" legacy line:", legacy_line[0].inputs)
+        print(" candle skills:", [step.skill_name for step in candle.steps])
+        print(" candle inputs:", [step.inputs for step in candle.steps])
+        print(" line skills:", [step.skill_name for step in line.steps])
+        print(" legacy line:", [step.skill_name for step in legacy_line], [step.inputs for step in legacy_line])
 
-        self.assertEqual(candle.steps[0].skill_name, "qt.ai.visual.export_kline")
-        self.assertNotIn("plot_type", candle.steps[0].inputs)
-        self.assertEqual(line.steps[0].skill_name, "qt.ai.visual.export_kline")
-        self.assertEqual(line.steps[0].inputs.get("plot_type"), "line")
-        self.assertNotIn("plot_type", legacy_candle[0].inputs)
-        self.assertEqual(legacy_line[0].skill_name, "qt.ai.visual.export_kline")
-        self.assertEqual(legacy_line[0].inputs.get("plot_type"), "line")
+        self.assertEqual(
+            [step.skill_name for step in candle.steps],
+            ["qt.ai.data.kline", "qt.ai.hp.plot"],
+        )
+        self.assertTrue(all("plot_type" not in step.inputs for step in candle.steps))
+        self.assertEqual(
+            [step.skill_name for step in line.steps],
+            ["qt.ai.data.kline", "qt.ai.hp.plot"],
+        )
+        self.assertTrue(all("plot_type" not in step.inputs for step in line.steps))
+        self.assertEqual(
+            [step.skill_name for step in legacy_candle],
+            ["qt.ai.data.kline", "qt.ai.hp.plot"],
+        )
+        self.assertEqual(
+            [step.skill_name for step in legacy_line],
+            ["qt.ai.data.kline", "qt.ai.hp.plot"],
+        )
+        self.assertTrue(all("plot_type" not in step.inputs for step in legacy_line))
 
     def test_kline_summary_routes_to_summary_not_export(self) -> None:
-        """kline summary 优先路由到 summary_kline（修误路由）。"""
+        """kline summary 走取数、波动率和结构摘要，不落到导出。"""
 
         print("\n[TestAiPlannerB0] kline summary routing")
         planner = Planner(self.registry, env_facts={})
         plan = planner.build_plan("kline summary of 000300.SH", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
         print(" skills:", skill_names)
-        self.assertEqual(skill_names, ["qt.ai.data.summary_kline"])
+        self.assertEqual(
+            skill_names,
+            ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
+        )
         self.assertEqual(plan.steps[0].inputs.get("shares"), "000300.SH")
 
-    def test_empty_env_facts_summary_single_step(self) -> None:
-        """空 env_facts 时 summary 问法仍单步（不破坏语料）。"""
+    def test_empty_env_facts_summary_has_no_table_gate(self) -> None:
+        """空 env_facts 时 summary 不前置 overview。"""
 
-        print("\n[TestAiPlannerB0] empty env_facts single summary")
+        print("\n[TestAiPlannerB0] empty env_facts summary chain")
         planner = Planner(self.registry, env_facts={})
         plan = planner.build_plan("show summary of 000300.SH from 20240101 to 20241231", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
         print(" skills:", skill_names)
-        self.assertEqual(skill_names, ["qt.ai.data.summary_kline"])
+        self.assertEqual(
+            skill_names,
+            ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
+        )
+        self.assertNotIn("qt.ai.env.overview_tables", skill_names)
 
     def test_missing_table_gate_prepends_overview(self) -> None:
         """已记录 index_daily.exists=False 时 summary 前置 overview_tables。"""
@@ -102,7 +121,10 @@ class TestAiPlannerB0(unittest.TestCase):
         print(" skills:", skill_names)
         self.assertGreaterEqual(len(plan.steps), 2)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.env.overview_tables")
-        self.assertEqual(plan.steps[-1].skill_name, "qt.ai.data.summary_kline")
+        self.assertIn("qt.ai.data.kline", skill_names)
+        self.assertEqual(plan.steps[-1].skill_name, "qt.ai.hp.describe")
+        kline = next(step for step in plan.steps if step.skill_name == "qt.ai.data.kline")
+        self.assertEqual(plan.steps[-1].depends_on, [kline.step_id])
 
     def test_run_merges_env_facts_after_guide_execute(self) -> None:
         """execute 成功后 Assistant 将 guide 探针 merge 进 env_facts。"""

@@ -83,10 +83,13 @@ from .side_effects import plan_has_high_side_effect
 from .skills import (
     build_backtest_run_skill,
     build_check_tushare_skill,
+    build_data_kline_skill,
     build_data_read_skill,
     build_data_refill_skill,
-    build_data_summary_skill,
     build_factor_ic_summary_skill,
+    build_hp_describe_skill,
+    build_hp_plot_skill,
+    build_hp_volatility_skill,
     build_insight_backtest_skill,
     build_live_trade_plan_only_skill,
     build_optimize_run_skill,
@@ -102,7 +105,6 @@ from .skills import (
     build_strategy_spec_from_nl_skill,
     build_system_fallback_skill,
     build_universe_filter_skill,
-    build_visual_export_skill,
 )
 
 
@@ -229,9 +231,11 @@ def build_default_registry() -> SkillRegistry:
     for builder in [
         build_strategy_meta_list_skill,
         build_strategy_meta_get_skill,
-        build_data_summary_skill,
+        build_data_kline_skill,
+        build_hp_volatility_skill,
+        build_hp_describe_skill,
+        build_hp_plot_skill,
         build_data_read_skill,
-        build_visual_export_skill,
         build_system_fallback_skill,
         build_check_tushare_skill,
         build_overview_tables_skill,

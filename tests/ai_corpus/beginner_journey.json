@@ -93,7 +93,7 @@
       "mode": "plan",
       "query": "kline summary of 000300.SH",
       "expected_job": "data.summary",
-      "expected_skills": ["qt.ai.data.summary_kline"],
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
       "tutorial": "docs/source/tutorials/2.4-historypanel-basics.md",
       "run_policy": "plan_only",
       "notes": "gold B2"
@@ -104,7 +104,7 @@
       "mode": "plan",
       "query": "export kline of 000300.SH to png",
       "expected_job": "data.export",
-      "expected_skills": ["qt.ai.visual.export_kline"],
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.plot"],
       "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
       "run_policy": "plan_only",
       "notes": "gold C1"

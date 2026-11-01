@@ -331,7 +331,12 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             )
             continue
-        if skill in {"qt.ai.data.read", "qt.ai.data.summary_kline"} or (
+        if skill in {
+            "qt.ai.data.read",
+            "qt.ai.data.summary_kline",
+            "qt.ai.hp.describe",
+            "qt.ai.hp.volatility",
+        } or (
             isinstance(result.get("data_summary"), dict)
             and skill.startswith("qt.ai.data.")
             and "export" not in skill
@@ -500,7 +505,7 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             continue
         image_art = _image_artifact(arts)
-        if image_art is not None or skill == "qt.ai.visual.export_kline":
+        if image_art is not None or skill in {"qt.ai.visual.export_kline", "qt.ai.hp.plot"}:
             path = str((image_art or {}).get("path") or "")
             warnings = [] if path else ["Chart file path is missing."]
             items.append(

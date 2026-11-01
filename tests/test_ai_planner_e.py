@@ -49,7 +49,7 @@ class TestAiPlannerE(unittest.TestCase):
                     {
                         "steps": [
                             {"skill_name": "qt.ai.strategy_meta.list", "inputs": {}},
-                            {"skill_name": "qt.ai.data.summary_kline", "inputs": {"shares": "000300.SH"}},
+                            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
                         ]
                     }
                 ),
@@ -62,7 +62,7 @@ class TestAiPlannerE(unittest.TestCase):
         print(" skills:", names, "intent:", plan.planner_trace.get("intent_job"))
         print(" prompts:", len(fake.prompts))
         self.assertEqual(plan.planner_trace.get("intent_job"), "open")
-        self.assertEqual(names, ["qt.ai.strategy_meta.list", "qt.ai.data.summary_kline"])
+        self.assertEqual(names, ["qt.ai.strategy_meta.list", "qt.ai.data.kline"])
         self.assertGreaterEqual(len(fake.prompts), 2)
 
     def test_open_drops_unknown_input_keys(self) -> None:

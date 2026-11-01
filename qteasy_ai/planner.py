@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .identity import prefix_system_prompt
 from .intent_engine import IntentEngine, IntentDecision
-from .intents.recipes import compose_recipe
+from .intents.recipes import _compose_screen, _export_steps, _summary_steps, compose_recipe
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
@@ -408,22 +408,6 @@ class Planner:
 
         return self._extract_market_inputs(query, overrides=getattr(self, "_market_overrides", None))
 
-    @staticmethod
-    def _query_wants_close_curve(query: str) -> bool:
-        """问句是否明确要收盘曲线，而不是蜡烛图。"""
-
-        text = str(query or "").lower()
-        phrases = ("close curve", "close line", "line chart", "收盘曲线", "折线")
-        return any(phrase in text for phrase in phrases)
-
-    def _export_kline_inputs(self, query: str) -> Dict[str, Any]:
-        """K 线导出槽。未点名收盘曲线时不传 plot_type，技能默认蜡烛图。"""
-
-        inputs = dict(self._market_inputs(query))
-        if self._query_wants_close_curve(query):
-            inputs["plot_type"] = "line"
-        return inputs
-
     def _overlay_session_slots(self, steps: List[ToolStep], session: Any) -> List[ToolStep]:
         """用 session 槽覆盖步骤输入；补齐后可把 refill 澄清换成真步骤。"""
 
@@ -662,9 +646,11 @@ class Planner:
 
     _DATA_INTENT_SKILLS = {
         "qt.ai.data.summary_kline",
+        "qt.ai.data.kline",
         "qt.ai.data.read",
         "qt.ai.research.factor_ic_summary",
         "qt.ai.visual.export_kline",
+        "qt.ai.hp.plot",
         "qt.ai.data.refill_basic_equity_and_index",
         "qt.ai.research.universe_filter",
         "qt.ai.research.price_predicate",
@@ -1109,20 +1095,10 @@ class Planner:
             return self._factor_ic_steps(query)
 
         if self._is_summary_query(q_lower):
-            primary = self._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.data.summary_kline",
-                inputs=self._market_inputs(query),
-            )
-            return [primary]
+            return _summary_steps(self, query)
 
         if any(word in q_lower for word in ["kline", "candle", "k线", "绘图", "导出", "png", "export"]):
-            primary = self._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.visual.export_kline",
-                inputs=self._export_kline_inputs(query),
-            )
-            return [primary]
+            return _export_steps(self, query)
 
         return [
             self._make_step(
@@ -1382,53 +1358,11 @@ class Planner:
         return summarize and not launching
 
     def _infer_screen_steps(self, *, query: str, q_lower: str) -> Optional[List[ToolStep]]:
-        """筛股路由：规则抽参；缺阈值/窗口或额外条件则澄清。"""
+        """筛股路由与闭合菜谱同一份三原子步骤表。"""
 
         if not self._is_screen_query(q_lower):
             return None
-        extra = []
-        for token in ("市盈率", "市值", "成交量", "换手", "申万", " pe", "pe/", "pb"):
-            if token in q_lower:
-                extra.append(token.strip())
-        if extra:
-            return [
-                self._make_step(
-                    step_id="step_1",
-                    skill_name="qt.ai.system.fallback",
-                    inputs=self._fallback_step_inputs(
-                        query=query,
-                        action="clarify_required",
-                        reason="screen_extra_conditions_not_supported",
-                        hint="PE/market-cap/volume/formula filters are not supported in this stage.",
-                        missing_info="supported_screen_conditions",
-                        next_step="Use lookback + drawdown/gain threshold + one exact Tushare industry name.",
-                        details={"unsupported": extra},
-                    ),
-                )
-            ]
-        params, missing = self._extract_screen_params(query=query, q_lower=q_lower)
-        if missing:
-            return [
-                self._make_step(
-                    step_id="step_1",
-                    skill_name="qt.ai.system.fallback",
-                    inputs=self._fallback_step_inputs(
-                        query=query,
-                        action="clarify_required",
-                        reason="screen_missing_fields",
-                        hint="Stock screen needs a lookback window and a return threshold.",
-                        missing_info="|".join(missing),
-                        next_step="Example: 过去半年跌幅>20%，行业属于银行.",
-                    ),
-                )
-            ]
-        return [
-            self._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.research.screen_stocks",
-                inputs=params,
-            )
-        ]
+        return _compose_screen(self, query, q_lower)
 
     def _extract_screen_params(self, *, query: str, q_lower: str) -> Tuple[Dict[str, Any], List[str]]:
         """从筛股问法抽取 lookback / metric / threshold / industry。"""

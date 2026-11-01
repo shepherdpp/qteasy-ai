@@ -4,7 +4,7 @@
       "id": "P1",
       "query": "summary 999999.SH from 20240101 to 20240110",
       "expected_error_codes": [
-        "KLINE_SUMMARY_FAILED"
+        "KLINE_FETCH_FAILED"
       ]
     },
     {

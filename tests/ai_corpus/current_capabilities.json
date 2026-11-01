@@ -19,21 +19,21 @@
       "query": "show summary of 000300.SH from 20240101 to 20241231",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.summary_kline"
+      "expected_skill": "qt.ai.data.kline"
     },
     {
       "id": "B2",
       "query": "kline summary of 000300.SH",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.summary_kline"
+      "expected_skill": "qt.ai.data.kline"
     },
     {
       "id": "C1",
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
       "expected_job": "data.export",
-      "expected_skill": "qt.ai.visual.export_kline"
+      "expected_skill": "qt.ai.data.kline"
     },
     {
       "id": "D1",

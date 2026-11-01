@@ -17,7 +17,7 @@ from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState
 from qteasy_ai.skills.data_read import build_data_read_skill
-from qteasy_ai.skills.data_summary import build_data_summary_skill
+from qteasy_ai.skills.data_kline import build_data_kline_skill
 from qteasy_ai.workbench.mapper import classify_artifacts, map_assistant_payload
 
 
@@ -392,14 +392,14 @@ class TestAiWorkbenchDto(unittest.TestCase):
             },
             index=kline_index,
         )
-        _, summary_handler = build_data_summary_skill(get_kline_func=lambda **kwargs: kline.copy())
+        _, summary_handler = build_data_kline_skill(get_kline_func=lambda **kwargs: kline.copy())
         summary_result = summary_handler(shares="000300.SH", freq="d")
         summary_items = classify_artifacts(
             "run_sum",
             [
                 {
                     "step_id": "s1",
-                    "skill_name": "qt.ai.data.summary_kline",
+                    "skill_name": "qt.ai.data.kline",
                     "result": summary_result,
                 }
             ],

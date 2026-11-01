@@ -45,8 +45,8 @@
       "query": "kline summary of 000300.SH",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.summary_kline",
-      "expected_skills": ["qt.ai.data.summary_kline"],
+      "expected_skill": "qt.ai.data.kline",
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
       "notes": "gold B2; G4 pretty must say Dry-run plan (not executed); no successfully/completed"
     },
     {
@@ -55,8 +55,8 @@
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
       "expected_job": "data.export",
-      "expected_skill": "qt.ai.visual.export_kline",
-      "expected_skills": ["qt.ai.visual.export_kline"],
+      "expected_skill": "qt.ai.data.kline",
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.plot"],
       "notes": "gold C1; plan only"
     },
     {
@@ -359,8 +359,8 @@
       "query": "kline summary of 000300.SH",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.summary_kline",
-      "expected_skills": ["qt.ai.data.summary_kline"],
+      "expected_skill": "qt.ai.data.kline",
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
       "notes": "Mode-D lock gold; source=rule even if model vetoes"
     },
     {
