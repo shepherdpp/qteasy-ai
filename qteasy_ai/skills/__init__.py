@@ -20,6 +20,11 @@ from .data_static import build_data_static_skill
 from .datasource_tables import build_table_info_skill, build_table_overview_skill
 from .dtype_find import build_dtype_find_skill
 from .hp_describe import build_hp_describe_skill
+from .hp_indicator import (
+    build_hp_candle_pattern_skill,
+    build_hp_indicator_skill,
+    build_hp_research_preset_skill,
+)
 from .hp_plot import build_hp_plot_skill
 from .hp_shape import (
     build_hp_align_skill,
@@ -101,6 +106,9 @@ __all__ = [
     "build_hp_combine_mask_skill",
     "build_hp_where_skill",
     "build_hp_expr_skill",
+    "build_hp_indicator_skill",
+    "build_hp_candle_pattern_skill",
+    "build_hp_research_preset_skill",
     "build_hp_plot_skill",
     "build_hp_volatility_skill",
     "build_system_fallback_skill",
