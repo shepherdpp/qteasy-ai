@@ -32,6 +32,21 @@ from .hp_shape import (
     build_hp_resample_skill,
     build_hp_slice_skill,
 )
+from .hp_transform import (
+    build_hp_agg_skill,
+    build_hp_combine_mask_skill,
+    build_hp_compare_skill,
+    build_hp_corr_skill,
+    build_hp_diff_skill,
+    build_hp_expr_skill,
+    build_hp_pct_change_skill,
+    build_hp_rank_skill,
+    build_hp_returns_skill,
+    build_hp_rolling_skill,
+    build_hp_shift_skill,
+    build_hp_where_skill,
+    build_hp_zscore_skill,
+)
 from .hp_volatility import build_hp_volatility_skill
 from .env_guide import build_check_tushare_skill, build_overview_tables_skill
 from .insight_backtest import build_insight_backtest_skill
@@ -73,6 +88,19 @@ __all__ = [
     "build_hp_assign_skill",
     "build_hp_align_skill",
     "build_hp_join_skill",
+    "build_hp_returns_skill",
+    "build_hp_shift_skill",
+    "build_hp_diff_skill",
+    "build_hp_pct_change_skill",
+    "build_hp_rank_skill",
+    "build_hp_zscore_skill",
+    "build_hp_rolling_skill",
+    "build_hp_agg_skill",
+    "build_hp_corr_skill",
+    "build_hp_compare_skill",
+    "build_hp_combine_mask_skill",
+    "build_hp_where_skill",
+    "build_hp_expr_skill",
     "build_hp_plot_skill",
     "build_hp_volatility_skill",
     "build_system_fallback_skill",
