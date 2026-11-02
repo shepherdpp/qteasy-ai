@@ -49,7 +49,10 @@
       "expected_skill": "qt.ai.env.check_tushare",
       "expected_skills": [
         "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info"
       ]
     },
     {

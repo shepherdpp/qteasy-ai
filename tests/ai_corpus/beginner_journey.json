@@ -24,7 +24,10 @@
       "expected_job": "env.ready",
       "expected_skills": [
         "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info"
       ],
       "tutorial": "docs/source/getting_started.md",
       "run_policy": "plan_only",
@@ -60,7 +63,7 @@
       "mode": "plan",
       "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skills": ["qt.ai.data.history"],
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "plan_only",
       "notes": "gold E-READ-H；channel=history"
@@ -71,7 +74,7 @@
       "mode": "plan",
       "query": "get_reference_data cn_gdp from 20240101 to 20240131",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skills": ["qt.ai.data.reference"],
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "plan_only",
       "notes": "gold E-READ-R；channel=reference"
@@ -82,7 +85,7 @@
       "mode": "plan",
       "query": "get_static_data industry for 000001.SZ",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skills": ["qt.ai.data.static"],
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "plan_only",
       "notes": "gold E-READ-S；channel=static"

@@ -16,6 +16,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from ..intent_engine import IntentDecision
+from ..skills.env_guide import DEFAULT_CORE_TABLES
 
 if TYPE_CHECKING:
     from ..planner import Planner
@@ -137,10 +138,7 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             )
         ]
     if job == "env.ready":
-        return [
-            planner._make_step(step_id="step_1", skill_name="qt.ai.env.check_tushare", inputs={}),
-            planner._make_step(step_id="step_2", skill_name="qt.ai.env.overview_tables", inputs={}),
-        ]
+        return env_ready_steps(planner)
     if job == "data.summary":
         return _summary_steps(planner, query)
     if job == "data.export":
@@ -260,6 +258,37 @@ _API_TO_CHANNEL = {
     "get_reference_data": "reference",
     "get_static_data": "static",
 }
+_CHANNEL_SKILL = {
+    "history": "qt.ai.data.history",
+    "reference": "qt.ai.data.reference",
+    "static": "qt.ai.data.static",
+}
+
+
+def env_ready_steps(planner: "Planner") -> List["ToolStep"]:
+    """token 检查，再对四张核心表各查一次 table_info。
+
+    Parameters
+    ----------
+    planner : Planner
+        用来生成步骤。
+
+    Returns
+    -------
+    list of ToolStep
+        第一步是 ``qt.ai.env.check_tushare``。
+    """
+
+    steps = [planner._make_step(step_id="step_1", skill_name="qt.ai.env.check_tushare", inputs={})]
+    for offset, table_name in enumerate(DEFAULT_CORE_TABLES, start=2):
+        steps.append(
+            planner._make_step(
+                step_id=f"step_{offset}",
+                skill_name="qt.ai.datasource.table_info",
+                inputs={"table_name": table_name},
+            )
+        )
+    return steps
 
 
 @lru_cache(maxsize=64)
@@ -307,21 +336,25 @@ def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) ->
         recommended = _recommended_channel(names)
         if recommended in {"reference", "static"}:
             channel = recommended
-    inputs: Dict[str, Any] = {"channel": channel}
-    if market.get("shares"):
-        inputs["shares"] = market["shares"]
-    if market.get("start"):
-        inputs["start"] = market["start"]
-    if market.get("end"):
-        inputs["end"] = market["end"]
-    if market.get("freq"):
-        inputs["freq"] = market["freq"]
-    if names:
+    skill_name = _CHANNEL_SKILL.get(channel, "qt.ai.data.history")
+    inputs: Dict[str, Any] = {}
+    if channel == "history":
+        inputs["htype_names"] = names or "close"
+    elif names:
         inputs["names"] = names
+    if channel != "reference" and market.get("shares"):
+        inputs["shares"] = market["shares"]
+    if channel != "static":
+        if market.get("start"):
+            inputs["start"] = market["start"]
+        if market.get("end"):
+            inputs["end"] = market["end"]
+        if market.get("freq"):
+            inputs["freq"] = market["freq"]
     return [
         planner._make_step(
             step_id="step_1",
-            skill_name="qt.ai.data.read",
+            skill_name=skill_name,
             inputs=inputs,
         )
     ]

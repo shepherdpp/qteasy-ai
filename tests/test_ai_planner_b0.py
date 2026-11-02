@@ -15,7 +15,8 @@ import unittest
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
-from qteasy_ai.skills.env_guide import build_check_tushare_skill, build_overview_tables_skill
+from qteasy_ai.skills.datasource_tables import build_table_info_skill
+from qteasy_ai.skills.env_guide import DEFAULT_CORE_TABLES, build_check_tushare_skill
 
 
 class TestAiPlannerB0(unittest.TestCase):
@@ -25,15 +26,19 @@ class TestAiPlannerB0(unittest.TestCase):
         self.registry = build_default_registry()
 
     def test_env_query_two_step_plan(self) -> None:
-        """环境检查问法产出 check_tushare + overview_tables。"""
+        """环境检查问法产出 check_tushare 和四张核心表的 table_info。"""
 
-        print("\n[TestAiPlannerB0] env query two-step")
+        print("\n[TestAiPlannerB0] env query table_info")
         planner = Planner(self.registry, env_facts={})
         plan = planner.build_plan("帮我看 Tushare 是否配好、本地缺哪些表", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
+        tables = [step.inputs.get("table_name") for step in plan.steps[1:]]
         print(" skills:", skill_names)
-        self.assertEqual(set(skill_names), {"qt.ai.env.check_tushare", "qt.ai.env.overview_tables"})
-        self.assertEqual(len(plan.steps), 2)
+        print(" tables:", tables)
+        self.assertEqual(skill_names[0], "qt.ai.env.check_tushare")
+        self.assertEqual(skill_names[1:], ["qt.ai.datasource.table_info"] * 4)
+        self.assertEqual(tables, list(DEFAULT_CORE_TABLES))
+        self.assertEqual(len(plan.steps), 5)
         for step in plan.steps:
             self.assertEqual(step.depends_on, [])
 
@@ -134,22 +139,28 @@ class TestAiPlannerB0(unittest.TestCase):
             store = MemoryStore(base_dir=temp_dir)
             registry = build_default_registry()
             # 覆盖默认 env skills 为 DI 探针，避免真实 QT_CONFIG/DataSource
-            for name in ["qt.ai.env.check_tushare", "qt.ai.env.overview_tables"]:
+            for name in ["qt.ai.env.check_tushare", "qt.ai.datasource.table_info"]:
                 registry._meta.pop(name, None)
                 registry._impl.pop(name, None)
             meta_t, handler_t = build_check_tushare_skill(
                 token_getter=lambda: {"token_present": True, "token_source": "qt_config"}
             )
-            meta_o, handler_o = build_overview_tables_skill(
-                table_info_func=lambda name: {
-                    "stock_daily": {"exists": True, "rows": 42},
-                    "index_daily": {"exists": True, "rows": 10},
-                    "trade_calendar": {"exists": True, "rows": 100},
-                    "stock_basic": {"exists": True, "rows": 5},
-                }.get(name, {"exists": False, "rows": 0})
+            catalog = {
+                "stock_daily": {"exists": True, "rows": 42},
+                "index_daily": {"exists": True, "rows": 10},
+                "trade_calendar": {"exists": True, "rows": 100},
+                "stock_basic": {"exists": True, "rows": 5},
+            }
+
+            def fake_info(table, verbose=False, print_info=False, human=False):
+                return catalog.get(table, {"exists": False, "rows": 0})
+
+            meta_i, handler_i = build_table_info_skill(
+                table_info_func=fake_info,
+                schema_func=lambda table: [],
             )
             registry.register(meta_t, handler_t)
-            registry.register(meta_o, handler_o)
+            registry.register(meta_i, handler_i)
 
             assistant = QteasyAssistant(memory_store=store, registry=registry)
             payload = assistant.run("帮我看 Tushare 是否配好、本地缺哪些表", response_style="raw")

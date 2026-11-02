@@ -285,7 +285,7 @@ class TestAiPlannerF(unittest.TestCase):
                 response_style="raw",
                 session_id=sid,
             )
-            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
             print(" first inputs:", read[0]["inputs"] if read else None)
             self.assertTrue(read)
             self.assertEqual(read[0]["inputs"].get("shares"), "000300.SH")
@@ -296,7 +296,7 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id=sid,
                 patches={"shares": "000001.SZ", "freq": "w", "start": "20240201"},
             )
-            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
             store = SessionStore(assistant.memory_store)
             state = store.load(sid)
             slot = state.task.slots["shares"].to_dict()
@@ -321,7 +321,7 @@ class TestAiPlannerF(unittest.TestCase):
                 response_style="raw",
                 session_id="s-explicit",
             )
-            read = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
             print(" inputs:", read[0]["inputs"] if read else None)
             self.assertTrue(read)
             self.assertEqual(read[0]["inputs"].get("shares"), "000001.SZ")

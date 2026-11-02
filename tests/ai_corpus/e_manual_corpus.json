@@ -15,7 +15,10 @@
       "expected_skill": "qt.ai.env.check_tushare",
       "expected_skills": [
         "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info"
       ],
       "notes": "gold E1 lock; source=rule"
     },
@@ -65,8 +68,8 @@
       "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
       "mode": "plan",
       "expected_job": "data.read",
-      "expected_skill": "qt.ai.data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skill": "qt.ai.data.history",
+      "expected_skills": ["qt.ai.data.history"],
       "notes": "channel=history; names=close"
     },
     {
@@ -75,8 +78,8 @@
       "query": "get_reference_data cn_gdp from 20240101 to 20240131",
       "mode": "plan",
       "expected_job": "data.read",
-      "expected_skill": "qt.ai.data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skill": "qt.ai.data.reference",
+      "expected_skills": ["qt.ai.data.reference"],
       "notes": "channel=reference; missing local table may fail at execute; plan routing must be correct"
     },
     {
@@ -85,8 +88,8 @@
       "query": "get_static_data industry for 000001.SZ",
       "mode": "plan",
       "expected_job": "data.read",
-      "expected_skill": "qt.ai.data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skill": "qt.ai.data.static",
+      "expected_skills": ["qt.ai.data.static"],
       "notes": "channel=static; names=industry"
     },
     {

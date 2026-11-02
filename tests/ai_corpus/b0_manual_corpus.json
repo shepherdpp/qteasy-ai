@@ -80,7 +80,10 @@
       "expected_skill": "qt.ai.env.check_tushare",
       "expected_skills": [
         "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info"
       ],
       "expect_plan_md": true,
       "notes": "after run, env_facts.json should contain tushare and tables"
@@ -100,7 +103,10 @@
       "mode": "plan",
       "expected_skills": [
         "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info"
       ]
     },
     {

@@ -102,8 +102,9 @@ class TestAiPlannerE(unittest.TestCase):
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         print(" intent:", plan.planner_trace.get("intent_job"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
-        self.assertEqual(plan.steps[0].inputs.get("channel"), "static")
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.static")
+        self.assertEqual(plan.steps[0].inputs.get("names"), "industry")
+        self.assertEqual(plan.steps[0].inputs.get("shares"), "000001.SZ")
 
     def test_inverted_dates_clarify(self) -> None:
         """倒置日期区间 → clarify，不得落到 summary 执行失败。"""
@@ -139,8 +140,7 @@ class TestAiPlannerE(unittest.TestCase):
         inputs = plan.steps[0].inputs
         print(" skill:", plan.steps[0].skill_name)
         print(" inputs:", inputs)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
-        self.assertEqual(inputs.get("channel"), "reference")
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.reference")
         self.assertEqual(inputs.get("names"), "cn_gdp")
 
     def test_provider_dtype_channel_persists_on_task(self) -> None:
@@ -148,19 +148,26 @@ class TestAiPlannerE(unittest.TestCase):
 
         print("\n[TestAiPlannerE] provider dtype channel")
         cases = (
-            ("please fetch cn_gdp from 20240101 to 20240131", "reference", "cn_gdp"),
-            ("please fetch industry for 000001.SZ", "static", "industry"),
-            ("please fetch close for 000300.SH from 20240101 to 20240131", "history", "close"),
+            ("please fetch cn_gdp from 20240101 to 20240131", "reference", "cn_gdp", "qt.ai.data.reference", "names"),
+            ("please fetch industry for 000001.SZ", "static", "industry", "qt.ai.data.static", "names"),
+            (
+                "please fetch close for 000300.SH from 20240101 to 20240131",
+                "history",
+                "close",
+                "qt.ai.data.history",
+                "htype_names",
+            ),
         )
-        for query, channel, names in cases:
+        for query, channel, names, skill_name, name_key in cases:
             fake = FakeLLMProvider(replies=[json.dumps({"job": "data.read", "uncertain": False})])
             plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
             inputs = plan.steps[0].inputs
             print(" query:", query)
             print(" inputs:", inputs)
-            self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
-            self.assertEqual(inputs.get("channel"), channel)
-            self.assertEqual(inputs.get("names"), names)
+            self.assertEqual(plan.steps[0].skill_name, skill_name)
+            self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
+            self.assertEqual((plan.assumptions or {}).get("intent_flags", {}).get("channel"), channel)
+            self.assertEqual(inputs.get(name_key), names)
             self.assertNotIn("get_reference_data", query)
             self.assertNotIn("get_static_data", query)
             self.assertNotIn("get_history_data", query)
@@ -180,12 +187,11 @@ class TestAiPlannerE(unittest.TestCase):
                 response_style="raw",
                 session_id=sid,
             )
-            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.reference"]
             state = SessionStore(store).load(sid)
             print(" first inputs:", read[0]["inputs"] if read else None)
             print(" task flags:", state.task.flags if state.task else None)
             self.assertTrue(read)
-            self.assertEqual(read[0]["inputs"].get("channel"), "reference")
             self.assertEqual(read[0]["inputs"].get("names"), "cn_gdp")
             self.assertEqual(state.task.flags.get("channel"), "reference")
 
@@ -195,12 +201,11 @@ class TestAiPlannerE(unittest.TestCase):
                 session_id=sid,
                 patches={"end": "20240630"},
             )
-            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.reference"]
             print(" second inputs:", read2[0]["inputs"] if read2 else None)
             print(" second source:", second["plan"]["planner_trace"].get("source"))
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
             self.assertTrue(read2)
-            self.assertEqual(read2[0]["inputs"].get("channel"), "reference")
             self.assertEqual(read2[0]["inputs"].get("names"), "cn_gdp")
 
 

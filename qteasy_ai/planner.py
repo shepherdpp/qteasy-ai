@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .identity import prefix_system_prompt
 from .intent_engine import IntentEngine, IntentDecision
-from .intents.recipes import _compose_screen, _export_steps, _summary_steps, compose_recipe
+from .intents.recipes import _compose_screen, _export_steps, _summary_steps, compose_recipe, env_ready_steps
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
@@ -39,6 +39,12 @@ from .slot_decl import (
     finalize_clarification_for_emit,
     interpret_declared_slots,
 )
+
+_FETCH_CHANNEL = {
+    "qt.ai.data.history": "history",
+    "qt.ai.data.reference": "reference",
+    "qt.ai.data.static": "static",
+}
 
 
 class RuleValidator:
@@ -320,7 +326,10 @@ class Planner:
             assumptions["session_missing"] = missing
         intent_flags = dict(decision.flags or {})
         for step in steps:
-            if step.skill_name == "qt.ai.data.read":
+            mapped = _FETCH_CHANNEL.get(step.skill_name)
+            if mapped:
+                intent_flags["channel"] = mapped
+            elif step.skill_name == "qt.ai.data.read":
                 channel = str((step.inputs or {}).get("channel") or "").strip()
                 if channel:
                     intent_flags["channel"] = channel
@@ -452,15 +461,21 @@ class Planner:
                     step.inputs["asset_pool"] = _val("shares")
                 if _val("strategy_id"):
                     step.inputs["strategy_id"] = _val("strategy_id")
-            if name == "qt.ai.data.read":
-                if _confirmed("shares"):
+            if name in {
+                "qt.ai.data.read",
+                "qt.ai.data.history",
+                "qt.ai.data.reference",
+                "qt.ai.data.static",
+            }:
+                if name != "qt.ai.data.reference" and _confirmed("shares"):
                     step.inputs["shares"] = _confirmed("shares")
-                if _confirmed("start"):
-                    step.inputs["start"] = _confirmed("start")
-                if _confirmed("end"):
-                    step.inputs["end"] = _confirmed("end")
-                if _confirmed("freq"):
-                    step.inputs["freq"] = _confirmed("freq")
+                if name != "qt.ai.data.static":
+                    if _confirmed("start"):
+                        step.inputs["start"] = _confirmed("start")
+                    if _confirmed("end"):
+                        step.inputs["end"] = _confirmed("end")
+                    if _confirmed("freq"):
+                        step.inputs["freq"] = _confirmed("freq")
             if name == "qt.ai.strategy.spec_from_nl":
                 if _val("slow") is not None:
                     step.inputs["slow"] = _val("slow")
@@ -648,6 +663,10 @@ class Planner:
         "qt.ai.data.summary_kline",
         "qt.ai.data.kline",
         "qt.ai.data.read",
+        "qt.ai.data.history",
+        "qt.ai.data.reference",
+        "qt.ai.data.static",
+        "qt.ai.data.statement",
         "qt.ai.research.factor_ic_summary",
         "qt.ai.visual.export_kline",
         "qt.ai.hp.plot",
@@ -1060,10 +1079,7 @@ class Planner:
             return insight_steps
 
         if self._is_env_query(q_lower):
-            return [
-                self._make_step(step_id="step_1", skill_name="qt.ai.env.check_tushare", inputs={}),
-                self._make_step(step_id="step_2", skill_name="qt.ai.env.overview_tables", inputs={}),
-            ]
+            return env_ready_steps(self)
 
         if any(word in q_lower for word in ["strategy", "built-in", "built in", "策略"]):
             is_parameter_query = self._is_strategy_parameter_query(q_lower)
