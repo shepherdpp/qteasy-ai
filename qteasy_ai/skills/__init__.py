@@ -26,6 +26,13 @@ from .hp_indicator import (
     build_hp_research_preset_skill,
 )
 from .hp_plot import build_hp_plot_skill
+from .hp_study import (
+    build_hp_alpha_beta_skill,
+    build_hp_cum_return_skill,
+    build_hp_normalize_skill,
+    build_hp_performance_skill,
+    build_hp_portfolio_skill,
+)
 from .hp_shape import (
     build_hp_align_skill,
     build_hp_assign_skill,
@@ -109,6 +116,11 @@ __all__ = [
     "build_hp_indicator_skill",
     "build_hp_candle_pattern_skill",
     "build_hp_research_preset_skill",
+    "build_hp_portfolio_skill",
+    "build_hp_cum_return_skill",
+    "build_hp_normalize_skill",
+    "build_hp_alpha_beta_skill",
+    "build_hp_performance_skill",
     "build_hp_plot_skill",
     "build_hp_volatility_skill",
     "build_system_fallback_skill",

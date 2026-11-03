@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -49,6 +49,78 @@ def _page_count(panel: Any, shares: Any, max_shares_per_figure: int) -> int:
     return int(np.ceil(total / float(max_shares_per_figure)))
 
 
+def _payloads(upstream_payload: Any, upstream_payloads: Any) -> List[Dict[str, Any]]:
+    """有上游列表时以列表为准，否则用第一块。
+
+    Parameters
+    ----------
+    upstream_payload : Any
+        第一块上游 payload。
+    upstream_payloads : Any
+        全部上游 payload。
+
+    Returns
+    -------
+    list of dict
+        可用的上游字典。
+    """
+
+    if isinstance(upstream_payloads, list) and upstream_payloads:
+        return [item for item in upstream_payloads if isinstance(item, dict)]
+    if isinstance(upstream_payload, dict):
+        return [upstream_payload]
+    return []
+
+
+def _squeeze_highlight(mask: Any) -> Any:
+    """三维且末维为 1 的掩码收成二维。其它形状原样交给库。
+
+    Parameters
+    ----------
+    mask : Any
+        高亮条件。
+
+    Returns
+    -------
+    Any
+        库可接受的 ``max`` / ``min``、一维或二维布尔数组，或原本的对象。
+    """
+
+    if isinstance(mask, str):
+        return mask
+    array = np.asarray(mask)
+    if array.ndim == 3 and array.shape[-1] == 1:
+        array = np.asarray(array[:, :, 0])
+    return array
+
+
+def _resolve_highlight(highlight: Any, payloads: Sequence[Dict[str, Any]]) -> Any:
+    """``max`` / ``min`` 优先。否则用上游布尔掩码。
+
+    Parameters
+    ----------
+    highlight : Any
+        调用方传入的高亮。
+    payloads : sequence of dict
+        上游 payload。
+
+    Returns
+    -------
+    Any
+        传给 ``HistoryPanel.plot`` 的高亮；没有则 ``None``。
+    """
+
+    if highlight in ("max", "min"):
+        return highlight
+    if highlight not in (None, ""):
+        return _squeeze_highlight(highlight)
+    for item in payloads:
+        mask = item.get("mask")
+        if mask is not None:
+            return _squeeze_highlight(mask)
+    return None
+
+
 def build_hp_plot_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
     """构建 ``qt.ai.hp.plot``。
 
@@ -71,6 +143,7 @@ def build_hp_plot_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
             "interactive": {"type": "boolean", "required": False},
             "output_path": {"type": "string", "required": False},
             "upstream_payload": {"type": "object", "required": False},
+            "upstream_payloads": {"type": "array", "required": False},
         },
         outputs_schema={"artifacts": "list", "metrics": "dict"},
         side_effects=SkillSideEffects(filesystem_write=True, description="write one PNG"),
@@ -88,16 +161,22 @@ def build_hp_plot_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         interactive: bool = False,
         output_path: Optional[str] = None,
         upstream_payload: Optional[Dict[str, Any]] = None,
+        upstream_payloads: Optional[Sequence[Any]] = None,
         **kwargs,
     ) -> dict:
         del interactive  # 本里程碑的执行器不打开交互图。
         per_page = int(max_shares_per_figure or 5)
         page_no = int(page or 1)
         target = _default_output_path(output_path)
+        payloads = _payloads(upstream_payload, upstream_payloads)
+        resolved = _resolve_highlight(highlight, payloads)
+        echo_highlight = highlight
+        if highlight in (None, "") and resolved is not None:
+            echo_highlight = "upstream_mask"
         inputs_echo = {
             "shares": shares,
             "layout": layout or "auto",
-            "highlight": highlight,
+            "highlight": echo_highlight,
             "max_shares_per_figure": per_page,
             "page": page_no,
             "interactive": False,
@@ -129,8 +208,8 @@ def build_hp_plot_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
             }
             if shares not in (None, ""):
                 plot_kwargs["shares"] = shares
-            if highlight not in (None, ""):
-                plot_kwargs["highlight"] = highlight
+            if resolved is not None:
+                plot_kwargs["highlight"] = resolved
             fig = panel.plot(**plot_kwargs)
             os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
             fig.savefig(target, dpi=120, bbox_inches="tight", pad_inches=0.1)

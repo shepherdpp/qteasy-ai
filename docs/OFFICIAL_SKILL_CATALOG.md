@@ -2,7 +2,7 @@
 
 **状态：E.4 起草；Phase E 已关单（2026-09-05）。** G.5 自动化对照（2026-09-07）无 P0 缺口。**1.0 标签仍由 Jackie 打。** 不升版。
 
-对照：产品顶层 §3.8 / §3.9；意图门 **H′**；Registry = `build_default_registry()`（56 个 skill，0.4 A3 后）。本目录按 **Job 出图**，不是扁平 skill 菜单。
+对照：产品顶层 §3.8 / §3.9；意图门 **H′**；Registry = `build_default_registry()`（61 个 skill，0.4 A4 后）。本目录按 **Job 出图**，不是扁平 skill 菜单。
 
 | 项 | 说明 |
 |----|------|
@@ -51,7 +51,7 @@
 
 ---
 
-## 3. Registry skill（56）
+## 3. Registry skill（61）
 
 | # | skill | 层 | 副作用摘要 | 由哪个 Job 带出 |
 |---|-------|----|------------|-----------------|
@@ -95,22 +95,27 @@
 | 38 | `qt.ai.hp.indicator` | L1 | 只读 | 已注册；open 合法边待 A5 |
 | 39 | `qt.ai.hp.candle_pattern` | L1 | 只读 | 已注册；open 合法边待 A5 |
 | 40 | `qt.ai.hp.research_preset` | L1 | 只读 | 已注册；open 合法边待 A5 |
-| 41 | `qt.ai.data.read` | L1 | 只读 | 仍注册；菜谱已改按 channel 叶子 |
-| 42 | `qt.ai.data.refill_basic_equity_and_index` | L2 | 网络+写库 | `data.refill` |
-| 43 | `qt.ai.research.factor_ic_summary` | L1 | 只读 | `research.factor_ic` |
-| 44 | `qt.ai.research.universe_filter` | L1 | 只读 | `research.screen` |
-| 45 | `qt.ai.research.price_predicate` | L1 | 只读 | `research.screen`（有谓语） |
-| 46 | `qt.ai.research.project_universe` | L1 | 只读 | `research.screen` |
-| 47 | `qt.ai.research.screen_stocks` | 遗留 L2 | — | **菜谱不再出图**（负例） |
-| 48 | `qt.ai.backtest.run_builtin` | L2 | 写 trade_log / 曲线 | `backtest.builtin`；builder 可选末步 |
-| 49 | `qt.ai.insight.summarize_backtest` | L3 | 只读 | `insight.last_backtest`；P0 第二步 |
-| 50 | `qt.ai.optimize.run_builtin` | L2 | 重计算 | `optimize.builtin` |
-| 51 | `qt.ai.strategy.spec_from_nl` | L2 | 只读 | `strategy.builder` |
-| 52 | `qt.ai.strategy.codegen_hybrid` | L2 | 写 `.py` | `strategy.builder` |
-| 53 | `qt.ai.strategy.sanity_check` | L2 | 只读 | `strategy.builder` |
-| 54 | `qt.ai.operator.build_from_spec` | L2 | 内存组装 | `strategy.builder` |
-| 55 | `qt.ai.pipeline.live_trade_plan_only` | L2 | 只读清单 | `live.plan_only` |
-| 56 | `qt.ai.system.fallback` | 系统 | 只读 | 系统出口 / 缺槽 |
+| 41 | `qt.ai.hp.portfolio` | L1 | 只读 | 已注册；open 合法边待 A5 |
+| 42 | `qt.ai.hp.cum_return` | L1 | 只读 | 已注册；open 合法边待 A5 |
+| 43 | `qt.ai.hp.normalize` | L1 | 只读 | 已注册；open 合法边待 A5 |
+| 44 | `qt.ai.hp.alpha_beta` | L1 | 只读 | 已注册；open 合法边待 A5 |
+| 45 | `qt.ai.hp.performance` | L1 | 只读 | 已注册；open 合法边待 A5 |
+| 46 | `qt.ai.data.read` | L1 | 只读 | 仍注册；菜谱已改按 channel 叶子 |
+| 47 | `qt.ai.data.refill_basic_equity_and_index` | L2 | 网络+写库 | `data.refill` |
+| 48 | `qt.ai.research.factor_ic_summary` | L1 | 只读 | `research.factor_ic` |
+| 49 | `qt.ai.research.universe_filter` | L1 | 只读 | `research.screen` |
+| 50 | `qt.ai.research.price_predicate` | L1 | 只读 | `research.screen`（有谓语） |
+| 51 | `qt.ai.research.project_universe` | L1 | 只读 | `research.screen` |
+| 52 | `qt.ai.research.screen_stocks` | 遗留 L2 | — | **菜谱不再出图**（负例） |
+| 53 | `qt.ai.backtest.run_builtin` | L2 | 写 trade_log / 曲线 | `backtest.builtin`；builder 可选末步 |
+| 54 | `qt.ai.insight.summarize_backtest` | L3 | 只读 | `insight.last_backtest`；P0 第二步 |
+| 55 | `qt.ai.optimize.run_builtin` | L2 | 重计算 | `optimize.builtin` |
+| 56 | `qt.ai.strategy.spec_from_nl` | L2 | 只读 | `strategy.builder` |
+| 57 | `qt.ai.strategy.codegen_hybrid` | L2 | 写 `.py` | `strategy.builder` |
+| 58 | `qt.ai.strategy.sanity_check` | L2 | 只读 | `strategy.builder` |
+| 59 | `qt.ai.operator.build_from_spec` | L2 | 内存组装 | `strategy.builder` |
+| 60 | `qt.ai.pipeline.live_trade_plan_only` | L2 | 只读清单 | `live.plan_only` |
+| 61 | `qt.ai.system.fallback` | 系统 | 只读 | 系统出口 / 缺槽 |
 
 门禁插步（token / 缺表）**不是** Job。
 
