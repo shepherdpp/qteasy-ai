@@ -252,6 +252,15 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("payload.answer", src)
             self.assertIn("Answered:", src)
             self.assertIn("shouldShowLiveClarify", src)
+            show_fn = src.split("function shouldShowLiveClarify")[1].split("function pendingDecision")[0]
+            submit_fn = src.split("function submitClarification")[1].split("function syncClarifyWizardControls")[0]
+            hidden_at = submit_fn.find("clarifyCardHidden = true")
+            send_at = submit_fn.find("sendControlPatches")
+            print(" clarify flag before send:", hidden_at, send_at)
+            print(" shouldShow reads flag:", "clarifyCardHidden" in show_fn)
+            self.assertIn("if (clarifyCardHidden) return false;", show_fn)
+            self.assertGreaterEqual(hidden_at, 0)
+            self.assertLess(hidden_at, send_at)
             self.assertIn("clarification-form", src)
             self.assertIn("plan-card", src)
             self.assertIn("liveClarifyMessage", src)
@@ -417,7 +426,57 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("composer-provider", src)
             self.assertIn("btn-settings", src)
             self.assertIn("statusbar", src)
-            self.assertIn('title="Edit">✎</button>', src)
+            pencil_body = src.split("pencil:")[1].split("trash:")[0]
+            print(" pencil path:", "M10.1 2.3" in pencil_body)
+            print(" edit uses pencil icon:", 'title="Edit">${icon("pencil")}</button>' in src)
+            print(" send stays arrow:", 'aria-label="Send">↑</button>' in src)
+            self.assertIn("M10.1 2.3", pencil_body)
+            self.assertIn('title="Edit">${icon("pencil")}</button>', src)
+            self.assertIn('aria-label="Send">↑</button>', src)
+            self.assertIn(".ui-icon", css)
+            icon_btn = css.split("button.icon-btn {", 1)[1].split("}", 1)[0]
+            provider_badge = css.split("button.provider-badge {", 1)[1].split("}", 1)[0]
+            pager_css = css.split(".ix-card-pager {", 1)[1].split("}", 1)[0]
+            title_css = css.split(".ix-card-title {", 1)[1].split("}", 1)[0]
+            foot_css = css.split(".ix-card-foot {", 1)[1].split("}", 1)[0]
+            mount = src.split("function mountShell")[1].split("function bindShell")[0]
+            chat_at = mount.find('id="chat-log"')
+            live_at = mount.find('id="live-cards"')
+            composer_at = mount.find('id="composer"')
+            chat_fn = src.split("function renderChat()")[1].split("function latestMessage")[0]
+            end_fn = src.split('t.id === "btn-clarify-end-confirm"')[1].split('if (t.id === "btn-clarify-prev")')[0]
+            plan_fn = src.split("function renderPlanCard()")[1].split("function renderSteps()")[0]
+            confirm_fn = src.split("async function confirmPlan()")[1].split("async function cancelPlan()")[0]
+            end_flag = end_fn.find("clarifyCardHidden = true")
+            end_skip = end_fn.find("sendControlSkip(")
+            confirm_flag = confirm_fn.find("planCardHidden = true")
+            confirm_await = confirm_fn.find("await api")
+            print(" icon border 0:", "border: 0" in icon_btn)
+            print(" provider border 0:", "border: 0" in provider_badge)
+            print(" dock order:", chat_at, live_at, composer_at)
+            print(" cards leave chat-log:", "parts.push(renderClarification())" not in chat_fn)
+            print(" pager 12:", "font-size: 12px" in pager_css)
+            print(" title bold:", "font-weight: 600" in title_css)
+            print(" foot min-height:", "min-height: 34px" in foot_css)
+            print(" end hide before skip:", end_flag, end_skip)
+            print(" confirm flag before await:", confirm_flag, confirm_await)
+            self.assertIn("border: 0", icon_btn)
+            self.assertIn("border: 0", provider_badge)
+            self.assertLess(chat_at, live_at)
+            self.assertLess(live_at, composer_at)
+            self.assertIn('const cards = $("live-cards")', chat_fn)
+            self.assertIn("renderClarification()", chat_fn)
+            self.assertIn("renderPlanCard()", chat_fn)
+            self.assertNotIn("parts.push(renderClarification())", chat_fn)
+            self.assertNotIn("parts.push(renderPlanCard())", chat_fn)
+            self.assertIn("font-size: 12px", pager_css)
+            self.assertIn("font-weight: 600", title_css)
+            self.assertNotIn("min-height: 34px", foot_css)
+            self.assertGreaterEqual(end_flag, 0)
+            self.assertLess(end_flag, end_skip)
+            self.assertIn("if (planCardHidden) return", plan_fn)
+            self.assertGreaterEqual(confirm_flag, 0)
+            self.assertLess(confirm_flag, confirm_await)
             self.assertIn('id="btn-rewind-submit">${escapeHtml(action.label)}</button>', src)
             self.assertIn('id="btn-rewind-cancel">Cancel</button>', src)
             self.assertIn("Discard and resend", src)
@@ -1353,7 +1412,8 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("position: absolute", edit_block)
             self.assertIn("right: 6px", edit_block)
             self.assertIn("display: none", edit_block)
-            self.assertIn("display: inline-block", hover_block)
+            print(" hover display flex:", "display: inline-flex" in hover_block)
+            self.assertIn("display: inline-flex", hover_block)
             self.assertIn(".msg.user:focus-within .bubble-edit", css)
             user_bubble = css.split(".msg.user .bubble {", 1)[1].split("}", 1)[0]
             print(" user bubble:", user_bubble.strip())

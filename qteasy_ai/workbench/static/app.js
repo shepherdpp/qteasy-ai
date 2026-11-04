@@ -70,6 +70,10 @@ let clarifyWizard = {
   drafts: {},
   ending: false,
 };
+/** 提交澄清后立刻藏卡，等 /v1/plan 结束再按服务端结果决定是否画出新卡。 */
+let clarifyCardHidden = false;
+/** Confirm / Apply 后立刻藏 Plan ready，请求结束再按服务端结果决定是否画回。 */
+let planCardHidden = false;
 let workspace = { artifacts: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
@@ -92,6 +96,21 @@ const COPY_ICON_SVG =
   '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="2" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
 const CHECK_ICON_SVG =
   '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function icon(name) {
+  const paths = {
+    gear: '<path d="M6.30 3.78 L6.63 1.54 L9.37 1.54 L9.70 3.78 L10.80 4.41 L12.90 3.58 L14.28 5.96 L12.51 7.37 L12.51 8.63 L14.28 10.04 L12.90 12.42 L10.80 11.59 L9.70 12.22 L9.37 14.46 L6.63 14.46 L6.30 12.22 L5.20 11.59 L3.10 12.42 L1.72 10.04 L3.49 8.63 L3.49 7.37 L1.72 5.96 L3.10 3.58 L5.20 4.41 Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+    chevronLeft: '<path d="M10 3 L5 8 L10 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    chevronRight: '<path d="M6 3 L11 8 L6 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    chevronDown: '<path d="M3.5 6 L8 10.5 L12.5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    paperclip: '<path d="M6.1 8.7 L10.1 4.7 a2.1 2.1 0 0 1 3 3 L7.1 13.7 a2.9 2.9 0 0 1 -4.1 -4.1 L9.1 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    pencil: '<path d="M10.1 2.3 l3.6 3.6 L6.1 13.5 H2.5 V9.9 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+    trash: '<path d="M3.2 4.6 h9.6 M6.2 4.6 V3.2 h3.6 v1.4 M4.5 4.6 l.6 8.2 h5.8 l.6 -8.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>',
+    plus: '<path d="M8 3.2 v9.6 M3.2 8 h9.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  };
+  const body = paths[name] || "";
+  return `<svg class="ui-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">${body}</svg>`;
+}
 
 localStorage.setItem(STORAGE_SESSION, sessionId);
 
@@ -164,6 +183,7 @@ function liveClarifyMessage() {
 }
 
 function shouldShowLiveClarify() {
+  if (clarifyCardHidden) return false;
   const missing = (state.sidebar && state.sidebar.missing) || [];
   if (missing.length) return true;
   const last = liveClarifyMessage();
@@ -256,13 +276,13 @@ function mountShell() {
       <span class="brand">qteasy-ai Workbench</span>
       <span class="spacer"></span>
       <span class="session-title" id="session-title"></span>
-      <button type="button" class="icon-btn ghost" id="btn-settings" title="Settings">⚙</button>
+      <button type="button" class="icon-btn ghost" id="btn-settings" title="Settings">${icon("gear")}</button>
     </div>
     <div class="layout" id="layout">
       <aside class="rail" id="session-rail">
         <div class="col-head">
           <h2>Sessions</h2>
-          <button type="button" class="icon-btn ghost" id="btn-toggle-rail" title="Collapse session list">«</button>
+          <button type="button" class="icon-btn ghost" id="btn-toggle-rail" title="Collapse session list">${icon("chevronLeft")}</button>
         </div>
         <div class="rail-new" style="padding:6px;">
           <button type="button" class="primary" id="btn-new-session" style="width:100%;">New</button>
@@ -274,6 +294,7 @@ function mountShell() {
         <div class="now-chips" id="now-chips"></div>
         <div class="mode-notice" id="mode-notice" hidden></div>
         <div class="chat-log" id="chat-log"></div>
+        <div id="live-cards" hidden></div>
         <div class="composer" id="composer">
           <div class="attach-chips" id="attach-chips" hidden></div>
           <div class="attach-status err-text" id="attach-status" hidden></div>
@@ -297,7 +318,7 @@ function mountShell() {
               </div>
             </div>
             <span class="composer-row-spacer"></span>
-            <button type="button" class="icon-btn ghost attach-btn" id="btn-attach" title="Attach" aria-label="Attach">📎</button>
+            <button type="button" class="icon-btn ghost attach-btn" id="btn-attach" title="Attach" aria-label="Attach">${icon("paperclip")}</button>
             <button type="button" class="send-btn mode-plan" id="btn-send" title="Send" aria-label="Send">↑</button>
           </div>
         </div>
@@ -310,7 +331,7 @@ function mountShell() {
       <aside class="workspace-col" id="sidebar-col">
         <div class="col-head">
           <h2>Workspace</h2>
-          <button type="button" class="icon-btn ghost" id="btn-collapse-workspace" title="Collapse">»</button>
+          <button type="button" class="icon-btn ghost" id="btn-collapse-workspace" title="Collapse">${icon("chevronRight")}</button>
         </div>
         <div class="workspace-body">
           <div class="now-block" id="workspace-now"></div>
@@ -487,6 +508,8 @@ function bindShell() {
     if (workspaceCollapsed) toggleWorkspace();
   });
   $("chat-log").addEventListener("click", onChatClick);
+  const liveCards = $("live-cards");
+  if (liveCards) liveCards.addEventListener("click", onChatClick);
   $("artifact-panel").addEventListener("click", onArtifactClick);
   $("session-list").addEventListener("click", onSessionListClick);
   $("session-list").addEventListener("dblclick", onSessionListDblClick);
@@ -511,9 +534,9 @@ function applyLayoutFlags() {
   rail.classList.toggle("collapsed", railCollapsed);
   const workspaceCol = $("sidebar-col");
   if (workspaceCol) workspaceCol.classList.toggle("collapsed", workspaceCollapsed);
-  $("btn-toggle-rail").textContent = railCollapsed ? "»" : "«";
+  $("btn-toggle-rail").innerHTML = icon(railCollapsed ? "chevronRight" : "chevronLeft");
   const wsBtn = $("btn-collapse-workspace");
-  if (wsBtn) wsBtn.textContent = workspaceCollapsed ? "«" : "»";
+  if (wsBtn) wsBtn.innerHTML = icon(workspaceCollapsed ? "chevronLeft" : "chevronRight");
   applyColumnWidths();
 }
 
@@ -1242,10 +1265,12 @@ async function confirmPlan() {
   const planId = state.plan_card && state.plan_card.plan_id;
   if (!planId || (state.plan_card && state.plan_card.confirmable === false) || busy) return;
   const keepWatch = backgrounded;
+  planCardHidden = true;
   if (!backgrounded) {
     setBusy(true);
     executeSseOpen = true;
   }
+  renderChat();
   try {
     const dto = await api("/v1/run-plan?stream=1", {
       method: "POST",
@@ -1277,10 +1302,12 @@ async function confirmPlan() {
       renderChat();
     }
   } finally {
+    planCardHidden = false;
     if (!keepWatch) {
       executeSseOpen = false;
       setBusy(false);
     }
+    renderChat();
   }
 }
 
@@ -1376,7 +1403,14 @@ function onChatClick(ev) {
     return;
   }
   if (t.id === "btn-clarify-end-confirm") {
-    sendControlSkip();
+    if (busy) return;
+    clarifyCardHidden = true;
+    const done = sendControlSkip();
+    renderChat();
+    Promise.resolve(done).finally(() => {
+      clarifyCardHidden = false;
+      renderChat();
+    });
     return;
   }
   if (t.id === "btn-clarify-prev") {
@@ -1508,6 +1542,7 @@ function clarifyAllDraftsReady(pending) {
 }
 
 function submitClarification() {
+  if (busy) return;
   const clar = liveClarifyMessage() || latestClarify();
   ensureClarifyWizard(clar);
   const pending = clarifyPendingItems(clar);
@@ -1519,7 +1554,13 @@ function submitClarification() {
     if (name && value) patches[name] = value;
   });
   if (!Object.keys(patches).length) return;
-  sendControlPatches(patches);
+  clarifyCardHidden = true;
+  const done = sendControlPatches(patches);
+  renderChat();
+  Promise.resolve(done).finally(() => {
+    clarifyCardHidden = false;
+    renderChat();
+  });
 }
 
 function syncClarifyWizardControls() {
@@ -1539,13 +1580,13 @@ function syncClarifyWizardControls() {
   if (prev) prev.disabled = busy || n <= 1 || step <= 1;
   if (next) next.disabled = busy || n <= 1 || step >= n || !hasDraft;
   if (submit) submit.disabled = busy || !allReady;
-  const open = document.querySelector("#chat-log input[data-clarify-open]");
+  const open = document.querySelector("#live-cards input[data-clarify-open], #chat-log input[data-clarify-open]");
   if (open) open.disabled = busy;
 }
 
 async function submitParamEdits() {
   const patches = {};
-  Array.from(document.querySelectorAll("#chat-log input[data-edit-slot], #workspace-now input[data-now-slot]")).forEach((el) => {
+  Array.from(document.querySelectorAll("#live-cards input[data-edit-slot], #chat-log input[data-edit-slot], #workspace-now input[data-now-slot]")).forEach((el) => {
     const name = el.getAttribute("data-edit-slot") || el.getAttribute("data-now-slot");
     const value = String(el.value || "").trim();
     if (!name || !value) return;
@@ -1560,7 +1601,9 @@ async function submitParamEdits() {
   }
   if (busy) return;
   dismissModeNotice();
+  planCardHidden = true;
   setBusy(true);
+  renderChat();
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
@@ -1584,7 +1627,9 @@ async function submitParamEdits() {
     persistTranscript();
     renderChat();
   } finally {
+    planCardHidden = false;
     setBusy(false);
+    renderChat();
   }
 }
 
@@ -2433,7 +2478,7 @@ function bucketedNodes(nodes, nowMs) {
 }
 
 function renderTimeGroupHead(key, label, open) {
-  const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+  const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}" aria-label="${escapeHtml(label)}">${icon(open ? "chevronDown" : "chevronRight")}</button>`;
   return `<div class="time-group-head">${twist}<span class="time-bucket">${escapeHtml(label)}</span></div>`;
 }
 
@@ -2459,8 +2504,8 @@ function renderSessionList() {
           return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
         <div class="session-main">${nameBlock}${meta}${runTag}</div>
         <div class="session-actions">
-          <button type="button" class="icon-btn ghost" data-session-rename title="Rename">✎</button>
-          <button type="button" class="icon-btn ghost" data-session-delete title="Delete">🗑</button>
+          <button type="button" class="icon-btn ghost" data-session-rename title="Rename">${icon("pencil")}</button>
+          <button type="button" class="icon-btn ghost" data-session-delete title="Delete">${icon("trash")}</button>
         </div>
       </div>`;
         })
@@ -2615,7 +2660,7 @@ function renderProcessGroup(html, foldable, turnKey) {
   if (!foldable) return html;
   const open = openProcessTurns.has(turnKey);
   const label = open ? "Hide process" : "Show process";
-  const arrow = open ? "▾" : "▸";
+  const arrow = icon(open ? "chevronDown" : "chevronRight");
   const body = open ? `<div class="process-body">${html}</div>` : "";
   return `<div class="process-fold" data-testid="process-fold"><button type="button" class="ghost process-toggle" data-process-turn="${turnKey}" aria-expanded="${open ? "true" : "false"}">${arrow} ${label}</button>${body}</div>`;
 }
@@ -2682,7 +2727,7 @@ function renderVisibleMessage(msg, index) {
           </div>
         </div>`;
     }
-    return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
+    return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">${icon("pencil")}</button></div></div>`;
   }
   if (msg.kind === "result") {
     return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
@@ -2772,9 +2817,13 @@ function renderChat() {
       parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock(backgrounded ? "Background" : "Working")}</span>${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
     }
   }
-  parts.push(renderClarification());
-  parts.push(renderPlanCard());
   host.innerHTML = parts.join("");
+  const cards = $("live-cards");
+  const cardHtml = `${renderClarification()}${renderPlanCard()}`;
+  if (cards) {
+    cards.innerHTML = cardHtml;
+    cards.hidden = !cardHtml;
+  }
   decorateCodeBlocks(host);
   ensureOutputAgeTimer();
   const rewind = $("rewind-text");
@@ -2790,7 +2839,7 @@ function renderChat() {
     rewind.focus();
     rewind.setSelectionRange(rewind.value.length, rewind.value.length);
   }
-  const clarifyOpen = host.querySelector("input[data-clarify-open]");
+  const clarifyOpen = (cards || host).querySelector("input[data-clarify-open]");
   if (clarifyOpen) {
     clarifyOpen.addEventListener("input", () => {
       const slot = String(clarifyOpen.getAttribute("data-clarify-open") || "").trim();
@@ -2938,6 +2987,7 @@ function renderClarification() {
 }
 
 function renderPlanCard() {
+  if (planCardHidden) return "";
   const card = state.plan_card;
   const missing = (state.sidebar && state.sidebar.missing) || [];
   if (!card || !card.confirmable || mode === "ask" || missing.length) return "";
@@ -3311,7 +3361,7 @@ function renderProviderForm() {
     const detail = row.builtin ? "built-in" : (row.api_key_present ? "key set" : "no key");
     const active = row.id === activeId;
     const tools = !row.builtin
-      ? `<div class="provider-actions"><button type="button" class="icon-btn ghost" data-provider-edit="${escapeHtml(row.id)}" title="Edit">✎</button><button type="button" class="icon-btn ghost provider-delete" data-provider-delete="${escapeHtml(row.id)}" title="Delete">🗑</button></div>`
+      ? `<div class="provider-actions"><button type="button" class="icon-btn ghost" data-provider-edit="${escapeHtml(row.id)}" title="Edit">${icon("pencil")}</button><button type="button" class="icon-btn ghost provider-delete" data-provider-delete="${escapeHtml(row.id)}" title="Delete">${icon("trash")}</button></div>`
       : "";
     const meta = `${model ? `${escapeHtml(model)} · ` : ""}${detail}`;
     return `<div class="provider-row${active ? " is-active" : ""}" data-provider-id="${escapeHtml(row.id)}">
@@ -3322,7 +3372,7 @@ function renderProviderForm() {
       ${tools}
     </div>`;
   }).join("");
-  return `<div class="provider-list">${list}</div><div class="settings-add-row"><button type="button" class="icon-btn ghost" id="btn-prov-add" title="Add provider" aria-label="Add provider">+</button></div>`;
+  return `<div class="provider-list">${list}</div><div class="settings-add-row"><button type="button" class="icon-btn ghost" id="btn-prov-add" title="Add provider" aria-label="Add provider">${icon("plus")}</button></div>`;
 }
 
 function renderSettingsBody() {
@@ -3747,7 +3797,7 @@ function renderWorkspace() {
         .map((node) => {
           const key = `${node.kind}::${node.run_id || ""}`;
           const open = !treeCollapsed.has(key);
-          const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+          const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}" aria-label="${escapeHtml(node.label || "Toggle")}">${icon(open ? "chevronDown" : "chevronRight")}</button>`;
           const head = node.kind === "plan"
             ? `<button type="button" class="${workspaceTreeClass(arts[node.art_index])}" data-art-index="${node.art_index}">${escapeHtml(node.label || "plan")}</button>`
             : `<span class="dir-name">${escapeHtml(node.label || "Run")}</span>`;
