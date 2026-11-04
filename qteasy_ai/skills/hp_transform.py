@@ -506,7 +506,12 @@ def build_hp_rolling_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
 
     schema = {
         "window": {"type": "integer", "required": True},
-        "stat": {"type": "string", "required": True},
+        "stat": {
+            "type": "string",
+            "required": True,
+            "enum": ["mean", "std", "min", "max", "sum"],
+            "enum_strict": True,
+        },
         "min_periods": {"type": "integer", "required": False},
         "center": {"type": "boolean", "required": False},
         "by": {"type": "string", "required": False},
@@ -575,7 +580,12 @@ def build_hp_agg_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
     """构建 ``qt.ai.hp.agg``。整段汇总，不是滚动窗口。"""
 
     schema = {
-        "stat": {"type": "string", "required": True},
+        "stat": {
+            "type": "string",
+            "required": True,
+            "enum": ["mean", "sum", "min", "max", "std", "median", "quantile"],
+            "enum_strict": True,
+        },
         "by": {"type": "string", "required": False},
         "skipna": {"type": "boolean", "required": False},
         "q": {"type": "number", "required": False},
@@ -677,7 +687,12 @@ def build_hp_compare_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
 
     schema = {
         "htype": {"type": "string", "required": True},
-        "op": {"type": "string", "required": True},
+        "op": {
+            "type": "string",
+            "required": True,
+            "enum": ["gt", "ge", "lt", "le", "eq", "ne"],
+            "enum_strict": True,
+        },
         "value": {"type": "number", "required": False},
         "other_htype": {"type": "string", "required": False},
     }
@@ -749,7 +764,14 @@ def build_hp_compare_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
 def build_hp_combine_mask_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
     """构建 ``qt.ai.hp.combine_mask``。``and`` / ``or`` / ``not``，形状必须相同。"""
 
-    schema = {"op": {"type": "string", "required": True}}
+    schema = {
+        "op": {
+            "type": "string",
+            "required": True,
+            "enum": ["and", "or", "not"],
+            "enum_strict": True,
+        }
+    }
     schema.update(_upstream_schema())
     metadata = _meta(
         "qt.ai.hp.combine_mask",

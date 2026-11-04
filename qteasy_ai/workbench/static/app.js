@@ -2859,8 +2859,13 @@ function renderClarifyStepOptions(row, slotName, lock) {
     .join("");
   const openLetter = clarifyLetter(items.length);
   const openActive = openSelected ? " selected" : "";
+  const openLabel = row && typeof row === "object" ? String(row.open_label || "").trim() : "";
+  const openCaption = openLabel
+    ? `<span class="clarify-option-label">${escapeHtml(openLabel)}</span>`
+    : "";
+  const openPlaceholder = openLabel ? "" : "请输入 / Please input...";
   const openRow = slotName
-    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="请输入 / Please input..." ${lock} /></div>`
+    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span>${openCaption}<input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="${openPlaceholder}" ${lock} /></div>`
     : "";
   return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}</div>`;
 }

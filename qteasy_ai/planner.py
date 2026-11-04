@@ -39,6 +39,7 @@ from .slot_decl import (
     finalize_clarification_for_emit,
     interpret_declared_slots,
 )
+from .slot_graph import apply_slot_layer, date_pending_rows, polish_clarification, strategy_id_options
 
 _FETCH_CHANNEL = {
     "qt.ai.data.history": "history",
@@ -159,6 +160,7 @@ class Planner:
         session: Any = None,
         skip_classify: bool = False,
         profile: Optional[Dict[str, Any]] = None,
+        forced_job: str = "",
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -174,6 +176,8 @@ class Planner:
             为 True 时用 session.task.job 重出同一 Job 的 R。
         profile : dict, optional
             用户 profile，用于选填默认值。
+        forced_job : str, optional
+            ``open`` 时跳过分类，仍组合法边短图。
 
         Returns
         -------
@@ -187,6 +191,7 @@ class Planner:
             session=session,
             skip_classify=skip_classify,
             profile=profile,
+            forced_job=forced_job,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -199,6 +204,7 @@ class Planner:
         session: Any = None,
         skip_classify: bool = False,
         profile: Optional[Dict[str, Any]] = None,
+        forced_job: str = "",
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -233,8 +239,23 @@ class Planner:
         self._market_overrides = self._confirmed_market_overrides(session)
         self.intent_engine.provider = self.provider
         task = getattr(session, "task", None) if session is not None else None
+        origin_text = str(getattr(task, "user_query", "") or "") if task is not None else ""
+        if not origin_text:
+            origin_text = query
         skip = bool(skip_classify and task is not None and str(getattr(task, "job", "") or ""))
-        if skip:
+        forced = str(forced_job or "").strip()
+        if forced == "open":
+            skip = False
+            decision = IntentDecision(
+                job="open",
+                flags={},
+                source="user",
+                rationale="unresolved_compose_open",
+            )
+            candidate_source = "user"
+            downgrade_reason = ""
+            steps = compose_recipe(self, decision, query)
+        elif skip:
             decision = IntentDecision(
                 job=str(task.job or "clarify"),
                 flags=dict(task.flags or {}),
@@ -265,7 +286,11 @@ class Planner:
             else:
                 steps = open_steps
         steps, gate_extras = self._apply_post_candidate_gates(
-            steps, query=query, candidate_source=candidate_source
+            steps,
+            query=query,
+            candidate_source=candidate_source,
+            job=decision.job,
+            session=session,
         )
         assumptions = {
             "planner": "hybrid_intent_h_prime",
@@ -288,8 +313,10 @@ class Planner:
                 assumptions["screen_end"] = "latest trading day in local datasource"
         steps = self._overlay_session_slots(steps, session)
         steps, default_notes = self._apply_optional_defaults(steps, decision.job, profile or {}, session)
-        if default_notes:
-            assumptions["slot_defaults"] = default_notes
+        slot_defaults = dict(assumptions.get("slot_defaults") or {})
+        slot_defaults.update(default_notes or {})
+        if slot_defaults:
+            assumptions["slot_defaults"] = slot_defaults
         input_sources: Dict[str, str] = {}
         for key, note in (default_notes or {}).items():
             if note != "profile":
@@ -324,6 +351,14 @@ class Planner:
                 )
             )
             assumptions["session_missing"] = missing
+        elif isinstance(assumptions.get("clarification"), dict):
+            assumptions["clarification"] = finalize_clarification_for_emit(assumptions["clarification"])
+        if self.provider is not None and isinstance(assumptions.get("clarification"), dict):
+            assumptions["clarification"] = polish_clarification(
+                self.provider,
+                assumptions["clarification"],
+                origin_text,
+            )
         intent_flags = dict(decision.flags or {})
         for step in steps:
             mapped = _FETCH_CHANNEL.get(step.skill_name)
@@ -612,7 +647,9 @@ class Planner:
                 missing.append(key)
         if self._is_clarify_fallback(steps) and not missing:
             info = str((steps[0].inputs or {}).get("missing_info") or "")
-            if "date" in info:
+            if info in {"", "none", "supported_skill", "supported_screen_conditions"}:
+                pass
+            elif "date" in info:
                 missing = ["start", "end"]
             elif info:
                 missing = [part.strip() for part in info.replace("|", ",").split(",") if part.strip()]
@@ -626,7 +663,7 @@ class Planner:
         ``finalize_clarification_for_emit`` 截断并写 step 字段。
         """
 
-        strategy_ids = ("macd", "dma", "bband", "rsi", "kdj")
+        strategy_ids = tuple(strategy_id_options())
         pending: List[Dict[str, Any]] = []
         for name in missing:
             row: Dict[str, Any] = {"name": name, "hint": f"Please provide {name}."}
@@ -634,7 +671,8 @@ class Planner:
                 row["options"] = [{"id": sid, "label": sid} for sid in strategy_ids]
             pending.append(row)
         if "strategy_id" in missing:
-            prompt = "Which built-in strategy? Reply with an id such as macd."
+            example = strategy_ids[0] if strategy_ids else "a built-in id"
+            prompt = f"Which built-in strategy? Reply with an id such as {example}."
         else:
             prompt = "Reply with the missing fields, or say yes if the restatement is correct."
         return {
@@ -768,11 +806,13 @@ class Planner:
         *,
         query: str,
         candidate_source: str = "rule",
+        job: str = "",
+        session: Any = None,
     ) -> Tuple[List[ToolStep], Dict[str, Any]]:
-        """对已知 Job 与 open DAG 共用日期/freq、必填槽与 env_facts 门禁。"""
+        """投影填槽之后，再走日期/freq、必填槽与 env_facts 门禁。"""
 
-        extras: Dict[str, Any] = {}
-        gated = self._enforce_date_or_freq_clarify(steps, query=query)
+        gated, extras = apply_slot_layer(self, steps, query, job, session)
+        gated = self._enforce_date_or_freq_clarify(gated, query=query)
         gated = self._enforce_refill_date_range(gated, query=query)
         gated = self._enforce_required_slots(gated, query=query)
         gated = self._maybe_prepend_tushare_gate(gated)
@@ -848,8 +888,9 @@ class Planner:
                         action="clarify_required",
                         reason="refill_date_range_required",
                         hint="Download/refill requires an explicit start and end date. Unbounded full-history download is not allowed.",
-                        missing_info="date_range",
+                        missing_info="start|end",
                         next_step="Provide a date range such as 20180101 to 20231231 or 2018-2023.",
+                        details={"slot_pending": date_pending_rows()},
                     ),
                 )
             ]
@@ -1434,24 +1475,11 @@ class Planner:
         if not skip_query_guard and not self._is_download_query(q_lower):
             return None
         market = self._market_inputs(query)
-        start = market.get("start")
-        end = market.get("end")
-        if not start or not end:
-            return [
-                self._make_step(
-                    step_id="step_1",
-                    skill_name="qt.ai.system.fallback",
-                    inputs=self._fallback_step_inputs(
-                        query=query,
-                        action="clarify_required",
-                        reason="refill_date_range_required",
-                        hint="Download/refill requires an explicit start and end date. Unbounded full-history download is not allowed.",
-                        missing_info="date_range",
-                        next_step="Provide a date range such as 20180101 to 20231231 or 2018-2023.",
-                    ),
-                )
-            ]
-        inputs: Dict[str, Any] = {"start": start, "end": end, "tables": ["stock_daily", "index_daily"]}
+        inputs: Dict[str, Any] = {"tables": ["stock_daily", "index_daily"]}
+        if market.get("start"):
+            inputs["start"] = market["start"]
+        if market.get("end"):
+            inputs["end"] = market["end"]
         if market.get("shares"):
             inputs["symbols"] = market["shares"]
         steps = [

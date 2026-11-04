@@ -47,7 +47,7 @@ def build_data_static_skill(
         inputs_schema={
             "names": {"type": "string", "required": True},
             "shares": {"type": "string", "required": True},
-            "asset_type": {"type": "string", "required": False},
+            "asset_type": {"type": "string", "required": False, "enum": ["E", "FD"], "enum_strict": False},
         },
         outputs_schema={"payload": "dict"},
         side_effects=SkillSideEffects(description="readonly local static"),

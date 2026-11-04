@@ -327,21 +327,24 @@ def _recommended_channel(dtype_name: str) -> str:
 
 
 def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) -> List["ToolStep"]:
-    """三入口只读取数。字面非 history 的 channel 保持不动；否则跟 DataType 推荐入口。"""
+    """三入口只读取数。字面非 history 的 channel 保持不动；否则跟数据类型候选。
+
+    数据类型的值留给填槽。图上只先写下行情里已经抽到的标的和日期。
+    """
+
+    from ..slot_graph import dtype_tokens, peek_channel
 
     market = planner._market_inputs(query)
     channel = str(flags.get("channel") or "history").strip().lower() or "history"
-    names = _extract_dtype_names(query)
-    if channel == "history" and names:
-        recommended = _recommended_channel(names)
-        if recommended in {"reference", "static"}:
-            channel = recommended
+    tokens = dtype_tokens(query)
+    if channel == "history":
+        peeked = peek_channel(tokens)
+        if peeked:
+            channel = peeked
     skill_name = _CHANNEL_SKILL.get(channel, "qt.ai.data.history")
     inputs: Dict[str, Any] = {}
-    if channel == "history":
-        inputs["htype_names"] = names or "close"
-    elif names:
-        inputs["names"] = names
+    if channel == "history" and not tokens:
+        inputs["htype_names"] = "close"
     if channel != "reference" and market.get("shares"):
         inputs["shares"] = market["shares"]
     if channel != "static":
@@ -415,7 +418,9 @@ def _export_steps(planner: "Planner", query: str) -> List["ToolStep"]:
 
 
 def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolStep"]:
-    """选股 Job：Universe + 可选谓词 + 投影。"""
+    """选股 Job：Universe + 可选谓词 + 投影。用户槽留给填槽。"""
+
+    from ..slot_graph import mentions_return
 
     extra = []
     for token in ("市盈率", "市值", "成交量", "换手", "申万", " pe", "pe/", "pb"):
@@ -437,50 +442,20 @@ def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolS
                 ),
             )
         ]
-    params, missing = planner._extract_screen_params(query=query, q_lower=q_lower)
-    industry = str(params.get("industry") or "").strip()
-    if "industry" in missing and not industry:
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.system.fallback",
-                inputs=planner._fallback_step_inputs(
-                    query=query,
-                    action="clarify_required",
-                    reason="screen_missing_fields",
-                    hint="Stock screen needs an industry (Tushare short name) and a lookback window.",
-                    missing_info="|".join(missing),
-                    next_step="Example: 过去半年跌幅>20%，行业属于银行.",
-                ),
-            )
-        ]
-    if "lookback" in missing:
-        params["lookback_days"] = 126
-        missing = [item for item in missing if item != "lookback"]
-    universe_inputs: Dict[str, Any] = {"industry": industry}
     steps = [
         planner._make_step(
             step_id="step_1",
             skill_name="qt.ai.research.universe_filter",
-            inputs=universe_inputs,
+            inputs={},
         )
     ]
     last_id = "step_1"
-    if "return_threshold" not in missing:
-        pred_inputs = {
-            "metric": params.get("metric") or "drawdown",
-            "threshold": params.get("threshold"),
-            "lookback_days": params.get("lookback_days") or 126,
-        }
-        if params.get("start"):
-            pred_inputs["start"] = params["start"]
-        if params.get("end"):
-            pred_inputs["end"] = params["end"]
+    if mentions_return(query):
         steps.append(
             planner._make_step(
                 step_id="step_2",
                 skill_name="qt.ai.research.price_predicate",
-                inputs=pred_inputs,
+                inputs={},
                 depends_on=[last_id],
             )
         )

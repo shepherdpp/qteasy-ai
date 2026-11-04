@@ -192,7 +192,12 @@ def build_data_statement_skill(
         inputs_schema={
             "shares": {"type": "string", "required": True},
             "period": {"type": "string", "required": True},
-            "statement": {"type": "string", "required": True},
+            "statement": {
+                "type": "string",
+                "required": True,
+                "enum": ["income", "balance", "cashflow"],
+                "enum_strict": True,
+            },
             "fields": {"type": "string", "required": False},
             "compare": {"type": "string", "required": False},
         },

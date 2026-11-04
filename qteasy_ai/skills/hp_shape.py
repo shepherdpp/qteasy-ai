@@ -304,7 +304,12 @@ def build_hp_fill_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         version="0.1.0",
         summary="Fill missing HistoryPanel values with ffill, bfill, or a constant.",
         inputs_schema={
-            "method": {"type": "string", "required": False},
+            "method": {
+                "type": "string",
+                "required": False,
+                "enum": ["ffill", "bfill", "fillna"],
+                "enum_strict": True,
+            },
             "value": {"type": "number", "required": False},
             "upstream_payload": {"type": "object", "required": False},
         },

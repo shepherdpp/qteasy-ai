@@ -269,7 +269,7 @@ def _accept_one(
 
 
 def _kind_ok(kind: str, text: str, is_history_column: Callable[[str], bool]) -> bool:
-    """三种已知 kind。未知 kind 不放行。"""
+    """已知 kind 才放行。未知 kind 不放行。"""
 
     if kind == "date":
         return _normalize_date(text) is not None
@@ -280,6 +280,12 @@ def _kind_ok(kind: str, text: str, is_history_column: Callable[[str], bool]) -> 
             return bool(is_history_column(text))
         except Exception:
             return False
+    if kind == "integer":
+        return bool(re.fullmatch(r"-?\d+", _text(text)))
+    if kind == "number":
+        return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", _text(text)))
+    if kind == "string":
+        return bool(_text(text))
     return False
 
 
@@ -294,6 +300,12 @@ def _kind_error(decl: Dict[str, Any], text: str) -> str:
         return f"{text!r} needs at least {minimum} entries."
     if kind == "history_panel_column":
         return f"{text!r} is not a local history column."
+    if kind == "integer":
+        return f"{text!r} is not an integer."
+    if kind == "number":
+        return f"{text!r} is not a number."
+    if kind == "string":
+        return f"{text!r} cannot be accepted for this field."
     return f"{text!r} cannot be accepted for this field."
 
 

@@ -63,7 +63,7 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertNotEqual(plan.planner_trace.get("intent_job"), "data.summary")
 
     def test_gold_refill_without_dates_still_clarify(self) -> None:
-        """下载缺日期仍 clarify date_range。"""
+        """下载缺日期仍 clarify，pending 是 start 与 end。"""
 
         print("\n[TestAiPlannerHybrid] refill missing dates")
         fake = FakeLLMProvider(replies=[_llm_job("data.refill")])
@@ -77,7 +77,14 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertEqual(plan.planner_trace.get("source"), "llm")
         self.assertEqual(step.skill_name, "qt.ai.system.fallback")
         self.assertEqual(step.inputs.get("fallback_action"), "clarify_required")
-        self.assertEqual(step.inputs.get("missing_info"), "date_range")
+        self.assertEqual(step.inputs.get("missing_info"), "start|end")
+        pending = [
+            str(item.get("name") or "")
+            for item in ((plan.assumptions.get("clarification") or {}).get("pending") or [])
+            if isinstance(item, dict)
+        ]
+        self.assertEqual(pending, ["start", "end"])
+        self.assertNotEqual(step.inputs.get("missing_info"), "date_range")
         self.assertTrue(fake.prompts)
 
     def test_no_provider_p0_skill_sequence_matches_rules(self) -> None:

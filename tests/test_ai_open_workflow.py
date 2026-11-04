@@ -535,7 +535,9 @@ class TestAiClarifyEmitS1(unittest.TestCase):
         options = list((strategy or {}).get("options") or [])
         print(" options:", [item.get("id") for item in options])
         self.assertLessEqual(len(options), 5)
-        self.assertTrue(any(str(item.get("id") or "") == "macd" for item in options))
+        from qteasy_ai.slot_graph import strategy_id_options
+
+        self.assertEqual([str(item.get("id") or "") for item in options], strategy_id_options())
         self.assertEqual(int(clar.get("step_index") or 0), 1)
         self.assertEqual(int(clar.get("step_total") or 0), len(pending))
 

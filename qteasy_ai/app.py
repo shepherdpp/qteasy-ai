@@ -626,46 +626,92 @@ class QteasyAssistant:
                 response_style=response_style,
                 include_user_text=False,
             )
-        if not structured:
-            identity = self._identity_response(
-                query,
-                session_id=session_id,
+        action = self._unresolved_action(session_id, structured)
+        if action == "abandon":
+            sid = str(session_id or "").strip()
+            session = self.session_store.load(sid) if sid else None
+            if session is None or session.task is None:
+                return self._closed_error_result(
+                    query=query,
+                    requested_mode="plan",
+                    response_style=response_style,
+                    session=session,
+                    code="SESSION_ID_REQUIRED",
+                    message="Provide a session_id to abandon this request.",
+                    next_action="Open a session, then choose Abandon on the clarify card.",
+                )
+            return self._close_clarification_result(
+                session,
+                query=query,
                 requested_mode="plan",
                 response_style=response_style,
+                include_user_text=False,
+                code="CLARIFICATION_ABANDONED",
+                message="Request abandoned.",
+                next_action="Start a new question when you are ready.",
             )
-            if identity is not None:
-                return identity
-            # Web clarifying：跳过 typed skip / discuss / execute，交给 assemble 换题。
-            skip_hatch = False
-            if not allow_composer_slot_fill:
-                sid = str(session_id or "").strip()
-                if sid:
-                    peek = self.session_store.load(sid)
-                    skip_hatch = peek.task_status() == "clarifying"
-            if not skip_hatch:
-                hatched = self._maybe_hatch_mode_gap(
+        if action == "compose_open":
+            plan, session = self._assemble_plan(
+                "",
+                session_id=session_id,
+                agent_auto=agent_auto,
+                patches=None,
+                allow_composer_slot_fill=allow_composer_slot_fill,
+                forced_job="open",
+            )
+            asked = ""
+        elif action:
+            plan, session = self._assemble_plan(
+                action,
+                session_id=session_id,
+                agent_auto=agent_auto,
+                patches=None,
+                allow_composer_slot_fill=False,
+                replace_query=action,
+            )
+            asked = action
+        else:
+            asked = query
+            if not structured:
+                identity = self._identity_response(
                     query,
                     session_id=session_id,
                     requested_mode="plan",
                     response_style=response_style,
-                    persist=persist,
-                    keep=keep,
-                    explanation_depth=explanation_depth,
-                    agent_auto=agent_auto,
                 )
-                if hatched is not None:
-                    return hatched
-        plan, session = self._assemble_plan(
-            query,
-            session_id=session_id,
-            agent_auto=agent_auto,
-            patches=structured or None,
-            allow_composer_slot_fill=allow_composer_slot_fill,
-        )
+                if identity is not None:
+                    return identity
+                # Web clarifying：跳过 typed skip / discuss / execute，交给 assemble 换题。
+                skip_hatch = False
+                if not allow_composer_slot_fill:
+                    sid = str(session_id or "").strip()
+                    if sid:
+                        peek = self.session_store.load(sid)
+                        skip_hatch = peek.task_status() == "clarifying"
+                if not skip_hatch:
+                    hatched = self._maybe_hatch_mode_gap(
+                        query,
+                        session_id=session_id,
+                        requested_mode="plan",
+                        response_style=response_style,
+                        persist=persist,
+                        keep=keep,
+                        explanation_depth=explanation_depth,
+                        agent_auto=agent_auto,
+                    )
+                    if hatched is not None:
+                        return hatched
+            plan, session = self._assemble_plan(
+                query,
+                session_id=session_id,
+                agent_auto=agent_auto,
+                patches=structured or None,
+                allow_composer_slot_fill=allow_composer_slot_fill,
+            )
         failed = self._clarification_failed_result(
             plan,
             session,
-            query=query,
+            query=asked,
             requested_mode="plan",
             response_style=response_style,
         )
@@ -673,7 +719,7 @@ class QteasyAssistant:
             return failed
         if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
             return self.ask(
-                query,
+                asked,
                 response_style=response_style,
                 persist=persist,
                 keep=keep,
@@ -689,7 +735,7 @@ class QteasyAssistant:
             keep=keep,
             explanation_depth=explanation_depth,
             session=session,
-            query=query,
+            query=asked,
             requested_mode="plan",
         )
 
@@ -1416,6 +1462,23 @@ class QteasyAssistant:
             if item.get("name")
         }
         if not declarations:
+            pending = []
+            if task is not None and isinstance(getattr(task, "pending_clarification", None), dict):
+                pending = [
+                    item
+                    for item in (task.pending_clarification.get("pending") or [])
+                    if isinstance(item, dict) and item.get("type")
+                ]
+            if pending:
+                from .slot_graph import parse_card_answers
+
+                accepted, errors = parse_card_answers(pending, submitted, provider=self.planner.provider)
+                if errors:
+                    flags = dict(task.flags or {})
+                    flags["_slot_errors"] = errors
+                    task.flags = flags
+                labels = {str(item.get("name") or ""): str(item.get("label") or item.get("name") or "") for item in pending}
+                return accepted, _revision_changes(accepted, submitted, labels, "")
             return submitted, _revision_changes(submitted, submitted, labels, "")
         current: Dict[str, Any] = {}
         for key, slot in (getattr(task, "slots", {}) or {}).items():
@@ -1437,6 +1500,22 @@ class QteasyAssistant:
         source_name = sources[0] if len(sources) == 1 else ""
         return out, _revision_changes(out, submitted, labels, source_name)
 
+    def _unresolved_action(self, session_id: str | None, patches: Dict[str, Any]) -> str:
+        """当前卡在问 ``unresolved_intent`` 时返回提交值，否则空串。"""
+
+        if "unresolved_intent" not in (patches or {}):
+            return ""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return ""
+        session = self.session_store.load(sid)
+        task = session.task if session is not None else None
+        pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
+        rows = pending.get("pending") if isinstance(pending.get("pending"), list) else []
+        if not any(isinstance(item, dict) and str(item.get("name") or "") == "unresolved_intent" for item in rows):
+            return ""
+        return str(patches.get("unresolved_intent") or "").strip()
+
     def _assemble_plan(
         self,
         query: str,
@@ -1445,6 +1524,8 @@ class QteasyAssistant:
         agent_auto: Optional[bool],
         patches: Optional[Dict[str, Any]] = None,
         allow_composer_slot_fill: bool = True,
+        forced_job: str = "",
+        replace_query: str = "",
     ) -> Tuple[Any, Optional[ConversationState]]:
         """Composer 先记 user_text，再按 Task 转移表路由。"""
 
@@ -1452,11 +1533,23 @@ class QteasyAssistant:
         profile = self.memory_store.load_profile()
         sid = str(session_id or "").strip()
         if not sid:
-            return self.planner.build_plan(query, mode="plan", profile=profile), None
+            return self.planner.build_plan(
+                query,
+                mode="plan",
+                profile=profile,
+                forced_job=forced_job,
+            ), None
 
         state = self.session_store.load(sid)
         if agent_auto is not None:
             state.agent_auto = bool(agent_auto)
+        if str(forced_job or "") == "open" or str(replace_query or "").strip():
+            return self._assemble_recovery(
+                state,
+                profile=profile,
+                forced_job=forced_job,
+                replace_query=replace_query,
+            )
         structured = _normalize_patches(patches)
         inbound = "control" if structured else "composer"
         asked = str(query or "").strip()
@@ -1552,6 +1645,56 @@ class QteasyAssistant:
             plan.assumptions["revision"] = int(getattr(state.task, "revision", 0) or 0) if state.task else 0
         self._sync_session_from_plan(state, plan, query=asked or query, skip_classify=skip_classify)
         self._apply_clarify_answer_streak(state, plan, user_answered=user_answered)
+        self.session_store.save(state)
+        return plan, state
+
+    def _assemble_recovery(
+        self,
+        state: ConversationState,
+        *,
+        profile: Dict[str, Any],
+        forced_job: str,
+        replace_query: str,
+    ) -> Tuple[Any, ConversationState]:
+        """恢复卡的两个规划动作：强制 open，或用新句子重新分类。"""
+
+        if str(forced_job or "") == "open":
+            if state.task is None:
+                state.start_task(query="")
+            asked = str(state.task.user_query or "").strip()
+            if state.task.pending_clarification or state.task.missing:
+                state.close_open_card("compose_open", status="answered")
+            plan = self.planner.build_plan(
+                asked,
+                mode="plan",
+                session=state,
+                skip_classify=False,
+                profile=profile,
+                forced_job="open",
+            )
+            self._sync_session_from_plan(state, plan, query=asked, skip_classify=False)
+            if state.task is not None and not isinstance((plan.assumptions or {}).get("clarification"), dict):
+                if state.task.status == "clarifying":
+                    state.task.mark_ready()
+            self.session_store.save(state)
+            return plan, state
+
+        text = str(replace_query or "").strip()
+        backgrounded = is_live_backgrounded(state.session_id)
+        cancelled = bool(
+            state.task and state.task.status in {"clarifying", "ready", "running"}
+        ) and not backgrounded
+        if text:
+            state.append_user_text(text)
+        if cancelled:
+            state.cancel_task()
+        state.start_task(query=text)
+        merge_facts(state, extract_patches(text), source="extracted", confirmed=True)
+        plan = self.planner.build_plan(text, mode="plan", session=state, profile=profile)
+        if cancelled:
+            plan.assumptions = dict(plan.assumptions or {})
+            plan.assumptions["topic_skipped"] = True
+        self._sync_session_from_plan(state, plan, query=text, skip_classify=False)
         self.session_store.save(state)
         return plan, state
 

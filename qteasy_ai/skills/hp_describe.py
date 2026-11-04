@@ -61,7 +61,12 @@ def build_hp_describe_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         version="0.1.0",
         summary="Structural view of an upstream HistoryPanel.",
         inputs_schema={
-            "view": {"type": "string", "required": False},
+            "view": {
+                "type": "string",
+                "required": False,
+                "enum": ["info", "head", "tail", "shape", "htypes", "shares"],
+                "enum_strict": True,
+            },
             "n": {"type": "integer", "required": False},
             "upstream_payload": {"type": "object", "required": False},
         },

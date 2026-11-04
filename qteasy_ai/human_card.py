@@ -17,6 +17,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
+from .slot_graph import clarification_skips_polish
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
 HUMAN_CARD_KINDS = frozenset(
@@ -547,6 +548,9 @@ def polish_human_cards(
             continue
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         if kind == "clarify":
+            if clarification_skips_polish(payload):
+                out.append(item)
+                continue
             polished = _polish_clarify_card(
                 item,
                 provider=provider,
