@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 import pandas as pd
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import asset_type_spec, freq_spec
 from .hp_panel import as_history_panel, english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -51,9 +52,9 @@ def build_data_kline_skill(
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
             "rows": {"type": "integer", "required": False},
-            "freq": {"type": "string", "required": False, "enum": ["d", "w", "m"], "enum_strict": False},
+            "freq": freq_spec(),
             "adj": {"type": "string", "required": False},
-            "asset_type": {"type": "string", "required": False, "enum": ["E", "FD"], "enum_strict": False},
+            "asset_type": asset_type_spec(),
             "as_panel": {"type": "boolean", "required": False},
             "b_days_only": {"type": "boolean", "required": False},
             "trade_time_only": {"type": "boolean", "required": False},

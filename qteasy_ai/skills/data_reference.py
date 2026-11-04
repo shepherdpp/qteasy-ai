@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import asset_type_spec, dtype_spec, freq_spec
 from .hp_panel import english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -45,12 +46,12 @@ def build_data_reference_skill(
         version="0.1.0",
         summary="Read local reference series via get_reference_data.",
         inputs_schema={
-            "names": {"type": "string", "required": True},
+            "names": dtype_spec(required=True),
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
-            "freq": {"type": "string", "required": False, "enum": ["d", "w", "m"], "enum_strict": False},
+            "freq": freq_spec(),
             "rows": {"type": "integer", "required": False},
-            "asset_type": {"type": "string", "required": False, "enum": ["E", "FD"], "enum_strict": False},
+            "asset_type": asset_type_spec(),
         },
         outputs_schema={"payload": "dict"},
         side_effects=SkillSideEffects(description="readonly local reference"),

@@ -14,7 +14,12 @@ import unittest
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.plan_markdown import plan_artifact_title, run_group_title, tool_plan_to_markdown
+from qteasy_ai.plan_markdown import (
+    _build_mermaid,
+    plan_artifact_title,
+    run_group_title,
+    tool_plan_to_markdown,
+)
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 
@@ -77,6 +82,39 @@ class TestAiPlanMarkdown(unittest.TestCase):
         self.assertNotIn("gold_lock", md)
         self.assertNotIn("hybrid_intent", md)
         self.assertNotIn("hybrid_candidate_stage_b0", md)
+
+    def test_mermaid_draws_only_resolved_step_ids(self) -> None:
+        """技能名或空依赖都不画边；只有对上的步骤号才连线。"""
+
+        print("\n[TestAiPlanMarkdown] mermaid 只画步骤号")
+        by_skill = _build_mermaid(
+            [
+                {"step_id": "step_1", "skill_name": "qt.ai.data.kline", "depends_on": []},
+                {
+                    "step_id": "step_2",
+                    "skill_name": "qt.ai.hp.returns",
+                    "depends_on": ["qt.ai.data.kline"],
+                },
+            ]
+        )
+        empty = _build_mermaid(
+            [
+                {"step_id": "step_1", "skill_name": "qt.ai.data.kline", "depends_on": []},
+                {"step_id": "step_2", "skill_name": "qt.ai.hp.returns", "depends_on": []},
+            ]
+        )
+        linked = _build_mermaid(
+            [
+                {"step_id": "step_1", "skill_name": "qt.ai.data.kline", "depends_on": []},
+                {"step_id": "step_2", "skill_name": "qt.ai.hp.returns", "depends_on": ["step_1"]},
+            ]
+        )
+        print(" by skill:\n", by_skill)
+        print(" empty:\n", empty)
+        print(" linked:\n", linked)
+        self.assertNotIn("-->", by_skill)
+        self.assertNotIn("-->", empty)
+        self.assertIn("step_1 --> step_2", linked)
 
     def test_mode_r_is_deterministic_without_provider(self) -> None:
         """无 Provider 时两次渲染正文相同。"""

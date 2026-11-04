@@ -39,7 +39,13 @@ from .slot_decl import (
     finalize_clarification_for_emit,
     interpret_declared_slots,
 )
-from .slot_graph import apply_slot_layer, date_pending_rows, polish_clarification, strategy_id_options
+from .slot_graph import (
+    apply_slot_layer,
+    contract_digest_lines,
+    date_pending_rows,
+    polish_clarification,
+    strategy_id_options,
+)
 
 _FETCH_CHANNEL = {
     "qt.ai.data.history": "history",
@@ -161,6 +167,7 @@ class Planner:
         skip_classify: bool = False,
         profile: Optional[Dict[str, Any]] = None,
         forced_job: str = "",
+        resume_steps: Optional[List[Dict[str, Any]]] = None,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -192,6 +199,7 @@ class Planner:
             skip_classify=skip_classify,
             profile=profile,
             forced_job=forced_job,
+            resume_steps=resume_steps,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -205,6 +213,7 @@ class Planner:
         skip_classify: bool = False,
         profile: Optional[Dict[str, Any]] = None,
         forced_job: str = "",
+        resume_steps: Optional[List[Dict[str, Any]]] = None,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -244,7 +253,28 @@ class Planner:
             origin_text = query
         skip = bool(skip_classify and task is not None and str(getattr(task, "job", "") or ""))
         forced = str(forced_job or "").strip()
-        if forced == "open":
+        resumed = [row for row in (resume_steps or []) if isinstance(row, dict) and row.get("skill_name")]
+        if resumed:
+            decision = IntentDecision(
+                job="open",
+                flags={},
+                source="session",
+                rationale="resume_candidate",
+            )
+            candidate_source = "session"
+            downgrade_reason = ""
+            steps = [
+                self._make_step(
+                    step_id=str(row.get("step_id") or f"step_{idx}"),
+                    skill_name=str(row.get("skill_name") or ""),
+                    inputs=dict(row.get("inputs") or {}) if isinstance(row.get("inputs"), dict) else {},
+                    depends_on=[str(item) for item in (row.get("depends_on") or [])],
+                )
+                for idx, row in enumerate(resumed, start=1)
+            ]
+            query = self._session_query_text(user_query, session) if session is not None else query
+            q_lower = query.lower()
+        elif forced == "open":
             skip = False
             decision = IntentDecision(
                 job="open",
@@ -272,7 +302,7 @@ class Planner:
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
-        if decision.job == "open" and not skip:
+        if decision.job == "open" and not skip and not resumed:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:
                 downgrade_reason = open_reason
@@ -353,6 +383,7 @@ class Planner:
             assumptions["session_missing"] = missing
         elif isinstance(assumptions.get("clarification"), dict):
             assumptions["clarification"] = finalize_clarification_for_emit(assumptions["clarification"])
+        self._attach_open_resume(assumptions)
         if self.provider is not None and isinstance(assumptions.get("clarification"), dict):
             assumptions["clarification"] = polish_clarification(
                 self.provider,
@@ -401,6 +432,19 @@ class Planner:
             "rationale": candidate_plan.assumptions.get("intent_rationale", ""),
         }
         return final_plan
+
+    @staticmethod
+    def _attach_open_resume(assumptions: Dict[str, Any]) -> None:
+        """开放图澄清卡带上步骤快照，供控件提交时恢复。"""
+
+        if str(assumptions.get("intent_job") or "") != "open":
+            return
+        snapshot = assumptions.get("accepted_steps")
+        clar = assumptions.get("clarification")
+        if not isinstance(clar, dict) or not isinstance(snapshot, list) or not snapshot:
+            return
+        clar["accepted_steps"] = list(snapshot)
+        clar["resume_job"] = "open"
 
     @staticmethod
     def _session_query_text(user_query: str, session: Any) -> str:
@@ -715,7 +759,11 @@ class Planner:
 
     _LLM_OPEN_SYSTEM = (
         "You propose a short qteasy-ai ToolPlan using only allowed low side-effect skills. "
-        "Reply with JSON only: {\"steps\": [{\"skill_name\": \"qt.ai...\", \"inputs\": {}}]}. "
+        "Reply with JSON only: {\"steps\": ["
+        "{\"skill_name\": \"qt.ai...\", \"inputs\": {}, \"depends_on\": []}, "
+        "{\"skill_name\": \"qt.ai...\", \"inputs\": {}, \"depends_on\": [\"step_1\"]}"
+        "]}. "
+        "depends_on values are earlier step_id values such as step_1, not skill names. "
         "Do not invent skills. Do not use refill, backtest, optimize, codegen, or live skills."
     )
 
@@ -728,9 +776,12 @@ class Planner:
         max_steps = catalog.legal_max_steps()
         if self.provider is None:
             return None, "open_requires_provider"
-        allowed_lines = "\n".join(f"- {name}" for name in sorted(allowed))
+        allowed_names = sorted(allowed)
+        allowed_lines = "\n".join(f"- {name}" for name in allowed_names)
+        digest = "\n".join(contract_digest_lines(self, allowed_names))
         prompt = (
             f"Allowed skills:\n{allowed_lines}\n\n"
+            f"Skill contracts:\n{digest}\n\n"
             f"User query:\n{query}\n"
         )
         try:

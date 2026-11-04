@@ -450,6 +450,21 @@ _CARD_SYSTEM_PROMPT = (
     "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
     "Output the rewritten card text only."
 )
+_CLARIFY_FIELDS_SYSTEM_PROMPT = (
+    "Rewrite this qteasy-ai clarification card into Simplified Chinese. "
+    "The input has TEXT and FIELDS sections. FIELDS lines are name|label|hint. "
+    "Change only tone and language of the card text, each label, and each hint. "
+    "Keep every field name exactly as written. Do not add, drop, or rename fields. "
+    "Do not change formats or examples; they are not in the input. "
+    "Keep every qt.ai skill id, plan_id, error code, parameter, and number exactly as written. "
+    "Do not add steps, returns, drawdowns, hit counts, or any number that is not already present. "
+    "Output exactly two sections:\n"
+    "TEXT:\n"
+    "<rewritten card text>\n"
+    "FIELDS:\n"
+    "<name>|<rewritten label>|<rewritten hint>\n"
+    "with one FIELDS line per input field, same names, same order."
+)
 _CLARIFY_OPTIONS_SYSTEM_PROMPT = (
     "Rewrite this qteasy-ai clarification card into Simplified Chinese. "
     "The input has TEXT and LABELS sections. LABELS lines are option_id|label. "
@@ -604,6 +619,113 @@ def _format_clarify_polish_prompt(text: str, option_rows: Sequence[Tuple[str, st
     return "\n".join(lines)
 
 
+def _rows_keep_format(payload: Dict[str, Any]) -> bool:
+    """自由输入格带了格式或例子时，润色不得改这两项。"""
+
+    pending = payload.get("pending") if isinstance(payload.get("pending"), list) else []
+    return any(
+        isinstance(item, dict) and (str(item.get("format") or "") or str(item.get("example") or ""))
+        for item in pending
+    )
+
+
+def _format_field_polish_prompt(text: str, pending: Sequence[Dict[str, Any]]) -> str:
+    """TEXT 加 FIELDS：name|label|hint。"""
+
+    lines = ["TEXT:", str(text or "").rstrip(), "", "FIELDS:"]
+    for row in pending:
+        lines.append(
+            f"{row.get('name')}|{row.get('label') or ''}|{row.get('hint') or ''}"
+        )
+    return "\n".join(lines)
+
+
+def _parse_field_polish_reply(
+    raw: str,
+    *,
+    expected_names: Sequence[str],
+) -> Optional[Tuple[str, Dict[str, Tuple[str, str]]]]:
+    """解析 TEXT:/FIELDS:。名字或顺序不对则返回 None。"""
+
+    body = str(raw or "").strip()
+    fenced = _FENCE_RE.match(body)
+    if fenced:
+        body = str(fenced.group(1) or "").strip()
+    if not body:
+        return None
+    upper = body.upper()
+    text_mark = upper.find("TEXT:")
+    fields_mark = upper.find("FIELDS:")
+    if text_mark < 0 or fields_mark < 0 or fields_mark <= text_mark:
+        return None
+    text_body = body[text_mark + len("TEXT:") : fields_mark].strip()
+    fields_body = body[fields_mark + len("FIELDS:") :].strip()
+    if not text_body:
+        return None
+    parsed: List[Tuple[str, str, str]] = []
+    for line in fields_body.splitlines():
+        row = str(line or "").strip()
+        if not row:
+            continue
+        name, sep, rest = row.partition("|")
+        label, sep2, hint = rest.partition("|")
+        name = name.strip()
+        label = label.strip()
+        hint = hint.strip()
+        if not sep or not sep2 or not name or not label or not hint:
+            return None
+        parsed.append((name, label, hint))
+    names = [item[0] for item in parsed]
+    if names != list(expected_names):
+        return None
+    return text_body, {name: (label, hint) for name, label, hint in parsed}
+
+
+def _polish_clarify_fields(
+    item: Dict[str, Any],
+    *,
+    provider: Any,
+    identity_dir: Any = None,
+) -> Dict[str, Any]:
+    """改写正文、label 和 hint。format 与 example 留在原行上。"""
+
+    text = str(item.get("text") or "")
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    pending = [dict(row) for row in (payload.get("pending") or []) if isinstance(row, dict)]
+    names = [str(row.get("name") or "") for row in pending]
+    try:
+        raw = provider.chat(
+            _format_field_polish_prompt(text, pending),
+            system_prompt=prefix_system_prompt(_CLARIFY_FIELDS_SYSTEM_PROMPT, identity_dir),
+        )
+    except Exception:
+        return item
+    parsed = _parse_field_polish_reply(str(raw or ""), expected_names=names)
+    if parsed is None:
+        return item
+    new_text, fields = parsed
+    if not _card_rewrite_ok(text, new_text, kind="clarify"):
+        return item
+    new_pending: List[Dict[str, Any]] = []
+    for row in pending:
+        name = str(row.get("name") or "")
+        label, hint = fields[name]
+        if not _card_rewrite_ok(str(row.get("label") or ""), label, kind="clarify"):
+            return item
+        if not _card_rewrite_ok(str(row.get("hint") or ""), hint, kind="clarify"):
+            return item
+        cloned = dict(row)
+        cloned["label"] = label
+        cloned["hint"] = hint
+        new_pending.append(cloned)
+    out_payload = dict(payload)
+    out_payload["pending"] = new_pending
+    cloned_item = dict(item)
+    cloned_item["text"] = new_text
+    cloned_item["payload"] = out_payload
+    return cloned_item
+
+
 def _parse_clarify_polish_reply(
     raw: str,
     *,
@@ -711,6 +833,12 @@ def _polish_clarify_card(
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     option_rows = _clarify_option_rows(payload)
     if not option_rows:
+        if _rows_keep_format(payload):
+            return _polish_clarify_fields(
+                item,
+                provider=provider,
+                identity_dir=identity_dir,
+            )
         rewritten = _rewrite_card_text(
             provider,
             text,

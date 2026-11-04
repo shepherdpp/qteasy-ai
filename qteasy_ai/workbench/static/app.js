@@ -2894,7 +2894,15 @@ function renderClarification() {
   const submitDisabled = busy || !allReady ? "disabled" : "";
   const hint = row && typeof row === "object" ? String(row.hint || "") : "";
   const error = row && typeof row === "object" ? String(row.error || "") : "";
-  const hintHtml = hint ? `<span class="slot-hint ix-card-meta">${escapeHtml(hint)}</span>` : "";
+  const format = row && typeof row === "object" ? String(row.format || "") : "";
+  const example = row && typeof row === "object" ? String(row.example || "") : "";
+  const constraint = row && typeof row === "object" ? String(row.constraint || "") : "";
+  const label = row && typeof row === "object" ? String(row.label || slotLabel(slotName)) : slotLabel(slotName);
+  const hintHtml = hint ? `<span class="slot-hint ix-card-meta" data-testid="clarify-hint">${escapeHtml(hint)}</span>` : "";
+  const formatHtml = format ? `<span class="slot-format ix-card-meta" data-testid="clarify-format">${escapeHtml(format)}</span>` : "";
+  const exampleHtml = example ? `<span class="slot-example ix-card-meta" data-testid="clarify-example">${escapeHtml(example)}</span>` : "";
+  const constraintHtml = constraint ? `<p class="clarify-constraint" data-testid="clarify-constraint">${escapeHtml(constraint)}</p>` : "";
+  const questionHtml = label ? `<p class="clarify-question" data-testid="clarify-question">${escapeHtml(label)}</p>` : "";
   const errorHtml = error ? `<span class="slot-error ix-card-meta">${escapeHtml(error)}</span>` : "";
   const optionRows = renderClarifyStepOptions(row, slotName, lock);
   const pager = `<div class="ix-card-pager" data-testid="clarify-nav">
@@ -2914,12 +2922,17 @@ function renderClarification() {
       <button type="button" class="primary" id="btn-clarify" ${submitDisabled}>Submit</button>
     </div>`;
   }
-  const prompt = clar
-    ? `<p>${escapeHtml(clar.text || "")}</p>`
-    : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
+  const cardText = clar ? String(clar.text || "") : "";
+  const ownQuestion = Boolean(hint || format || constraint);
+  const showCardText = !ownQuestion || cardText.includes("Last chance");
+  const prompt = showCardText && cardText
+    ? `<p>${escapeHtml(cardText)}</p>`
+    : clar
+      ? ""
+      : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
   return `<div class="ix-card" data-testid="clarification-form">
     <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3>${pager}</div>
-    <div class="ix-card-body">${prompt}${hintHtml}${errorHtml}${optionRows}</div>
+    <div class="ix-card-body">${prompt}${constraintHtml}${questionHtml}${hintHtml}${formatHtml}${exampleHtml}${errorHtml}${optionRows}</div>
     ${foot}
   </div>`;
 }

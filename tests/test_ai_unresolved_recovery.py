@@ -299,6 +299,88 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             )
             self.assertNotIn("unresolved_intent", after.task.slots)
 
+    def test_open_slot_answer_resumes_the_same_graph(self) -> None:
+        """开放图缺窗口时，控件提交日期恢复原图，不再分类。"""
+
+        print("\n[TestAiUnresolvedRecovery] 开放图补日期后恢复原图")
+        query = "取 000300.SH 的 close，算收益，再出一页图"
+        rough = [
+            {
+                "skill_name": "qt.ai.data.history",
+                "inputs": {
+                    "freq": "d",
+                    "shares": "000300.SH",
+                    "htype_names": "close",
+                    "asset_type": "IDX",
+                },
+            },
+            {"skill_name": "qt.ai.hp.returns", "inputs": {"method": "pct_change"}},
+            {"skill_name": "qt.ai.hp.plot", "inputs": {"shares": "000300.SH"}},
+        ]
+        decoy = _job({"job": "data.refill"})
+        fake = FakeLLMProvider(
+            replies=[
+                _job({"job": "open"}),
+                _job({"job": "open"}),
+                json.dumps({"steps": rough}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=fake,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-resume-open"
+            first = asst.plan(query, response_style="raw", session_id=sid)
+            held = asst.session_store.load(sid)
+            clar = (first.get("plan") or {}).get("assumptions", {}).get("clarification") or {}
+            pending = held.task.pending_clarification if held.task is not None else {}
+            snapshot = [row.get("skill_name") for row in (clar.get("accepted_steps") or [])]
+            print(" resume_job:", clar.get("resume_job"), "snapshot:", snapshot)
+            print(" pending:", [item.get("name") for item in (clar.get("pending") or []) if isinstance(item, dict)])
+            print(" task job:", held.task.job if held.task else None)
+            self.assertEqual(clar.get("resume_job"), "open")
+            self.assertEqual(
+                snapshot,
+                ["qt.ai.data.history", "qt.ai.hp.returns", "qt.ai.hp.plot"],
+            )
+            self.assertEqual(pending.get("resume_job"), "open")
+            self.assertFalse(str(held.task.job or ""))
+            catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+            fake.replies.extend(["polish placeholder", "polish placeholder", "polish placeholder", decoy])
+            second = asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"start": "20250101"},
+            )
+            after = asst.session_store.load(sid)
+            plan = second.get("plan") or {}
+            steps = plan.get("steps") or []
+            skills = [step.get("skill_name") for step in steps]
+            depends = [list(step.get("depends_on") or []) for step in steps]
+            history = next((step for step in steps if step.get("skill_name") == "qt.ai.data.history"), {})
+            names = [
+                item.get("name")
+                for item in ((plan.get("assumptions") or {}).get("clarification") or {}).get("pending") or []
+                if isinstance(item, dict)
+            ]
+            catalogs_after = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+            print(" skills:", skills, plan.get("execution_mode"))
+            print(" depends:", depends)
+            print(" history:", (history.get("inputs") or {}))
+            print(" catalogs:", len(catalogs), len(catalogs_after), "left:", fake.replies)
+            print(" names:", names, "job:", after.task.job if after.task else None)
+            self.assertEqual(catalogs_after, catalogs)
+            self.assertIn(decoy, fake.replies)
+            self.assertEqual(plan.get("execution_mode"), "dry_run")
+            self.assertEqual(skills, ["qt.ai.data.history", "qt.ai.hp.returns", "qt.ai.hp.plot"])
+            self.assertEqual((history.get("inputs") or {}).get("start"), "20250101")
+            self.assertEqual(depends, [[], ["step_1"], ["step_2"]])
+            self.assertNotIn("unresolved_intent", names)
+            self.assertFalse(str(after.task.job or ""))
+
 
 if __name__ == "__main__":
     unittest.main()

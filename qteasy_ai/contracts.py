@@ -86,6 +86,8 @@ class SkillMetadata:
     """技能子标签：``api``（默认 L1 原子）、``guide``（环境引导）、``insight``（只读归因）。"""
     expected_artifact: str = ""
     """plan.md 人读预期：产物形态与 Artifacts 位置。空串时由渲染器用 summary 与入口名合成。"""
+    any_of: List[List[str]] = field(default_factory=list)
+    """每组至少填一个。组内全空时追问，填上任意一个即通过。"""
 
 
 @dataclass

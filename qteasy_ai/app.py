@@ -1557,6 +1557,7 @@ class QteasyAssistant:
         topic_skipped = False
         user_answered = False
         keep_plan_id = ""
+        resume_steps = None
         slot_revision: Optional[Dict[str, Any]] = None
         slot_changes: List[Dict[str, Any]] = []
 
@@ -1573,6 +1574,19 @@ class QteasyAssistant:
                 user_answered = True
             skip_classify = bool(state.task and state.task.job)
             keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
+            pending = (
+                state.task.pending_clarification
+                if state.task is not None and isinstance(state.task.pending_clarification, dict)
+                else {}
+            )
+            snapshot = pending.get("accepted_steps")
+            if (
+                str(pending.get("resume_job") or "") == "open"
+                and isinstance(snapshot, list)
+                and snapshot
+            ):
+                resume_steps = [row for row in snapshot if isinstance(row, dict)]
+                asked = str(state.task.user_query or asked).strip()
             slot_revision = dict(structured)
             if state.task is not None:
                 state.task.revision = int(state.task.revision or 0) + 1
@@ -1631,6 +1645,7 @@ class QteasyAssistant:
             session=state,
             skip_classify=skip_classify,
             profile=profile,
+            resume_steps=resume_steps,
         )
         if keep_plan_id and inbound == "control":
             plan.plan_id = keep_plan_id

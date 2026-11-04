@@ -409,7 +409,7 @@ def _escape_mermaid_label(text: str) -> str:
 
 
 def _build_mermaid(steps: Sequence[Dict[str, Any]]) -> str:
-    """由 depends_on 生成 flowchart；无依赖则顺序串。"""
+    """由已对上 ``step_id`` 的 ``depends_on`` 生成 flowchart。"""
 
     if not steps:
         return "flowchart TD\n  empty[No steps]\n"
@@ -433,8 +433,6 @@ def _build_mermaid(steps: Sequence[Dict[str, Any]]) -> str:
                 source = id_by_step.get(dep)
                 if source:
                     edges.add((source, target))
-        elif index > 0:
-            edges.add((node_ids[index - 1], target))
     for source, target in edges:
         lines.append(f"  {source} --> {target}")
     return "\n".join(lines) + "\n"

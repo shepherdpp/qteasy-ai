@@ -13,6 +13,7 @@ import json
 import unittest
 
 from qteasy_ai.app import build_default_registry
+from qteasy_ai.plan_markdown import tool_plan_to_markdown
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
@@ -384,12 +385,95 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             mode="plan",
         )
         print(" open skills:", [step.skill_name for step in dry.steps], dry.execution_mode)
+        print(" kline pending:", _pending_names(dry))
         self.assertEqual(dry.execution_mode, "dry_run")
         self.assertLessEqual(len(dry.steps), 3)
         self.assertEqual(
             [step.skill_name for step in dry.steps],
             ["qt.ai.data.kline", "qt.ai.hp.returns", "qt.ai.hp.plot"],
         )
+        self.assertNotIn("start", _pending_names(dry))
+        self.assertNotIn("end", _pending_names(dry))
+
+    def test_open_history_contract_normalizes_and_asks(self) -> None:
+        """历史图上的非法取值要收成契约值；缺窗口和列名时追问，边要接上。"""
+
+        print("\n[TestAi04A6] 开放历史图按契约验收")
+        rough = [
+            {
+                "skill_name": "qt.ai.data.history",
+                "inputs": {
+                    "freq": "D",
+                    "shares": "000300.SH",
+                    "htype_names": "['日线']",
+                    "asset_type": "指数",
+                },
+            },
+            {"skill_name": "qt.ai.hp.returns", "inputs": {"method": "pct_change"}},
+            {"skill_name": "qt.ai.hp.plot", "inputs": {"shares": "000300.SH"}},
+        ]
+        asked = "取 000300.SH 日线，算收益，再出一页图"
+        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": rough}, ensure_ascii=False)])
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(asked, mode="plan")
+        print(" pending:", _pending_names(plan))
+        print(" skill:", plan.steps[0].skill_name)
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(_pending_names(plan), ["htype_names", "start", "end"])
+        accepted = {
+            row["step_id"]: row
+            for row in ((plan.assumptions or {}).get("accepted_steps") or [])
+        }
+        history = (accepted.get("step_1") or {}).get("inputs") or {}
+        print(" history:", history)
+        print(" depends:", accepted.get("step_2", {}).get("depends_on"), accepted.get("step_3", {}).get("depends_on"))
+        self.assertEqual(history.get("freq"), "d")
+        self.assertEqual(history.get("asset_type"), "IDX")
+        self.assertNotIn("htype_names", history)
+        self.assertNotIn("日线", json.dumps(history, ensure_ascii=False))
+        self.assertNotIn("指数", json.dumps(history, ensure_ascii=False))
+        self.assertEqual((accepted.get("step_2") or {}).get("depends_on"), ["step_1"])
+        self.assertEqual((accepted.get("step_3") or {}).get("depends_on"), ["step_2"])
+        digest = [text for text in fake.prompts if text.startswith("Allowed skills:")]
+        print(" digest lines:", len(digest))
+        self.assertTrue(digest)
+        self.assertIn("Skill contracts:", digest[0])
+        self.assertIn("any_of=start|end", digest[0])
+        self.assertIn("needs_upstream", digest[0])
+
+        ready = [
+            {
+                "skill_name": "qt.ai.data.history",
+                "inputs": {
+                    "freq": "D",
+                    "shares": "000300.SH",
+                    "htype_names": "close",
+                    "asset_type": "指数",
+                    "start": "20240101",
+                },
+            },
+            {"skill_name": "qt.ai.hp.returns", "inputs": {"method": "pct_change"}},
+            {"skill_name": "qt.ai.hp.plot", "inputs": {"shares": "000300.SH"}},
+        ]
+        opened = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": ready}, ensure_ascii=False)])
+        dry = Planner(self.registry, provider=opened, env_facts={}).build_plan(
+            "取 000300.SH 从 20240101 起的日线，算收益，再出一页图",
+            mode="plan",
+        )
+        print(" dry skills:", [step.skill_name for step in dry.steps], dry.execution_mode)
+        print(" dry inputs:", dry.steps[0].inputs)
+        print(" dry depends:", [list(step.depends_on) for step in dry.steps])
+        self.assertEqual(dry.execution_mode, "dry_run")
+        self.assertEqual(
+            [step.skill_name for step in dry.steps],
+            ["qt.ai.data.history", "qt.ai.hp.returns", "qt.ai.hp.plot"],
+        )
+        self.assertEqual(dry.steps[0].inputs.get("freq"), "d")
+        self.assertEqual(dry.steps[0].inputs.get("asset_type"), "IDX")
+        self.assertEqual(dry.steps[0].inputs.get("htype_names"), "close")
+        self.assertEqual(dry.steps[0].inputs.get("start"), "20240101")
+        self.assertEqual(list(dry.steps[1].depends_on), ["step_1"])
+        self.assertEqual(list(dry.steps[2].depends_on), ["step_2"])
+        self.assertNotIn("start", _pending_names(dry))
 
     def test_refill_strategy_options_factor_ic_and_fast_slow(self) -> None:
         """下载问 start/end；策略选项按字母序；因子 IC 与 fast/slow 不动。"""
@@ -403,8 +487,8 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" refill missing:", refill.steps[0].inputs.get("missing_info"))
         self.assertEqual(_pending_names(refill), ["start", "end"])
         self.assertNotEqual(refill.steps[0].inputs.get("missing_info"), "date_range")
-        hint = str(_pending(refill)[0].get("hint") or "")
-        self.assertIn("Unbounded full-history download is not allowed", hint)
+        constraint = str(_pending(refill)[0].get("constraint") or "")
+        self.assertIn("Unbounded full-history download is not allowed", constraint)
 
         meta = Planner(self.registry, env_facts={}).build_plan("列出策略参数", mode="plan")
         options = [str(item.get("id") or "") for item in (_pending(meta)[0].get("options") or [])]
@@ -465,6 +549,139 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertFalse(freq.get("enum_strict"))
         self.assertEqual(metric.get("enum"), ["drawdown", "gain"])
         self.assertTrue(metric.get("enum_strict"))
+
+    def test_depends_resolve_to_earlier_step_id(self) -> None:
+        """依赖写成唯一的上游技能名时收成步骤号；对不上则整单拒绝。"""
+
+        print("\n[TestAi04A6] 依赖收成更早的步骤号")
+        linked = [
+            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
+            {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["qt.ai.data.kline"]},
+        ]
+        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": linked})])
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            "取 000300.SH 日线再算收益",
+            mode="plan",
+        )
+        print(" skills:", [step.skill_name for step in plan.steps])
+        print(" depends:", [list(step.depends_on) for step in plan.steps])
+        print(" mode:", plan.execution_mode)
+        self.assertEqual(plan.execution_mode, "dry_run")
+        self.assertEqual(
+            [step.skill_name for step in plan.steps],
+            ["qt.ai.data.kline", "qt.ai.hp.returns"],
+        )
+        self.assertEqual(list(plan.steps[0].depends_on), [])
+        self.assertEqual(list(plan.steps[1].depends_on), ["step_1"])
+        md = tool_plan_to_markdown(plan)
+        print(" edge:", "step_1 --> step_2" in md)
+        self.assertIn("step_1 --> step_2", md)
+        open_systems = [text for text in fake.system_prompts if "depends_on" in text]
+        print(" open system mentions step_1:", any("step_1" in text for text in open_systems))
+        self.assertTrue(open_systems)
+        self.assertIn("step_1", open_systems[0])
+        self.assertIn("step_id", open_systems[0])
+
+        ambiguous = [
+            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
+            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000001.SZ"}},
+            {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["qt.ai.data.kline"]},
+        ]
+        unknown = [
+            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
+            {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["step_9"]},
+        ]
+        forward = [
+            {
+                "skill_name": "qt.ai.data.kline",
+                "inputs": {"shares": "000300.SH"},
+                "depends_on": ["step_2"],
+            },
+            {"skill_name": "qt.ai.hp.returns", "inputs": {}},
+        ]
+        for label, steps in (("ambiguous", ambiguous), ("unknown", unknown), ("forward", forward)):
+            opened = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": steps})])
+            rejected = Planner(self.registry, provider=opened, env_facts={}).build_plan(
+                "取 000300.SH 日线再算收益",
+                mode="plan",
+            )
+            reason = rejected.steps[0].inputs.get("reason")
+            print(" ", label, rejected.steps[0].skill_name, reason, _pending_names(rejected))
+            self.assertEqual(rejected.steps[0].skill_name, "qt.ai.system.fallback")
+            self.assertEqual(reason, "unresolved_depends")
+            self.assertEqual(_pending_names(rejected), [])
+
+        empty = [
+            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
+            {"skill_name": "qt.ai.hp.returns", "inputs": {}},
+        ]
+        bound = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": empty})])
+        dry = Planner(self.registry, provider=bound, env_facts={}).build_plan(
+            "取 000300.SH 日线再算收益",
+            mode="plan",
+        )
+        print(" empty depends:", [list(step.depends_on) for step in dry.steps], _pending_names(dry))
+        self.assertEqual(dry.execution_mode, "dry_run")
+        self.assertEqual(list(dry.steps[1].depends_on), ["step_1"])
+        self.assertNotIn("start", _pending_names(dry))
+        self.assertNotIn("end", _pending_names(dry))
+
+    def test_date_rows_ask_one_field_with_format(self) -> None:
+        """start 与 end 各有题干、格式和例子；组约束不写进 hint。"""
+
+        print("\n[TestAi04A6] 日期格各自发问")
+        rough = [
+            {
+                "skill_name": "qt.ai.data.history",
+                "inputs": {
+                    "freq": "d",
+                    "shares": "000300.SH",
+                    "htype_names": "close",
+                    "asset_type": "IDX",
+                },
+            },
+            {"skill_name": "qt.ai.hp.returns", "inputs": {}},
+        ]
+        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": rough})])
+        asked = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            "取 000300.SH 的 close，算收益",
+            mode="plan",
+        )
+        rows = {str(item.get("name") or ""): item for item in _pending(asked)}
+        print(" history rows:", {name: {key: rows[name].get(key) for key in ("label", "hint", "format", "example", "constraint")} for name in rows})
+        self.assertEqual(list(rows), ["start", "end"])
+        self._assert_distinct_date_rows(rows, "rows alone does not select a history window.")
+
+        refill = Planner(self.registry, env_facts={}).build_plan(
+            "download A-share daily data to local datasource",
+            mode="plan",
+        )
+        refill_rows = {str(item.get("name") or ""): item for item in _pending(refill)}
+        print(
+            " refill rows:",
+            {name: {key: refill_rows[name].get(key) for key in ("label", "hint", "format", "example", "constraint")} for name in ("start", "end")},
+        )
+        self.assertEqual([str(item.get("name") or "") for item in _pending(refill)], ["start", "end"])
+        self._assert_distinct_date_rows(refill_rows, "Unbounded full-history download is not allowed.")
+
+    def _assert_distinct_date_rows(self, rows, constraint_text: str) -> None:
+        """两格题干、hint、例子不同，格式相同，组约束只在 constraint。"""
+
+        start = rows["start"]
+        end = rows["end"]
+        print(" start:", start.get("label"), start.get("hint"), start.get("example"))
+        print(" end:", end.get("label"), end.get("hint"), end.get("example"))
+        self.assertNotEqual(start.get("label"), end.get("label"))
+        self.assertNotEqual(start.get("hint"), end.get("hint"))
+        self.assertNotEqual(start.get("example"), end.get("example"))
+        self.assertEqual(start.get("format"), "YYYYMMDD")
+        self.assertEqual(end.get("format"), "YYYYMMDD")
+        self.assertTrue(str(start.get("example") or ""))
+        self.assertTrue(str(end.get("example") or ""))
+        self.assertIn(constraint_text, str(start.get("constraint") or ""))
+        self.assertIn(constraint_text, str(end.get("constraint") or ""))
+        self.assertNotIn(constraint_text, str(start.get("hint") or ""))
+        self.assertNotIn(constraint_text, str(end.get("hint") or ""))
 
 
 if __name__ == "__main__":

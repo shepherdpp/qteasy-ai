@@ -1601,6 +1601,62 @@ class TestAiHumanCardPolish(unittest.TestCase):
         self.assertEqual(out["payload"]["pending"][0]["name"], "start_date")
         self.assertNotIn("TEXT:", provider.prompts[0])
 
+    def test_clarify_polish_rewrites_date_labels_and_keeps_format(self) -> None:
+        """自由输入的日期格可改 label 与 hint，format 和 example 不动。"""
+
+        print("\n[TestAiHumanCardPolish] 日期格润色保留格式")
+        cards = [
+            {
+                "kind": "clarify",
+                "text": "Provide at least one of start or end.",
+                "payload": {
+                    "pending": [
+                        {
+                            "name": "start",
+                            "label": "Start date",
+                            "hint": "The first day of the range.",
+                            "format": "YYYYMMDD",
+                            "example": "20250101",
+                        },
+                        {
+                            "name": "end",
+                            "label": "End date",
+                            "hint": "The last day of the range.",
+                            "format": "YYYYMMDD",
+                            "example": "20251231",
+                        },
+                    ],
+                    "step_index": 1,
+                    "step_total": 2,
+                },
+            }
+        ]
+        reply = (
+            "TEXT:\n"
+            "请至少给出 start 或 end。\n"
+            "FIELDS:\n"
+            "start|起始日期|区间的第一天\n"
+            "end|结束日期|区间的最后一天\n"
+        )
+        provider = FakeLLMProvider(replies=[reply, reply.replace("start|", "begin|", 1)])
+        polished = polish_human_cards(cards, provider=provider, query="取 000300.SH 的 close")
+        out = next(item for item in polished if item["kind"] == "clarify")
+        pending = out["payload"]["pending"]
+        print(" text:", out["text"])
+        print(" rows:", [(item.get("name"), item.get("label"), item.get("hint"), item.get("format"), item.get("example")) for item in pending])
+        self.assertEqual(out["text"], "请至少给出 start 或 end。")
+        self.assertEqual([item.get("name") for item in pending], ["start", "end"])
+        self.assertEqual([item.get("label") for item in pending], ["起始日期", "结束日期"])
+        self.assertEqual([item.get("hint") for item in pending], ["区间的第一天", "区间的最后一天"])
+        self.assertEqual([item.get("format") for item in pending], ["YYYYMMDD", "YYYYMMDD"])
+        self.assertEqual([item.get("example") for item in pending], ["20250101", "20251231"])
+        rolled = polish_human_cards(cards, provider=provider, query="取 000300.SH 的 close")
+        rolled_out = next(item for item in rolled if item["kind"] == "clarify")
+        print(" rolled text:", rolled_out["text"])
+        self.assertEqual(rolled_out["text"], cards[0]["text"])
+        self.assertEqual(rolled_out["payload"]["pending"][0]["label"], "Start date")
+        self.assertEqual(rolled_out["payload"]["pending"][0]["example"], "20250101")
+
     def test_attach_human_cards_stores_chinese_plan_ready(self) -> None:
         """装配层把通过校验的中文 plan_ready 写入 session。"""
 

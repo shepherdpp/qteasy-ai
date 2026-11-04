@@ -326,6 +326,41 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertTrue(read)
             self.assertEqual(read[0]["inputs"].get("shares"), "000001.SZ")
 
+    def test_refill_date_patches_stay_on_the_recipe(self) -> None:
+        """下载缺日期用控件补上后仍是 refill 菜谱，不走开放图快照。"""
+
+        print("\n[TestAiPlannerF] 下载补日期仍走菜谱")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self._assistant(temp_dir)
+            first = assistant.plan(
+                "download A-share daily data to local datasource",
+                response_style="raw",
+                session_id="s-refill-patch",
+            )
+            clar = (first.get("plan") or {}).get("assumptions", {}).get("clarification") or {}
+            print(" resume_job:", clar.get("resume_job"), "pending:", [item.get("name") for item in (clar.get("pending") or [])])
+            self.assertNotEqual(clar.get("resume_job"), "open")
+            self.assertFalse(clar.get("accepted_steps"))
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-refill-patch",
+                patches={"start": "20240101", "end": "20241231"},
+            )
+            plan = second.get("plan") or {}
+            refill = [
+                step
+                for step in (plan.get("steps") or [])
+                if step.get("skill_name") == "qt.ai.data.refill_basic_equity_and_index"
+            ]
+            print(" intent:", (plan.get("planner_trace") or {}).get("intent_job"))
+            print(" inputs:", refill[0]["inputs"] if refill else None)
+            self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "data.refill")
+            self.assertEqual((plan.get("planner_trace") or {}).get("source"), "session")
+            self.assertTrue(refill)
+            self.assertEqual(refill[0]["inputs"].get("start"), "20240101")
+            self.assertEqual(refill[0]["inputs"].get("end"), "20241231")
+
 
 if __name__ == "__main__":
     unittest.main()

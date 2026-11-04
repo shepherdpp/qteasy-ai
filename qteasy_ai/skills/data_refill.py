@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import refill_bound_spec
 from .env_guide import _default_token_probe
 
 DEFAULT_REFILL_TABLES: List[str] = ["stock_daily", "index_daily"]
@@ -57,8 +58,8 @@ def build_data_refill_skill(
         version="0.2.0",
         summary="Download stock_daily and index_daily into the local datasource (high cost).",
         inputs_schema={
-            "start": {"type": "string", "required": True},
-            "end": {"type": "string", "required": True},
+            "start": refill_bound_spec("start"),
+            "end": refill_bound_spec("end"),
             "tables": {"type": "list", "required": False},
             "symbols": {"type": "string", "required": False},
         },
