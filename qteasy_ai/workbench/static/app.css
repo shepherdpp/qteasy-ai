@@ -83,7 +83,7 @@ button.icon-btn {
   line-height: 0;
   border: 0;
 }
-.ui-icon { display: block; }
+.ui-icon { display: block; pointer-events: none; }
 button.danger { color: var(--err); }
 textarea, input {
   font: inherit;
@@ -618,7 +618,13 @@ html[data-theme="light"] .mode-notice {
   color: var(--text-muted);
   margin: 10px 0 2px;
 }
-.now-block .now-job .now-v { font-size: 14px; color: var(--text-bright); font-weight: 600; }
+.now-block .now-line { font-size: 12px; font-weight: 400; color: var(--text); }
+.now-block .now-line .now-label { font-weight: 700; }
+.now-block .now-line.clip {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
 .pipe { color: var(--text-muted); }
 .pipe.active { color: var(--text-bright); background: var(--bg-active); border-radius: 8px; padding: 1px 6px; }

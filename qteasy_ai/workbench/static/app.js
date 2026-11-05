@@ -147,6 +147,10 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, "&quot;");
+}
+
 function slotLabel(name) {
   return SLOT_LABELS[name] || String(name || "").replace(/_/g, " ");
 }
@@ -1709,7 +1713,7 @@ async function submitProviderChange() {
 
 function onNowClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
   const toggle = t.closest("[data-tree-toggle]");
   if (toggle) {
     const key = toggle.getAttribute("data-tree-toggle") || "";
@@ -1820,7 +1824,7 @@ function onSessionListDblClick(ev) {
 
 function onSessionListClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
   const toggle = t.closest("[data-tree-toggle]");
   if (toggle) {
     ev.stopPropagation();
@@ -1889,6 +1893,7 @@ async function commitRenameSession(id, raw) {
     if (label === "New session") delete pendingSessionNames[id];
     else pendingSessionNames[id] = label;
     renderSessionList();
+    renderNow();
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, {
@@ -2424,6 +2429,7 @@ async function refreshSessions() {
     ];
   }
   renderSessionList();
+  renderNow();
 }
 
 async function refreshWorkspace() {
@@ -3590,11 +3596,34 @@ function slotTone(slot) {
   return "unconfirmed";
 }
 
+function formatSessionUpdated(mtimeSeconds) {
+  const mtime = Number(mtimeSeconds);
+  if (!Number.isFinite(mtime) || mtime <= 0) return "—";
+  const then = new Date(mtime * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${then.getFullYear()}-${pad(then.getMonth() + 1)}-${pad(then.getDate())} ${pad(then.getHours())}:${pad(then.getMinutes())}`;
+}
+
+function nowClipLine(label, value, clip) {
+  const shown = value == null || String(value).trim() === "" ? "—" : String(value);
+  const text = `${label}: ${shown}`;
+  const useClip = clip !== false;
+  const cls = useClip ? "now-line clip" : "now-line";
+  const title = useClip ? ` title="${escapeAttr(text)}"` : "";
+  return `<p class="${cls}"${title}><span class="now-label">${escapeHtml(label)}:</span> ${escapeHtml(shown)}</p>`;
+}
+
 function renderNow() {
   const host = $("workspace-now");
   if (!host) return;
   const bar = state.sidebar || {};
   const job = (bar.active_intent && bar.active_intent.job) || "—";
+  const currentSession = sessions.find((row) => row.session_id === sessionId);
+  const sessionLines = [
+    nowClipLine("Session ID", sessionId || "—"),
+    nowClipLine("Session Name", sessionDisplayName(currentSession) || sessionId || "—"),
+    nowClipLine("Last Update", formatSessionUpdated(currentSession && currentSession.mtime)),
+  ].join("");
   const missing = bar.missing || [];
   const slots = bar.slots || [];
   const slotRows = slots
@@ -3622,15 +3651,16 @@ function renderNow() {
   const nowOpen = !treeCollapsed.has("workspace:now");
   const auditOpen = !treeCollapsed.has("workspace:audit");
   const nowBody = nowOpen
-    ? `<div class="now-job"><p class="now-v">Job: ${escapeHtml(job)}</p>
+    ? `<div class="now-job">${sessionLines}
+    ${nowClipLine("Job", job, false)}
     ${runLine}
     ${pipe}</div>
     ${missingLine}
     ${slotBlock}`
     : "";
   const auditBody = auditOpen
-    ? `<p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
-      <p>Run: ${escapeHtml(state.run_id || "—")}</p>`
+    ? `${nowClipLine("Plan", bar.current_plan_id || "—", false)}
+      ${nowClipLine("Run", state.run_id || "—", false)}`
     : "";
   host.innerHTML = `<div class="time-group">${renderTimeGroupHead("workspace:now", "NOW", nowOpen)}${nowBody}</div>
     <div class="time-group">${renderTimeGroupHead("workspace:audit", "AUDIT", auditOpen)}${auditBody}</div>`;

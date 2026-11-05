@@ -8,6 +8,7 @@
 # Unittest for workbench SPA shell (G.4)
 # ======================================
 
+import datetime
 import json
 import re
 import subprocess
@@ -367,6 +368,69 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" css session-actions:", "session-actions" in css.text)
             self.assertIn("session-actions", css.text)
             self.assertIn(":focus-within", css.text)
+            session_click = _extract_js_function(src, "onSessionListClick")
+            now_click = _extract_js_function(src, "onNowClick")
+            print(" session click accepts Element:", "instanceof Element" in session_click)
+            print(" now click accepts Element:", "instanceof Element" in now_click)
+            self.assertIn("instanceof Element", session_click)
+            self.assertNotIn("instanceof HTMLElement", session_click)
+            self.assertIn("instanceof Element", now_click)
+            self.assertNotIn("instanceof HTMLElement", now_click)
+            icon_css = css.text.split(".ui-icon {", 1)[1].split("}", 1)[0]
+            print(" ui-icon css:", icon_css.strip())
+            self.assertIn("pointer-events: none", icon_css)
+            now_fn = _extract_js_function(src, "renderNow")
+            clip_fn = _extract_js_function(src, "nowClipLine")
+            print(" now session before job:", now_fn.find("Session ID"), now_fn.find('"Job"'))
+            self.assertIn("Session ID", now_fn)
+            self.assertIn("Session Name", now_fn)
+            self.assertIn("Last Update", now_fn)
+            self.assertLess(now_fn.find("Session ID"), now_fn.find('"Job"'))
+            self.assertIn('nowClipLine("Job", job, false)', now_fn)
+            self.assertIn('nowClipLine("Plan"', now_fn)
+            self.assertIn('nowClipLine("Run"', now_fn)
+            self.assertIn('"now-line clip"', clip_fn)
+            self.assertIn("now-label", clip_fn)
+            self.assertIn("title=", clip_fn)
+            refresh_fn = _extract_js_function(src, "refreshSessions")
+            rename_fn = _extract_js_function(src, "commitRenameSession")
+            print(" refresh paints now:", "renderNow()" in refresh_fn)
+            print(" rename paints now:", "renderNow()" in rename_fn)
+            self.assertIn("renderNow()", refresh_fn)
+            self.assertIn("renderNow()", rename_fn)
+            line_css = css.text.split(".now-block .now-line {", 1)[1].split("}", 1)[0]
+            label_css = css.text.split(".now-block .now-line .now-label {", 1)[1].split("}", 1)[0]
+            clip_css = css.text.split(".now-block .now-line.clip {", 1)[1].split("}", 1)[0]
+            print(" now line css:", line_css.strip(), "label:", label_css.strip(), "clip:", clip_css.strip())
+            self.assertIn("font-size: 12px", line_css)
+            self.assertIn("font-weight: 400", line_css)
+            self.assertIn("font-weight: 700", label_css)
+            self.assertIn("white-space: nowrap", clip_css)
+            self.assertIn("text-overflow: ellipsis", clip_css)
+            prelude = (
+                _extract_js_function(src, "escapeHtml")
+                + "\n"
+                + _extract_js_function(src, "escapeAttr")
+                + "\n"
+                + _extract_js_function(src, "formatSessionUpdated")
+                + "\n"
+                + clip_fn
+            )
+            stamp = 1762320000
+            expected = datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M")
+            formatted = _eval_js(prelude, f"formatSessionUpdated({stamp})")
+            missing = _eval_js(prelude, "formatSessionUpdated(0)")
+            quoted = _eval_js(prelude, """nowClipLine("Session Name", 'say "hi"')""")
+            print(" last update:", formatted, "expected:", expected)
+            print(" missing mtime:", missing)
+            print(" clip line:", quoted)
+            self.assertEqual(formatted, expected)
+            self.assertEqual(missing, "—")
+            self.assertIsInstance(quoted, str)
+            self.assertIn('class="now-line clip"', quoted)
+            self.assertIn('<span class="now-label">Session Name:</span> say "hi"', quoted)
+            self.assertIn('title="Session Name: say &quot;hi&quot;"', quoted)
+            self.assertNotIn(".now-v", css.text)
 
     def test_artifact_tabs_open_on_demand_not_auto(self) -> None:
         """中栏 openTabs；Workspace / Open plan 共用 openArtifactTab；ingest 不自动打开。"""
