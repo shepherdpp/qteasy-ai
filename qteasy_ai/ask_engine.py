@@ -72,12 +72,25 @@ _PLAIN_LANGUAGE_SIGNALS = (
     "讲太复杂",
     "别翻代码",
 )
+_CONTEXT_TURN_CAP = 4
+_CONTEXT_REFERENCE_RE = re.compile(
+    r"刚才|前面|你说|earlier|you said|"
+    r"第\s*(?:[0-9]+|[一二三四五六七八九十两]+)\s*[条项点]",
+    re.IGNORECASE,
+)
+_EARLIER_ANSWER_WRITER_CLAUSE = (
+    "Earlier answers are part of this conversation. Use them to resolve references "
+    "such as 刚才, 第N条, or a request to repeat an earlier answer in simpler words. "
+    "Do not claim those earlier answers are missing. "
+    "New facts still come from the knowledge snippets."
+)
 
 _TOPIC_SYSTEM_PROMPT = (
     "You select topics for a qteasy Ask question. "
     "Reply with one JSON object and no other text. "
     "When choosing topics, use only topic ids from the registry. "
     "When naming earlier turns, use only turns and source ids from the history index. "
+    "topics and prior may appear together or alone. "
     "Also set \"plain_language\": true when the user wants plain language or fewer "
     "jargon terms first; listed substrings in the user prompt are reference signals "
     "only, not the only signals—synonyms outside that list still count. "
@@ -93,6 +106,39 @@ def query_requests_plain_language(text: str) -> bool:
     if not blob:
         return False
     return any(token in blob for token in _PLAIN_LANGUAGE_SIGNALS)
+
+
+def query_references_earlier_turn(text: str) -> bool:
+    """问句是否像在指代前文。启发式用，允许误伤。"""
+
+    return bool(_CONTEXT_REFERENCE_RE.search(str(text or "")))
+
+
+def _cap_context_cards(cards: Sequence[AskHistoryCard]) -> List[AskHistoryCard]:
+    """上文最多保留编号最大的若干轮。"""
+
+    turns: List[int] = []
+    for card in cards:
+        if card.turn not in turns:
+            turns.append(card.turn)
+    if len(turns) <= _CONTEXT_TURN_CAP:
+        return list(cards)
+    kept = set(sorted(turns)[-_CONTEXT_TURN_CAP:])
+    return [card for card in cards if card.turn in kept]
+
+
+def _heuristic_context_cards(
+        query: str,
+        history: Sequence[AskHistoryCard],
+) -> List[AskHistoryCard]:
+    """没有可用 prior 时，指代问句只附最近一轮。"""
+
+    if not history or not query_references_earlier_turn(query):
+        return []
+    latest = max(card.turn for card in history)
+    return [card for card in history if card.turn == latest]
+
+
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _NEEDS_PROVIDER_MESSAGE = (
     "Follow-up questions, references to earlier turns, and relations need a configured language model. "
@@ -260,6 +306,20 @@ def _named_turn_blocks(cards: Sequence[AskHistoryCard]) -> List[AskHistoryCard]:
     return blocks
 
 
+def _earlier_answers_block(cards: Sequence[AskHistoryCard]) -> str:
+    """作家提示里的上文。没有轮次时为空串。"""
+
+    blocks = _named_turn_blocks(cards)
+    if not blocks:
+        return ""
+    lines = ["Earlier answers:"]
+    for card in blocks:
+        lines.append(f"turn {card.turn}")
+        lines.append(f"User: {card.user_text}")
+        lines.append(f"Answer shown: {card.answer_text}")
+    return "\n".join(lines) + "\n\n"
+
+
 @dataclass
 class AskResponse:
     """Ask 目标态结构化响应（不含可执行 plan）。
@@ -346,8 +406,10 @@ class AskEngine:
         """回答用户问题，不走 plan / skill。
 
         无 Provider 时只做单句检索，不读历史正文。有 Provider 时不把目录当第一跳：
-        定主题、在主题菜单里点卡，作家只读通过校验的正文。已有成功 Ask 时，
-        定主题提示只加一句话索引；模型点名轮次后，那些轮次的原话和答文才进入点卡。
+        定主题、在主题菜单里点卡，作家读通过校验的正文。已有成功 Ask 时，
+        定主题提示只加一句话索引。``topics`` 与 ``prior`` 可单独或同时出现。
+        合法 ``prior`` 的原话和答文进入点卡和作家；只有 ``prior`` 时用被点名卡片的
+        主题打开菜单并仍然点卡。只有 ``topics`` 且问句不像指代时，作家不看上文。
         ``raw['ask_plain_language']`` 仅表示本轮新判定（供 session 粘住）；作家是否
         加降术语条款看 ``plain_language`` 参数或本轮判定。
 
@@ -379,6 +441,7 @@ class AskEngine:
             return self._with_plain_flag(self._not_found(query=text, depth=depth), False)
         topic_ids: List[str] = []
         turn_plain = False
+        context_cards: List[AskHistoryCard] = []
         if self.provider is None:
             turn_plain = query_requests_plain_language(text)
             hits = self.knowledge_base.retrieve(text)
@@ -388,7 +451,7 @@ class AskEngine:
                     turn_plain,
                 )
         else:
-            hits, topic_ids, turn_plain = self._select_with_provider(text, history)
+            hits, topic_ids, turn_plain, context_cards = self._select_with_provider(text, history)
         if not hits:
             return self._with_plain_flag(self._not_found(query=text, depth=depth), turn_plain)
 
@@ -404,6 +467,7 @@ class AskEngine:
                 session_context=session_context,
                 menu_ids=menu_ids,
                 plain_language=effective_plain,
+                context_cards=context_cards,
             )
         else:
             answer = self._offline_answer(hits)
@@ -429,55 +493,59 @@ class AskEngine:
             self,
             query: str,
             history: Sequence[AskHistoryCard],
-    ) -> Tuple[List[KbEntry], List[str], bool]:
+    ) -> Tuple[List[KbEntry], List[str], bool, List[AskHistoryCard]]:
         """定主题、点卡、校验。失败时不调用作家。
 
         Returns
         -------
         tuple
-            选中的条目、本轮主题 id、本轮定主题 JSON 的 ``plain_language``。
-            失败时条目与主题为空，语域为 False。
+            选中的条目、本轮主题 id、本轮定主题 JSON 的 ``plain_language``、
+            要交给点卡和作家的上文卡片。失败时条目、主题和上文为空，语域为 False。
         """
 
         resolved = self._resolve_topics(query, history)
         if resolved is None:
-            return [], [], False
+            return [], [], False, []
         topic_ids, named, turn_plain = resolved
         if not topic_ids:
-            return [], [], False
+            return [], [], False, []
         menu = self.knowledge_base.menu_for_topics(topic_ids)
         if not menu:
-            return [], [], False
+            return [], [], False, []
         card_raw = self.provider.chat(
             self._card_user_prompt(query, menu, named_cards=named),
             system_prompt=_CARD_SYSTEM_PROMPT,
         )
         raw_ids = self._parse_ids_reply(str(card_raw))
         if raw_ids is None:
-            return [], [], False
+            return [], [], False, []
         menu_ids = {entry.id for entry in menu}
         accepted = self.knowledge_base.validate_card_ids(menu, raw_ids)
         primaries = [entry for entry in accepted if entry.id in menu_ids]
         primaries = self.knowledge_base.prefer_exclusive(primaries)
         if not primaries:
-            return [], [], False
+            return [], [], False, []
         meta = self.knowledge_base._maybe_strategy_meta(query)
         if meta is not None:
             primaries = list(primaries) + [meta]
-        return primaries, topic_ids, bool(turn_plain)
+        return primaries, topic_ids, bool(turn_plain), list(named)
 
     def _resolve_topics(
             self,
             query: str,
             history: Sequence[AskHistoryCard],
     ) -> Optional[Tuple[List[str], List[AskHistoryCard], bool]]:
-        """定主题。有历史时由模型 JSON 决定新问题或点名轮次。
+        """定主题。``topics`` 与 ``prior`` 可单独或同时出现。
+
+        ``topics`` 有效时菜单听它。同时有合法 ``prior`` 时，那些轮次作为上文。
+        只有合法 ``prior`` 时，菜单来自被点名卡片的主题。``topics`` 有效但
+        ``prior`` 缺失或非法时，指代问句走启发式，不因此失败。
 
         Returns
         -------
         tuple or None
-            主题 id、被点名的卡片、以及 ``plain_language`` 本轮判定。
-            新问题时卡片列表为空。失败或 ``uncertain`` 时为 ``None``（不置语域）。
+            主题 id、上文卡片、以及 ``plain_language`` 本轮判定。
+            失败或 ``uncertain`` 时为 ``None``（不置语域）。
         """
 
         topic_raw = self.provider.chat(
@@ -488,20 +556,20 @@ class AskEngine:
         if payload is None or payload.get("uncertain") is True:
             return None
         turn_plain = payload.get("plain_language") is True
-        has_topics = "topics" in payload
-        has_prior = "prior" in payload
-        if has_topics and has_prior:
-            return None
-        if has_prior:
-            prior = self._prior_topics(payload, history)
-            if prior is None:
-                return None
-            topic_ids, named = prior
+        topic_ids = (
+            self._parse_topics_reply(str(topic_raw)) if "topics" in payload else None
+        )
+        prior = self._prior_topics(payload, history) if "prior" in payload else None
+        if topic_ids:
+            if prior is not None:
+                named = _cap_context_cards(prior[1])
+            else:
+                named = _heuristic_context_cards(query, history)
             return topic_ids, named, turn_plain
-        topic_ids = self._parse_topics_reply(str(topic_raw))
-        if not topic_ids:
-            return None
-        return topic_ids, [], turn_plain
+        if prior is not None:
+            prior_topics, prior_cards = prior
+            return prior_topics, _cap_context_cards(prior_cards), turn_plain
+        return None
 
     def _prior_topics(
             self,
@@ -610,11 +678,16 @@ class AskEngine:
         lines.append(f"Question: {query}")
         if history:
             lines.append(
-                'Reply with JSON only: {"topics": ["<id>"], "plain_language": true|false} '
-                "using 1 or 2 registry ids, "
-                'or {"prior": [{"turn": 1, "sources": ["<id>"]}], "plain_language": true|false} '
-                "naming only turns and source ids from the index, "
-                'or {"uncertain": true}. '
+                "Reply with JSON only. topics and prior may be used alone or together. "
+                '{"topics": ["<id>"], "plain_language": true|false} '
+                "using 1 or 2 registry ids. "
+                'Optionally add "prior": [{"turn": 1, "sources": ["<id>"]}] '
+                "when the question refers to earlier answers, naming only turns and "
+                "source ids from the index. "
+                "Send prior without topics when there is no new topic and the question "
+                "only continues those earlier turns. "
+                "Omit prior when the question does not depend on earlier answers. "
+                'Or {"uncertain": true}. '
                 "plain_language is optional; omit or false when not requested."
             )
         else:
@@ -651,6 +724,10 @@ class AskEngine:
                 lines.append(f"turn {card.turn}")
                 lines.append(f"User: {card.user_text}")
                 lines.append(f"Answer shown: {card.answer_text}")
+            lines.append(
+                "Use these earlier answers together with the question when choosing cards. "
+                "Still choose ids only from the menu below."
+            )
         lines.append("Cards in the selected topics:")
         for entry in menu:
             lines.append(f"- {entry.id}: {entry.title}. {entry.summary}")
@@ -755,8 +832,9 @@ class AskEngine:
             session_context: str = "",
             menu_ids: Optional[Sequence[str]] = None,
             plain_language: bool = False,
+            context_cards: Optional[Sequence[AskHistoryCard]] = None,
     ) -> str:
-        """将主答卡正文与合编方式注入 prompt 后调用 Provider。"""
+        """将主答卡正文、可选上文与合编方式注入 prompt 后调用 Provider。"""
 
         snippets = []
         for item in hits:
@@ -764,11 +842,13 @@ class AskEngine:
                 f"[{item.id}] {item.title}\n{item.narrative}\npython:\n{item.python_code}"
             )
         context_block = f"\n\nConfirmed session slots: {session_context}\n" if session_context else "\n"
+        earlier = _earlier_answers_block(context_cards or [])
         compose = self._compose_block(hits, menu_ids=menu_ids or [])
         compose_block = f"\n\n{compose}" if compose else ""
         prompt = (
             f"Question: {query}"
             f"{context_block}"
+            f"{earlier}"
             "Knowledge snippets:\n"
             + "\n\n".join(snippets)
             + compose_block
@@ -777,6 +857,8 @@ class AskEngine:
             "Do not expand a card that is only mentioned as an invitation."
         )
         system = _ASK_SYSTEM_PROMPT
+        if earlier:
+            system = f"{system} {_EARLIER_ANSWER_WRITER_CLAUSE}"
         if plain_language:
             system = f"{system} {_PLAIN_LANGUAGE_WRITER_CLAUSE}"
         if any(

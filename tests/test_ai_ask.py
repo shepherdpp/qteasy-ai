@@ -594,7 +594,11 @@ class TestAiAskEngine(unittest.TestCase):
             print(" card prompt:", card_prompt)
             print(" menu ids:", sorted(menu_ids))
             print(" sources:", third.get("sources"))
-            print(" writer has history answers:", _NAN_ANSWER in writer_prompt, _DATA_ANSWER in writer_prompt)
+            print(
+                " writer has history answers:",
+                _NAN_ANSWER in writer_prompt,
+                _DATA_ANSWER in writer_prompt,
+            )
             self._assert_no_plan_execution(third)
             self.assertEqual(len(fake.prompts) - before, 3)
             self.assertIn(nan_line, topic_prompt)
@@ -622,7 +626,8 @@ class TestAiAskEngine(unittest.TestCase):
             )
             self.assertNotIn("data_three_entries", card_prompt)
             self.assertIn("optimize_intro", card_prompt)
-            self.assertNotIn(_NAN_ANSWER, writer_prompt)
+            self.assertIn("Earlier answers:", writer_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
             self.assertNotIn(_DATA_ANSWER, writer_prompt)
             self.assertIn("The engine should not trade that symbol on that bar", writer_prompt)
             self.assertEqual(third.get("sources"), ["common_errors_nan"])
@@ -681,9 +686,9 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertEqual(second.get("sources"), ["backtest_intro"])
 
     def test_bad_prior_or_uncertain_does_not_call_writer(self) -> None:
-        """点名对不上或 uncertain 时不调用作家，也不退回猜卡。"""
+        """没有 topics 时，点名对不上或 uncertain 不调用作家。"""
 
-        print("\n[TestAiAskEngine] 非法点名不调用作家")
+        print("\n[TestAiAskEngine] 没有 topics 的非法点名不调用作家")
         from qteasy_ai.app import QteasyAssistant
         from qteasy_ai.memory_store import MemoryStore
         from qteasy_ai.provider import FakeLLMProvider
@@ -692,10 +697,6 @@ class TestAiAskEngine(unittest.TestCase):
             ('{"prior":[{"turn":9,"sources":["common_errors_nan"]}]}', "轮次不在索引"),
             ('{"prior":[{"turn":1,"sources":["data_three_entries"]}]}', "source 不属于该轮"),
             ('{"uncertain": true}', "uncertain"),
-            (
-                '{"topics":["backtest"],"prior":[{"turn":1,"sources":["common_errors_nan"]}]}',
-                "同时给出 topics 和 prior",
-            ),
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = QteasyAssistant(
@@ -725,6 +726,177 @@ class TestAiAskEngine(unittest.TestCase):
                 self.assertEqual((missed.get("error") or {}).get("message"), _OFFLINE_NOT_FOUND_MESSAGE)
                 self.assertEqual(missed.get("sources"), [])
                 self.assertNotIn("data-downloading", missed.get("answer") or "")
+
+    def test_topics_and_prior_menu_follows_topics(self) -> None:
+        """topics 与 prior 同时出现时，菜单听 topics，上文是被点名的轮次。"""
+
+        print("\n[TestAiAskEngine] topics 加 prior：菜单听 topics")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["data-analysis"]}',
+            '{"ids":["data_three_entries"]}',
+            _DATA_ANSWER,
+            '{"topics":["data-analysis"],"prior":[{"turn":1,"sources":["common_errors_nan"]}]}',
+            '{"ids":["data_three_entries"]}',
+            "WRITER-BOTH",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-both")
+            second = assistant.ask("参考数据", response_style="raw", session_id="a7-both")
+            print(" first sources:", first.get("sources"))
+            print(" second sources:", second.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            self.assertEqual(second.get("sources"), ["data_three_entries"])
+            before = len(fake.prompts)
+            third = assistant.ask(
+                "把第一轮再用数据的说法讲一遍",
+                response_style="raw",
+                session_id="a7-both",
+            )
+            topic_prompt = fake.prompts[before]
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            focus = (third.get("raw") or {}).get("ask_focus") or {}
+            print(" menu ids:", sorted(menu_ids))
+            print(" sources:", third.get("sources"))
+            print(" focus:", focus)
+            print(
+                " writer turns:",
+                _NAN_ANSWER in writer_prompt,
+                _DATA_ANSWER in writer_prompt,
+            )
+            self._assert_no_plan_execution(third)
+            self.assertEqual(len(fake.prompts) - before, 3)
+            self.assertIn("Ask history index:", topic_prompt)
+            self.assertNotIn(_NAN_ANSWER, topic_prompt)
+            self.assertNotIn(_DATA_ANSWER, topic_prompt)
+            self.assertIn("data_three_entries", menu_ids)
+            self.assertNotIn("backtest_intro", menu_ids)
+            self.assertNotIn("common_errors_nan", menu_ids)
+            self.assertIn("User: 停牌", card_prompt)
+            self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
+            self.assertNotIn(_DATA_ANSWER, card_prompt)
+            self.assertNotIn("参考数据", card_prompt)
+            self.assertIn("Earlier answers:", writer_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
+            self.assertNotIn(_DATA_ANSWER, writer_prompt)
+            self.assertEqual(third.get("sources"), ["data_three_entries"])
+            self.assertEqual(focus.get("topic"), "data-analysis")
+            self.assertTrue(third.get("ok"))
+
+    def test_referential_question_without_prior_uses_latest_turn(self) -> None:
+        """只有 topics 且问句像指代时，启发式附最近一轮，菜单仍听 topics。"""
+
+        print("\n[TestAiAskEngine] 指代问句没有 prior 时附最近一轮")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["data-analysis"]}',
+            '{"ids":["data_three_entries"]}',
+            _DATA_ANSWER,
+            '{"topics":["backtest"]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-HEUR",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-heur")
+            second = assistant.ask("参考数据", response_style="raw", session_id="a7-heur")
+            print(" first sources:", first.get("sources"))
+            print(" second sources:", second.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            self.assertEqual(second.get("sources"), ["data_three_entries"])
+            before = len(fake.prompts)
+            third = assistant.ask(
+                "刚才说的第2条",
+                response_style="raw",
+                session_id="a7-heur",
+            )
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            focus = (third.get("raw") or {}).get("ask_focus") or {}
+            print(" menu ids:", sorted(menu_ids))
+            print(" sources:", third.get("sources"))
+            print(" focus:", focus)
+            self._assert_no_plan_execution(third)
+            self.assertEqual(len(fake.prompts) - before, 3)
+            self.assertIn("backtest_intro", menu_ids)
+            self.assertIn("common_errors_nan", menu_ids)
+            self.assertNotIn("data_three_entries", menu_ids)
+            self.assertIn("User: 参考数据", card_prompt)
+            self.assertIn(f"Answer shown: {_DATA_ANSWER}", card_prompt)
+            self.assertNotIn(_NAN_ANSWER, card_prompt)
+            self.assertIn("Earlier answers:", writer_prompt)
+            self.assertIn(_DATA_ANSWER, writer_prompt)
+            self.assertNotIn(_NAN_ANSWER, writer_prompt)
+            self.assertEqual(third.get("sources"), ["backtest_intro"])
+            self.assertEqual(focus.get("topic"), "backtest")
+            self.assertTrue(third.get("ok"))
+
+    def test_invalid_prior_with_topics_falls_back_to_heuristic(self) -> None:
+        """topics 有效但 prior 对不上索引时不失败，指代问句改附最近一轮。"""
+
+        print("\n[TestAiAskEngine] 非法 prior 有 topics 时退回启发式")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["backtest"],"prior":[{"turn":9,"sources":["common_errors_nan"]}]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-FALLBACK",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-fallback")
+            print(" first sources:", first.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            before = len(fake.prompts)
+            second = assistant.ask(
+                "刚才说的第2条",
+                response_style="raw",
+                session_id="a7-fallback",
+            )
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            print(" menu ids:", sorted(menu_ids))
+            print(" sources:", second.get("sources"))
+            print(" ok:", second.get("ok"))
+            self._assert_no_plan_execution(second)
+            self.assertEqual(len(fake.prompts) - before, 3)
+            self.assertTrue(second.get("ok"))
+            self.assertIn("backtest_intro", menu_ids)
+            self.assertNotIn("data_three_entries", menu_ids)
+            self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
+            self.assertEqual(second.get("sources"), ["backtest_intro"])
 
     def test_plan_ready_text_stays_out_of_ask_prompts(self) -> None:
         """定主题提示不读 plan_ready、clarify 或 result 的正文。"""
