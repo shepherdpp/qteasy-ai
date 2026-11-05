@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import queue
@@ -78,6 +79,7 @@ _NEXT_ACTION = {
     "CONFIRM_REQUIRED": "Set confirm=true after reviewing the note, then retry the write.",
     "KB_WRITE_NOT_PENDING": "Lock the FactorSpec first (save this note), then confirm the write.",
     "RUN_IN_PROGRESS": "Wait for the current run to finish, or open that session and watch it.",
+    "KERNEL_BUSY": "Wait until the other session finishes, then send again.",
     "QUIT_DISABLED": "Quit is available from Settings when this page was opened with qteasy-ai serve.",
     "QUIT_CONFIRM_REQUIRED": "Confirm quit in the dialog, then try again.",
     "ATTACHMENT_REQUIRED": "Choose a file with the paperclip, or paste / drop a supported file.",
@@ -180,6 +182,72 @@ class WorkbenchHttp:
     def __init__(self, assistant: QteasyAssistant) -> None:
         self.assistant = assistant
         self.events: Dict[str, List[Dict[str, Any]]] = {}
+        self._kernel_lock = threading.Lock()
+        self._kernel_owner = ""
+
+    def _try_begin_kernel(self, session_id: str) -> Optional[JSONResponse]:
+        """非阻塞占住唯一一路内核。占用中返回 409。"""
+
+        if not self._kernel_lock.acquire(blocking=False):
+            return _error("KERNEL_BUSY", "Another session is still replying.", 409)
+        self._kernel_owner = str(session_id or "")
+        return None
+
+    def _end_kernel(self) -> None:
+        """释放内核锁。须与成功的 ``_try_begin_kernel`` 成对。"""
+
+        self._kernel_owner = ""
+        self._kernel_lock.release()
+
+    async def _in_kernel(
+        self,
+        owner_id: str,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """在线程中执行一次内核调用。锁被占用时返回 409，不排队。"""
+
+        denied = self._try_begin_kernel(owner_id)
+        if denied is not None:
+            return denied
+        try:
+            return await asyncio.to_thread(func, *args, **kwargs)
+        finally:
+            self._end_kernel()
+
+    def _dto_response(self, payload: Any, *, query: str, session_id: str) -> JSONResponse:
+        """内核结果或 409 都收成 JSON 响应。"""
+
+        if isinstance(payload, JSONResponse):
+            return payload
+        return JSONResponse(
+            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
+        )
+
+    def _open_kernel_stream(
+        self,
+        session_id: str,
+        runner: Callable[..., Dict[str, Any]],
+        *,
+        query: str,
+    ) -> Response:
+        """占锁后立刻启动 SSE 工作线程。线程结束才放锁。"""
+
+        denied = self._try_begin_kernel(session_id)
+        if denied is not None:
+            return denied
+        try:
+            iterator = self._stream_execute(
+                runner,
+                query=query,
+                session_id=session_id,
+                kernel_owned=True,
+            )
+        except Exception:
+            self._end_kernel()
+            raise
+        return self._sse_response(iterator)
 
     def _record_step(self, run_bucket: List[Dict[str, Any]], record: PlanStepRecord) -> None:
         """on_step：写入 SSE 缓存。"""
@@ -352,8 +420,9 @@ class WorkbenchHttp:
         *,
         query: str = "",
         session_id: str = "",
+        kernel_owned: bool = False,
     ) -> Iterator[str]:
-        """在线程中执行 runner，按 on_step 推 SSE；空闲 ≥2s 推 heartbeat，最后推 state。
+        """启动工作线程后返回 SSE 迭代器。空闲 ≥2s 推 heartbeat，最后推 state。
 
         Parameters
         ----------
@@ -363,6 +432,8 @@ class WorkbenchHttp:
             写入 DTO 的用户句。
         session_id : str, optional
             侧栏会话。
+        kernel_owned : bool, default False
+            为真时，工作线程结束才释放内核锁。调用方须已经占锁。
 
         Returns
         -------
@@ -417,9 +488,37 @@ class WorkbenchHttp:
                     box["payload"] = runner(on_step)
             except Exception as exc:
                 box["exc"] = exc
-            q.put(("end", None))
+            finally:
+                if kernel_owned:
+                    self._end_kernel()
+                q.put(("end", None))
 
         threading.Thread(target=worker, daemon=True).start()
+
+        def iterate() -> Iterator[str]:
+            yield from self._iterate_execute(
+                q,
+                box,
+                bucket,
+                started=started,
+                query=query,
+                session_id=session_id,
+            )
+
+        return iterate()
+
+    def _iterate_execute(
+        self,
+        q: "queue.Queue[Any]",
+        box: Dict[str, Any],
+        bucket: List[Dict[str, Any]],
+        *,
+        started: float,
+        query: str,
+        session_id: str,
+    ) -> Iterator[str]:
+        """从执行队列读出 SSE 行，直到工作线程发出结束。"""
+
         while True:
             try:
                 kind, data = q.get(timeout=2.0)
@@ -516,15 +615,15 @@ class WorkbenchHttp:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
         session_id = str(body.get("session_id") or "").strip()
         depth = str(body.get("depth") or "standard")
-        payload = self.assistant.ask(
+        payload = await self._in_kernel(
+            session_id,
+            self.assistant.ask,
             query,
             response_style="raw",
             explanation_depth=depth,
             session_id=session_id or None,
         )
-        return JSONResponse(
-            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
-        )
+        return self._dto_response(payload, query=query, session_id=session_id)
 
     async def plan(self, request: Request) -> JSONResponse:
         """POST /v1/plan。"""
@@ -542,31 +641,31 @@ class WorkbenchHttp:
         if skip:
             if not session_id:
                 return _error("SESSION_ID_REQUIRED", "Provide a session_id with skip.", 400)
-            payload = self.assistant.plan(
+            payload = await self._in_kernel(
+                session_id,
+                self.assistant.plan,
                 query,
                 response_style="raw",
                 session_id=session_id,
                 skip=True,
             )
-            return JSONResponse(
-                self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
-            )
+            return self._dto_response(payload, query=query, session_id=session_id)
         if not query and not patches:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
         if patches and not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id with patches.", 400)
         # Web Composer：clarifying 只认控件 patches/skip；打字=换题。
         allow_fill = bool(patches)
-        payload = self.assistant.plan(
+        payload = await self._in_kernel(
+            session_id,
+            self.assistant.plan,
             query,
             response_style="raw",
             session_id=session_id or None,
             patches=patches or None,
             allow_composer_slot_fill=allow_fill,
         )
-        return JSONResponse(
-            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
-        )
+        return self._dto_response(payload, query=query, session_id=session_id)
 
     async def run(self, request: Request) -> Response:
         """POST /v1/run（显式 Agent 入口）。默认 JSON；可选 SSE。"""
@@ -590,15 +689,15 @@ class WorkbenchHttp:
             )
 
         if _wants_stream(request):
-            return self._sse_response(
-                self._stream_execute(runner, query=query, session_id=session_id)
-            )
+            return self._open_kernel_stream(session_id, runner, query=query)
         bucket: List[Dict[str, Any]] = []
 
         def on_step(record: PlanStepRecord) -> None:
             self._record_step(bucket, record)
 
-        payload = runner(on_step)
+        payload = await self._in_kernel(session_id, runner, on_step)
+        if isinstance(payload, JSONResponse):
+            return payload
         dto = self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
         run_id = str(dto.get("run_id") or "")
         if run_id:
@@ -635,18 +734,18 @@ class WorkbenchHttp:
             )
 
         if _wants_stream(request):
-            return self._sse_response(
-                self._stream_execute(runner, query="", session_id=session_id)
-            )
+            return self._open_kernel_stream(session_id, runner, query="")
         bucket: List[Dict[str, Any]] = []
 
         def on_step(record: PlanStepRecord) -> None:
             self._record_step(bucket, record)
 
         try:
-            payload = runner(on_step)
+            payload = await self._in_kernel(session_id, runner, on_step)
         except ValueError as exc:
             return _error("PLAN_ID_NOT_FOUND", str(exc), 404)
+        if isinstance(payload, JSONResponse):
+            return payload
         dto = self._to_dto(payload, query="", session_id=session_id, persist_transcript=True)
         run_id = str(dto.get("run_id") or "")
         if run_id:
@@ -665,14 +764,16 @@ class WorkbenchHttp:
         if not confirm and not dismiss:
             return _error("CONFIRM_REQUIRED", "KB write requires confirm=true.", 400)
         try:
-            payload = self.assistant.confirm_kb_write(
-                session_id, confirm=confirm, response_style="raw"
+            payload = await self._in_kernel(
+                session_id,
+                self.assistant.confirm_kb_write,
+                session_id,
+                confirm=confirm,
+                response_style="raw",
             )
         except ValueError as exc:
             return _error("KB_WRITE_NOT_PENDING", str(exc), 400)
-        return JSONResponse(
-            self._to_dto(payload, query="confirm kb write", session_id=session_id, persist_transcript=True)
-        )
+        return self._dto_response(payload, query="confirm kb write", session_id=session_id)
 
     async def get_session(self, request: Request) -> JSONResponse:
         """GET /v1/session/{session_id}：有 current_plan_id 则按 plan_id 回填 DTO。"""
@@ -680,7 +781,10 @@ class WorkbenchHttp:
         session_id = str(request.path_params.get("session_id") or "").strip()
         if not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
-        conv = SessionStore(self.assistant.memory_store).load(session_id)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.exists(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        conv = store.load(session_id)
         env = self.assistant.memory_store.load_env_facts()
         plan_id = str(conv.task.plan_id or "") if conv.task is not None else ""
         pending = conv.task.pending_clarification if conv.task is not None else None
@@ -713,6 +817,7 @@ class WorkbenchHttp:
                 break
             if kind in {"plan_ready", "result", "clarify", "executing", "error"}:
                 break
+        dumped["kernel_busy"] = bool(self._kernel_owner) and self._kernel_owner == session_id
         return JSONResponse(self._overlay_live_running(dumped, session_id))
 
     async def patch_session(self, request: Request) -> JSONResponse:
@@ -918,15 +1023,26 @@ class WorkbenchHttp:
         store.save(conv)
         return await self.get_session(request)
 
+    async def create_session(self, request: Request) -> JSONResponse:
+        """POST /v1/sessions：立刻写下一条空会话并返回摘要。"""
+
+        del request
+        row = SessionStore(self.assistant.memory_store).create_empty()
+        row["ok"] = True
+        return JSONResponse(row)
+
     async def list_sessions(self, request: Request) -> JSONResponse:
         """GET /v1/sessions：只读列举已落盘会话。"""
 
         del request
         store = SessionStore(self.assistant.memory_store)
         rows = store.list_summaries()
+        owner = self._kernel_owner
         for row in rows:
             if isinstance(row, dict):
-                row["running"] = is_live_running(str(row.get("session_id") or ""))
+                sid = str(row.get("session_id") or "")
+                row["running"] = is_live_running(sid)
+                row["kernel_busy"] = bool(owner) and sid == owner
         return JSONResponse({"ok": True, "sessions": rows})
 
     async def rewind_session(self, request: Request) -> JSONResponse:
@@ -969,16 +1085,30 @@ class WorkbenchHttp:
             return _error(code, "Cannot rewind to that message.", 400)
         store.save(conv)
         if mode == "ask":
-            payload = self.assistant.ask(
-                query, response_style="raw", session_id=session_id
+            payload = await self._in_kernel(
+                session_id,
+                self.assistant.ask,
+                query,
+                response_style="raw",
+                session_id=session_id,
             )
         elif mode in {"agent", "run"}:
-            payload = self.assistant.run(query, response_style="raw", session_id=session_id)
+            payload = await self._in_kernel(
+                session_id,
+                self.assistant.run,
+                query,
+                response_style="raw",
+                session_id=session_id,
+            )
         else:
-            payload = self.assistant.plan(query, response_style="raw", session_id=session_id)
-        return JSONResponse(
-            self._to_dto(payload, query=query, session_id=session_id, persist_transcript=True)
-        )
+            payload = await self._in_kernel(
+                session_id,
+                self.assistant.plan,
+                query,
+                response_style="raw",
+                session_id=session_id,
+            )
+        return self._dto_response(payload, query=query, session_id=session_id)
 
     async def shutdown_server(self, request: Request) -> JSONResponse:
         """POST /v1/server/shutdown：确认后停止 ``qteasy-ai serve``。"""
@@ -1213,6 +1343,7 @@ def create_app(
         Route("/v1/run-plan", api.run_plan, methods=["POST"]),
         Route("/v1/kb/write", api.kb_write, methods=["POST"]),
         Route("/v1/sessions", api.list_sessions, methods=["GET"]),
+        Route("/v1/sessions", api.create_session, methods=["POST"]),
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
         Route("/v1/session/{session_id}/cancel-run", api.cancel_run, methods=["POST"]),
         Route("/v1/session/{session_id}/background-run", api.background_run, methods=["POST"]),

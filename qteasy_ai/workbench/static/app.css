@@ -312,6 +312,27 @@ button.provider-badge {
 .session-item:hover { background: var(--bg-hover); }
 .session-item.active { background: var(--bg-active); color: var(--text-on-active); }
 .session-item .session-main { flex: 1; min-width: 0; }
+.session-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-busy-ring,
+.session-unseen-dot { flex: 0 0 auto; }
+.session-busy-ring {
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: session-busy-spin 0.9s linear infinite;
+}
+.session-unseen-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+}
+@keyframes session-busy-spin { to { transform: rotate(360deg); } }
+.session-title-row .sid,
+.session-title-row .session-rename { flex: 1; min-width: 0; }
 .session-item .sid { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-item .meta { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-item .running-tag { color: var(--accent); }
@@ -791,6 +812,27 @@ html[data-theme="light"] .mode-notice {
   font-style: italic;
 }
 .busy-dot { color: var(--accent); }
+.busy-ellipsis { display: inline-block; margin-left: 1px; }
+.busy-ellipsis i {
+  display: inline-block;
+  width: 0.35em;
+  font-style: normal;
+  text-align: center;
+  animation: busy-ellipsis-blink 1.2s infinite;
+  opacity: 0.25;
+}
+.busy-ellipsis i::before { content: "."; }
+.busy-ellipsis i:nth-child(2) { animation-delay: 0.2s; }
+.busy-ellipsis i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes busy-ellipsis-blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .busy-ellipsis i { animation: none; opacity: 1; }
+  .session-busy-ring { animation: none; border-color: var(--accent); }
+}
+.send-lock-notice { font-size: 12px; color: var(--text-muted); padding: 0 2px 6px; }
 .busy-skill { display: block; margin-top: 4px; font-style: normal; color: var(--text-muted); font-size: 12px; }
 .progress-indet {
   position: relative;

@@ -234,6 +234,116 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(loaded.session_id, "web-demo")
             self.assertTrue(any(m.get("kind") == "user_text" for m in loaded.messages))
 
+    def test_post_sessions_creates_empty_file(self) -> None:
+        """POST /v1/sessions 立刻落盘空会话；未知 id 的 GET 为 404。"""
+
+        print("\n[TestAiWorkbenchHttp] create empty session")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            created = client.post("/v1/sessions")
+            body = created.json()
+            sid = str(body.get("session_id") or "")
+            print(" status:", created.status_code, "id:", sid)
+            print(" name:", body.get("name"), "mtime:", body.get("mtime"), "last_user:", body.get("last_user"))
+            self.assertEqual(created.status_code, 200)
+            self.assertTrue(body.get("ok"))
+            self.assertTrue(sid.startswith("web-"))
+            self.assertEqual(body.get("name"), sid)
+            self.assertEqual(body.get("last_user"), "")
+            self.assertGreater(float(body.get("mtime") or 0), 0)
+            path = store.sessions_dir / f"{sid}.json"
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            print(" file:", path.name, "messages:", raw.get("messages"), "name:", repr(raw.get("name")))
+            self.assertTrue(path.is_file())
+            self.assertEqual(raw.get("messages"), [])
+            self.assertEqual(raw.get("name"), "")
+            listed = client.get("/v1/sessions").json()
+            ids = [row.get("session_id") for row in (listed.get("sessions") or [])]
+            print(" listed:", ids)
+            self.assertIn(sid, ids)
+            second = client.post("/v1/sessions").json()
+            sid2 = str(second.get("session_id") or "")
+            print(" second id:", sid2)
+            self.assertTrue(sid2.startswith("web-"))
+            self.assertNotEqual(sid2, sid)
+            missing = client.get("/v1/session/no-such-session")
+            print(" missing:", missing.status_code, missing.json().get("error"))
+            self.assertEqual(missing.status_code, 404)
+            self.assertEqual((missing.json().get("error") or {}).get("code"), "SESSION_NOT_FOUND")
+            got = client.get(f"/v1/session/{sid}")
+            print(" get created:", got.status_code, "transcript:", got.json().get("transcript"))
+            self.assertEqual(got.status_code, 200)
+            self.assertEqual(got.json().get("transcript"), [])
+
+    def test_kernel_busy_lets_session_get_through(self) -> None:
+        """慢 Ask 占住内核时，会话 GET 仍返回，第二次 Ask 为 409。"""
+
+        print("\n[TestAiWorkbenchHttp] kernel busy keeps session GET alive")
+        import threading
+        import time
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, assistant = self._client(temp_dir)
+            entered = threading.Event()
+            release = threading.Event()
+
+            def slow_ask(*_args: object, **_kwargs: object) -> dict:
+                entered.set()
+                release.wait(5)
+                return {"mode": "ask", "answer": "done", "sources": ["stub"]}
+
+            assistant.ask = slow_ask
+            box: dict = {}
+
+            with client:
+                created = client.post("/v1/sessions").json()
+                other = client.post("/v1/sessions").json()
+                sid = str(created.get("session_id") or "")
+                sid2 = str(other.get("session_id") or "")
+                print(" sessions:", sid, sid2)
+                self.assertTrue(sid)
+                self.assertNotEqual(sid2, sid)
+
+                def post_ask() -> None:
+                    box["res"] = client.post(
+                        "/v1/ask",
+                        json={"query": "hold the kernel", "session_id": sid},
+                    )
+
+                worker = threading.Thread(target=post_ask)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(3))
+                    started = time.monotonic()
+                    listed = client.get("/v1/sessions")
+                    elapsed = time.monotonic() - started
+                    rows = {row.get("session_id"): row for row in (listed.json().get("sessions") or [])}
+                    print(" list elapsed:", round(elapsed, 3), "kernel:", rows.get(sid, {}).get("kernel_busy"))
+                    self.assertLess(elapsed, 2.0)
+                    self.assertEqual(listed.status_code, 200)
+                    self.assertTrue(rows[sid].get("kernel_busy"))
+                    self.assertFalse(rows[sid2].get("kernel_busy"))
+                    denied = client.post("/v1/ask", json={"query": "second", "session_id": sid2})
+                    print(" second:", denied.status_code, (denied.json().get("error") or {}).get("code"))
+                    self.assertEqual(denied.status_code, 409)
+                    self.assertEqual((denied.json().get("error") or {}).get("code"), "KERNEL_BUSY")
+                    other_view = client.get(f"/v1/session/{sid2}")
+                    print(" other view:", other_view.status_code, other_view.json().get("kernel_busy"))
+                    self.assertEqual(other_view.status_code, 200)
+                    self.assertFalse(other_view.json().get("kernel_busy"))
+                finally:
+                    release.set()
+                    worker.join(5)
+                first = box.get("res")
+                print(" first:", None if first is None else first.status_code)
+                self.assertIsNotNone(first)
+                self.assertEqual(first.status_code, 200)
+                cleared = client.get("/v1/sessions").json()
+            flags = [bool(row.get("kernel_busy")) for row in (cleared.get("sessions") or [])]
+            print(" cleared flags:", flags)
+            self.assertEqual(len(flags), 2)
+            self.assertFalse(any(flags))
+
     def test_workspace_orphan_run_has_human_title_and_mtime(self) -> None:
         """无 plan.md 的 run 在 workspace 上带人话 run_title 与文件 mtime，且不造 plan 项。"""
 

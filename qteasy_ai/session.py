@@ -632,6 +632,22 @@ def _user_texts(messages: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def _new_web_session_id() -> str:
+    """工作台会话 id：``web-``、毫秒的 base36、4 位十六进制。均可做文件名。"""
+
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    number = int(time.time() * 1000)
+    chars: List[str] = []
+    if number <= 0:
+        chars.append("0")
+    else:
+        while number:
+            number, rem = divmod(number, 36)
+            chars.append(alphabet[rem])
+        chars.reverse()
+    return "web-" + "".join(chars) + uuid.uuid4().hex[:4]
+
+
 def clip_session_name(raw: Any) -> str:
     """规范化用户标签：去空白，最长 80。空串表示回退默认。"""
 
@@ -981,6 +997,29 @@ class SessionStore:
                 pass
         remove_session_blob_dir(self.memory_store, session_id)
         return True
+
+    def create_empty(self) -> Dict[str, Any]:
+        """新建空会话并立即落盘，返回列表摘要。
+
+        典型调用方是工作台 ``POST /v1/sessions``。``name`` 留空，首条用户句仍可成为标题。
+
+        Returns
+        -------
+        dict
+            ``summarize_one`` 的摘要。文件已在 ``sessions/`` 下，``mtime`` 大于 0。
+        """
+
+        state: Optional[ConversationState] = None
+        for _ in range(8):
+            session_id = _new_web_session_id()
+            if self.exists(session_id):
+                continue
+            state = ConversationState.empty(session_id)
+            self.save(state)
+            break
+        if state is None:
+            raise OSError("Could not allocate a new session id.")
+        return self.summarize_one(state)
 
     def summarize_one(self, state: ConversationState) -> Dict[str, Any]:
         """单条列表摘要（与 ``list_summaries`` 同行形状）。"""

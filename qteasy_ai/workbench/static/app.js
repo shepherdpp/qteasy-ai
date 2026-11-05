@@ -42,7 +42,7 @@ const EXAMPLES = [
 ];
 
 let mode = "plan";
-let sessionId = localStorage.getItem(STORAGE_SESSION) || newSessionId();
+let sessionId = localStorage.getItem(STORAGE_SESSION) || "";
 let state = emptyState();
 let transcript = [];
 let openTabs = [];
@@ -61,8 +61,24 @@ let shellReady = false;
 let codeCache = {};
 let filePreview = null;
 let sessions = [];
-/** @type {Record<string, string>} local_only 改名尚未 PATCH 到服务端时暂存 */
-let pendingSessionNames = {};
+/** @type {Record<string, object>} 切走后仍在等待的会话快照。不 abort。 */
+let sessionWatches = {};
+/** 本页正在等待的内核请求所属会话。 */
+let localKernelOwner = "";
+/** 服务端 kernel_busy 标出的会话。刷新后仍在。 */
+let serverKernelOwner = "";
+let followServerKernel = false;
+let sessionLoading = false;
+let kernelPoll = null;
+/** @type {Set<string>} 已结束、用户还没点开的会话。 */
+const unseenDone = new Set();
+/** @type {Promise<string> | null} */
+let creatingSession = null;
+let sendChain = Promise.resolve();
+const WAITING_NOTICE = "This session is still waiting for a reply.";
+const SEND_LOCK_OTHER = "Another session is still replying. Send stays locked until it finishes.";
+const SEND_LOCK_THIS = "This session is still running. Send stays locked until it finishes.";
+const CREATE_FAILED = "Could not create a session.";
 /** 澄清卡本地向导：翻页与草稿不打服务端，签名变了整卡重置 */
 let clarifyWizard = {
   signature: "",
@@ -110,12 +126,6 @@ function icon(name) {
   };
   const body = paths[name] || "";
   return `<svg class="ui-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">${body}</svg>`;
-}
-
-localStorage.setItem(STORAGE_SESSION, sessionId);
-
-function newSessionId() {
-  return `web-${Date.now().toString(36)}`;
 }
 
 function emptyState() {
@@ -262,10 +272,111 @@ function readTranscriptMap() {
   }
 }
 
-function persistTranscript() {
+function persistTranscriptFor(id, rows) {
+  const key = String(id || "").trim();
+  if (!key) return;
   const all = readTranscriptMap();
-  all[sessionId] = transcript;
+  all[key] = rows;
   localStorage.setItem(STORAGE_TRANSCRIPTS, JSON.stringify(all));
+}
+
+function persistTranscript() {
+  persistTranscriptFor(sessionId, transcript);
+}
+
+function viewing(owner) {
+  return !owner || owner === sessionId;
+}
+
+function parkedWatch(id) {
+  return sessionWatches[id] || null;
+}
+
+function sessionIsWaiting(id) {
+  if (id === sessionId) return Boolean(busy || backgrounded);
+  const parked = parkedWatch(id);
+  return Boolean(parked && (parked.busy || parked.backgrounded));
+}
+
+function parkCurrentSession() {
+  if (!sessionId) return;
+  sessionWatches[sessionId] = {
+    busy,
+    backgrounded,
+    abort: runAbort,
+    startedAt: runStartedAt,
+    elapsedS: runElapsedS,
+    executeSseOpen,
+    transcript,
+    state,
+    mode,
+    livePoll,
+    modeNotice,
+    sessionAttachments: sessionAttachments.slice(),
+  };
+  runAbort = null;
+  livePoll = null;
+}
+
+function restoreParked(id) {
+  const parked = parkedWatch(id);
+  if (!parked) return false;
+  busy = Boolean(parked.busy);
+  backgrounded = Boolean(parked.backgrounded);
+  runAbort = parked.abort || null;
+  runStartedAt = parked.startedAt || 0;
+  runElapsedS = parked.elapsedS || 0;
+  executeSseOpen = Boolean(parked.executeSseOpen);
+  transcript = parked.transcript || [];
+  state = parked.state || emptyState();
+  mode = parked.mode || "plan";
+  livePoll = parked.livePoll || null;
+  modeNotice = parked.modeNotice || "";
+  sessionAttachments = Array.isArray(parked.sessionAttachments) ? parked.sessionAttachments : [];
+  if ((busy || backgrounded) && runStartedAt) startElapsedClock();
+  else stopElapsedClock();
+  return true;
+}
+
+function rememberExecuteFlag(owner, next) {
+  if (viewing(owner)) executeSseOpen = next;
+  else if (parkedWatch(owner)) parkedWatch(owner).executeSseOpen = next;
+}
+
+function pushTranscriptRow(owner, row) {
+  if (viewing(owner)) {
+    transcript.push(row);
+    persistTranscript();
+    return;
+  }
+  const parked = parkedWatch(owner);
+  if (!parked) return;
+  parked.transcript = parked.transcript || [];
+  parked.transcript.push(row);
+  persistTranscriptFor(owner, parked.transcript);
+}
+
+function setBusyFor(owner, next) {
+  if (viewing(owner)) {
+    setBusy(next);
+    return;
+  }
+  const parked = parkedWatch(owner);
+  if (!parked) return;
+  parked.busy = next;
+  if (next) {
+    if (!parked.backgrounded) {
+      if (!parked.abort) parked.abort = new AbortController();
+      if (!parked.startedAt) parked.startedAt = Date.now();
+    }
+    return;
+  }
+  if (!parked.backgrounded) {
+    parked.startedAt = 0;
+    parked.elapsedS = 0;
+    parked.abort = null;
+    parked.executeSseOpen = false;
+  }
 }
 
 function loadTranscriptFor(id) {
@@ -302,6 +413,7 @@ function mountShell() {
         <div class="composer" id="composer">
           <div class="attach-chips" id="attach-chips" hidden></div>
           <div class="attach-status err-text" id="attach-status" hidden></div>
+          <div class="send-lock-notice" id="send-lock-notice" hidden></div>
           <textarea id="query-input" placeholder="Ask in natural language · Ctrl/⌘+Enter to send" rows="3"></textarea>
           <input type="file" id="attach-input" multiple hidden
             accept=".txt,.md,.py,.json,.csv,.yaml,.yml,.toml,.ini,.log,.html,.css,.js,.ts,.png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.docx,.xlsx,.pptx">
@@ -810,15 +922,18 @@ function planningWait() {
   return busy && !runWatchActive() && !executeSseOpen && mode !== "agent" && mode !== "run";
 }
 
+function busyStatusText() {
+  if (planningWait()) return "Planning";
+  return backgrounded ? formatRunClock("Background") : formatRunClock("Working");
+}
+
+function busyMarkup(label) {
+  return `<span class="busy-dot" id="busy-elapsed"><span id="busy-label">${escapeHtml(label)}</span><span class="busy-ellipsis" aria-hidden="true"><i></i><i></i><i></i></span></span>`;
+}
+
 function updateBusyElapsedDom() {
-  const label = $("busy-elapsed");
-  if (label) {
-    label.textContent = planningWait()
-      ? "Planning…"
-      : backgrounded
-        ? formatRunClock("Background")
-        : formatRunClock("Working");
-  }
+  const label = $("busy-label");
+  if (label) label.textContent = busyStatusText();
   const now = $("now-run-status");
   if (now) now.textContent = backgrounded ? formatRunClock("Background") : formatRunClock("Running");
 }
@@ -907,31 +1022,55 @@ function isTerminalRun(dto) {
 
 function startLivePoll() {
   if (livePoll) return;
+  const owner = sessionId;
   livePoll = setInterval(async () => {
-    if (executeSseOpen || !sessionId) return;
-    const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
+    const onScreen = owner === sessionId;
+    const parked = sessionWatches[owner];
+    const sseOpen = onScreen ? executeSseOpen : Boolean(parked && parked.executeSseOpen);
+    if (sseOpen || !owner) return;
+    const dto = await api(`/v1/session/${encodeURIComponent(owner)}`);
     if (dto && dto.error) return;
+    const stillHere = owner === sessionId;
+    const base = stillHere ? state : (parked && parked.state) || null;
+    if (!base) return;
     if (isDtoRunning(dto)) {
-      if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
+      if (dto.execution) base.execution = Object.assign({}, base.execution || {}, dto.execution);
       const foreground = dto.execution && dto.execution.blocks_composer !== false && !dto.execution.backgrounded;
       if (dto.plan_card) {
-        state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card, foreground ? { confirmable: false } : {});
+        base.plan_card = Object.assign({}, base.plan_card || {}, dto.plan_card, foreground ? { confirmable: false } : {});
       }
-      const elapsed = dto.execution && dto.execution.elapsed_s;
-      if (elapsed != null || isDtoRunning(dto)) noteRunClock(dto);
-      renderNow();
-      renderChat();
+      if (stillHere) {
+        const elapsed = dto.execution && dto.execution.elapsed_s;
+        if (elapsed != null || isDtoRunning(dto)) noteRunClock(dto);
+        renderNow();
+        renderChat();
+      } else if (parked && dto.execution && dto.execution.elapsed_s != null) {
+        parked.elapsedS = Math.max(0, Math.floor(Number(dto.execution.elapsed_s) || 0));
+      }
       return;
     }
     if (!isTerminalRun(dto)) return;
-    backgrounded = false;
-    stopLivePoll();
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    setBusy(false);
-    renderPanes();
-    await refreshWorkspace();
-    await refreshSessions();
+    if (stillHere) {
+      backgrounded = false;
+      stopLivePoll();
+      ingestDto(dto, { appendUser: false, owner });
+      applyServerTranscript(dto, owner);
+      setBusy(false);
+      renderPanes();
+      await refreshWorkspace();
+      await refreshSessions();
+      return;
+    }
+    if (!parked) return;
+    parked.backgrounded = false;
+    parked.busy = false;
+    parked.executeSseOpen = false;
+    if (parked.livePoll) {
+      clearInterval(parked.livePoll);
+      parked.livePoll = null;
+    }
+    ingestDto(dto, { appendUser: false, owner });
+    applyServerTranscript(dto, owner);
   }, 2000);
 }
 
@@ -1002,6 +1141,101 @@ async function backgroundThisRun() {
   renderNow();
 }
 
+function kernelOwnerId() {
+  return localKernelOwner || serverKernelOwner || "";
+}
+
+function sendLocked() {
+  if (busy || backgrounded) return true;
+  if (kernelOwnerId()) return true;
+  if (sessions.some((row) => row && row.running)) return true;
+  return Object.keys(sessionWatches).some((id) => {
+    const watch = sessionWatches[id];
+    return Boolean(watch && (watch.busy || watch.backgrounded));
+  });
+}
+
+function sendLockNotice() {
+  if (busy || !sendLocked()) return "";
+  const owner = kernelOwnerId();
+  const runningRow = sessions.find((row) => row && row.running);
+  const holder = owner || (runningRow && runningRow.session_id) || "";
+  const parked = Object.keys(sessionWatches).find((id) => {
+    const watch = sessionWatches[id];
+    return watch && (watch.busy || watch.backgrounded);
+  });
+  const who = holder || parked || "";
+  if (who && who !== sessionId) return SEND_LOCK_OTHER;
+  return SEND_LOCK_THIS;
+}
+
+function refuseIfSendLocked() {
+  if (!sendLocked()) return false;
+  if (!busy) showStatusNotice(sendLockNotice());
+  return true;
+}
+
+function applyComposerLock() {
+  const send = $("btn-send");
+  const input = $("query-input");
+  if (send) send.disabled = sendLocked();
+  if (input) input.disabled = busy;
+  const note = $("send-lock-notice");
+  if (note) {
+    const text = sendLockNotice();
+    note.hidden = !text;
+    note.textContent = text;
+  }
+  ensureKernelPoll();
+}
+
+function beginKernel(owner) {
+  localKernelOwner = owner || "";
+  applyComposerLock();
+  renderSessionList();
+}
+
+function finishKernel(owner) {
+  if (!owner || localKernelOwner === owner) localKernelOwner = "";
+  if (owner && serverKernelOwner === owner) serverKernelOwner = "";
+  if (owner && owner !== sessionId) unseenDone.add(owner);
+  applyComposerLock();
+  renderSessionList();
+}
+
+function noteServerKernel(rows) {
+  const previous = serverKernelOwner;
+  const row = (rows || []).find((item) => item && item.kernel_busy);
+  serverKernelOwner = row ? String(row.session_id || "") : "";
+  if (serverKernelOwner && serverKernelOwner === sessionId && !localKernelOwner) followServerKernel = true;
+  if (previous && !serverKernelOwner && !localKernelOwner && previous !== sessionId) unseenDone.add(previous);
+  return previous;
+}
+
+function ensureKernelPoll() {
+  const need = Boolean(serverKernelOwner) && !localKernelOwner;
+  if (need && !kernelPoll) kernelPoll = setInterval(() => { refreshSessions(); }, 2000);
+  if (!need && kernelPoll) {
+    clearInterval(kernelPoll);
+    kernelPoll = null;
+  }
+}
+
+function sessionMark(id) {
+  const owner = kernelOwnerId();
+  const row = sessions.find((item) => item && item.session_id === id);
+  const parked = sessionWatches[id];
+  const spinning = owner === id
+    || Boolean(row && (row.kernel_busy || row.running))
+    || Boolean(parked && (parked.busy || parked.backgrounded))
+    || (id === sessionId && (busy || backgrounded));
+  if (spinning) return `<span class="session-busy-ring" title="Busy" aria-label="Busy"></span>`;
+  if (id !== sessionId && unseenDone.has(id)) {
+    return `<span class="session-unseen-dot" title="Reply ready" aria-label="Reply ready"></span>`;
+  }
+  return "";
+}
+
 function setBusy(next) {
   busy = next;
   if (busy) {
@@ -1016,12 +1250,9 @@ function setBusy(next) {
     runElapsedS = 0;
     runAbort = null;
   }
-  const input = $("query-input");
-  const send = $("btn-send");
   const attach = $("btn-attach");
-  if (input) input.disabled = busy;
-  if (send) send.disabled = busy;
   if (attach) attach.disabled = busy;
+  applyComposerLock();
   document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
@@ -1066,7 +1297,7 @@ async function api(path, options) {
   const res = await fetch(path, options);
   const ctype = res.headers.get("content-type") || "";
   if (ctype.includes("text/event-stream") && res.body) {
-    return consumeSse(res, options && options.signal);
+    return consumeSse(res, options && options.signal, options && options.owner);
   }
   let data = {};
   try {
@@ -1081,7 +1312,7 @@ async function api(path, options) {
   return data;
 }
 
-async function consumeSse(res, signal) {
+async function consumeSse(res, signal, owner) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -1107,11 +1338,17 @@ async function consumeSse(res, signal) {
         continue;
       }
       const ev = eventMatch ? eventMatch[1].trim() : "";
-      if (ev === "step_status") applyLiveStep(payload);
-      else if (ev === "progress") applyLiveProgress(payload);
+      if (ev === "step_status") applyLiveStep(payload, owner);
+      else if (ev === "progress") applyLiveProgress(payload, owner);
       else if (ev === "heartbeat") {
-        if (payload.elapsed_s != null) runElapsedS = Number(payload.elapsed_s) || runElapsedS;
-        updateBusyElapsedDom();
+        if (payload.elapsed_s != null) {
+          const elapsed = Number(payload.elapsed_s) || 0;
+          if (owner && owner !== sessionId && sessionWatches[owner]) sessionWatches[owner].elapsedS = elapsed;
+          else {
+            runElapsedS = elapsed || runElapsedS;
+            updateBusyElapsedDom();
+          }
+        } else if (!owner || owner === sessionId) updateBusyElapsedDom();
       }
       else if (ev === "state") finalDto = payload;
       else if (ev === "error") sseError = payload;
@@ -1124,8 +1361,16 @@ async function consumeSse(res, signal) {
   return finalDto || errorFromHttp({ error: { message: "Stream ended without a state event." } });
 }
 
-function applyLiveStep(event) {
-  const steps = Array.isArray(state.execution && state.execution.steps) ? state.execution.steps.slice() : [];
+function liveState(owner) {
+  if (!owner || owner === sessionId) return state;
+  const parked = sessionWatches[owner];
+  return parked ? parked.state : null;
+}
+
+function applyLiveStep(event, owner) {
+  const target = liveState(owner);
+  if (!target) return;
+  const steps = Array.isArray(target.execution && target.execution.steps) ? target.execution.steps.slice() : [];
   const row = {
     step_id: event.step_id,
     skill_name: event.skill_name,
@@ -1141,70 +1386,108 @@ function applyLiveStep(event) {
     if (event.total != null) patch.step_total = Number(event.total) || 0;
     patch.progress = null;
   }
-  state.execution = Object.assign({}, state.execution || {}, patch);
-  renderChat();
-  renderNow();
+  target.execution = Object.assign({}, target.execution || {}, patch);
+  if (!owner || owner === sessionId) {
+    renderChat();
+    renderNow();
+  }
 }
 
-function applyLiveProgress(event) {
+function applyLiveProgress(event, owner) {
+  const target = liveState(owner);
+  if (!target) return;
   const done = Number(event.done) || 0;
   const total = Number(event.total) || 0;
   const label = event.label || "";
-  state.execution = Object.assign({}, state.execution || {}, {
+  target.execution = Object.assign({}, target.execution || {}, {
     status: "running",
     progress: total > 0 ? { done, total, label } : null,
   });
-  renderChat();
-  renderNow();
+  if (!owner || owner === sessionId) {
+    renderChat();
+    renderNow();
+  }
 }
 
-function ingestDto(dto, { appendUser } = {}) {
-  const prevCard = state.plan_card;
-  state = Object.assign(emptyState(), dto || {});
-  if (!state.session_id) state.session_id = sessionId;
-  const incoming = Array.isArray(state.messages) ? state.messages : [];
-  if (appendUser) {
-    const last = transcript[transcript.length - 1];
+function ingestDto(dto, options) {
+  const opts = options || {};
+  const targetOwner = opts.owner || sessionId;
+  const onScreen = !targetOwner || targetOwner === sessionId;
+  const parked = targetOwner ? sessionWatches[targetOwner] : null;
+  const base = onScreen ? state : parked && parked.state;
+  if (!onScreen && !base) return;
+  const prevCard = base && base.plan_card;
+  const next = Object.assign(emptyState(), dto || {});
+  next.session_id = targetOwner || next.session_id || sessionId;
+  const incoming = Array.isArray(next.messages) ? next.messages : [];
+  let rows = (onScreen ? transcript : (parked && parked.transcript) || []).slice();
+  if (opts.appendUser) {
+    const last = rows[rows.length - 1];
     for (const msg of incoming) {
       if (msg.kind === "user_text" && last && last.kind === "user_text" && last.text === msg.text) continue;
-      transcript.push(msg);
+      rows.push(msg);
     }
-  } else if (!transcript.length) {
-    transcript = incoming.slice();
+  } else if (!rows.length) {
+    rows = incoming.slice();
   }
-  if (prevCard && prevCard.plan_id !== (state.plan_card && state.plan_card.plan_id)) {
-    editingParams = false;
+  if (onScreen) {
+    state = next;
+    transcript = rows;
+    if (prevCard && prevCard.plan_id !== (state.plan_card && state.plan_card.plan_id)) editingParams = false;
+    absorbPlanArtifacts(state.artifacts);
+    persistTranscript();
+    return;
   }
-  absorbPlanArtifacts(state.artifacts);
-  persistTranscript();
+  parked.state = next;
+  parked.transcript = rows;
+  persistTranscriptFor(targetOwner, rows);
 }
 
-async function sendQuery(query, { keepDraft } = {}) {
+async function sendQuery(query, options) {
   const text = String(query || "").trim();
-  if (!text || busy) return;
-  dismissModeNotice();
+  if (!text) return;
+  if (refuseIfSendLocked()) return;
+  const job = sendChain.then(() => sendQueryBody(text, options || {}));
+  sendChain = job.catch(() => {});
+  return job;
+}
+
+async function sendQueryBody(text, options) {
+  const keepDraft = Boolean(options && options.keepDraft);
+  if (!text || refuseIfSendLocked()) return;
   const input = $("query-input");
+  const requestMode = mode;
+  if (!sessionId) {
+    const created = await ensureSession();
+    if (!created || busy) return;
+    if (mode !== requestMode) setMode(requestMode);
+  }
+  dismissModeNotice();
   if (!keepDraft && input) input.value = "";
+  const owner = sessionId;
   transcript.push({ kind: "user_text", text });
   persistTranscript();
   renderChat();
+  beginKernel(owner);
   const keepWatch = backgrounded;
   setBusy(true);
-  if (mode === "agent" && !backgrounded) executeSseOpen = true;
+  if (requestMode === "agent" && !backgrounded) executeSseOpen = true;
+  const signal = backgrounded ? undefined : (runAbort ? runAbort.signal : undefined);
   try {
-    const body = JSON.stringify({ query: text, session_id: sessionId });
-    const path = mode === "ask" ? "/v1/ask" : mode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
+    const body = JSON.stringify({ query: text, session_id: owner });
+    const path = requestMode === "ask" ? "/v1/ask" : requestMode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
     const headers = { "Content-Type": "application/json" };
-    if (mode === "agent") headers.Accept = "text/event-stream";
+    if (requestMode === "agent") headers.Accept = "text/event-stream";
     const dto = await api(path, {
       method: "POST",
       headers,
       body,
-      signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
+      signal,
+      owner,
     });
-    if (!adoptServerResult(dto)) {
-      renderChat();
-    } else {
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) {
       filePreview = null;
       renderPanes();
       await refreshSessions();
@@ -1212,51 +1495,61 @@ async function sendQuery(query, { keepDraft } = {}) {
     }
   } catch (exc) {
     if (!isAbortError(exc)) {
-      transcript.push({
+      pushTranscriptRow(owner, {
         kind: "error",
         text: "Network error. Check that the workbench server is running.",
         payload: { next_action: PENCIL_RESEND },
       });
-      persistTranscript();
-      renderChat();
+      if (viewing(owner)) renderChat();
     }
   } finally {
-    if (!keepWatch) executeSseOpen = false;
-    setBusy(false);
+    if (!keepWatch) rememberExecuteFlag(owner, false);
+    setBusyFor(owner, false);
+    finishKernel(owner);
   }
 }
 
 async function sendControlPatches(patches) {
-  if (busy) return;
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   setBusy(true);
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, patches }),
+      body: JSON.stringify({ session_id: owner, patches }),
+      owner,
     });
-    if (!adoptServerResult(dto)) renderChat();
-    else renderPanes();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
-    setBusy(false);
+    setBusyFor(owner, false);
+    finishKernel(owner);
   }
 }
 
 async function sendControlSkip() {
-  if (busy) return;
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   setBusy(true);
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, skip: true }),
+      body: JSON.stringify({ session_id: owner, skip: true }),
+      owner,
     });
-    if (!adoptServerResult(dto)) renderChat();
-    else renderPanes();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
-    setBusy(false);
+    setBusyFor(owner, false);
+    finishKernel(owner);
   }
 }
 
@@ -1267,9 +1560,13 @@ function isDeferredNotice(dto) {
 
 async function confirmPlan() {
   const planId = state.plan_card && state.plan_card.plan_id;
-  if (!planId || (state.plan_card && state.plan_card.confirmable === false) || busy) return;
+  if (!planId || (state.plan_card && state.plan_card.confirmable === false)) return;
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   const keepWatch = backgrounded;
   planCardHidden = true;
+  const signal = backgrounded ? undefined : (runAbort ? runAbort.signal : undefined);
   if (!backgrounded) {
     setBusy(true);
     executeSseOpen = true;
@@ -1279,39 +1576,43 @@ async function confirmPlan() {
     const dto = await api("/v1/run-plan?stream=1", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ plan_id: planId, session_id: sessionId }),
-      signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
+      body: JSON.stringify({ plan_id: planId, session_id: owner }),
+      signal,
+      owner,
     });
     if (keepWatch && isDeferredNotice(dto)) {
-      if (dto && Array.isArray(dto.transcript)) applyServerTranscript(dto);
-      renderChat();
-      renderNow();
+      if (dto && Array.isArray(dto.transcript)) applyServerTranscript(dto, owner);
+      if (viewing(owner)) {
+        renderChat();
+        renderNow();
+      }
       return;
     }
-    if (!adoptServerResult(dto)) {
-      renderChat();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
       return;
     }
+    if (!viewing(owner)) return;
     closePlanTabsForRun(state.run_id);
     renderPanes();
     await refreshWorkspace();
   } catch (exc) {
     if (!isAbortError(exc)) {
-      transcript.push({
+      pushTranscriptRow(owner, {
         kind: "error",
         text: "Network error. Confirm did not complete.",
         payload: { next_action: PENCIL_RESEND },
       });
-      persistTranscript();
-      renderChat();
+      if (viewing(owner)) renderChat();
     }
   } finally {
-    planCardHidden = false;
+    if (viewing(owner)) planCardHidden = false;
     if (!keepWatch) {
-      executeSseOpen = false;
-      setBusy(false);
+      rememberExecuteFlag(owner, false);
+      setBusyFor(owner, false);
     }
-    renderChat();
+    finishKernel(owner);
+    if (viewing(owner)) renderChat();
   }
 }
 
@@ -1334,29 +1635,33 @@ function identityActions(msg) {
 }
 
 async function confirmIdentityWrite(confirm) {
-  if (busy || !sessionId) return;
+  if (!sessionId || refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   setBusy(true);
   try {
     const body = confirm
-      ? { session_id: sessionId, confirm: true }
-      : { session_id: sessionId, dismiss: true };
+      ? { session_id: owner, confirm: true }
+      : { session_id: owner, dismiss: true };
     const dto = await api("/v1/kb/write", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      owner,
     });
-    if (!adoptServerResult(dto)) renderChat();
-    else renderPanes();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
   } catch (exc) {
-    transcript.push({
+    pushTranscriptRow(owner, {
       kind: "error",
       text: "Network error. The name was not saved.",
       payload: { next_action: PENCIL_RESEND },
     });
-    persistTranscript();
-    renderChat();
+    if (viewing(owner)) renderChat();
   } finally {
-    setBusy(false);
+    setBusyFor(owner, false);
+    finishKernel(owner);
   }
 }
 
@@ -1500,6 +1805,7 @@ function onChatClick(ev) {
     return;
   }
   if (t.dataset.example) {
+    if (refuseIfSendLocked()) return;
     const ex = EXAMPLES[Number(t.dataset.example)];
     if (ex) {
       setMode(ex.mode);
@@ -1603,8 +1909,10 @@ async function submitParamEdits() {
     renderNow();
     return;
   }
-  if (busy) return;
+  if (refuseIfSendLocked()) return;
   dismissModeNotice();
+  const owner = sessionId;
+  beginKernel(owner);
   planCardHidden = true;
   setBusy(true);
   renderChat();
@@ -1612,28 +1920,29 @@ async function submitParamEdits() {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, patches }),
+      body: JSON.stringify({ session_id: owner, patches }),
+      owner,
     });
-    if (!adoptServerResult(dto)) {
-      renderChat();
-    } else {
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) {
       filePreview = null;
       renderPanes();
       await refreshSessions();
       await refreshWorkspace();
     }
   } catch (exc) {
-    transcript.push({
+    pushTranscriptRow(owner, {
       kind: "error",
       text: "Network error. Parameter update did not complete.",
       payload: { next_action: "Press Apply again. You do not need to start over." },
     });
-    persistTranscript();
-    renderChat();
+    if (viewing(owner)) renderChat();
   } finally {
-    planCardHidden = false;
-    setBusy(false);
-    renderChat();
+    if (viewing(owner)) planCardHidden = false;
+    setBusyFor(owner, false);
+    finishKernel(owner);
+    if (viewing(owner)) renderChat();
   }
 }
 
@@ -1813,7 +2122,11 @@ function onArtifactClick(ev) {
 }
 
 function sessionDisplayName(row) {
-  return String((row && (row.name || row.title)) || (row && row.session_id) || "").trim();
+  const id = String((row && row.session_id) || "").trim();
+  const name = String((row && (row.name || row.title)) || "").trim();
+  const last = String((row && row.last_user) || "").trim();
+  if (!last && (!name || name === id)) return "New session";
+  return name || id;
 }
 
 function onSessionListDblClick(ev) {
@@ -1855,7 +2168,11 @@ function onSessionListClick(ev) {
 }
 
 function beginRenameSession(id) {
-  if (!id || busy) return;
+  if (!id) return;
+  if (sessionIsWaiting(id)) {
+    showStatusNotice(WAITING_NOTICE);
+    return;
+  }
   renamingSessionId = id;
   renderSessionList();
   const box = document.querySelector(".session-rename");
@@ -1865,52 +2182,62 @@ function beginRenameSession(id) {
   }
 }
 
-async function flushPendingSessionName(id) {
-  const key = String(id || "").trim();
-  const name = pendingSessionNames[key];
-  if (!key || !name) return false;
-  const dto = await api(`/v1/session/${encodeURIComponent(key)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (dto && dto.error) return false;
-  delete pendingSessionNames[key];
-  return true;
-}
-
 async function commitRenameSession(id, raw) {
-  const name = String(raw || "").trim();
+  const typed = String(raw || "").trim();
   renamingSessionId = "";
-  const local = sessions.find((row) => row.session_id === id);
-  const persisted = Boolean(local && !local.local_only);
-  if (!persisted) {
-    const label = name || "New session";
-    if (local) {
-      local.name = label;
-      local.title = label;
-    }
-    if (label === "New session") delete pendingSessionNames[id];
-    else pendingSessionNames[id] = label;
-    renderSessionList();
-    renderNow();
-    return;
-  }
+  const name = !typed || typed === "New session" ? "" : typed;
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
   if (dto && dto.error) {
+    showStatusNotice((dto.error && dto.error.message) || "Could not rename this session.");
     renderSessionList();
     return;
   }
-  delete pendingSessionNames[id];
   await refreshSessions();
 }
 
+function clearVisibleSession() {
+  sessionId = "";
+  localStorage.removeItem(STORAGE_SESSION);
+  busy = false;
+  backgrounded = false;
+  runAbort = null;
+  runStartedAt = 0;
+  runElapsedS = 0;
+  executeSseOpen = false;
+  stopElapsedClock();
+  transcript = [];
+  state = emptyState();
+  clearOpenTabs();
+  treeCollapsed = new Set();
+  openProcessTurns = new Set();
+  editingParams = false;
+  editingNowSlot = "";
+  editingUserIndex = -1;
+  filePreview = null;
+  workspace = { artifacts: [] };
+  modeNotice = "";
+  mode = "plan";
+  sessionAttachments = [];
+  renderAttachChips();
+  setAttachStatus("");
+  const input = $("query-input");
+  const send = $("btn-send");
+  const attach = $("btn-attach");
+  if (input) input.disabled = false;
+  if (send) send.disabled = false;
+  if (attach) attach.disabled = false;
+}
+
 async function deleteSession(id) {
-  if (!id || busy) return;
+  if (!id) return;
+  if (sessionIsWaiting(id)) {
+    showStatusNotice(WAITING_NOTICE);
+    return;
+  }
   const row = sessions.find((item) => item.session_id === id);
   const label = sessionDisplayName(row) || id;
   if (
@@ -1918,15 +2245,6 @@ async function deleteSession(id) {
       `Delete session "${label}"? This also deletes its plans, runs, and artifacts. This cannot be undone.`
     )
   ) {
-    return;
-  }
-  if (row && row.local_only) {
-    delete pendingSessionNames[id];
-    if (id === sessionId) createSession();
-    else {
-      sessions = sessions.filter((item) => item.session_id !== id);
-      renderSessionList();
-    }
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -1937,9 +2255,15 @@ async function deleteSession(id) {
     window.alert(String(msg));
     return;
   }
-  delete pendingSessionNames[id];
+  delete sessionWatches[id];
   if (id === sessionId) {
-    await createSession();
+    clearVisibleSession();
+    await refreshSessions();
+    if (sessions[0]) await switchSession(sessions[0].session_id);
+    else {
+      renderPanes();
+      focusComposer();
+    }
     return;
   }
   await refreshSessions();
@@ -1947,7 +2271,9 @@ async function deleteSession(id) {
 
 async function rewindUserMessage(index, text, confirmDiscard) {
   const query = String(text || "").trim();
-  if (!query || busy || index < 0) return;
+  if (!query || index < 0 || refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   const snapshot = transcript.slice();
   const savedCard = state.plan_card;
   const savedExec = state.execution;
@@ -1964,7 +2290,7 @@ async function rewindUserMessage(index, text, confirmDiscard) {
   let retryDiscard = false;
   let restore = false;
   try {
-    const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/rewind`, {
+    const dto = await api(`/v1/session/${encodeURIComponent(owner)}/rewind`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1973,6 +2299,7 @@ async function rewindUserMessage(index, text, confirmDiscard) {
         mode,
         confirm_discard: Boolean(confirmDiscard),
       }),
+      owner,
     });
     if (dto && dto.needs_confirm) {
       if (confirmDiscard) return;
@@ -1984,22 +2311,24 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       return;
     }
     if (dto && dto.error && !dto.transcript) {
-      transcript.push({
+      pushTranscriptRow(owner, {
         kind: "error",
         text: (dto.error && dto.error.message) || "Rewind failed.",
         payload: dto.error || {},
       });
-      renderChat();
+      if (viewing(owner)) renderChat();
       return;
     }
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    filePreview = null;
-    renderPanes();
-    await refreshSessions();
-    await refreshWorkspace();
+    ingestDto(dto, { appendUser: false, owner });
+    applyServerTranscript(dto, owner);
+    if (viewing(owner)) {
+      filePreview = null;
+      renderPanes();
+      await refreshSessions();
+      await refreshWorkspace();
+    }
   } finally {
-    if (restore) {
+    if (restore && viewing(owner)) {
       transcript = snapshot;
       persistTranscript();
       state.plan_card = savedCard;
@@ -2007,37 +2336,44 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       state.run_id = savedRun;
       editingUserIndex = index;
     }
-    setBusy(false);
-    if (!retryDiscard && !restore) focusComposer();
+    setBusyFor(owner, false);
+    finishKernel(owner);
+    if (viewing(owner) && !retryDiscard && !restore) focusComposer();
   }
   if (retryDiscard) await rewindUserMessage(index, query, true);
 }
 
-function appendDtoError(dto) {
-  const err = (dto && dto.error) || { message: "Request failed." };
-  transcript.push({
-    kind: "error",
-    text: err.message || "Request failed.",
-    payload: err,
-  });
-  persistTranscript();
-}
-
-function adoptServerResult(dto) {
+function adoptServerResult(dto, owner) {
+  const targetOwner = owner || sessionId;
   if (dto && Array.isArray(dto.transcript)) {
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
+    ingestDto(dto, { appendUser: false, owner: targetOwner });
+    applyServerTranscript(dto, targetOwner);
     return true;
   }
-  if (dto && dto.error) appendDtoError(dto);
+  if (dto && dto.error) {
+    const err = dto.error || { message: "Request failed." };
+    pushTranscriptRow(targetOwner, {
+      kind: "error",
+      text: err.message || "Request failed.",
+      payload: err,
+    });
+  }
   return false;
 }
 
-function applyServerTranscript(dto) {
+function applyServerTranscript(dto, owner) {
+  const targetOwner = owner || sessionId;
   if (!dto || !Array.isArray(dto.transcript)) return;
-  const server = dto.transcript;
-  transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
-  persistTranscript();
+  const server = dto.transcript.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
+  if (!targetOwner || targetOwner === sessionId) {
+    transcript = server;
+    persistTranscript();
+    return;
+  }
+  const parked = sessionWatches[targetOwner];
+  if (!parked) return;
+  parked.transcript = server;
+  persistTranscriptFor(targetOwner, server);
 }
 
 function mergeArtifactLists(left, right) {
@@ -2218,17 +2554,16 @@ async function refreshAttachments() {
   renderAttachChips();
 }
 
-async function ensureSessionForAttach() {
-  if (!sessionId) {
-    sessionId = newSessionId();
-    localStorage.setItem(STORAGE_SESSION, sessionId);
-  }
-  return sessionId;
+async function ensureSession() {
+  if (sessionId) return sessionId;
+  const created = await createSession();
+  return created || "";
 }
 
 async function uploadAttachmentFile(file) {
   if (!file) return;
-  await ensureSessionForAttach();
+  const id = await ensureSession();
+  if (!id) return;
   const form = new FormData();
   form.append("file", file, file.name || "paste.png");
   const res = await fetch(`/v1/session/${encodeURIComponent(sessionId)}/attachments`, {
@@ -2356,14 +2691,40 @@ function bindComposerAttachments() {
 }
 
 async function createSession() {
-  stopLivePoll();
-  dropRunWatch();
-  persistTranscript();
-  sessionId = newSessionId();
+  if (creatingSession) return creatingSession;
+  creatingSession = openNewSession().finally(() => {
+    creatingSession = null;
+  });
+  return creatingSession;
+}
+
+async function openNewSession() {
+  const previous = sessionId;
+  parkCurrentSession();
+  const dto = await api("/v1/sessions", { method: "POST" });
+  if (!dto || dto.error || !dto.session_id) {
+    if (previous) {
+      sessionId = previous;
+      restoreParked(previous);
+      setBusy(busy);
+    }
+    showStatusNotice((dto && dto.error && dto.error.message) || CREATE_FAILED);
+    renderPanes();
+    return "";
+  }
+  sessionId = String(dto.session_id);
   localStorage.setItem(STORAGE_SESSION, sessionId);
+  planCardHidden = false;
+  clarifyCardHidden = false;
+  busy = false;
+  backgrounded = false;
+  runAbort = null;
+  runStartedAt = 0;
+  runElapsedS = 0;
+  executeSseOpen = false;
+  stopElapsedClock();
   state = emptyState();
   transcript = [];
-  persistTranscript();
   clearOpenTabs();
   treeCollapsed = new Set();
   openProcessTurns = new Set();
@@ -2379,22 +2740,63 @@ async function createSession() {
   sessionAttachments = [];
   renderAttachChips();
   setAttachStatus("");
-  renderPanes();
+  const attach = $("btn-attach");
+  if (attach) attach.disabled = false;
+  applyComposerLock();
   await refreshSessions();
+  renderPanes();
   focusComposer();
+  return sessionId;
 }
 
 async function switchSession(id) {
   if (!id || id === sessionId) return;
-  persistTranscript();
-  dropRunWatch();
+  unseenDone.delete(id);
+  followServerKernel = false;
+  parkCurrentSession();
   sessionId = id;
   localStorage.setItem(STORAGE_SESSION, sessionId);
+  planCardHidden = false;
+  clarifyCardHidden = false;
+  const parked = sessionWatches[id];
+  renderSessionList();
+  if (parked && (parked.busy || parked.backgrounded)) {
+    restoreParked(id);
+    setBusy(busy);
+    renderAttachChips();
+    renderPanes();
+    focusComposer();
+    await refreshWorkspace();
+    renderPanes();
+    focusComposer();
+    return;
+  }
+  delete sessionWatches[id];
+  busy = false;
+  backgrounded = false;
+  runStartedAt = 0;
+  runElapsedS = 0;
+  executeSseOpen = false;
+  stopElapsedClock();
   transcript = [];
-  const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
-  ingestDto(dto);
-  applySessionMode(dto);
-  applyServerTranscript(dto);
+  state = emptyState();
+  sessionLoading = true;
+  applyComposerLock();
+  renderPanes();
+  let dto = null;
+  try {
+    dto = await api(`/v1/session/${encodeURIComponent(id)}`);
+  } finally {
+    sessionLoading = false;
+  }
+  if (dto && !dto.error) {
+    ingestDto(dto);
+    applySessionMode(dto);
+    applyServerTranscript(dto);
+  } else {
+    transcript = [];
+    showStatusNotice((dto && dto.error && dto.error.message) || "Session not found.");
+  }
   clearOpenTabs();
   treeCollapsed = new Set();
   openProcessTurns = new Set();
@@ -2404,32 +2806,38 @@ async function switchSession(id) {
   await refreshWorkspace();
   await refreshProvider();
   await refreshAttachments();
+  setBusy(false);
+  if (dto && dto.kernel_busy && !isDtoRunning(dto)) {
+    serverKernelOwner = id;
+    followServerKernel = true;
+    setBusy(true);
+  }
   renderPanes();
-  applyRunningWatch(dto);
+  if (dto && !dto.error) applyRunningWatch(dto);
+  if (dto && dto.kernel_busy && !isDtoRunning(dto) && !busy) setBusy(true);
+  applyComposerLock();
   focusComposer();
 }
 
 async function refreshSessions() {
   const data = await api("/v1/sessions");
-  sessions = data.sessions || [];
-  const onServer = new Set(sessions.map((row) => row.session_id));
-  let flushed = false;
-  for (const id of Object.keys(pendingSessionNames)) {
-    if (onServer.has(id) && (await flushPendingSessionName(id))) flushed = true;
-  }
-  if (flushed) {
-    const again = await api("/v1/sessions");
-    sessions = again.sessions || [];
-  }
-  if (sessionId && !sessions.some((row) => row.session_id === sessionId)) {
-    const label = pendingSessionNames[sessionId] || "New session";
-    sessions = [
-      { session_id: sessionId, name: label, title: label, last_user: "", job: "", local_only: true },
-      ...sessions,
-    ];
-  }
+  const previous = noteServerKernel((data && data.sessions) || []);
+  sessions = (data && data.sessions) || [];
+  const finishedHere = Boolean(
+    followServerKernel && previous && previous === sessionId && !serverKernelOwner && !localKernelOwner
+  );
+  if (finishedHere) followServerKernel = false;
   renderSessionList();
   renderNow();
+  applyComposerLock();
+  if (!finishedHere) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
+  if (dto && !dto.error) {
+    ingestDto(dto);
+    applyServerTranscript(dto);
+  }
+  setBusy(false);
+  renderPanes();
 }
 
 async function refreshWorkspace() {
@@ -2507,8 +2915,9 @@ function renderSessionList() {
             : `<span class="sid">${escapeHtml(name)}</span>`;
           const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
           const runTag = row.running ? `<span class="meta running-tag">Running</span>` : "";
+          const mark = sessionMark(row.session_id);
           return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
-        <div class="session-main">${nameBlock}${meta}${runTag}</div>
+        <div class="session-main"><div class="session-title-row">${mark}${nameBlock}</div>${meta}${runTag}</div>
         <div class="session-actions">
           <button type="button" class="icon-btn ghost" data-session-rename title="Rename">${icon("pencil")}</button>
           <button type="button" class="icon-btn ghost" data-session-delete title="Delete">${icon("trash")}</button>
@@ -2791,11 +3200,14 @@ function renderChat() {
   if (!host) return;
   const stick = host.scrollHeight - host.scrollTop - host.clientHeight < 48;
   const parts = [];
-  if (!transcript.length) {
+  if (sessionLoading && !transcript.length) {
+    parts.push(`<div class="empty-hint"><p>Loading…</p></div>`);
+  } else if (!transcript.length) {
+    const exampleDisabled = sendLocked() ? "disabled" : "";
     parts.push(`<div class="empty-hint">
       <p>This session is empty. Try a beginner step:</p>
       <div class="examples">${EXAMPLES.map(
-        (ex, i) => `<button type="button" class="example" data-example="${i}">${escapeHtml(ex.mode.toUpperCase())}: ${escapeHtml(ex.text)}</button>`
+        (ex, i) => `<button type="button" class="example" data-example="${i}" ${exampleDisabled}>${escapeHtml(ex.mode.toUpperCase())}: ${escapeHtml(ex.text)}</button>`
       ).join("")}</div>
     </div>`);
   }
@@ -2813,14 +3225,15 @@ function renderChat() {
   }
   if (busy || backgrounded) {
     if (planningWait()) {
-      parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">Planning…</span></div></div>`);
+      parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble">${busyMarkup("Planning")}</div></div>`);
     } else {
       const skill = runningSkillName();
       const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
       const backgroundBtn = backgrounded
         ? ""
         : `<button type="button" class="ghost" id="btn-background-run">Background</button>`;
-      parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock(backgrounded ? "Background" : "Working")}</span>${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
+      const label = formatRunClock(backgrounded ? "Background" : "Working");
+      parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble">${busyMarkup(label)}${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
     }
   }
   host.innerHTML = parts.join("");
@@ -3869,6 +4282,23 @@ mountShell();
 renderMode();
 
 async function restoreCurrentSession() {
+  const data = await api("/v1/sessions");
+  sessions = (data && data.sessions) || [];
+  noteServerKernel(sessions);
+  const saved = String(sessionId || "").trim();
+  const known = sessions.some((row) => row.session_id === saved);
+  if (known) sessionId = saved;
+  else if (sessions.length) sessionId = String(sessions[0].session_id || "");
+  else sessionId = "";
+  if (sessionId) localStorage.setItem(STORAGE_SESSION, sessionId);
+  else localStorage.removeItem(STORAGE_SESSION);
+  if (!sessionId) {
+    transcript = [];
+    state = emptyState();
+    renderPanes();
+    await refreshProvider();
+    return;
+  }
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
   if (dto && !dto.error) {
     ingestDto(dto);
@@ -3877,11 +4307,17 @@ async function restoreCurrentSession() {
   } else {
     transcript = [];
   }
-  await refreshSessions();
   await refreshWorkspace();
   await refreshProvider();
   await refreshAttachments();
   renderPanes();
+  if (dto && !dto.error) applyRunningWatch(dto);
+  if (dto && dto.kernel_busy && !isDtoRunning(dto) && !busy) {
+    serverKernelOwner = sessionId;
+    followServerKernel = true;
+    setBusy(true);
+  }
+  applyComposerLock();
 }
 
 restoreCurrentSession();
