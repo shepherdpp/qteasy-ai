@@ -73,15 +73,35 @@ _PLAIN_LANGUAGE_SIGNALS = (
     "别翻代码",
 )
 _CONTEXT_TURN_CAP = 4
+_OUTLINE_RECENT_TURNS = 2
 _CONTEXT_REFERENCE_RE = re.compile(
-    r"刚才|前面|你说|earlier|you said|"
+    r"刚才|前面|之前|上面|上次|你说|earlier|you said|"
     r"第\s*(?:[0-9]+|[一二三四五六七八九十两]+)\s*[条项点]",
     re.IGNORECASE,
 )
+_ITEM_MENTION_RE = re.compile(
+    r"第\s*([0-9]+|[一二三四五六七八九十两]+)\s*[条项点]"
+)
+_NUMBERED_LINE_RE = re.compile(
+    r"^\s*(?:(\d+)|([一二三四五六七八九十两]+))[\.、．]\s*(\S.*?)\s*$"
+)
+_ZH_DIGIT = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
 _EARLIER_ANSWER_WRITER_CLAUSE = (
-    "Earlier answers are part of this conversation. Use them to resolve references "
-    "such as 刚才, 第N条, or a request to repeat an earlier answer in simpler words. "
-    "Do not claim those earlier answers are missing. "
+    "The session outline is part of this conversation, including brief lines for older turns. "
+    "Use it to resolve references such as 刚才, 之前, 第N条, or a request to repeat an earlier answer. "
+    "Do not claim an item is missing when it appears in the outline. "
+    "Do not invent the unabridged wording of a turn that is only summarized. "
     "New facts still come from the knowledge snippets."
 )
 
@@ -114,29 +134,93 @@ def query_references_earlier_turn(text: str) -> bool:
     return bool(_CONTEXT_REFERENCE_RE.search(str(text or "")))
 
 
-def _cap_context_cards(cards: Sequence[AskHistoryCard]) -> List[AskHistoryCard]:
-    """上文最多保留编号最大的若干轮。"""
+def _clip(text: str, limit: int) -> str:
+    """按字符截断，并去掉换行，供提纲的短行使用。"""
 
-    turns: List[int] = []
-    for card in cards:
-        if card.turn not in turns:
-            turns.append(card.turn)
-    if len(turns) <= _CONTEXT_TURN_CAP:
-        return list(cards)
-    kept = set(sorted(turns)[-_CONTEXT_TURN_CAP:])
-    return [card for card in cards if card.turn in kept]
+    body = str(text or "").replace("\n", " ").strip()
+    if len(body) <= limit:
+        return body
+    return body[:limit]
 
 
-def _heuristic_context_cards(
-        query: str,
-        history: Sequence[AskHistoryCard],
-) -> List[AskHistoryCard]:
-    """没有可用 prior 时，指代问句只附最近一轮。"""
+def _zh_item_number(token: str) -> Optional[int]:
+    """把「二」「12」「十二」解析成正整数。解析不了则返回 None。"""
 
-    if not history or not query_references_earlier_turn(query):
-        return []
-    latest = max(card.turn for card in history)
-    return [card for card in history if card.turn == latest]
+    raw = str(token or "").strip()
+    if raw.isdigit():
+        number = int(raw)
+        return number if number >= 1 else None
+    if not raw or any(char not in _ZH_DIGIT and char != "十" for char in raw):
+        return None
+    if raw == "十":
+        return 10
+    if "十" not in raw:
+        if len(raw) == 1 and raw in _ZH_DIGIT:
+            return _ZH_DIGIT[raw]
+        return None
+    left, right = raw.split("十", 1)
+    if left == "":
+        tens = 1
+    elif left in _ZH_DIGIT:
+        tens = _ZH_DIGIT[left]
+    else:
+        return None
+    if right == "":
+        ones = 0
+    elif right in _ZH_DIGIT:
+        ones = _ZH_DIGIT[right]
+    else:
+        return None
+    number = tens * 10 + ones
+    return number if number >= 1 else None
+
+
+def _single_numbered_item(query: str) -> Optional[int]:
+    """问句里恰好一种「第 N 条/项/点」时返回 N。没有或有多种则不插入子卡。"""
+
+    found = []
+    for match in _ITEM_MENTION_RE.finditer(str(query or "")):
+        number = _zh_item_number(match.group(1))
+        if number is not None:
+            found.append(number)
+    unique = set(found)
+    if len(unique) != 1:
+        return None
+    return unique.pop()
+
+
+def _numbered_items(answer: str) -> List[Tuple[str, str]]:
+    """抽出答文里的编号行。没有编号的散文不在这里。"""
+
+    items: List[Tuple[str, str]] = []
+    for line in str(answer or "").splitlines():
+        match = _NUMBERED_LINE_RE.match(line)
+        if match is None:
+            continue
+        token = match.group(1) or match.group(2) or ""
+        body = str(match.group(3) or "").strip()
+        if token and body:
+            items.append((token, body))
+    return items
+
+
+def _full_turn_ids(turns: Sequence[int], promoted: Sequence[int]) -> set:
+    """全文名额最多 4 轮：先留给 prior 点名的轮次，再补最近 2 轮。"""
+
+    full: List[int] = []
+    for turn in promoted:
+        if turn in full or turn not in turns:
+            continue
+        full.append(turn)
+        if len(full) >= _CONTEXT_TURN_CAP:
+            return set(full)
+    for turn in list(turns)[-_OUTLINE_RECENT_TURNS:]:
+        if turn in full:
+            continue
+        if len(full) >= _CONTEXT_TURN_CAP:
+            break
+        full.append(turn)
+    return set(full)
 
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -204,7 +288,7 @@ def _json_object(raw: str) -> Optional[Dict[str, Any]]:
 
 @dataclass(frozen=True)
 class AskHistoryCard:
-    """成功 Ask 的一张卡片。原话和答文只在点名之后进入点卡提示。"""
+    """成功 Ask 的一张卡片。点卡和作家只在指代或 prior 时看到滚动提纲。"""
 
     turn: int
     kind: str
@@ -293,8 +377,18 @@ def build_ask_history_index(
     return cards
 
 
+def _promoted_turns(cards: Sequence[AskHistoryCard]) -> List[int]:
+    """prior 点名的轮次，保持点名顺序。"""
+
+    turns: List[int] = []
+    for card in cards:
+        if card.turn not in turns:
+            turns.append(card.turn)
+    return turns
+
+
 def _named_turn_blocks(cards: Sequence[AskHistoryCard]) -> List[AskHistoryCard]:
-    """每个被点名的轮次只留一块原话和答文。"""
+    """每个轮次只留一块原话和答文。"""
 
     blocks: List[AskHistoryCard] = []
     seen = set()
@@ -306,17 +400,91 @@ def _named_turn_blocks(cards: Sequence[AskHistoryCard]) -> List[AskHistoryCard]:
     return blocks
 
 
-def _earlier_answers_block(cards: Sequence[AskHistoryCard]) -> str:
-    """作家提示里的上文。没有轮次时为空串。"""
+def _render_turn_outline(
+        block: AskHistoryCard,
+        *,
+        fidelity: str,
+        age: int,
+        full: bool,
+) -> List[str]:
+    """一轮提纲。定主题不放答文全文；点卡和作家近详远略。"""
+
+    items = _numbered_items(block.answer_text)
+    if fidelity == "topic":
+        lines = [f"turn {block.turn}", f"User: {_clip(block.user_text, 40)}"]
+        if not items:
+            return lines
+        limit = 80 if age < 4 else 24
+        lines.append("Items:")
+        for token, body in items:
+            lines.append(f"{token}. {_clip(body, limit)}")
+        return lines
+    if full:
+        return [
+            f"turn {block.turn}",
+            f"User: {block.user_text}",
+            f"Answer shown: {block.answer_text}",
+        ]
+    if age <= 3:
+        lines = [f"turn {block.turn}", f"User: {_clip(block.user_text, 80)}"]
+        shown = items[:12]
+        if shown:
+            lines.append("Items:")
+            for token, body in shown:
+                lines.append(f"{token}. {_clip(body, 120)}")
+        else:
+            lines.append(f"Lead: {_clip(block.answer_text, 200)}")
+        return lines
+    user = _clip(block.user_text, 40)
+    if items:
+        bits = "; ".join(f"{token}. {_clip(body, 24)}" for token, body in items)
+        return [f"turn {block.turn} | User: {user} | Items: {bits}"]
+    return [f"turn {block.turn} | User: {user} | Lead: {_clip(block.answer_text, 60)}"]
+
+
+def render_session_outline(
+        cards: Sequence[AskHistoryCard],
+        *,
+        fidelity: str,
+        promoted_turns: Sequence[int] = (),
+) -> str:
+    """整段 Session 的滚动提纲。没有轮次时为空串。
+
+    ``fidelity="topic"`` 只放截断的用户原话和编号行。
+    ``fidelity="context"`` 给点卡和作家：最近两轮和 prior 点名的轮次可以是全文，
+    全文最多 4 轮，更早的轮次改成中等或一行简略。
+
+    Parameters
+    ----------
+    cards : sequence of AskHistoryCard
+        成功 Ask 索引。同一轮多张卡只渲染一次。
+    fidelity : {'topic', 'context'}
+        定主题用 topic，点卡和作家用 context。
+    promoted_turns : sequence of int, optional
+        prior 点名的轮次，按列表顺序占用全文名额。
+
+    Returns
+    -------
+    str
+        以 ``Session outline:`` 开头的文本；没有轮次时为空串。
+    """
 
     blocks = _named_turn_blocks(cards)
     if not blocks:
         return ""
-    lines = ["Earlier answers:"]
-    for card in blocks:
-        lines.append(f"turn {card.turn}")
-        lines.append(f"User: {card.user_text}")
-        lines.append(f"Answer shown: {card.answer_text}")
+    latest = blocks[-1].turn
+    turns = [block.turn for block in blocks]
+    full_turns = _full_turn_ids(turns, promoted_turns) if fidelity == "context" else set()
+    lines = ["Session outline:"]
+    for block in blocks:
+        lines.extend(
+            _render_turn_outline(
+                block,
+                fidelity=fidelity,
+                age=latest - block.turn,
+                full=block.turn in full_turns,
+            )
+        )
     return "\n".join(lines) + "\n\n"
 
 
@@ -407,9 +575,11 @@ class AskEngine:
 
         无 Provider 时只做单句检索，不读历史正文。有 Provider 时不把目录当第一跳：
         定主题、在主题菜单里点卡，作家读通过校验的正文。已有成功 Ask 时，
-        定主题提示只加一句话索引。``topics`` 与 ``prior`` 可单独或同时出现。
-        合法 ``prior`` 的原话和答文进入点卡和作家；只有 ``prior`` 时用被点名卡片的
-        主题打开菜单并仍然点卡。只有 ``topics`` 且问句不像指代时，作家不看上文。
+        定主题提示加一句话索引和滚动提纲，提纲不放答文全文。``topics`` 与 ``prior``
+        可单独或同时出现。合法 ``prior`` 或问句像指代时，点卡和作家看到近详远略提纲；
+        只有 ``prior`` 时用被点名卡片的主题打开菜单并仍然点卡。只有 ``topics`` 且
+        问句不像指代时，点卡和作家不看提纲。问句点名第 N 项且父卡有 ``details`` 时，
+        把对应子卡插进命中。
         ``raw['ask_plain_language']`` 仅表示本轮新判定（供 session 粘住）；作家是否
         加降术语条款看 ``plain_language`` 参数或本轮判定。
 
@@ -442,6 +612,7 @@ class AskEngine:
         topic_ids: List[str] = []
         turn_plain = False
         context_cards: List[AskHistoryCard] = []
+        promoted_turns: List[int] = []
         if self.provider is None:
             turn_plain = query_requests_plain_language(text)
             hits = self.knowledge_base.retrieve(text)
@@ -451,7 +622,9 @@ class AskEngine:
                     turn_plain,
                 )
         else:
-            hits, topic_ids, turn_plain, context_cards = self._select_with_provider(text, history)
+            hits, topic_ids, turn_plain, context_cards, promoted_turns = (
+                self._select_with_provider(text, history)
+            )
         if not hits:
             return self._with_plain_flag(self._not_found(query=text, depth=depth), turn_plain)
 
@@ -468,6 +641,7 @@ class AskEngine:
                 menu_ids=menu_ids,
                 plain_language=effective_plain,
                 context_cards=context_cards,
+                promoted_turns=promoted_turns,
             )
         else:
             answer = self._offline_answer(hits)
@@ -493,58 +667,66 @@ class AskEngine:
             self,
             query: str,
             history: Sequence[AskHistoryCard],
-    ) -> Tuple[List[KbEntry], List[str], bool, List[AskHistoryCard]]:
+    ) -> Tuple[List[KbEntry], List[str], bool, List[AskHistoryCard], List[int]]:
         """定主题、点卡、校验。失败时不调用作家。
 
         Returns
         -------
         tuple
-            选中的条目、本轮主题 id、本轮定主题 JSON 的 ``plain_language``、
-            要交给点卡和作家的上文卡片。失败时条目、主题和上文为空，语域为 False。
+            选中的条目、本轮主题 id、本轮 ``plain_language``、
+            要交给点卡和作家的历史卡片、prior 点名的轮次。
+            失败时条目、主题、历史和轮次为空，语域为 False。
         """
 
         resolved = self._resolve_topics(query, history)
         if resolved is None:
-            return [], [], False, []
-        topic_ids, named, turn_plain = resolved
+            return [], [], False, [], []
+        topic_ids, context_cards, promoted, turn_plain = resolved
         if not topic_ids:
-            return [], [], False, []
+            return [], [], False, [], []
         menu = self.knowledge_base.menu_for_topics(topic_ids)
         if not menu:
-            return [], [], False, []
+            return [], [], False, [], []
         card_raw = self.provider.chat(
-            self._card_user_prompt(query, menu, named_cards=named),
+            self._card_user_prompt(
+                query,
+                menu,
+                context_cards=context_cards,
+                promoted_turns=promoted,
+            ),
             system_prompt=_CARD_SYSTEM_PROMPT,
         )
         raw_ids = self._parse_ids_reply(str(card_raw))
         if raw_ids is None:
-            return [], [], False, []
+            return [], [], False, [], []
         menu_ids = {entry.id for entry in menu}
         accepted = self.knowledge_base.validate_card_ids(menu, raw_ids)
         primaries = [entry for entry in accepted if entry.id in menu_ids]
         primaries = self.knowledge_base.prefer_exclusive(primaries)
         if not primaries:
-            return [], [], False, []
+            return [], [], False, [], []
+        hits = self._with_detail_children(query, primaries)
         meta = self.knowledge_base._maybe_strategy_meta(query)
         if meta is not None:
-            primaries = list(primaries) + [meta]
-        return primaries, topic_ids, bool(turn_plain), list(named)
+            hits = list(hits) + [meta]
+        return hits, topic_ids, bool(turn_plain), list(context_cards), list(promoted)
 
     def _resolve_topics(
             self,
             query: str,
             history: Sequence[AskHistoryCard],
-    ) -> Optional[Tuple[List[str], List[AskHistoryCard], bool]]:
+    ) -> Optional[Tuple[List[str], List[AskHistoryCard], List[int], bool]]:
         """定主题。``topics`` 与 ``prior`` 可单独或同时出现。
 
-        ``topics`` 有效时菜单听它。同时有合法 ``prior`` 时，那些轮次作为上文。
-        只有合法 ``prior`` 时，菜单来自被点名卡片的主题。``topics`` 有效但
-        ``prior`` 缺失或非法时，指代问句走启发式，不因此失败。
+        ``topics`` 有效时菜单听它。合法 ``prior`` 或指代问句把整段历史交给
+        点卡和作家做滚动提纲；prior 点名的轮次优先占全文名额。只有合法
+        ``prior`` 时，菜单来自被点名卡片的主题。``topics`` 有效但 ``prior``
+        缺失或非法时，指代问句仍附提纲，不因此失败。
 
         Returns
         -------
         tuple or None
-            主题 id、上文卡片、以及 ``plain_language`` 本轮判定。
+            主题 id、上文卡片、prior 点名轮次、``plain_language``。
             失败或 ``uncertain`` 时为 ``None``（不置语域）。
         """
 
@@ -560,15 +742,16 @@ class AskEngine:
             self._parse_topics_reply(str(topic_raw)) if "topics" in payload else None
         )
         prior = self._prior_topics(payload, history) if "prior" in payload else None
+        history_cards = list(history)
         if topic_ids:
             if prior is not None:
-                named = _cap_context_cards(prior[1])
-            else:
-                named = _heuristic_context_cards(query, history)
-            return topic_ids, named, turn_plain
+                return topic_ids, history_cards, _promoted_turns(prior[1]), turn_plain
+            if query_references_earlier_turn(query):
+                return topic_ids, history_cards, [], turn_plain
+            return topic_ids, [], [], turn_plain
         if prior is not None:
             prior_topics, prior_cards = prior
-            return prior_topics, _cap_context_cards(prior_cards), turn_plain
+            return prior_topics, history_cards, _promoted_turns(prior_cards), turn_plain
         return None
 
     def _prior_topics(
@@ -658,8 +841,63 @@ class AskEngine:
             return items[0]
         return None
 
+    def _detail_child_id(self, parent: KbEntry, item_n: int) -> Optional[str]:
+        """父卡上 item 等于 N 的 details 目标。没有或不是一条则不插入。"""
+
+        targets: List[str] = []
+        for rel in parent.relations:
+            if self.knowledge_base._relation_compose.get(rel["rel"]) != "detail":
+                continue
+            if rel.get("item") != item_n:
+                continue
+            target = str(rel.get("to") or "").strip()
+            if target and target not in targets:
+                targets.append(target)
+        if len(targets) != 1:
+            return None
+        return targets[0]
+
+    def _with_detail_children(self, query: str, hits: Sequence[KbEntry]) -> List[KbEntry]:
+        """问句只有一个第 N 项时，把已选父卡的 details 子卡插到父卡后面。
+
+        结果最多 3 张。超出时从末尾丢掉，但不丢掉这对父卡和子卡。
+        不沿子卡再爬。问句没有编号，或有两种编号时，不插入。
+        """
+
+        item_n = _single_numbered_item(query)
+        if item_n is None:
+            return list(hits)
+        ordered = list(hits)
+        protected = set()
+        for parent in list(hits):
+            child_id = self._detail_child_id(parent, item_n)
+            if child_id is None or child_id == parent.id:
+                continue
+            child = self.knowledge_base._by_id.get(child_id)
+            if child is None:
+                continue
+            protected.add(parent.id)
+            protected.add(child_id)
+            ordered = [item for item in ordered if item.id != child_id]
+            spliced: List[KbEntry] = []
+            for item in ordered:
+                spliced.append(item)
+                if item.id == parent.id:
+                    spliced.append(self.knowledge_base._clone_scored(child, 0.0))
+            ordered = spliced
+        while len(ordered) > 3:
+            drop_at = None
+            for index in range(len(ordered) - 1, -1, -1):
+                if ordered[index].id not in protected:
+                    drop_at = index
+                    break
+            if drop_at is None:
+                break
+            del ordered[drop_at]
+        return ordered
+
     def _topic_user_prompt(self, query: str, history: Sequence[AskHistoryCard]) -> str:
-        """定主题提示：注册表一句话。有历史时再加一句话索引，不放原话和答文。"""
+        """定主题提示：注册表一句话。有历史时再加索引和提纲，提纲不放答文全文。"""
 
         lines = ["Topic registry:"]
         for spec in self.knowledge_base.topic_specs():
@@ -671,6 +909,7 @@ class AskEngine:
                     f"- turn {card.turn} kind=ask id={card.card_id} "
                     f"title={card.title} summary={card.summary}"
                 )
+            lines.append(render_session_outline(history, fidelity="topic").rstrip("\n"))
         lines.append(
             "Plain-language reference signals (hints only, not required): "
             + "、".join(_PLAIN_LANGUAGE_SIGNALS)
@@ -683,7 +922,8 @@ class AskEngine:
                 "using 1 or 2 registry ids. "
                 'Optionally add "prior": [{"turn": 1, "sources": ["<id>"]}] '
                 "when the question refers to earlier answers, naming only turns and "
-                "source ids from the index. "
+                "source ids from the index. The session outline is only for resolving "
+                "earlier turns and numbered items. "
                 "Send prior without topics when there is no new topic and the question "
                 "only continues those earlier turns. "
                 "Omit prior when the question does not depend on earlier answers. "
@@ -702,7 +942,8 @@ class AskEngine:
             self,
             query: str,
             menu: Sequence[KbEntry],
-            named_cards: Optional[Sequence[AskHistoryCard]] = None,
+            context_cards: Optional[Sequence[AskHistoryCard]] = None,
+            promoted_turns: Optional[Sequence[int]] = None,
     ) -> str:
         """点卡提示：菜单内 id、标题、摘要，以及边上的 rel / 对方 id / 标题。
 
@@ -712,20 +953,22 @@ class AskEngine:
             用户原句。
         menu : sequence of KbEntry
             当前主题菜单。
-        named_cards : sequence of AskHistoryCard, optional
-            模型点名的卡片。只把这些轮次的原话和当时答文写进提示。
+        context_cards : sequence of AskHistoryCard, optional
+            指代或 prior 时的整段历史。渲染成近详远略提纲。
+        promoted_turns : sequence of int, optional
+            prior 点名的轮次，优先渲染为全文。
         """
 
         lines: List[str] = []
-        blocks = _named_turn_blocks(named_cards or [])
-        if blocks:
-            lines.append("Named turns:")
-            for card in blocks:
-                lines.append(f"turn {card.turn}")
-                lines.append(f"User: {card.user_text}")
-                lines.append(f"Answer shown: {card.answer_text}")
+        outline = render_session_outline(
+            context_cards or [],
+            fidelity="context",
+            promoted_turns=promoted_turns or [],
+        )
+        if outline:
+            lines.append(outline.rstrip("\n"))
             lines.append(
-                "Use these earlier answers together with the question when choosing cards. "
+                "Use this session outline together with the question when choosing cards. "
                 "Still choose ids only from the menu below."
             )
         lines.append("Cards in the selected topics:")
@@ -733,10 +976,15 @@ class AskEngine:
             lines.append(f"- {entry.id}: {entry.title}. {entry.summary}")
             for edge in self.knowledge_base.incident_edges(entry.id):
                 arrow = "->" if edge["direction"] == "out" else "<-"
+                item_bit = f" item={edge['item']}" if edge.get("item") else ""
                 lines.append(
-                    f"  edge {edge['rel']} {arrow} {edge['other_id']}: {edge['title']}"
+                    f"  edge {edge['rel']} {arrow} {edge['other_id']}{item_bit}: {edge['title']}"
                 )
         lines.append(f"Question: {query}")
+        lines.append(
+            "When the question expands one numbered item and a details edge lists that item, "
+            "include both the parent menu card and that target."
+        )
         lines.append(
             'Reply with JSON only: {"ids": ["<id>"]} using 1 to 3 ids from this menu '
             "or a depth-1 neighbor of a selected menu card, "
@@ -833,8 +1081,9 @@ class AskEngine:
             menu_ids: Optional[Sequence[str]] = None,
             plain_language: bool = False,
             context_cards: Optional[Sequence[AskHistoryCard]] = None,
+            promoted_turns: Optional[Sequence[int]] = None,
     ) -> str:
-        """将主答卡正文、可选上文与合编方式注入 prompt 后调用 Provider。"""
+        """将主答卡正文、可选提纲与合编方式注入 prompt 后调用 Provider。"""
 
         snippets = []
         for item in hits:
@@ -842,7 +1091,11 @@ class AskEngine:
                 f"[{item.id}] {item.title}\n{item.narrative}\npython:\n{item.python_code}"
             )
         context_block = f"\n\nConfirmed session slots: {session_context}\n" if session_context else "\n"
-        earlier = _earlier_answers_block(context_cards or [])
+        earlier = render_session_outline(
+            context_cards or [],
+            fidelity="context",
+            promoted_turns=promoted_turns or [],
+        )
         compose = self._compose_block(hits, menu_ids=menu_ids or [])
         compose_block = f"\n\n{compose}" if compose else ""
         prompt = (
@@ -890,6 +1143,15 @@ class AskEngine:
         lines: List[str] = []
         internal = self.knowledge_base.edges_among(primary_ids)
         seen_pairs = set()
+        hit_ids = [item.id for item in hits]
+        for edge in self.knowledge_base.edges_among(hit_ids):
+            if edge.get("compose") != "detail":
+                continue
+            lines.append(
+                f"Detail item {edge['item']} of {edge['fr']} is expanded by {edge['to']}. "
+                f"Explain that item from {edge['to']}. "
+                f"Do not restate the other items of {edge['fr']}."
+            )
         for edge in internal:
             if edge["rel"] != "contrasts_with":
                 continue

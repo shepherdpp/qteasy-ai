@@ -47,7 +47,7 @@ _TYPE_TIE_RANK = {
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _KB_ENTRY_TYPES = frozenset({"concept", "trap", "boundary", "pointer"})
 # 合编方式是代码里的封闭集合。注册表只能引用这些键，不能写自由字符串。
-_COMPOSE_METHODS = frozenset({"appendix", "next_card", "contrast", "plan_switch"})
+_COMPOSE_METHODS = frozenset({"appendix", "next_card", "contrast", "plan_switch", "detail"})
 # 目录命中是定条，分数只用于和关键词命中区分，不参与桶内打分。
 _CATALOG_HIT_SCORE = 100.0
 _EXCLUSIVE_ENTRY_TYPES = ("trap", "boundary")
@@ -223,25 +223,43 @@ def _parse_manual_anchor(entry_id: str, payload: Dict[str, Any]) -> str:
 def _parse_relations(
         entry_id: str,
         payload: Mapping[str, Any],
-        registered_rels: AbstractSet[str],
-) -> List[Dict[str, str]]:
-    """读取 relations。缺省为空列表；rel 必须已在边注册表登记。"""
+        relation_compose: Mapping[str, str],
+) -> List[Dict[str, Any]]:
+    """读取 relations。缺省为空列表；rel 必须已在边注册表登记。
+
+    ``compose=detail`` 的边必须带正整数 ``item``，同一张卡上不重复。
+    其它边带 ``item`` 则失败。
+    """
 
     raw = payload.get("relations", [])
     if raw is None:
         raw = []
     if not isinstance(raw, list):
         raise ValueError(f"KB entry {entry_id!r} relations must be a list")
-    parsed: List[Dict[str, str]] = []
+    parsed: List[Dict[str, Any]] = []
+    seen_items = set()
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError(f"KB entry {entry_id!r} relation must be an object")
         rel = item.get("rel")
         target = item.get("to")
-        if not isinstance(rel, str) or rel not in registered_rels:
+        if not isinstance(rel, str) or rel not in relation_compose:
             raise ValueError(f"KB entry {entry_id!r} has unregistered relation rel {rel!r}")
         if not isinstance(target, str) or not target.strip():
             raise ValueError(f"KB entry {entry_id!r} relation is missing a non-empty 'to'")
+        if relation_compose[rel] == "detail":
+            number = item.get("item")
+            if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+                raise ValueError(
+                    f"KB entry {entry_id!r} details relation is missing a positive item"
+                )
+            if number in seen_items:
+                raise ValueError(f"KB entry {entry_id!r} repeats details item {number}")
+            seen_items.add(number)
+            parsed.append({"rel": rel, "to": target.strip(), "item": number})
+            continue
+        if "item" in item:
+            raise ValueError(f"KB entry {entry_id!r} relation {rel!r} must not include item")
         parsed.append({"rel": rel, "to": target.strip()})
     return parsed
 
@@ -267,7 +285,7 @@ class KbEntry:
     type: str = ""
     topics: List[str] = field(default_factory=list)
     manual_anchor: str = ""
-    relations: List[Dict[str, str]] = field(default_factory=list)
+    relations: List[Dict[str, Any]] = field(default_factory=list)
     score: float = 0.0
     kernel_doc_zh: str = ""
 
@@ -329,6 +347,7 @@ class KnowledgeBase:
         self._relation_compose = {spec.id: spec.compose for spec in relation_specs}
         self._entries: List[KbEntry] = self._load_entries()
         self._by_id: Dict[str, KbEntry] = {entry.id: entry for entry in self._entries}
+        self._require_detail_targets()
         self._question_catalog: Dict[str, str] = self._load_question_catalog()
 
     def _load_entries(self) -> List[KbEntry]:
@@ -359,6 +378,19 @@ class KnowledgeBase:
                 )
             )
         return entries
+
+    def _require_detail_targets(self) -> None:
+        """details 的目标必须是已装载的卡。其它边仍允许悬空，点卡时跳过。"""
+
+        for entry in self._entries:
+            for rel in entry.relations:
+                if self._relation_compose.get(rel["rel"]) != "detail":
+                    continue
+                target = str(rel.get("to") or "")
+                if target not in self._by_id:
+                    raise ValueError(
+                        f"KB entry {entry.id!r} details target {target!r} does not exist"
+                    )
 
     def _load_question_catalog(self) -> Dict[str, str]:
         """加载 compile 生成的问句目录。文件不存在时目录为空。"""
@@ -475,26 +507,32 @@ class KnowledgeBase:
             other = self._by_id.get(item["to"])
             if other is None:
                 continue
-            found.append({
+            row = {
                 "direction": "out",
                 "rel": item["rel"],
                 "other_id": other.id,
                 "title": other.title,
                 "summary": other.summary,
-            })
+            }
+            if "item" in item:
+                row["item"] = str(item["item"])
+            found.append(row)
         for other in self._entries:
             if other.id == card_id:
                 continue
             for item in other.relations:
                 if item["to"] != card_id:
                     continue
-                found.append({
+                row = {
                     "direction": "in",
                     "rel": item["rel"],
                     "other_id": other.id,
                     "title": other.title,
                     "summary": other.summary,
-                })
+                }
+                if "item" in item:
+                    row["item"] = str(item["item"])
+                found.append(row)
         return found
 
     def external_invitations(
@@ -507,7 +545,8 @@ class KnowledgeBase:
         """主答卡指向菜单外的关联，最多 ``limit`` 条。
 
         同一对方只留一条。菜单里的卡不邀请。截断顺序是 ``contrasts_with``、
-        ``see_also``、``next_topic``、``plan_handoff``。不沿边再爬。
+        ``see_also``、``next_topic``、``plan_handoff``。``details`` 不进邀请。
+        不沿边再爬。
 
         Parameters
         ----------
@@ -548,7 +587,7 @@ class KnowledgeBase:
                         return chosen
         return chosen
 
-    def edges_among(self, selected_ids: Sequence[str]) -> List[Dict[str, str]]:
+    def edges_among(self, selected_ids: Sequence[str]) -> List[Dict[str, Any]]:
         """选中集内部的直接边。不把边外的卡算进来，也不沿边再爬。
 
         Parameters
@@ -575,12 +614,15 @@ class KnowledgeBase:
             for item in entry.relations:
                 target = item["to"]
                 if target in selected_set and target != card_id:
-                    found.append({
+                    row = {
                         "rel": item["rel"],
                         "compose": self._relation_compose[item["rel"]],
                         "fr": card_id,
                         "to": target,
-                    })
+                    }
+                    if "item" in item:
+                        row["item"] = item["item"]
+                    found.append(row)
         return found
 
     @staticmethod

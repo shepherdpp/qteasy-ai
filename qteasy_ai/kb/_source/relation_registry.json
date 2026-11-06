@@ -15,6 +15,10 @@
     {
       "id": "plan_handoff",
       "compose": "plan_switch"
+    },
+    {
+      "id": "details",
+      "compose": "detail"
     }
   ]
 }
