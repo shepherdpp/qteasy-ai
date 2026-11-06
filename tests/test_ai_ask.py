@@ -852,7 +852,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertIn("Session outline:", writer_prompt)
             self.assertIn(_DATA_ANSWER, writer_prompt)
             self.assertIn(_NAN_ANSWER, writer_prompt)
-            self.assertEqual(third.get("sources"), ["backtest_intro"])
+            self.assertEqual(third.get("sources"), ["backtest_intro", "backtest_result"])
             self.assertEqual(focus.get("topic"), "backtest")
             self.assertTrue(third.get("ok"))
 
@@ -899,7 +899,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertNotIn("data_three_entries", menu_ids)
             self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
             self.assertIn(_NAN_ANSWER, writer_prompt)
-            self.assertEqual(second.get("sources"), ["backtest_intro"])
+            self.assertEqual(second.get("sources"), ["backtest_intro", "backtest_result"])
 
     def test_plan_ready_text_stays_out_of_ask_prompts(self) -> None:
         """定主题提示不读 plan_ready、clarify 或 result 的正文。"""
@@ -949,7 +949,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertEqual(second.get("sources"), ["backtest_intro"])
 
     def test_second_item_follows_model_json(self) -> None:
-        """「第二项」只跟随模型 JSON，代码不按这四个字打开数据主题。"""
+        """「第二项」菜单仍听模型 JSON；sources 带上该条的 details 子卡。"""
 
         print("\n[TestAiAskEngine] 第二项跟随 JSON")
         from qteasy_ai.app import QteasyAssistant
@@ -998,7 +998,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertNotIn("data_three_entries", card_prompt)
             self.assertNotIn("env_ready", card_prompt)
             self.assertNotIn("Resolved ask_focus:", card_prompt)
-            self.assertEqual(second.get("sources"), ["backtest_intro"])
+            self.assertEqual(second.get("sources"), ["backtest_intro", "backtest_result"])
 
             plain = self._protocol(["backtest"], ["backtest_intro"], answer="回测需要明确的日期窗口。")
             bare = QteasyAssistant(memory_store=store, provider=plain)
@@ -1022,7 +1022,7 @@ class TestAiAskEngine(unittest.TestCase):
                 },
             )
             self.assertNotIn("data_three_entries", plain.prompts[1])
-            self.assertEqual(payload.get("sources"), ["backtest_intro"])
+            self.assertEqual(payload.get("sources"), ["backtest_intro", "backtest_result"])
             self.assertNotIn("session", payload)
 
     def test_offline_self_contained_hit_and_history_miss(self) -> None:
@@ -1432,7 +1432,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertNotIn("TURN1-TAIL-NOT-IN-BRIEF", writer_prompt)
             self.assertIn("Answer shown: TURN5-FULL-BODY", writer_prompt)
             self.assertIn("Answer shown: TURN6-FULL-BODY", writer_prompt)
-            self.assertEqual(brief.get("sources"), ["backtest_intro"])
+            self.assertEqual(brief.get("sources"), ["backtest_intro", "backtest_engine"])
             promoted = assistant.ask(
                 "把第一轮再说一遍",
                 response_style="raw",

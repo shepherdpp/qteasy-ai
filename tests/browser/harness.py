@@ -320,6 +320,14 @@ class WorkbenchBrowserCase(unittest.TestCase):
         self.page.wait_for_selector("#composer-mode", timeout=15000)
         self.page.evaluate("() => window.dispatchEvent(new Event('resize'))")
         self.page.click("#btn-new-session")
+        self.page.wait_for_function(
+            """() => {
+                const id = localStorage.getItem('qteasy-ai.session_id');
+                if (!id) return false;
+                return Boolean(document.querySelector('[data-session-id="' + CSS.escape(id) + '"]'));
+            }""",
+            timeout=10000,
+        )
         self.page.wait_for_selector("#query-input")
 
     def tearDown(self) -> None:

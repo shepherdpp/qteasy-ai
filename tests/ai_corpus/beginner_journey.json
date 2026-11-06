@@ -52,7 +52,7 @@
       "expected_job": "data.refill",
       "expected_skills": ["qt.ai.system.fallback"],
       "expected_fallback_action": "clarify_required",
-      "expected_missing_info": "date_range",
+      "expected_missing_info": "start|end",
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "clarify",
       "notes": "E-REFILL-C"

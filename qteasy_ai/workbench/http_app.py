@@ -996,7 +996,7 @@ class WorkbenchHttp:
         return await self.get_session(request)
 
     async def background_run(self, request: Request) -> JSONResponse:
-        """POST /v1/session/{session_id}/background-run：进度留下，Composer 解锁。"""
+        """POST /v1/session/{session_id}/background-run：进度留下，输入框解锁，Send 等到这次内核调用结束。"""
 
         session_id = str(request.path_params.get("session_id") or "").strip()
         if not session_id:

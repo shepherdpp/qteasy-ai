@@ -24,7 +24,7 @@ class TestAiPlannerB(unittest.TestCase):
         self.planner = Planner(self.registry, env_facts={})
 
     def test_download_without_dates_clarify(self) -> None:
-        """下载缺日期 → clarify_required date_range，禁止无界下载。"""
+        """下载缺日期 → clarify_required start|end，禁止无界下载。"""
 
         print("\n[TestAiPlannerB] download missing dates")
         plan = self.planner.build_plan("download A-share daily data to local datasource", mode="plan")
@@ -32,7 +32,7 @@ class TestAiPlannerB(unittest.TestCase):
         print(" skill:", step.skill_name, "action:", step.inputs.get("fallback_action"))
         self.assertEqual(step.skill_name, "qt.ai.system.fallback")
         self.assertEqual(step.inputs.get("fallback_action"), "clarify_required")
-        self.assertEqual(step.inputs.get("missing_info"), "date_range")
+        self.assertEqual(step.inputs.get("missing_info"), "start|end")
 
     def test_download_with_dates_routes_to_refill(self) -> None:
         """带日期的 download → refill skill，无 symbols 时 assumptions 标明 all symbols。"""

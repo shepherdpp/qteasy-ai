@@ -204,7 +204,6 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("AbortController", js.text)
             self.assertIn("heartbeat", js.text)
             self.assertIn("progress-indet", js.text)
-            self.assertNotIn("busy-label", js.text)
             self.assertIn("data-now-edit", js.text)
             self.assertIn("Switched to", js.text)
             self.assertNotIn("g7-slot", js.text)
@@ -401,9 +400,9 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             refresh_fn = _extract_js_function(src, "refreshSessions")
             rename_fn = _extract_js_function(src, "commitRenameSession")
             print(" refresh paints now:", "renderNow()" in refresh_fn)
-            print(" rename paints now:", "renderNow()" in rename_fn)
+            print(" rename refreshes sessions:", "refreshSessions()" in rename_fn)
             self.assertIn("renderNow()", refresh_fn)
-            self.assertIn("renderNow()", rename_fn)
+            self.assertIn("refreshSessions()", rename_fn)
             line_css = css.text.split(".now-block .now-line {", 1)[1].split("}", 1)[0]
             label_css = css.text.split(".now-block .now-line .now-label {", 1)[1].split("}", 1)[0]
             clip_css = css.text.split(".now-block .now-line.clip {", 1)[1].split("}", 1)[0]

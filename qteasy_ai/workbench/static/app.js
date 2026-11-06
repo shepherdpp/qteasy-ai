@@ -3449,6 +3449,27 @@ function renderClarification() {
   if (!pendingItems.length && missing.length) {
     pendingItems = missing.map((name) => ({ name: String(name) }));
   }
+  if (!pendingItems.length) {
+    const cardText = clar ? String(clar.text || "") : "";
+    const lock = busy ? "disabled" : "";
+    const prompt = cardText ? `<p>${escapeHtml(cardText)}</p>` : "";
+    let foot = "";
+    if (clarifyWizard.ending) {
+      foot = `<div class="ix-card-foot" data-testid="clarify-end-confirm">
+      <button type="button" class="ix-text-btn" id="btn-clarify-end-back" ${lock}>Back</button>
+      <button type="button" class="primary" id="btn-clarify-end-confirm" title="Confirm end" ${lock}>Confirm</button>
+    </div>`;
+    } else {
+      foot = `<div class="ix-card-foot">
+      <button type="button" class="ix-text-btn" id="btn-clarify-end" title="End this request" ${lock}>End</button>
+    </div>`;
+    }
+    return `<div class="ix-card" data-testid="clarification-form">
+    <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3></div>
+    <div class="ix-card-body">${prompt}</div>
+    ${foot}
+  </div>`;
+  }
   const n = pendingItems.length || 1;
   const step = Math.min(Math.max(clarifyWizard.step, 1), n);
   clarifyWizard.step = step;
@@ -4382,10 +4403,22 @@ mountShell();
 renderMode();
 
 async function restoreCurrentSession() {
+  const requestedFor = String(sessionId || "");
   const data = await api("/v1/sessions");
   sessions = (data && data.sessions) || [];
   noteServerKernel(sessions);
-  const saved = String(sessionId || "").trim();
+  const current = String(sessionId || "").trim();
+  if (current && current !== requestedFor) {
+    localStorage.setItem(STORAGE_SESSION, current);
+    const knownNow = sessions.some((row) => row && row.session_id === current);
+    if (!knownNow) await refreshSessions();
+    else renderPanes();
+    await refreshProvider();
+    applyComposerLock();
+    projectCurrentWatch();
+    return;
+  }
+  const saved = current;
   const known = sessions.some((row) => row.session_id === saved);
   if (known) sessionId = saved;
   else if (sessions.length) sessionId = String(sessions[0].session_id || "");

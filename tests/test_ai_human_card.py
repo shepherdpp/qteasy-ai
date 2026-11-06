@@ -1021,15 +1021,26 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertEqual(int(pending_blob.get("step_index") or 0), 1)
             strategy = next((item for item in pending_rows if item.get("name") == "strategy_id"), None)
             self.assertIsNotNone(strategy)
-            self.assertTrue(any(str(o.get("id") or "") == "macd" for o in ((strategy or {}).get("options") or [])))
+            from qteasy_ai.slot_graph import strategy_id_options
+
+            options = [str(item.get("id") or "") for item in ((strategy or {}).get("options") or [])]
+            print(" strategy options:", options)
+            self.assertEqual(options, strategy_id_options())
             filled = asst.run("macd", response_style="raw", session_id="s-clar")
             filled_session = asst.session_store.load("s-clar")
             fill_steps = (filled.get("execution") or {}).get("steps") or []
             fill_names = [str(item.get("skill_name") or "") for item in fill_steps]
             fill_status = str((filled.get("execution") or {}).get("status") or "")
+            get_step = next(
+                item for item in fill_steps if str(item.get("skill_name") or "") == "qt.ai.strategy_meta.get"
+            )
+            result = get_step.get("result") if isinstance(get_step.get("result"), dict) else {}
+            readback = str(((result.get("payload") or {}).get("strategy_id")) or "")
             print(" fill status:", fill_status, "skills:", fill_names)
+            print(" macd readback:", readback)
             print(" fill complete:", filled_session.task.status if filled_session.task else None)
             self.assertIn("qt.ai.strategy_meta.get", fill_names)
+            self.assertEqual(readback, "macd")
             self.assertEqual(fill_status, "success")
 
             asst2 = QteasyAssistant(

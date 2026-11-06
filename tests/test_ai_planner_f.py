@@ -308,6 +308,7 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(read2[0]["inputs"].get("shares"), "000001.SZ")
             self.assertEqual(read2[0]["inputs"].get("freq"), "w")
             self.assertEqual(read2[0]["inputs"].get("start"), "20240201")
+            self.assertEqual(read2[0]["inputs"].get("htype_names"), "close")
             self.assertNotIn("000300.SH", str(read2[0]["inputs"].get("shares")))
 
     def test_unconfirmed_profile_shares_do_not_override_explicit_code(self) -> None:

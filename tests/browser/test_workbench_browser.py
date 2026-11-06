@@ -372,11 +372,21 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         )
         clock = self.page.locator("#busy-elapsed").inner_text()
         bars = self.page.locator("#busy-msg .progress-indet, #busy-msg .progress-det").count()
-        print(" background:", clock, "bars:", bars, "input enabled:", self.page.locator("#query-input").is_enabled())
+        send_enabled = self.page.locator("#btn-send").is_enabled()
+        print(
+            " background:",
+            clock,
+            "bars:",
+            bars,
+            "input enabled:",
+            self.page.locator("#query-input").is_enabled(),
+            "send enabled:",
+            send_enabled,
+        )
         self.assertIn("Background", clock)
         self.assertGreater(bars, 0)
         self.assertTrue(self.page.locator("#query-input").is_enabled())
-        self.assertTrue(self.page.locator("#btn-send").is_enabled())
+        self.assertFalse(send_enabled)
 
     def test_stop_confirms_and_clears_run(self) -> None:
         """Stop 经过确认框，hold 因取消结束。"""

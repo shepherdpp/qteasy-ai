@@ -157,7 +157,7 @@ class TestAiGoldPaths(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0].get("skill_name"), "qt.ai.system.fallback")
         self.assertEqual(inputs.get("fallback_action"), "clarify_required")
-        self.assertEqual(inputs.get("missing_info"), "date_range")
+        self.assertEqual(inputs.get("missing_info"), "start|end")
         self.assertEqual(execution.get("status"), "dry_run")
         self.assertEqual(execution.get("steps"), [])
 

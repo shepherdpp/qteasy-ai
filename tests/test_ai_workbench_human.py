@@ -53,12 +53,10 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             print(" human:", text)
             print(" exec:", (payload.get("execution") or {}).get("status"))
             self.assertIn("[MODE: PLAN]", text)
-            self.assertTrue(
-                "missing" in text.lower()
-                or "provide" in text.lower()
-                or "Reply" in text
-                or "Clarification" in text
-                or "start" in text.lower()
+            self.assertIn(
+                "Download/refill requires an explicit start and end date. "
+                "Unbounded full-history download is not allowed.",
+                text,
             )
             self.assertNotIn("Status: success", text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)

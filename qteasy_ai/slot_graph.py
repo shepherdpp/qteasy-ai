@@ -708,7 +708,12 @@ def _fill_graph(planner: Any, steps: List[Any], query: str, session: Any) -> Tup
         if value is not None and _write_empty(planner, steps, slot["name"], value):
             slot["filled"] = True
             slot["value"] = value
-    heuristic, ambiguous = _heuristic(planner, query, [slot for slot in projected if not slot["filled"]])
+    heuristic, ambiguous = _heuristic(
+        planner,
+        query,
+        [slot for slot in projected if not slot["filled"]],
+        dtype_query=_utterance_without_slots(query, session),
+    )
     for slot in projected:
         if slot["filled"] or slot["name"] not in heuristic:
             continue
@@ -728,7 +733,9 @@ def _fill_graph(planner: Any, steps: List[Any], query: str, session: Any) -> Tup
     extras.pop("slot_defaults", None)
     extras["accepted_steps"] = _accepted_snapshot(steps)
     names = [str(item["name"]) for item in pending]
-    hint = str(pending[0].get("hint") or clarification_prompt(pending))
+    hint = str(
+        pending[0].get("constraint") or pending[0].get("hint") or clarification_prompt(pending)
+    )
     replaced = [
         planner._make_step(
             step_id="step_1",
@@ -791,15 +798,24 @@ def _rewrite_fallback(planner: Any, steps: List[Any], query: str) -> Tuple[List[
     info = str(inputs.get("missing_info") or "")
     reason = str(inputs.get("reason") or "")
     hint = str(inputs.get("hint") or "")
+    action = str(inputs.get("fallback_action") or "")
     if info == "date_range" or reason == "refill_date_range_required":
         inputs["missing_info"] = "start|end"
         inputs["hint"] = _DATE_HINT
         inputs["details"] = {"slot_pending": date_pending_rows()}
         step.inputs = inputs
         return steps, {}
+    if action == "clarify_required" and info in {"", "none"} and not reason.startswith("open_"):
+        prompt = hint or "Please rephrase the request."
+        return steps, {
+            "clarification": {
+                "restatement": f"You asked: {query}",
+                "pending": [],
+                "confirm_prompt": prompt,
+            }
+        }
     if info not in {"supported_skill", "supported_screen_conditions"} and not reason.startswith("open_"):
         return steps, {}
-    action = str(inputs.get("fallback_action") or "")
     if action == "clarify_required" and info == "supported_skill" and not reason.startswith("open_"):
         card = _recovery_clarification(query)
         inputs["missing_info"] = "none"
@@ -955,7 +971,30 @@ def _project(
     return [by_name[name] for name in order]
 
 
-def _heuristic(planner: Any, query: str, slots: Sequence[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str]]:
+def _utterance_without_slots(query: str, session: Any) -> str:
+    """数据类型解析用的原句。已确认槽拼上的 ``key value`` 不参与。"""
+
+    text = str(query or "").strip()
+    task = getattr(session, "task", None)
+    slots = getattr(task, "slots", {}) or {} if task is not None else {}
+    parts: List[str] = []
+    for key, slot in slots.items():
+        value = getattr(slot, "value", None)
+        if value in (None, ""):
+            continue
+        parts.append(f"{key} {value}")
+    suffix = " ".join(parts)
+    if suffix and text.endswith(suffix):
+        return text[: -len(suffix)].strip()
+    return text
+
+
+def _heuristic(
+    planner: Any,
+    query: str,
+    slots: Sequence[Dict[str, Any]],
+    dtype_query: Optional[str] = None,
+) -> Tuple[Dict[str, Any], List[str]]:
     """按槽的类型从问句收值。覆盖不全时留下仍缺的必填。"""
 
     wanted = {slot["name"] for slot in slots}
@@ -972,7 +1011,7 @@ def _heuristic(planner: Any, query: str, slots: Sequence[Dict[str, Any]]) -> Tup
             found[key] = screen[key]
     ambiguous: List[str] = []
     if "names" in wanted or "htype_names" in wanted:
-        joined, ambiguous = _resolve_phrase(query)
+        joined, ambiguous = _resolve_phrase(query if dtype_query is None else dtype_query)
         if joined and not ambiguous:
             if "names" in wanted:
                 found["names"] = joined
