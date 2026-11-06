@@ -17,7 +17,7 @@
   ],
   "title": "Three data entry points",
   "summary": "Prices and bars use get_history_data; macro and benchmarks use get_reference_data; attributes use get_static_data. get_kline is OHLCV sugar, not a fourth door.",
-  "narrative": "qteasy exposes three read-only data entries. They are not one catch-all API.\n\n- history: time × share series via get_history_data. Stock prices, valuations, and related htypes go here. get_kline is OHLCV sugar on the same history path; it is not a fourth entry.\n- reference: time-only series via get_reference_data. Macro series and benchmarks such as close-000300.SH go here. Do not pull GDP or a market benchmark through get_history_data \"on the side\".\n- static: share-only attributes via get_static_data. Industry, list_date, and names go here.\n\nHistory reads can later be gathered into a HistoryPanel for multi-share analysis; that container is a separate topic. Ask names the three doors. Plan data.read picks a channel from your wording. Mixing shapes in one call is not supported. Download and refill are a different Job from read.",
+  "narrative": "qteasy exposes three read-only data entries. They are not one catch-all API.\n\n- history: time × share series via get_history_data. Stock prices, valuations, and related htypes go here. get_kline is OHLCV sugar on the same history path; it is not a fourth entry.\n- reference: time-only series via get_reference_data. Macro series and benchmarks such as close-000300.SH go here. Do not pull GDP or a market benchmark through get_history_data \"on the side\".\n- static: share-only attributes via get_static_data. Industry, list_date, and names go here.\n\nHistory reads can later be gathered into a HistoryPanel for multi-share analysis; that container is a separate topic. Ask names the three doors. Plan data.read picks a channel from your wording. Mixing shapes in one call is not supported. Download and refill are a different Job from read.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. A DataType is the stable information id. Look it up, then pick one of these doors by shape.\n2. get_history_data still needs at least one of start or end. A row count alone is not a date window.",
   "python_code": "import qteasy as qt\nprint('history', hasattr(qt, 'get_history_data'), 'kline', hasattr(qt, 'get_kline'))\nprint('reference', hasattr(qt, 'get_reference_data'))\nprint('static', hasattr(qt, 'get_static_data'))",
   "risk_notes": "Mixing channels in one call is not supported. Download/refill is a different Job from read.",
   "type": "concept",
@@ -28,6 +28,8 @@
     {"rel": "see_also", "to": "datatype_lookup"},
     {"rel": "see_also", "to": "data_filter"},
     {"rel": "see_also", "to": "historypanel_basics"},
-    {"rel": "see_also", "to": "capability_map"}
+    {"rel": "see_also", "to": "capability_map"},
+    {"rel": "details", "to": "datatype_lookup", "item": 1},
+    {"rel": "details", "to": "common_errors_date_window", "item": 2}
   ]
 }

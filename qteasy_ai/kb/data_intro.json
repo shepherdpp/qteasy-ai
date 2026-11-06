@@ -1,0 +1,31 @@
+{
+  "id": "data_intro",
+  "tags": ["data", "pipeline", "overview"],
+  "keywords": [
+    "数据这块怎么分",
+    "qteasy 数据从哪来到哪去",
+    "data pipeline overview",
+    "数据总览",
+    "数据三层"
+  ],
+  "title": "How qteasy data is organized",
+  "summary": "Channels fill a local store; stable information ids are read through three doors; history-shaped series can become a HistoryPanel.",
+  "narrative": "qteasy's data path has three layers. Network channels fill a local store. The store holds cleaned tables. Stable information ids are then read through a small set of entry points, and history-shaped series can become a HistoryPanel. This card only names those layers. Downloading still needs an explicit date range and a confirmed Plan.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. DataSource is the local store of predefined tables. overview and get_table_info show what is already there.\n2. A data channel is the network source passed into refill. It is not a DataType and not a table.\n3. Refill copies a bounded date range into the local store. Ask explains it; Plan performs it.\n4. Before screening or type lookup, download the small starter set. This is not a catalog of every table.\n5. Check the token and which local tables exist before a download.\n6. Three read doors: history, reference, and static. get_kline is sugar on history, not a fourth door.\n7. Screen a pool with static attributes, then pass the codes into a history read.\n8. HistoryPanel is the in-memory shares × dates × series container for history-shaped data.\n\nNumbered table catalogs in the manual are storage layouts, not cards here.",
+  "python_code": "import qteasy as qt\nprint(hasattr(qt, 'DataSource'), hasattr(qt, 'get_history_data'), hasattr(qt, 'refill_data_source'))",
+  "risk_notes": "Ask does not download. A refill without an explicit start and end is rejected. This card is not a table catalog.",
+  "type": "concept",
+  "manual_anchor": "docs/source/manage_data/01. overview.md",
+  "topics": ["data-downloading", "data-analysis"],
+  "relations": [
+    {"rel": "see_also", "to": "data_three_entries"},
+    {"rel": "see_also", "to": "refill_bounded"},
+    {"rel": "details", "to": "datasource_local", "item": 1},
+    {"rel": "details", "to": "data_channels", "item": 2},
+    {"rel": "details", "to": "refill_bounded", "item": 3},
+    {"rel": "details", "to": "data_minimum", "item": 4},
+    {"rel": "details", "to": "env_ready", "item": 5},
+    {"rel": "details", "to": "data_three_entries", "item": 6},
+    {"rel": "details", "to": "data_filter", "item": 7},
+    {"rel": "details", "to": "historypanel_basics", "item": 8}
+  ]
+}

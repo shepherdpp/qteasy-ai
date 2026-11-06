@@ -17,6 +17,7 @@
       "capability_map",
       "data_channels",
       "data_filter",
+      "data_intro",
       "data_minimum",
       "data_three_entries",
       "datasource_local",
@@ -40,6 +41,7 @@
       "optimize_config",
       "optimize_intro",
       "optimize_result",
+      "process_data",
       "pt_ps_vs",
       "qteasy_advantages",
       "refill_bounded",
@@ -50,6 +52,7 @@
       "strategy_realize",
       "strategy_trace",
       "what_is_qteasy",
+      "what_is_qteasy_ai",
       "workbench_entry"
     ],
     "pointer": [],

@@ -1532,19 +1532,59 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertNotIn("filler_b", crowded_payload.get("sources"))
             self.assertNotIn("grand", crowded_payload.get("sources"))
 
-    def test_capability_map_has_no_details_edge(self) -> None:
-        """官方能力地图这轮不加 details 边。"""
+    def test_capability_map_details_match_hierarchy(self) -> None:
+        """官方能力地图的六条 details 按编号指向下一层卡。"""
 
-        print("\n[TestAiAskEngine] capability_map 仍无 details")
+        print("\n[TestAiAskEngine] capability_map 六条 details")
         raw = json.loads(
             (Path(__file__).resolve().parents[1] / "qteasy_ai" / "kb" / "capability_map.json").read_text(
                 encoding="utf-8",
             )
         )
-        rels = [item.get("rel") for item in raw.get("relations") or []]
-        print(" relations:", rels)
-        self.assertEqual(rels, ["see_also"])
-        self.assertNotIn("details", rels)
+        details = [item for item in raw.get("relations") or [] if item.get("rel") == "details"]
+        print(" details:", details)
+        self.assertEqual(
+            details,
+            [
+                {"rel": "details", "to": "what_is_qteasy", "item": 1},
+                {"rel": "details", "to": "data_intro", "item": 2},
+                {"rel": "details", "to": "backtest_intro", "item": 3},
+                {"rel": "details", "to": "optimize_intro", "item": 4},
+                {"rel": "details", "to": "live_what", "item": 5},
+                {"rel": "details", "to": "what_is_qteasy_ai", "item": 6},
+            ],
+        )
+
+    def test_official_details_reach_every_card(self) -> None:
+        """从三扇纯入口沿 details 能走到其余每一张官方卡。"""
+
+        print("\n[TestAiAskEngine] details 图覆盖全部官方卡")
+        kb = KnowledgeBase()
+        by_id = {entry.id: entry for entry in kb._entries}
+        roots = ("what_is_qteasy", "capability_map", "getting_started")
+        seen = set(roots)
+        pending = list(roots)
+        while pending:
+            current = pending.pop()
+            for item in by_id[current].relations:
+                if item.get("rel") != "details":
+                    continue
+                child = item["to"]
+                prefix = f"{item['item']}."
+                numbered = [
+                    line.strip() for line in by_id[current].narrative.splitlines()
+                ]
+                print(" edge:", current, prefix, "->", child)
+                self.assertTrue(
+                    any(line.startswith(prefix) for line in numbered),
+                    f"{current} narrative missing {prefix}",
+                )
+                if child not in seen:
+                    seen.add(child)
+                    pending.append(child)
+        missing = sorted(set(by_id) - seen)
+        print(" card count:", len(by_id), "reached:", len(seen), "missing:", missing)
+        self.assertEqual(missing, [])
 
 
 _CONTRAST_CLAUSE = (

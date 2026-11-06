@@ -71,6 +71,31 @@
         {
           "rel": "see_also",
           "to": "backtest_engine"
+        },
+        {
+          "rel": "details",
+          "to": "backtest_config",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "backtest_result",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "backtest_trade_log",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "backtest_engine",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "common_errors_nan",
+          "item": 5
         }
       ]
     },
@@ -168,6 +193,16 @@
         {
           "rel": "see_also",
           "to": "capability_map"
+        },
+        {
+          "rel": "details",
+          "to": "datatype_lookup",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "common_errors_date_window",
+          "item": 2
         }
       ]
     },
@@ -229,6 +264,41 @@
         {
           "rel": "next_topic",
           "to": "data_three_entries"
+        },
+        {
+          "rel": "details",
+          "to": "install_and_env",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "data_intro",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "backtest_intro",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "strategy_overview",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "optimize_intro",
+          "item": 5
+        },
+        {
+          "rel": "details",
+          "to": "live_what",
+          "item": 6
+        },
+        {
+          "rel": "details",
+          "to": "get_help",
+          "item": 7
         }
       ]
     },
@@ -279,6 +349,11 @@
         {
           "rel": "see_also",
           "to": "qteasy_advantages"
+        },
+        {
+          "rel": "details",
+          "to": "live_plan_only",
+          "item": 1
         }
       ]
     },
@@ -344,6 +419,11 @@
         {
           "rel": "see_also",
           "to": "backtest_config"
+        },
+        {
+          "rel": "details",
+          "to": "common_errors_run_freq",
+          "item": 1
         }
       ]
     },
@@ -383,6 +463,21 @@
         {
           "rel": "see_also",
           "to": "optimize_result"
+        },
+        {
+          "rel": "details",
+          "to": "optimize_config",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "optimize_algorithms",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "optimize_result",
+          "item": 3
         }
       ]
     },
@@ -531,6 +626,26 @@
         {
           "rel": "next_topic",
           "to": "getting_started"
+        },
+        {
+          "rel": "details",
+          "to": "library_map",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "qteasy_advantages",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "getting_started",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "what_is_qteasy_ai",
+          "item": 4
         }
       ]
     },
@@ -553,6 +668,31 @@
         {
           "rel": "see_also",
           "to": "qteasy_advantages"
+        },
+        {
+          "rel": "details",
+          "to": "data_intro",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "strategy_overview",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "backtest_intro",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "optimize_intro",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "live_what",
+          "item": 5
         }
       ]
     },
@@ -583,6 +723,26 @@
         {
           "rel": "see_also",
           "to": "live_what"
+        },
+        {
+          "rel": "details",
+          "to": "data_intro",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "lookahead_isolation",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "live_what",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "builtin_strategy_lookup",
+          "item": 4
         }
       ]
     },
@@ -601,6 +761,36 @@
         {
           "rel": "see_also",
           "to": "ask_plan_agent"
+        },
+        {
+          "rel": "details",
+          "to": "what_is_qteasy",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "data_intro",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "backtest_intro",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "optimize_intro",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "live_what",
+          "item": 5
+        },
+        {
+          "rel": "details",
+          "to": "what_is_qteasy_ai",
+          "item": 6
         }
       ]
     },
@@ -624,6 +814,11 @@
         {
           "rel": "see_also",
           "to": "faq_datasource"
+        },
+        {
+          "rel": "details",
+          "to": "faq_datasource",
+          "item": 1
         }
       ]
     },
@@ -818,6 +1013,16 @@
         {
           "rel": "see_also",
           "to": "capability_map"
+        },
+        {
+          "rel": "details",
+          "to": "historypanel_analysis",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "historypanel_plot",
+          "item": 2
         }
       ]
     },
@@ -911,6 +1116,41 @@
         {
           "rel": "see_also",
           "to": "builtin_strategy_lookup"
+        },
+        {
+          "rel": "details",
+          "to": "operator_create",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "operator_run_freq",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "pt_ps_vs",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "strategy_blender",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "builtin_strategy_lookup",
+          "item": 5
+        },
+        {
+          "rel": "details",
+          "to": "strategy_bases",
+          "item": 6
+        },
+        {
+          "rel": "details",
+          "to": "strategy_realize",
+          "item": 7
         }
       ]
     },
@@ -1041,6 +1281,21 @@
         {
           "rel": "see_also",
           "to": "lookahead_isolation"
+        },
+        {
+          "rel": "details",
+          "to": "strategy_trace",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "strategy_builder_intro",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "process_data",
+          "item": 3
         }
       ]
     },
@@ -1310,6 +1565,142 @@
         {
           "rel": "see_also",
           "to": "ask_plan_agent"
+        }
+      ]
+    },
+    {
+      "id": "data_intro",
+      "type": "concept",
+      "topics": [
+        "data-downloading",
+        "data-analysis"
+      ],
+      "manual_anchor": "docs/source/manage_data/01. overview.md",
+      "questions": [
+        "数据这块怎么分",
+        "qteasy 数据从哪来到哪去",
+        "data pipeline overview"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "data_three_entries"
+        },
+        {
+          "rel": "see_also",
+          "to": "refill_bounded"
+        },
+        {
+          "rel": "details",
+          "to": "datasource_local",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "data_channels",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "refill_bounded",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "data_minimum",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "env_ready",
+          "item": 5
+        },
+        {
+          "rel": "details",
+          "to": "data_three_entries",
+          "item": 6
+        },
+        {
+          "rel": "details",
+          "to": "data_filter",
+          "item": 7
+        },
+        {
+          "rel": "details",
+          "to": "historypanel_basics",
+          "item": 8
+        }
+      ]
+    },
+    {
+      "id": "process_data",
+      "type": "concept",
+      "topics": [
+        "strategy"
+      ],
+      "manual_anchor": "docs/source/design/09-process-data-and-dynamic-backtest.md",
+      "questions": [
+        "过程数据是什么",
+        "proc.own_cash",
+        "策略里怎么读持仓和现金"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "strategy_realize"
+        },
+        {
+          "rel": "see_also",
+          "to": "lookahead_isolation"
+        }
+      ]
+    },
+    {
+      "id": "what_is_qteasy_ai",
+      "type": "concept",
+      "topics": [
+        "capability",
+        "onboarding"
+      ],
+      "manual_anchor": "",
+      "questions": [
+        "什么是 qteasy-ai",
+        "qteasy-ai 是什么",
+        "what is qteasy-ai"
+      ],
+      "relations": [
+        {
+          "rel": "see_also",
+          "to": "what_is_qteasy"
+        },
+        {
+          "rel": "see_also",
+          "to": "capability_map"
+        },
+        {
+          "rel": "details",
+          "to": "ask_plan_agent",
+          "item": 1
+        },
+        {
+          "rel": "details",
+          "to": "workbench_entry",
+          "item": 2
+        },
+        {
+          "rel": "details",
+          "to": "notebook_cli",
+          "item": 3
+        },
+        {
+          "rel": "details",
+          "to": "official_vs_user_kb",
+          "item": 4
+        },
+        {
+          "rel": "details",
+          "to": "side_effects_safety",
+          "item": 5
         }
       ]
     }

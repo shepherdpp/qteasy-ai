@@ -672,6 +672,48 @@
       "expect_ids": [
         "workbench_entry"
       ]
+    },
+    {
+      "id": "data_intro",
+      "gold": [
+        "数据这块怎么分",
+        "qteasy 数据从哪来到哪去",
+        "data pipeline overview"
+      ],
+      "paraphrases": [
+        "数据管理分哪几层"
+      ],
+      "expect_ids": [
+        "data_intro"
+      ]
+    },
+    {
+      "id": "process_data",
+      "gold": [
+        "过程数据是什么",
+        "proc.own_cash",
+        "策略里怎么读持仓和现金"
+      ],
+      "paraphrases": [
+        "策略运行中怎么拿到当前现金"
+      ],
+      "expect_ids": [
+        "process_data"
+      ]
+    },
+    {
+      "id": "what_is_qteasy_ai",
+      "gold": [
+        "什么是 qteasy-ai",
+        "qteasy-ai 是什么",
+        "what is qteasy-ai"
+      ],
+      "paraphrases": [
+        "qteasy-ai 这个助手是干什么的"
+      ],
+      "expect_ids": [
+        "what_is_qteasy_ai"
+      ]
     }
   ]
 }

@@ -11,7 +11,7 @@
   ],
   "title": "What is qteasy",
   "summary": "qteasy is a local quantitative-research toolkit: data, strategies, backtest, optimization, and simulated live trading share one pipeline.",
-  "narrative": "qteasy is a Python toolkit for quantitative research and trading-strategy development. It covers the path from market data to strategies, backtest, parameter optimization, and simulated live trading.\n\nFour properties define it. The pipeline is local: data, research, and runs stay on your machine. The same strategy logic is used for backtest and simulated live, and the engine injects only the data visible at that step. Strategies can be combined, and many built-in strategies are ready to run.\n\nqteasy includes an AI agent. Ask explains concepts. Plan shows a reviewable list of steps. High-side-effect work waits until you confirm. An MCP connection under the display name qteasy is planned and is not released; this card does not give connection steps.\n\nHow the parts fit together, and why this is easier than a hand-written backtest, are separate questions.",
+  "narrative": "qteasy is a Python toolkit for quantitative research and trading-strategy development. It covers the path from market data to strategies, backtest, parameter optimization, and simulated live trading. Data, research, and runs stay on your machine. The same strategy logic is used for backtest and simulated live, and the engine injects only the data visible at that step. Strategies can be combined, and many built-in strategies are ready to run. An MCP connection under the display name qteasy is planned and is not released; this card does not give connection steps.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. How the parts fit together: local data, strategies, backtest, optimization, and simulated live as one pipeline.\n2. Why this is easier than a hand-written backtest: local data, lookahead isolation, one logic for both modes, and built-in strategies.\n3. The first hour: install, one bounded download, and one built-in backtest, then the rest of the route.\n4. The built-in assistant (qteasy-ai): Ask explains, Plan shows steps, and high-side-effect work waits for confirmation.",
   "python_code": "import qteasy as qt\nprint(qt.__version__)",
   "risk_notes": "Ask never downloads data or runs a backtest. Use Plan, then confirm, before high-side-effect work. This is not investment advice.",
   "type": "concept",
@@ -23,6 +23,10 @@
     {"rel": "see_also", "to": "official_vs_user_kb"},
     {"rel": "see_also", "to": "library_map"},
     {"rel": "see_also", "to": "qteasy_advantages"},
-    {"rel": "next_topic", "to": "getting_started"}
+    {"rel": "next_topic", "to": "getting_started"},
+    {"rel": "details", "to": "library_map", "item": 1},
+    {"rel": "details", "to": "qteasy_advantages", "item": 2},
+    {"rel": "details", "to": "getting_started", "item": 3},
+    {"rel": "details", "to": "what_is_qteasy_ai", "item": 4}
   ]
 }
