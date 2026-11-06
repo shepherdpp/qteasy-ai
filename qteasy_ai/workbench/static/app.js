@@ -61,7 +61,7 @@ let shellReady = false;
 let codeCache = {};
 let filePreview = null;
 let sessions = [];
-/** @type {Record<string, object>} 切走后仍在等待的会话快照。不 abort。 */
+/** @type {Record<string, object>} 每条会话一份记录，含正在看的那条。不 abort。 */
 let sessionWatches = {};
 /** 本页正在等待的内核请求所属会话。 */
 let localKernelOwner = "";
@@ -97,6 +97,8 @@ let modeNotice = "";
 let editingUserIndex = -1;
 let providerInfo = null;
 let renamingSessionId = "";
+/** 改名框还在时先记下，提交或取消后再补行首标记。 */
+let pendingMarkId = "";
 let openProcessTurns = new Set();
 const PENCIL_RESEND = "Edit the blue message (pencil) and send it again.";
 const REWIND_LATER_TURNS = "Later turns will be dropped from this session. Files in ai/runs/ stay on disk; this session will no longer track them.";
@@ -123,6 +125,7 @@ function icon(name) {
     pencil: '<path d="M10.1 2.3 l3.6 3.6 L6.1 13.5 H2.5 V9.9 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
     trash: '<path d="M3.2 4.6 h9.6 M6.2 4.6 V3.2 h3.6 v1.4 M4.5 4.6 l.6 8.2 h5.8 l.6 -8.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>',
     plus: '<path d="M8 3.2 v9.6 M3.2 8 h9.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    bubble: '<path d="M3.1 2.6 h9.4 a1.5 1.5 0 0 1 1.5 1.5 v4.8 a1.5 1.5 0 0 1 -1.5 1.5 H6.6 L4.2 13.2 V10.4 H3.1 a1.5 1.5 0 0 1 -1.5 -1.5 V4.1 a1.5 1.5 0 0 1 1.5 -1.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>',
   };
   const body = paths[name] || "";
   return `<svg class="ui-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">${body}</svg>`;
@@ -298,22 +301,41 @@ function sessionIsWaiting(id) {
   return Boolean(parked && (parked.busy || parked.backgrounded));
 }
 
+function projectCurrentWatch() {
+  if (!sessionId) return null;
+  const watch = sessionWatches[sessionId] || {
+    busy: false,
+    backgrounded: false,
+    abort: null,
+    startedAt: 0,
+    elapsedS: 0,
+    executeSseOpen: false,
+    transcript: [],
+    state: emptyState(),
+    mode: "plan",
+    livePoll: null,
+    modeNotice: "",
+    sessionAttachments: [],
+  };
+  sessionWatches[sessionId] = watch;
+  watch.busy = busy;
+  watch.backgrounded = backgrounded;
+  watch.abort = runAbort;
+  watch.startedAt = runStartedAt;
+  watch.elapsedS = runElapsedS;
+  watch.executeSseOpen = executeSseOpen;
+  watch.transcript = transcript;
+  watch.state = state;
+  watch.mode = mode;
+  watch.livePoll = livePoll;
+  watch.modeNotice = modeNotice;
+  watch.sessionAttachments = sessionAttachments.slice();
+  return watch;
+}
+
 function parkCurrentSession() {
   if (!sessionId) return;
-  sessionWatches[sessionId] = {
-    busy,
-    backgrounded,
-    abort: runAbort,
-    startedAt: runStartedAt,
-    elapsedS: runElapsedS,
-    executeSseOpen,
-    transcript,
-    state,
-    mode,
-    livePoll,
-    modeNotice,
-    sessionAttachments: sessionAttachments.slice(),
-  };
+  projectCurrentWatch();
   runAbort = null;
   livePoll = null;
 }
@@ -359,6 +381,20 @@ function pushTranscriptRow(owner, row) {
 function setBusyFor(owner, next) {
   if (viewing(owner)) {
     setBusy(next);
+    if (owner) {
+      if (!sessionWatches[owner]) projectCurrentWatch();
+      const watch = sessionWatches[owner];
+      if (watch) {
+        watch.busy = busy;
+        watch.backgrounded = backgrounded;
+        watch.abort = runAbort;
+        watch.startedAt = runStartedAt;
+        watch.elapsedS = runElapsedS;
+        watch.executeSseOpen = executeSseOpen;
+        watch.transcript = transcript;
+        watch.state = state;
+      }
+    }
     return;
   }
   const parked = parkedWatch(owner);
@@ -1192,7 +1228,7 @@ function applyComposerLock() {
 function beginKernel(owner) {
   localKernelOwner = owner || "";
   applyComposerLock();
-  renderSessionList();
+  paintSessionMark(owner);
 }
 
 function finishKernel(owner) {
@@ -1200,7 +1236,16 @@ function finishKernel(owner) {
   if (owner && serverKernelOwner === owner) serverKernelOwner = "";
   if (owner && owner !== sessionId) unseenDone.add(owner);
   applyComposerLock();
-  renderSessionList();
+  paintSessionMark(owner);
+}
+
+function settleOwnerReply(owner) {
+  const row = sessions.find((item) => item && item.session_id === owner);
+  if (row) row.kernel_busy = false;
+  setBusyFor(owner, false);
+  finishKernel(owner);
+  paintSessionMark(owner);
+  promoteSessionRow(owner);
 }
 
 function noteServerKernel(rows) {
@@ -1222,18 +1267,58 @@ function ensureKernelPoll() {
 }
 
 function sessionMark(id) {
-  const owner = kernelOwnerId();
+  const kernelOwner = kernelOwnerId();
   const row = sessions.find((item) => item && item.session_id === id);
   const parked = sessionWatches[id];
-  const spinning = owner === id
-    || Boolean(row && (row.kernel_busy || row.running))
+  const pageOwns = Boolean(parked) || kernelOwner === id;
+  const localBusy = kernelOwner === id
     || Boolean(parked && (parked.busy || parked.backgrounded))
     || (id === sessionId && (busy || backgrounded));
+  const serverBusy = Boolean(row && (row.kernel_busy || row.running));
+  const spinning = localBusy || (!pageOwns && serverBusy);
   if (spinning) return `<span class="session-busy-ring" title="Busy" aria-label="Busy"></span>`;
   if (id !== sessionId && unseenDone.has(id)) {
     return `<span class="session-unseen-dot" title="Reply ready" aria-label="Reply ready"></span>`;
   }
-  return "";
+  return `<span class="session-bubble" title="Session" aria-hidden="true">${icon("bubble")}</span>`;
+}
+
+function paintSessionMark(id) {
+  if (!id) return;
+  if (renamingSessionId === id) {
+    pendingMarkId = id;
+    return;
+  }
+  const item = document.querySelector('.session-item[data-session-id="' + String(id).replace(/"/g, "") + '"]');
+  if (!item) return;
+  const row = item.querySelector(".session-title-row");
+  if (!row) return;
+  let slot = row.querySelector(".session-status");
+  if (!slot) {
+    slot = document.createElement("span");
+    slot.className = "session-status";
+    row.insertBefore(slot, row.firstChild);
+  }
+  slot.innerHTML = sessionMark(id);
+}
+
+function promoteSessionRow(id) {
+  const row = sessions.find((item) => item && item.session_id === id);
+  if (!row) return;
+  row.mtime = Date.now() / 1000;
+  sessions = [row].concat(sessions.filter((item) => item && item.session_id !== id));
+  if (renamingSessionId === id) return;
+  const item = document.querySelector('.session-item[data-session-id="' + String(id).replace(/"/g, "") + '"]');
+  if (!item) return;
+  const groups = document.querySelectorAll("#session-list .time-group");
+  let today = null;
+  groups.forEach((group) => {
+    const label = group.querySelector(".time-bucket");
+    if (label && label.textContent === "TODAY") today = group;
+  });
+  if (!today) return;
+  const first = today.querySelector(".session-item");
+  if (first !== item) today.insertBefore(item, first);
 }
 
 function setBusy(next) {
@@ -1280,6 +1365,7 @@ function setBusy(next) {
   document.querySelectorAll("input[data-clarify-open]").forEach((el) => {
     el.disabled = busy;
   });
+  projectCurrentWatch();
   renderChat();
   renderNow();
 }
@@ -1490,7 +1576,6 @@ async function sendQueryBody(text, options) {
     } else if (viewing(owner)) {
       filePreview = null;
       renderPanes();
-      await refreshSessions();
       await refreshWorkspace();
     }
   } catch (exc) {
@@ -1504,8 +1589,7 @@ async function sendQueryBody(text, options) {
     }
   } finally {
     if (!keepWatch) rememberExecuteFlag(owner, false);
-    setBusyFor(owner, false);
-    finishKernel(owner);
+    settleOwnerReply(owner);
   }
 }
 
@@ -1526,8 +1610,7 @@ async function sendControlPatches(patches) {
     } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
-    setBusyFor(owner, false);
-    finishKernel(owner);
+    settleOwnerReply(owner);
   }
 }
 
@@ -1548,8 +1631,7 @@ async function sendControlSkip() {
     } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
-    setBusyFor(owner, false);
-    finishKernel(owner);
+    settleOwnerReply(owner);
   }
 }
 
@@ -1609,9 +1691,10 @@ async function confirmPlan() {
     if (viewing(owner)) planCardHidden = false;
     if (!keepWatch) {
       rememberExecuteFlag(owner, false);
-      setBusyFor(owner, false);
+      settleOwnerReply(owner);
+    } else {
+      finishKernel(owner);
     }
-    finishKernel(owner);
     if (viewing(owner)) renderChat();
   }
 }
@@ -1660,8 +1743,7 @@ async function confirmIdentityWrite(confirm) {
     });
     if (viewing(owner)) renderChat();
   } finally {
-    setBusyFor(owner, false);
-    finishKernel(owner);
+    settleOwnerReply(owner);
   }
 }
 
@@ -1928,7 +2010,6 @@ async function submitParamEdits() {
     } else if (viewing(owner)) {
       filePreview = null;
       renderPanes();
-      await refreshSessions();
       await refreshWorkspace();
     }
   } catch (exc) {
@@ -1940,8 +2021,7 @@ async function submitParamEdits() {
     if (viewing(owner)) renderChat();
   } finally {
     if (viewing(owner)) planCardHidden = false;
-    setBusyFor(owner, false);
-    finishKernel(owner);
+    settleOwnerReply(owner);
     if (viewing(owner)) renderChat();
   }
 }
@@ -2193,10 +2273,12 @@ async function commitRenameSession(id, raw) {
   });
   if (dto && dto.error) {
     showStatusNotice((dto.error && dto.error.message) || "Could not rename this session.");
+    pendingMarkId = "";
     renderSessionList();
     return;
   }
   await refreshSessions();
+  pendingMarkId = "";
 }
 
 function clearVisibleSession() {
@@ -2324,7 +2406,6 @@ async function rewindUserMessage(index, text, confirmDiscard) {
     if (viewing(owner)) {
       filePreview = null;
       renderPanes();
-      await refreshSessions();
       await refreshWorkspace();
     }
   } finally {
@@ -2336,8 +2417,7 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       state.run_id = savedRun;
       editingUserIndex = index;
     }
-    setBusyFor(owner, false);
-    finishKernel(owner);
+    settleOwnerReply(owner);
     if (viewing(owner) && !retryDiscard && !restore) focusComposer();
   }
   if (retryDiscard) await rewindUserMessage(index, query, true);
@@ -2368,6 +2448,8 @@ function applyServerTranscript(dto, owner) {
   if (!targetOwner || targetOwner === sessionId) {
     transcript = server;
     persistTranscript();
+    const watch = sessionWatches[targetOwner || sessionId];
+    if (watch) watch.transcript = transcript;
     return;
   }
   const parked = sessionWatches[targetOwner];
@@ -2744,9 +2826,26 @@ async function openNewSession() {
   if (attach) attach.disabled = false;
   applyComposerLock();
   await refreshSessions();
+  projectCurrentWatch();
   renderPanes();
   focusComposer();
   return sessionId;
+}
+
+async function revalidateWaitingSession(id) {
+  const watch = sessionWatches[id];
+  if (!watch || (!watch.busy && !watch.backgrounded)) return;
+  if (watch.backgrounded || watch.executeSseOpen) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
+  if (!dto || dto.error || dto.kernel_busy || isDtoRunning(dto)) return;
+  const localRows = id === sessionId ? transcript : (watch.transcript || []);
+  const server = Array.isArray(dto.transcript) ? dto.transcript : [];
+  const visible = server.filter((row) => row && row.kind !== "plan_card" && row.kind !== "step_status");
+  if (visible.length <= localRows.length) return;
+  ingestDto(dto, { appendUser: false, owner: id });
+  applyServerTranscript(dto, id);
+  settleOwnerReply(id);
+  if (id === sessionId) renderPanes();
 }
 
 async function switchSession(id) {
@@ -2760,18 +2859,18 @@ async function switchSession(id) {
   clarifyCardHidden = false;
   const parked = sessionWatches[id];
   renderSessionList();
-  if (parked && (parked.busy || parked.backgrounded)) {
+  if (parked) {
     restoreParked(id);
     setBusy(busy);
     renderAttachChips();
     renderPanes();
     focusComposer();
+    if (busy || backgrounded) await revalidateWaitingSession(id);
     await refreshWorkspace();
     renderPanes();
     focusComposer();
     return;
   }
-  delete sessionWatches[id];
   busy = false;
   backgrounded = false;
   runStartedAt = 0;
@@ -2915,7 +3014,7 @@ function renderSessionList() {
             : `<span class="sid">${escapeHtml(name)}</span>`;
           const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
           const runTag = row.running ? `<span class="meta running-tag">Running</span>` : "";
-          const mark = sessionMark(row.session_id);
+          const mark = `<span class="session-status">${sessionMark(row.session_id)}</span>`;
           return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
         <div class="session-main"><div class="session-title-row">${mark}${nameBlock}</div>${meta}${runTag}</div>
         <div class="session-actions">
@@ -2941,6 +3040,7 @@ function renderSessionList() {
       }
       if (ev.key === "Escape") {
         renamingSessionId = "";
+        pendingMarkId = "";
         renderSessionList();
       }
     });
@@ -4318,6 +4418,7 @@ async function restoreCurrentSession() {
     setBusy(true);
   }
   applyComposerLock();
+  projectCurrentWatch();
 }
 
 restoreCurrentSession();

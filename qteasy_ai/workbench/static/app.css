@@ -313,6 +313,16 @@ button.provider-badge {
 .session-item.active { background: var(--bg-active); color: var(--text-on-active); }
 .session-item .session-main { flex: 1; min-width: 0; }
 .session-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-status {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.session-bubble { color: var(--text-muted); display: inline-flex; line-height: 0; }
+.session-bubble .ui-icon { width: 14px; height: 14px; }
 .session-busy-ring,
 .session-unseen-dot { flex: 0 0 auto; }
 .session-busy-ring {

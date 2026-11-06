@@ -828,6 +828,49 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("session-busy-spin", css)
             self.assertIn(".session-busy-ring { animation: none;", css)
 
+    def test_reply_mark_follows_one_watch(self) -> None:
+        """本地等待不刷列表。收场只改行首标记，切回仍在等的会话再 GET 这一条。"""
+
+        print("\n[TestAiWorkbenchWeb] reply mark follows one watch")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            poll = _extract_js_function(src, "ensureKernelPoll")
+            settle = _extract_js_function(src, "settleOwnerReply")
+            revalidate = _extract_js_function(src, "revalidateWaitingSession")
+            busy_for = _extract_js_function(src, "setBusyFor")
+            mark = _extract_js_function(src, "sessionMark")
+            switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
+            viewing_return = busy_for.split("viewing(owner)")[1].split("return;")[0]
+            print(" poll needs idle local:", "!localKernelOwner" in poll)
+            print(" settle kernel flag:", "kernel_busy = false" in settle, "paint:", "paintSessionMark" in settle)
+            print(" settle refresh:", "refreshSessions" in settle, "list html:", "session-list" in settle and "innerHTML" in settle)
+            print(" viewing writes watch:", "sessionWatches[owner]" in viewing_return)
+            print(" mark bubble:", "session-bubble" in mark)
+            print(" switch revalidate:", "revalidateWaitingSession" in switch_fn, "drop:", "dropRunWatch" in switch_fn)
+            self.assertIn("!localKernelOwner", poll)
+            self.assertIn("kernel_busy = false", settle)
+            self.assertIn("paintSessionMark", settle)
+            self.assertNotIn("refreshSessions", settle)
+            self.assertNotIn("innerHTML", settle)
+            self.assertNotIn(".abort(", settle)
+            self.assertIn("sessionWatches[owner]", viewing_return)
+            self.assertIn("session-bubble", mark)
+            self.assertIn("session-bubble", css)
+            self.assertIn("--text-muted", css.split(".session-bubble")[1].split("}")[0])
+            self.assertIn(".session-status", css)
+            self.assertNotIn("dropRunWatch", switch_fn)
+            self.assertIn("restoreParked", switch_fn)
+            self.assertLess(switch_fn.find("restoreParked"), switch_fn.find("revalidateWaitingSession"))
+            self.assertIn("/v1/session/", revalidate)
+            self.assertNotIn("refreshSessions", revalidate)
+            self.assertNotIn(".abort(", revalidate)
+
     def test_background_watch_keeps_clock_and_plan_card(self) -> None:
         """后台监视：计时不被 setBusy 清掉，结束后收起进度条，Confirm 不被轮询关掉。"""
 
