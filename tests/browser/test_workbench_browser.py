@@ -33,6 +33,21 @@ _DRAG = 8.0
 class TestWorkbenchBrowser(WorkbenchBrowserCase):
     """壳、对话和运行控制。"""
 
+    def rename_box(self, session_id: str, name: str, *, submit: str = "") -> None:
+        """在改名框里逐字输入。
+
+        ``fill`` 先选中框内文字，再把新字插入当前焦点。焦点不在框上时，
+        空会话框里仍是 ``New session``，回车会把这个占位词提交成空名字。
+        """
+
+        row = self.page.locator(f'[data-session-id="{session_id}"]')
+        row.hover()
+        row.locator("[data-session-rename]").click()
+        box = self.page.locator(".session-rename")
+        box.press_sequentially(name)
+        if submit:
+            box.press(submit)
+
     def _wait_macd_plan(self) -> None:
         """等改写后的 plan 卡出现，而不是气泡先被本地改掉的那一帧。"""
 
@@ -285,10 +300,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         query = "list built-in strategies"
         session_id = self.session_id()
         row = self.page.locator(f'[data-session-id="{session_id}"]')
-        row.hover()
-        row.locator("[data-session-rename]").click()
-        self.page.fill(".session-rename", custom)
-        self.page.press(".session-rename", "Enter")
+        self.rename_box(session_id, custom, submit="Enter")
         self.page.wait_for_function(
             "() => document.querySelector('#session-title').textContent.includes('Pre-named empty')",
             timeout=10000,
@@ -328,10 +340,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
             encoding="utf-8",
         )
         row = self.page.locator(f'[data-session-id="{session_id}"]')
-        row.hover()
-        row.locator("[data-session-rename]").click()
-        self.page.fill(".session-rename", "Browser drill")
-        self.page.press(".session-rename", "Enter")
+        self.rename_box(session_id, "Browser drill", submit="Enter")
         self.page.wait_for_function(
             "() => document.querySelector('#session-title').textContent.includes('Browser drill')",
             timeout=10000,
@@ -565,9 +574,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
                 timeout=10000,
             )
             row = self.page.locator(f'[data-session-id="{second}"]')
-            row.hover()
-            row.locator("[data-session-rename]").click()
-            self.page.fill(".session-rename", "Half name")
+            self.rename_box(second, "Half name")
             print(" rename draft:", self.page.locator(".session-rename").input_value())
             self._fulfill_json(held, {
                 "ok": True,
@@ -671,10 +678,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
             self.assertEqual(first_row.locator(".session-unseen-dot").count(), 0)
             self.assertEqual(first_row.locator(".session-bubble").count(), 0)
             self.assertEqual(second_row.locator(".session-bubble").count(), 1)
-            second_row.hover()
-            second_row.locator("[data-session-rename]").click()
-            self.page.fill(".session-rename", "Side two")
-            self.page.press(".session-rename", "Enter")
+            self.rename_box(second, "Side two", submit="Enter")
             self.page.wait_for_function(
                 "() => document.querySelector('#session-title').textContent.includes('Side two')",
                 timeout=10000,
