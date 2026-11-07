@@ -627,7 +627,26 @@ class QteasyAssistant:
                 include_user_text=False,
             )
         action = self._unresolved_action(session_id, structured)
-        if action == "abandon":
+        wire_choice = self._wire_choice_value(session_id, structured)
+        if wire_choice in {"drop_consumer", "use_panel"}:
+            plan, session = self._assemble_wire_resume(
+                session_id,
+                agent_auto=agent_auto,
+                choice=wire_choice,
+            )
+            asked = ""
+        elif wire_choice:
+            text = str(query or "").strip() if wire_choice == "rewrite" else wire_choice
+            plan, session = self._assemble_plan(
+                text,
+                session_id=session_id,
+                agent_auto=agent_auto,
+                patches=None,
+                allow_composer_slot_fill=False,
+                replace_query=text,
+            )
+            asked = text
+        elif action == "abandon":
             sid = str(session_id or "").strip()
             session = self.session_store.load(sid) if sid else None
             if session is None or session.task is None:
@@ -650,7 +669,7 @@ class QteasyAssistant:
                 message="Request abandoned.",
                 next_action="Start a new question when you are ready.",
             )
-        if action == "compose_open":
+        elif action == "compose_open":
             plan, session = self._assemble_plan(
                 "",
                 session_id=session_id,
@@ -1499,6 +1518,62 @@ class QteasyAssistant:
         sources = [str(key) for key in coerced if str(key) in submitted]
         source_name = sources[0] if len(sources) == 1 else ""
         return out, _revision_changes(out, submitted, labels, source_name)
+
+    def _wire_choice_value(self, session_id: str | None, patches: Dict[str, Any]) -> str:
+        """当前卡在问 ``wire_choice`` 时返回提交值，否则空串。"""
+
+        if "wire_choice" not in (patches or {}):
+            return ""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return ""
+        session = self.session_store.load(sid)
+        task = session.task if session is not None else None
+        pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
+        rows = pending.get("pending") if isinstance(pending.get("pending"), list) else []
+        if not any(isinstance(item, dict) and str(item.get("name") or "") == "wire_choice" for item in rows):
+            return ""
+        return str(patches.get("wire_choice") or "").strip()
+
+    def _assemble_wire_resume(
+        self,
+        session_id: str | None,
+        *,
+        agent_auto: Optional[bool],
+        choice: str,
+    ) -> Tuple[Any, Optional[ConversationState]]:
+        """按选择卡上已经验证过的步骤快照恢复，不再组图。"""
+
+        self._refresh_planner_env_facts()
+        profile = self.memory_store.load_profile()
+        sid = str(session_id or "").strip()
+        state = self.session_store.load(sid) if sid else None
+        if state is None or state.task is None:
+            return self.planner.build_plan("", mode="plan", profile=profile), state
+        if agent_auto is not None:
+            state.agent_auto = bool(agent_auto)
+        pending = state.task.pending_clarification if isinstance(state.task.pending_clarification, dict) else {}
+        snapshots = pending.get("wire_snapshots") if isinstance(pending.get("wire_snapshots"), dict) else {}
+        rows = snapshots.get(choice) if isinstance(snapshots, dict) else None
+        snapshot = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        asked = str(state.task.user_query or "").strip()
+        if state.task.pending_clarification or state.task.missing:
+            state.close_open_card(choice, status="answered")
+        held = self.planner.provider
+        self.planner.provider = None
+        try:
+            plan = self.planner.build_plan(
+                asked,
+                mode="plan",
+                session=state,
+                profile=profile,
+                resume_steps=snapshot or None,
+            )
+        finally:
+            self.planner.provider = held
+        self._sync_session_from_plan(state, plan, query=asked, skip_classify=True)
+        self.session_store.save(state)
+        return plan, state
 
     def _unresolved_action(self, session_id: str | None, patches: Dict[str, Any]) -> str:
         """当前卡在问 ``unresolved_intent`` 时返回提交值，否则空串。"""

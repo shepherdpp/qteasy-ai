@@ -46,6 +46,7 @@ from .slot_graph import (
     polish_clarification,
     strategy_id_options,
 )
+from .wire import align_steps, choice_card
 
 _FETCH_CHANNEL = {
     "qt.ai.data.history": "history",
@@ -764,7 +765,11 @@ class Planner:
         "{\"skill_name\": \"qt.ai...\", \"inputs\": {}, \"depends_on\": [\"step_1\"]}"
         "]}. "
         "depends_on values are earlier step_id values such as step_1, not skill names. "
-        "Do not invent skills. Do not use refill, backtest, optimize, codegen, or live skills."
+        "A depends_on edge is legal only when every wire the consumer needs is among a "
+        "dependency's default output or a declared alternate output. "
+        "Do not invent skills. Do not add a conversion step. "
+        "Do not set as_panel, compare, or other shape switches; leave them unset. "
+        "Do not use refill, backtest, optimize, codegen, or live skills."
     )
 
     def _compose_open_dag(self, query: str) -> Tuple[Optional[List[ToolStep]], str]:
@@ -821,6 +826,24 @@ class Planner:
                 depends_on=[str(item) for item in depends],
             )
             steps.append(step)
+        mismatch = align_steps(self, steps)
+        if mismatch:
+            card = choice_card(self, steps, query)
+            return [
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="wire_choice",
+                        hint=str(card.get("confirm_prompt") or ""),
+                        missing_info="none",
+                        next_step="Choose how to continue.",
+                        details={"clarification": card},
+                    ),
+                )
+            ], ""
         return steps, ""
 
     @staticmethod

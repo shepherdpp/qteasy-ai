@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional
 
 from .contracts import SkillMetadata
 from .runtime import SkillRuntime
+from .wires import apply_known_wires
 
 
 class SkillRegistry:
@@ -51,6 +52,7 @@ class SkillRegistry:
 
         if metadata.name in self._meta:
             raise ValueError(f'Skill "{metadata.name}" already registered.')
+        apply_known_wires(metadata)
         self._meta[metadata.name] = metadata
         self._impl[metadata.name] = handler
 

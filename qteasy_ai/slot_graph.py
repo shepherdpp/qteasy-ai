@@ -22,6 +22,8 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from .slot_decl import clarification_prompt
+from .wire import align_steps, choice_card
+from .wires import format_wire_digest
 
 _SKIP = {"upstream_payload", "upstream_payloads"}
 _FILLABLE = {
@@ -404,7 +406,7 @@ def apply_slot_layer(planner: Any, steps: List[Any], query: str, job: str, sessi
         return steps, {}
     if _is_fallback(steps):
         return _rewrite_fallback(planner, steps, query)
-    return _fill_graph(planner, steps, query, session)
+    return _fill_graph(planner, steps, query, session, job)
 
 
 def parse_card_answers(
@@ -546,7 +548,7 @@ def clarification_skips_polish(blob: Dict[str, Any]) -> bool:
     if not isinstance(pending, list):
         return False
     return any(
-        isinstance(item, dict) and str(item.get("name") or "") == "unresolved_intent"
+        isinstance(item, dict) and str(item.get("name") or "") in {"unresolved_intent", "wire_choice"}
         for item in pending
     )
 
@@ -671,7 +673,13 @@ def _alias_hit(spec: Dict[str, Any], token: str) -> Optional[str]:
     return None
 
 
-def _fill_graph(planner: Any, steps: List[Any], query: str, session: Any) -> Tuple[List[Any], Dict[str, Any]]:
+def _fill_graph(
+    planner: Any,
+    steps: List[Any],
+    query: str,
+    session: Any,
+    job: str = "",
+) -> Tuple[List[Any], Dict[str, Any]]:
     """填图上还空着的用户槽。缺必填就换成澄清卡。"""
 
     if _resolve_depends(steps):
@@ -725,6 +733,9 @@ def _fill_graph(planner: Any, steps: List[Any], query: str, session: Any) -> Tup
             slot["value"] = value
     if _apply_lookback_default(planner, steps, query, projected):
         extras["slot_defaults"] = {"lookback_days": "library"}
+    mismatch = align_steps(planner, steps)
+    if mismatch:
+        return _wire_rejected(planner, steps, query, job, mismatch)
     errors = _take_slot_errors(session)
     open_names = _open_any_of_names(planner, steps, projected)
     pending = _pending_after_fill(projected, steps, ambiguous, errors, query, open_names, rejected)
@@ -752,6 +763,56 @@ def _fill_graph(planner: Any, steps: List[Any], query: str, session: Any) -> Tup
         )
     ]
     return replaced, extras
+
+
+def _wire_rejected(
+    planner: Any,
+    steps: List[Any],
+    query: str,
+    job: str,
+    mismatch: str,
+) -> Tuple[List[Any], Dict[str, Any]]:
+    """线接不上。开放图出选择卡，闭合菜谱只留错误说明。"""
+
+    if job == "open":
+        card = choice_card(planner, steps, query)
+        replaced = [
+            planner._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.system.fallback",
+                inputs=planner._fallback_step_inputs(
+                    query=query,
+                    action="clarify_required",
+                    reason="wire_choice",
+                    hint=str(card.get("confirm_prompt") or ""),
+                    missing_info="none",
+                    next_step="Choose how to continue.",
+                    details={"clarification": card},
+                ),
+            )
+        ]
+        return replaced, {"clarification": card}
+    replaced = [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.system.fallback",
+            inputs=planner._fallback_step_inputs(
+                query=query,
+                action="clarify_required",
+                reason="wire_product_mismatch",
+                hint=mismatch,
+                missing_info="none",
+                next_step="This recipe connects steps that do not share a declared wire.",
+            ),
+        )
+    ]
+    return replaced, {
+        "clarification": {
+            "restatement": f"You asked: {query}",
+            "pending": [],
+            "confirm_prompt": mismatch,
+        }
+    }
 
 
 def _recovery_clarification(query: str) -> Dict[str, Any]:
@@ -797,6 +858,15 @@ def _rewrite_fallback(planner: Any, steps: List[Any], query: str) -> Tuple[List[
     inputs = dict(step.inputs or {})
     info = str(inputs.get("missing_info") or "")
     reason = str(inputs.get("reason") or "")
+    if reason == "wire_choice":
+        details = inputs.get("details") if isinstance(inputs.get("details"), dict) else {}
+        card = details.get("clarification") if isinstance(details, dict) else None
+        if isinstance(card, dict):
+            inputs["missing_info"] = "none"
+            inputs["hint"] = str(card.get("confirm_prompt") or "")
+            step.inputs = inputs
+            return steps, {"clarification": card}
+        return steps, {}
     hint = str(inputs.get("hint") or "")
     action = str(inputs.get("fallback_action") or "")
     if info == "date_range" or reason == "refill_date_range_required":
@@ -1647,6 +1717,9 @@ def contract_digest_lines(planner: Any, names: Sequence[str]) -> List[str]:
             bits.append("enum=" + ",".join(enums))
         if _needs_upstream(schema):
             bits.append("needs_upstream")
+        wire_bits = format_wire_digest(meta)
+        if wire_bits:
+            bits.append(wire_bits)
         lines.append(" ".join(bits))
     return lines
 

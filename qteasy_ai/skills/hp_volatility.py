@@ -119,6 +119,8 @@ def build_hp_volatility_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         payload: Dict[str, Any] = {"preview_rows": tabular_preview_rows(computed)}
         if type(computed).__name__ == "HistoryPanel":
             payload["panel"] = computed
+        elif isinstance(computed, (pd.DataFrame, pd.Series)):
+            payload["frame"] = computed
         result = SkillResult(
             ok=True,
             skill_name=metadata.name,
