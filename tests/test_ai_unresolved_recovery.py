@@ -85,7 +85,8 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual((plan.assumptions.get("clarification") or {}).get("confirm_prompt"), _ZH_PROMPT)
             self.assertEqual(row["options"][0]["label"], "给出开放计划")
             self.assertEqual(row["options"][1]["label"], "放弃")
-            self.assertEqual(row.get("open_label"), "重写需求")
+            self.assertEqual((row.get("open") or {}).get("label"), "重写需求")
+            self.assertNotIn("open_label", row)
             self.assertNotIn("unresolved_intent", plan.steps[0].inputs)
 
     def test_certain_open_skips_the_recovery_card(self) -> None:
@@ -159,7 +160,8 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             print(" shares:", None if shares is None else shares.value)
             print(" prompts after card:", len(fake.prompts), "left:", fake.replies)
             self.assertEqual(clar.get("text"), _ZH_PROMPT)
-            self.assertEqual(clar["payload"]["pending"][0].get("open_label"), "重写需求")
+            self.assertEqual((clar["payload"]["pending"][0].get("open") or {}).get("label"), "重写需求")
+            self.assertNotIn("open_label", clar["payload"]["pending"][0])
             self.assertIsNotNone(shares)
             self.assertEqual(shares.value, "000300.SH")
             self.assertNotIn("unresolved_intent", before.task.slots)
@@ -220,9 +222,22 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             steps = plan.get("steps") or []
             pending = ((plan.get("assumptions") or {}).get("clarification") or {}).get("pending") or []
             reason = (steps[0].get("inputs") or {}).get("reason") if steps else ""
+            after = asst.session_store.load(sid)
+            kinds = [item.get("kind") for item in (second.get("human_cards") or [])]
+            error = next((item for item in (second.get("human_cards") or []) if item.get("kind") == "error"), None)
             print(" reason:", reason, "pending:", pending)
+            print(" status:", after.task.status if after.task else None)
+            print(" kinds:", kinds)
+            print(" error:", None if error is None else error.get("text"))
+            print(" plan_md:", bool(second.get("plan_md")))
             self.assertEqual(reason, "open_too_many_steps")
             self.assertEqual(pending, [])
+            self.assertIsNone(after.task.pending_clarification)
+            self.assertEqual(after.task.status, "done")
+            self.assertNotIn("clarify", kinds)
+            self.assertIsNotNone(error)
+            self.assertIn("open_too_many_steps", str(error.get("text") or ""))
+            self.assertFalse(second.get("plan_md"))
 
     def test_abandon_closes_the_task(self) -> None:
         """放弃结束当前请求，不再规划。"""

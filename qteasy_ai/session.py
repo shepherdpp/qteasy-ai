@@ -836,15 +836,23 @@ class ConversationState:
         self.messages = self.messages[-120:]
         return list(self.messages)
 
-    def close_open_card(self, answer: str, *, status: str = "answered") -> bool:
+    def close_open_card(
+        self,
+        answer: str,
+        *,
+        status: str = "answered",
+        answer_label: str = "",
+    ) -> bool:
         """就地关闭最近一张未答开卡（优先 clarify，其次 plan_ready）。
 
         Parameters
         ----------
         answer : str
-            本轮回执原文，写入 ``payload.answer``。
+            选项 id 或用户原文，写入 ``payload.answer``。
         status : str, optional
             ``answered`` 或 ``skipped``。
+        answer_label : str, optional
+            用户看见的标签。有则写入 ``payload.answer_label``。
 
         Returns
         -------
@@ -853,6 +861,7 @@ class ConversationState:
         """
 
         text = str(answer or "").strip()
+        label = str(answer_label or "").strip()
         mark = str(status or "answered").strip() or "answered"
         for kind in ("clarify", "plan_ready"):
             for row in reversed(self.messages):
@@ -863,6 +872,8 @@ class ConversationState:
                     continue
                 if text:
                     payload["answer"] = text
+                if label:
+                    payload["answer_label"] = label
                 payload["status"] = mark
                 row["payload"] = payload
                 return True

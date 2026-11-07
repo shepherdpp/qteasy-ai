@@ -18,6 +18,8 @@ from pathlib import Path
 from qteasy_ai.app import QteasyAssistant, _mark_rejected_slot_changes, build_default_registry
 from qteasy_ai.human_card import (
     HUMAN_CARD_KINDS,
+    choice_rows,
+    clarify_receipt_line,
     format_human_cards,
     infer_effective_kind,
     polish_human_cards,
@@ -25,6 +27,7 @@ from qteasy_ai.human_card import (
     revision_notice_text,
     usage_notice_card,
 )
+from qteasy_ai.slot_graph import date_pending_rows
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState, SessionStore
@@ -827,6 +830,52 @@ class TestAiHumanCardClarify(unittest.TestCase):
         print(" human:", text)
         self.assertIn("Need start.", text)
         self.assertIn("Answered: start 20240101", text)
+        labeled = [
+            {
+                "kind": "clarify",
+                "text": "是否创建开放计划？",
+                "payload": {"answer": "compose_open", "answer_label": "给出开放计划", "status": "answered"},
+            }
+        ]
+        labeled_text = format_human_cards(labeled, payload={"mode": "plan"})
+        print(" labeled human:", labeled_text)
+        self.assertIn("用户已选 给出开放计划", labeled_text)
+        self.assertNotIn("compose_open", labeled_text)
+        english = clarify_receipt_line(
+            "Create an open plan?",
+            {"answer": "compose_open", "answer_label": "Create an open plan"},
+        )
+        print(" english receipt:", english)
+        self.assertEqual(english, "Selected: Create an open plan")
+
+    def test_choice_rows_split_presets_and_open(self) -> None:
+        """恢复卡是两条预设加一条开放；日期格不是开放选项。"""
+
+        print("\n[TestAiHumanCardClarify] choice_rows")
+        recovery = {
+            "name": "unresolved_intent",
+            "options": [
+                {"id": "compose_open", "label": "给出开放计划"},
+                {"id": "abandon", "label": "放弃"},
+            ],
+            "open": {"label": "重写需求"},
+        }
+        rows = choice_rows(recovery)
+        print(" recovery rows:", rows)
+        self.assertEqual([item["kind"] for item in rows], ["option", "option", "open"])
+        self.assertEqual(rows[0]["id"], "compose_open")
+        self.assertEqual(rows[-1]["label"], "重写需求")
+        date_rows = choice_rows(date_pending_rows()[0])
+        print(" date rows:", date_rows, "slot:", date_pending_rows()[0].get("name"))
+        self.assertEqual(date_rows, [])
+        self.assertNotIn("open", date_pending_rows()[0])
+        src = Path(__file__).resolve().parents[1].joinpath("qteasy_ai/workbench/static/app.js").read_text(encoding="utf-8")
+        fn = src.split("function renderClarifyStepOptions")[1].split("function exampleFromRow")[0]
+        print(" open row gated:", "row.open" in fn, "placeholder:", "escapeAttr(openLabel)" in fn)
+        self.assertIn("row.open", fn)
+        self.assertIn('placeholder="${escapeAttr(openLabel)}"', fn)
+        self.assertNotIn("openCaption", fn)
+        self.assertNotIn("open_label", src)
 
 
 class TestAiHumanCardHumanCli(unittest.TestCase):

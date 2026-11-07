@@ -17,6 +17,7 @@ import pandas as pd
 
 from qteasy.history import HistoryPanel
 from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.human_card import clarification_needs_answer, project_human_cards
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
@@ -439,8 +440,26 @@ class TestAi04Wire(unittest.TestCase):
         print(" hint:", out[0].inputs.get("hint"))
         self.assertEqual(out[0].inputs.get("reason"), "wire_product_mismatch")
         self.assertEqual(pending, [])
+        self.assertFalse(clarification_needs_answer(blob))
         self.assertNotIn("wire_choice", json.dumps(blob, ensure_ascii=False))
         self.assertNotIn("drop_consumer", json.dumps(blob, ensure_ascii=False))
+        cards = project_human_cards(
+            {
+                "plan": {
+                    "user_query": "画绩效",
+                    "assumptions": {"clarification": blob},
+                    "steps": [],
+                },
+                "execution": {"status": "dry_run", "steps": []},
+            },
+            requested_mode="plan",
+            query="画绩效",
+            include_user_text=False,
+        )
+        kinds = [item.get("kind") for item in cards]
+        print(" cards:", kinds)
+        self.assertIn("error", kinds)
+        self.assertNotIn("clarify", kinds)
 
     def test_model_false_is_overwritten(self) -> None:
         """模型把 as_panel 写成假、后面仍是绘图时，检查器改回真。"""

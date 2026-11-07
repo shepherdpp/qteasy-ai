@@ -844,7 +844,7 @@ def _recovery_clarification(query: str) -> Dict[str, Any]:
                     {"id": "compose_open", "label": compose},
                     {"id": "abandon", "label": abandon},
                 ],
-                "open_label": rewrite,
+                "open": {"label": rewrite},
             }
         ],
         "confirm_prompt": prompt,

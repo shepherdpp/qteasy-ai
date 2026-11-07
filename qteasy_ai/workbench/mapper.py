@@ -15,7 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..human_card import normalize_card_kind, project_human_cards
+from ..human_card import (
+    clarification_is_live,
+    drop_closed_clarification,
+    normalize_card_kind,
+    project_human_cards,
+)
 from ..memory_store import _json_safe
 from ..plan_markdown import plan_artifact_title, skill_step_title
 from ..session import ConversationState
@@ -782,6 +787,8 @@ def map_assistant_payload(
     """
 
     raw = dict(payload or {})
+    if session is not None and not clarification_is_live(session):
+        raw = drop_closed_clarification(raw)
     sid = ""
     if session is not None:
         sid = session.session_id
@@ -871,7 +878,8 @@ def map_assistant_payload(
         tagged.insert(0, plan_art)
 
     sidebar = _sidebar_from_session(session, raw, env_facts)
-    if missing_from_pending and not sidebar.missing:
+    live_clarify = session is None or clarification_is_live(session)
+    if missing_from_pending and not sidebar.missing and live_clarify:
         sidebar.missing = missing_from_pending
     trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), dict) else {}
     job = str(trace.get("intent_job") or "")

@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,7 +35,13 @@ from .ask_engine import AskEngine, AskResponse, build_ask_history_index
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 from .contracts import ToolPlan, new_plan_id
 from .executor import PlanExecutor
-from .human_card import infer_effective_kind, polish_human_cards, project_human_cards
+from .human_card import (
+    clarification_needs_answer,
+    infer_effective_kind,
+    option_answer_label,
+    polish_human_cards,
+    project_human_cards,
+)
 from .identity import (
     parse_identity_utterance,
     remove_identity_file,
@@ -80,6 +87,12 @@ from .session_gate import (
     merge_facts,
 )
 from .side_effects import plan_has_high_side_effect
+
+_CJK_STAGE = re.compile(r"[\u4e00-\u9fff]")
+_STAGE_UNMATCHED_ZH = "未匹配到现成操作模版"
+_STAGE_UNMATCHED_EN = "No built-in operation template matched."
+_STAGE_OPEN_ZH = "正在创建开放计划"
+_STAGE_OPEN_EN = "Creating an open plan."
 from .skills import (
     build_backtest_run_skill,
     build_data_history_skill,
@@ -424,6 +437,7 @@ class QteasyAssistant:
         )
         self.session_store = SessionStore(self.memory_store)
         self.session_gate = SessionGate(provider=provider)
+        self.on_stage = None
         self._last_run_id = ""
         identity_dir = self.memory_store.user_kb_dir
         self.ask_engine.identity_dir = identity_dir
@@ -931,8 +945,9 @@ class QteasyAssistant:
         persist_mode = persist or self.run_policy.persist_mode
         persist_run = persist_mode in {"bounded", "audit"}
         execute_requested = bool(confirm)
+        closed_note = self._plan_is_closed_note(plan)
         clarify_plan = self._plan_is_clarify(plan)
-        if clarify_plan:
+        if clarify_plan or closed_note:
             confirm = False
         live_sid = ""
         live_generation = ""
@@ -1062,6 +1077,7 @@ class QteasyAssistant:
                 confirm=confirm,
                 execute_requested=execute_requested,
                 clarify_plan=clarify_plan,
+                closed_note=closed_note,
                 persist_run=persist_run,
                 persist_mode=persist_mode,
                 keep=keep,
@@ -1097,6 +1113,7 @@ class QteasyAssistant:
         confirm: bool,
         execute_requested: bool,
         clarify_plan: bool,
+        closed_note: bool = False,
         persist_run: bool,
         persist_mode: str,
         keep: bool,
@@ -1113,7 +1130,7 @@ class QteasyAssistant:
     ) -> Dict[str, Any] | AssistantOutput:
         """execute 成功后落盘 / 标 done；调用方在 finally 里 clear_live。"""
 
-        write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
+        write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan) and (not closed_note)
         if write_plan_md:
             plan_md = tool_plan_to_markdown(
                 payload.get("plan") or plan,
@@ -1136,7 +1153,11 @@ class QteasyAssistant:
             self._merge_env_facts_from_execution(payload)
         elif session is not None and session.task is not None:
             pending = session.task.pending_clarification
-            if clarify_plan or pending or session.task.missing:
+            if closed_note:
+                session.task.set_pending(None)
+                session.task.set_missing([])
+                session.task.mark_done()
+            elif clarify_plan or pending or session.task.missing:
                 session.task.status = "clarifying"
             else:
                 session.task.mark_ready()
@@ -1144,7 +1165,7 @@ class QteasyAssistant:
             self.session_store.save(session)
 
         self._attach_session_payload(payload, plan, session)
-        write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan)
+        write_plan_md = (not confirm) and (not execute_requested) and (not clarify_plan) and (not closed_note)
         if persist_run:
             run_id = str(payload.get("run_id", "")).strip()
             if run_id:
@@ -1452,13 +1473,24 @@ class QteasyAssistant:
         return self.renderer.render(payload, style="user_friendly", context={}, explanation_depth="standard")
 
     @staticmethod
-    def _plan_is_clarify(plan: Any) -> bool:
-        """单步 fallback clarify_required，本轮不得 execute。"""
+    def _plan_is_closed_note(plan: Any) -> bool:
+        """有说明、但没有可答项。不是澄清中断。"""
 
+        assumptions = getattr(plan, "assumptions", None) or {}
+        clar = assumptions.get("clarification")
+        return isinstance(clar, dict) and bool(clar) and not clarification_needs_answer(clar)
+
+    @staticmethod
+    def _plan_is_clarify(plan: Any) -> bool:
+        """单步 fallback clarify_required，且还有可答项。本轮不得 execute。"""
+
+        if QteasyAssistant._plan_is_closed_note(plan):
+            return False
         steps = list(getattr(plan, "steps", None) or [])
         if len(steps) != 1:
             assumptions = getattr(plan, "assumptions", None) or {}
-            return isinstance(assumptions.get("clarification"), dict) and bool(assumptions.get("clarification"))
+            clar = assumptions.get("clarification")
+            return isinstance(clar, dict) and clarification_needs_answer(clar)
         step = steps[0]
         if str(getattr(step, "skill_name", "") or "") != "qt.ai.system.fallback":
             return False
@@ -1535,6 +1567,89 @@ class QteasyAssistant:
             return ""
         return str(patches.get("wire_choice") or "").strip()
 
+    def _seal_clarify(self, state: ConversationState, answer: str, label: str) -> None:
+        """关闭澄清并立刻落盘，再进入可能很慢的规划。"""
+
+        if state.task is None:
+            return
+        if not (state.task.pending_clarification or state.task.missing):
+            return
+        shown = str(label or answer or "").strip()
+        state.close_open_card(str(answer or ""), status="answered", answer_label=shown)
+        state.task.set_pending(None)
+        state.task.set_missing([])
+        self.session_store.save(state)
+
+    def _commit_stage(self, state: ConversationState, stage_id: str, text: str) -> None:
+        """阶段收口写一条人话。本轮回调只被调用这一次。"""
+
+        sentence = str(text or "").strip()
+        if state is None or not sentence:
+            return
+        state.append_messages(
+            [
+                {
+                    "kind": "mode_notice",
+                    "text": sentence,
+                    "payload": {"stage_id": str(stage_id or "")},
+                }
+            ]
+        )
+        self.session_store.save(state)
+        hook = getattr(self, "on_stage", None)
+        if callable(hook):
+            hook(str(stage_id or ""), sentence)
+
+    def _job_summary(self, job: str) -> str:
+        """目录里的人读 Job 摘要。没有则空串。"""
+
+        catalog = self.planner.intent_engine.catalog
+        wanted = str(job or "").strip()
+        rows = list(catalog.jobs_doc.get("official") or []) + list(catalog.jobs_doc.get("system") or [])
+        for item in rows:
+            if str(item.get("id") or "") == wanted:
+                return str(item.get("summary") or "").strip()
+        return ""
+
+    def _stage_match_text(self, plan: Any, query: str) -> str:
+        """分类结束时的一句人话。澄清缺槽和开放组图不在这里写。"""
+
+        job = str((getattr(plan, "planner_trace", None) or {}).get("intent_job") or "")
+        clar = (getattr(plan, "assumptions", None) or {}).get("clarification")
+        names = [
+            str(item.get("name") or "")
+            for item in ((clar or {}).get("pending") or [])
+            if isinstance(item, dict) and item.get("name")
+        ]
+        chinese = bool(_CJK_STAGE.search(str(query or "")))
+        if "unresolved_intent" in names:
+            return _STAGE_UNMATCHED_ZH if chinese else _STAGE_UNMATCHED_EN
+        if job in {"", "clarify", "route_to_ask", "unsafe", "open"}:
+            return ""
+        summary = self._job_summary(job)
+        if not summary:
+            return ""
+        if chinese:
+            return f"已匹配：{summary}"
+        return f"Matched: {summary}"
+
+    def _commit_match_if_needed(
+        self,
+        state: ConversationState,
+        plan: Any,
+        query: str,
+        *,
+        classified: bool,
+    ) -> None:
+        """只在刚分类结束时写匹配回执。"""
+
+        if not classified:
+            return
+        text = self._stage_match_text(plan, query)
+        if not text:
+            return
+        self._commit_stage(state, "match", text)
+
     def _assemble_wire_resume(
         self,
         session_id: str | None,
@@ -1558,7 +1673,7 @@ class QteasyAssistant:
         snapshot = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
         asked = str(state.task.user_query or "").strip()
         if state.task.pending_clarification or state.task.missing:
-            state.close_open_card(choice, status="answered")
+            self._seal_clarify(state, choice, option_answer_label(pending, choice))
         held = self.planner.provider
         self.planner.provider = None
         try:
@@ -1644,9 +1759,6 @@ class QteasyAssistant:
             structured, slot_changes = self._coerce_declared_slot_patches(state, structured)
             merge_facts(state, structured, source="user", confirmed=True)
             answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
-            if state.task is not None and (state.task.pending_clarification or state.task.missing):
-                state.close_open_card(answer, status="answered")
-                user_answered = True
             skip_classify = bool(state.task and state.task.job)
             keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
             pending = (
@@ -1655,6 +1767,9 @@ class QteasyAssistant:
                 else {}
             )
             snapshot = pending.get("accepted_steps")
+            if state.task is not None and (pending or state.task.missing):
+                self._seal_clarify(state, answer, option_answer_label(pending, answer))
+                user_answered = True
             if (
                 str(pending.get("resume_job") or "") == "open"
                 and isinstance(snapshot, list)
@@ -1683,7 +1798,12 @@ class QteasyAssistant:
                 return self._block_running_plan(asked), state
             if gate.kind == "fill_slot":
                 merge_facts(state, gate.patches, source="user", confirmed=True)
-                state.close_open_card(asked, status="answered")
+                pending_card = (
+                    state.task.pending_clarification
+                    if state.task is not None and isinstance(state.task.pending_clarification, dict)
+                    else {}
+                )
+                self._seal_clarify(state, asked, option_answer_label(pending_card, asked))
                 user_answered = True
                 skip_classify = bool(state.task and state.task.job)
             elif gate.kind == "new_intent":
@@ -1735,6 +1855,12 @@ class QteasyAssistant:
             plan.assumptions["revision"] = int(getattr(state.task, "revision", 0) or 0) if state.task else 0
         self._sync_session_from_plan(state, plan, query=asked or query, skip_classify=skip_classify)
         self._apply_clarify_answer_streak(state, plan, user_answered=user_answered)
+        self._commit_match_if_needed(
+            state,
+            plan,
+            asked or query,
+            classified=inbound != "control" and not skip_classify and not resume_steps,
+        )
         self.session_store.save(state)
         return plan, state
 
@@ -1752,8 +1878,15 @@ class QteasyAssistant:
             if state.task is None:
                 state.start_task(query="")
             asked = str(state.task.user_query or "").strip()
+            pending_card = (
+                state.task.pending_clarification
+                if isinstance(state.task.pending_clarification, dict)
+                else {}
+            )
             if state.task.pending_clarification or state.task.missing:
-                state.close_open_card("compose_open", status="answered")
+                self._seal_clarify(state, "compose_open", option_answer_label(pending_card, "compose_open"))
+            chinese = bool(_CJK_STAGE.search(asked))
+            self._commit_stage(state, "compose_open", _STAGE_OPEN_ZH if chinese else _STAGE_OPEN_EN)
             plan = self.planner.build_plan(
                 asked,
                 mode="plan",
@@ -1763,7 +1896,12 @@ class QteasyAssistant:
                 forced_job="open",
             )
             self._sync_session_from_plan(state, plan, query=asked, skip_classify=False)
-            if state.task is not None and not isinstance((plan.assumptions or {}).get("clarification"), dict):
+            clar = (plan.assumptions or {}).get("clarification")
+            if state.task is not None and isinstance(clar, dict) and clar and not clarification_needs_answer(clar):
+                state.task.set_pending(None)
+                state.task.set_missing([])
+                state.task.mark_done()
+            elif state.task is not None and not isinstance(clar, dict):
                 if state.task.status == "clarifying":
                     state.task.mark_ready()
             self.session_store.save(state)
@@ -1785,6 +1923,7 @@ class QteasyAssistant:
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["topic_skipped"] = True
         self._sync_session_from_plan(state, plan, query=text, skip_classify=False)
+        self._commit_match_if_needed(state, plan, text, classified=True)
         self.session_store.save(state)
         return plan, state
 
@@ -1975,16 +2114,21 @@ class QteasyAssistant:
         clarification = (plan.assumptions or {}).get("clarification")
         if state.task is None:
             return
-        if missing:
+        answerable = isinstance(clarification, dict) and clarification_needs_answer(clarification)
+        closed_note = isinstance(clarification, dict) and bool(clarification) and not answerable
+        if closed_note:
+            state.task.set_pending(None)
+            state.task.set_missing([])
+            state.task.mark_done()
+        elif answerable:
+            state.task.set_pending(clarification)
             state.task.set_missing(missing)
-            if isinstance(clarification, dict):
-                state.task.set_pending(clarification)
+        elif missing:
+            state.task.set_missing(missing)
+            state.task.set_pending(None)
         else:
             state.task.set_missing([])
-            if isinstance(clarification, dict):
-                state.task.set_pending(clarification)
-            else:
-                state.task.set_pending(None)
+            state.task.set_pending(None)
         state.task.plan_id = str(getattr(plan, "plan_id", "") or "")
 
     @staticmethod

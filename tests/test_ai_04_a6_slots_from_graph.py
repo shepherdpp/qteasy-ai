@@ -13,6 +13,7 @@ import json
 import unittest
 
 from qteasy_ai.app import build_default_registry
+from qteasy_ai.human_card import clarification_needs_answer, project_human_cards
 from qteasy_ai.plan_markdown import tool_plan_to_markdown
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
@@ -346,7 +347,8 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
                 )
                 self.assertEqual(row["options"][0]["label"], "给出开放计划")
                 self.assertEqual(row["options"][1]["label"], "放弃")
-                self.assertEqual(row.get("open_label"), "重写需求")
+                self.assertEqual((row.get("open") or {}).get("label"), "重写需求")
+                self.assertNotIn("open_label", row)
             else:
                 self.assertEqual(
                     prompt,
@@ -354,7 +356,8 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
                 )
                 self.assertEqual(row["options"][0]["label"], "Create an open plan")
                 self.assertEqual(row["options"][1]["label"], "Abandon")
-                self.assertEqual(row.get("open_label"), "Rewrite the request")
+                self.assertEqual((row.get("open") or {}).get("label"), "Rewrite the request")
+                self.assertNotIn("open_label", row)
 
         too_many = [
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
@@ -371,8 +374,26 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" open pending:", _pending_names(rejected))
         self.assertEqual(rejected.steps[0].inputs.get("reason"), "open_too_many_steps")
         self.assertEqual(_pending_names(rejected), [])
+        self.assertFalse(clarification_needs_answer(rejected.assumptions.get("clarification")))
         self.assertNotEqual(rejected.steps[0].inputs.get("missing_info"), "supported_skill")
         self.assertIn("open_too_many_steps", str((rejected.assumptions.get("clarification") or {}).get("confirm_prompt")))
+        rejected_cards = project_human_cards(
+            {
+                "plan": {
+                    "user_query": "取日线、算收益、出一页图",
+                    "assumptions": {"clarification": rejected.assumptions.get("clarification")},
+                    "steps": [],
+                },
+                "execution": {"status": "dry_run", "steps": []},
+            },
+            requested_mode="plan",
+            query="取日线、算收益、出一页图",
+            include_user_text=False,
+        )
+        rejected_kinds = [item.get("kind") for item in rejected_cards]
+        print(" open cards:", rejected_kinds)
+        self.assertIn("error", rejected_kinds)
+        self.assertNotIn("clarify", rejected_kinds)
 
         steps = [
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
@@ -610,6 +631,24 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             self.assertEqual(rejected.steps[0].skill_name, "qt.ai.system.fallback")
             self.assertEqual(reason, "unresolved_depends")
             self.assertEqual(_pending_names(rejected), [])
+            self.assertFalse(clarification_needs_answer((rejected.assumptions or {}).get("clarification")))
+            depend_cards = project_human_cards(
+                {
+                    "plan": {
+                        "user_query": "取 000300.SH 日线再算收益",
+                        "assumptions": {"clarification": (rejected.assumptions or {}).get("clarification")},
+                        "steps": [],
+                    },
+                    "execution": {"status": "dry_run", "steps": []},
+                },
+                requested_mode="plan",
+                query="取 000300.SH 日线再算收益",
+                include_user_text=False,
+            )
+            depend_kinds = [item.get("kind") for item in depend_cards]
+            print(" ", label, "cards:", depend_kinds)
+            self.assertIn("error", depend_kinds)
+            self.assertNotIn("clarify", depend_kinds)
 
         empty = [
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},

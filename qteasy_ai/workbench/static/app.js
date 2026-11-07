@@ -199,14 +199,42 @@ function liveClarifyMessage() {
   return null;
 }
 
+function clarifyStatus(msg) {
+  return String((msg && msg.payload && msg.payload.status) || "");
+}
+
+function clarifySettled(msg) {
+  const status = clarifyStatus(msg);
+  return status === "answered" || status === "skipped";
+}
+
+function clarifyReceiptLine(msg) {
+  const payload = (msg && msg.payload) || {};
+  const label = String(payload.answer_label || "").trim();
+  const answer = String(payload.answer || "").trim();
+  if (label) {
+    const chinese = /[\u4e00-\u9fff]/.test(`${label}\n${msg.text || ""}`);
+    return chinese ? `用户已选 ${label}` : `Selected: ${label}`;
+  }
+  if (answer) return `Answered: ${answer}`;
+  return "";
+}
+
+function clarifyNeedsAnswer(clar) {
+  return clarifyPendingItems(clar).some((item) => {
+    if (typeof item === "string") return Boolean(String(item).trim());
+    return Boolean(item && String(item.name || "").trim());
+  });
+}
+
 function shouldShowLiveClarify() {
   if (clarifyCardHidden) return false;
+  const last = liveClarifyMessage();
+  if (last && clarifySettled(last)) return false;
   const missing = (state.sidebar && state.sidebar.missing) || [];
   if (missing.length) return true;
-  const last = liveClarifyMessage();
-  if (!last) return false;
-  const status = String((last.payload && last.payload.status) || "");
-  return status !== "answered" && status !== "skipped";
+  if (!last || !clarifyNeedsAnswer(last)) return false;
+  return !clarifySettled(last);
 }
 
 function pendingDecision() {
@@ -1563,6 +1591,7 @@ async function sendQueryBody(text, options) {
   beginKernel(owner);
   const keepWatch = backgrounded;
   setBusy(true);
+  if (requestMode === "plan") startBusyTranscriptPoll(owner);
   if (requestMode === "agent" && !backgrounded) executeSseOpen = true;
   const signal = backgrounded ? undefined : (runAbort ? runAbort.signal : undefined);
   try {
@@ -1577,6 +1606,7 @@ async function sendQueryBody(text, options) {
       signal,
       owner,
     });
+    if (requestMode === "plan") stopBusyTranscriptPoll();
     if (!adoptServerResult(dto, owner)) {
       if (viewing(owner)) renderChat();
     } else if (viewing(owner)) {
@@ -1594,6 +1624,7 @@ async function sendQueryBody(text, options) {
       if (viewing(owner)) renderChat();
     }
   } finally {
+    if (requestMode === "plan") stopBusyTranscriptPoll();
     if (!keepWatch) rememberExecuteFlag(owner, false);
     settleOwnerReply(owner);
   }
@@ -1604,6 +1635,7 @@ async function sendControlPatches(patches) {
   const owner = sessionId;
   beginKernel(owner);
   setBusy(true);
+  startBusyTranscriptPoll(owner);
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
@@ -1611,11 +1643,13 @@ async function sendControlPatches(patches) {
       body: JSON.stringify({ session_id: owner, patches }),
       owner,
     });
+    stopBusyTranscriptPoll();
     if (!adoptServerResult(dto, owner)) {
       if (viewing(owner)) renderChat();
     } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
+    stopBusyTranscriptPoll();
     settleOwnerReply(owner);
   }
 }
@@ -1625,6 +1659,7 @@ async function sendControlSkip() {
   const owner = sessionId;
   beginKernel(owner);
   setBusy(true);
+  startBusyTranscriptPoll(owner);
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
@@ -1632,11 +1667,13 @@ async function sendControlSkip() {
       body: JSON.stringify({ session_id: owner, skip: true }),
       owner,
     });
+    stopBusyTranscriptPoll();
     if (!adoptServerResult(dto, owner)) {
       if (viewing(owner)) renderChat();
     } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
+    stopBusyTranscriptPoll();
     settleOwnerReply(owner);
   }
 }
@@ -1802,6 +1839,8 @@ function onChatClick(ev) {
   if (t.id === "btn-clarify-end-confirm") {
     if (busy) return;
     clarifyCardHidden = true;
+    sealLocalClarify("", "", "skipped");
+    clarifyCardHidden = false;
     const done = sendControlSkip();
     renderChat();
     Promise.resolve(done).finally(() => {
@@ -1925,6 +1964,33 @@ function ensureClarifyWizard(clar) {
   if (clarifyWizard.step > n) clarifyWizard.step = n;
 }
 
+function optionLabelFor(clar, patches) {
+  const pending = clarifyPendingItems(clar);
+  const names = Object.keys(patches || {});
+  for (let i = 0; i < names.length; i += 1) {
+    const chosen = String(patches[names[i]] == null ? "" : patches[names[i]]).trim();
+    if (!chosen) continue;
+    const row = pending.find((item) => item && String((item && item.name) || item || "") === names[i]);
+    const options = (row && row.options) || [];
+    const hit = options.find((opt) => opt && String(opt.id || "") === chosen);
+    return hit ? String(hit.label || chosen) : chosen;
+  }
+  return "";
+}
+
+function sealLocalClarify(answer, label, status) {
+  const clar = liveClarifyMessage();
+  if (!clar || clarifySettled(clar)) return;
+  const payload = Object.assign({}, clar.payload || {});
+  const text = String(answer || "").trim();
+  const shown = String(label || "").trim();
+  if (text) payload.answer = text;
+  if (shown) payload.answer_label = shown;
+  payload.status = status || "answered";
+  clar.payload = payload;
+  persistTranscript();
+}
+
 function clarifyDraftValue(slotName) {
   const draft = clarifyWizard.drafts[slotName];
   if (!draft) return "";
@@ -1952,7 +2018,10 @@ function submitClarification() {
     if (name && value) patches[name] = value;
   });
   if (!Object.keys(patches).length) return;
+  const answer = Object.keys(patches).map((name) => String(patches[name] || "").trim()).find(Boolean) || "";
   clarifyCardHidden = true;
+  sealLocalClarify(answer, optionLabelFor(clar, patches), "answered");
+  clarifyCardHidden = false;
   const done = sendControlPatches(patches);
   renderChat();
   Promise.resolve(done).finally(() => {
@@ -2447,6 +2516,84 @@ function adoptServerResult(dto, owner) {
   return false;
 }
 
+let busyTranscriptGen = 0;
+let busyTranscriptPoll = null;
+
+function transcriptRowsFor(owner) {
+  if (!owner || owner === sessionId) return transcript;
+  const parked = sessionWatches[owner];
+  return (parked && parked.transcript) || [];
+}
+
+function setTranscriptRows(owner, rows) {
+  if (!owner || owner === sessionId) {
+    transcript = rows;
+    persistTranscript();
+    const watch = sessionWatches[owner || sessionId];
+    if (watch) watch.transcript = transcript;
+    return;
+  }
+  const parked = sessionWatches[owner];
+  if (!parked) return;
+  parked.transcript = rows;
+  persistTranscriptFor(owner, parked.transcript);
+}
+
+function serverClarifyBehindLocal(localRows, serverRows) {
+  for (let i = localRows.length - 1; i >= 0; i -= 1) {
+    const local = localRows[i];
+    if (!local || (local.kind !== "clarify" && local.kind !== "clarification") || !clarifySettled(local)) continue;
+    const server = serverRows.find(
+      (row) => row && row.kind === local.kind && String(row.text || "") === String(local.text || "")
+    );
+    return Boolean(server && !clarifySettled(server));
+  }
+  return false;
+}
+
+function mergeBusyTranscript(dto, owner) {
+  if (!dto || !Array.isArray(dto.transcript)) return;
+  const server = dto.transcript.filter((row) => row && row.kind !== "plan_card" && row.kind !== "step_status");
+  const local = transcriptRowsFor(owner);
+  if (serverClarifyBehindLocal(local, server)) return;
+  if (server.length < local.length) return;
+  if (server.length === local.length) {
+    const settledAhead = server.some((row, idx) => {
+      if (!row || (row.kind !== "clarify" && row.kind !== "clarification") || !clarifySettled(row)) return false;
+      const prev = local[idx];
+      return !prev || !clarifySettled(prev);
+    });
+    if (!settledAhead) return;
+  }
+  setTranscriptRows(owner, server.slice());
+}
+
+function startBusyTranscriptPoll(owner) {
+  stopBusyTranscriptPoll();
+  const gen = busyTranscriptGen;
+  busyTranscriptPoll = setInterval(() => {
+    pullBusyTranscript(owner, gen);
+  }, 500);
+  pullBusyTranscript(owner, gen);
+}
+
+function stopBusyTranscriptPoll() {
+  busyTranscriptGen += 1;
+  if (busyTranscriptPoll) {
+    clearInterval(busyTranscriptPoll);
+    busyTranscriptPoll = null;
+  }
+}
+
+async function pullBusyTranscript(owner, gen) {
+  if (!owner || gen !== busyTranscriptGen) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(owner)}`);
+  if (gen !== busyTranscriptGen) return;
+  mergeBusyTranscript(dto, owner);
+  if (gen !== busyTranscriptGen || !viewing(owner)) return;
+  renderChat();
+}
+
 function applyServerTranscript(dto, owner) {
   const targetOwner = owner || sessionId;
   if (!dto || !Array.isArray(dto.transcript)) return;
@@ -2843,7 +2990,12 @@ async function revalidateWaitingSession(id) {
   if (!watch || (!watch.busy && !watch.backgrounded)) return;
   if (watch.backgrounded || watch.executeSseOpen) return;
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
-  if (!dto || dto.kernel_busy || isDtoRunning(dto) || !hasSessionSnapshot(dto)) return;
+  if (!dto || !hasSessionSnapshot(dto)) return;
+  if (dto.kernel_busy || isDtoRunning(dto)) {
+    mergeBusyTranscript(dto, id);
+    if (id === sessionId) renderChat();
+    return;
+  }
   const localRows = id === sessionId ? transcript : (watch.transcript || []);
   const server = Array.isArray(dto.transcript) ? dto.transcript : [];
   const visible = server.filter((row) => row && row.kind !== "plan_card" && row.kind !== "step_status");
@@ -3132,7 +3284,12 @@ function lastClarifyIndex() {
 function transcriptRowHidden(msg, index) {
   if (!msg) return true;
   if (msg.kind === "plan_card" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") return true;
-  if ((msg.kind === "clarification" || msg.kind === "clarify") && shouldShowLiveClarify() && index === lastClarifyIndex()) {
+  if (
+    (msg.kind === "clarification" || msg.kind === "clarify") &&
+    !clarifySettled(msg) &&
+    shouldShowLiveClarify() &&
+    index === lastClarifyIndex()
+  ) {
     return true;
   }
   if (
@@ -3186,14 +3343,34 @@ function renderProcessGroup(html, foldable, turnKey) {
   return `<div class="process-fold" data-testid="process-fold"><button type="button" class="ghost process-toggle" data-process-turn="${turnKey}" aria-expanded="${open ? "true" : "false"}">${arrow} ${label}</button>${body}</div>`;
 }
 
+function clarifyReceiptHtml(msg) {
+  const line = clarifyReceiptLine(msg);
+  const answered = line ? `<div class="answered">${escapeHtml(line)}</div>` : "";
+  return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
+}
+
+function trailingStageNotice() {
+  for (let i = transcript.length - 1; i >= 0; i -= 1) {
+    const msg = transcript[i];
+    if (!msg) continue;
+    if (msg.kind === "user_text") return null;
+    if (msg.kind === "mode_notice" && msg.payload && msg.payload.stage_id) return msg;
+    if (msg.kind === "result" || msg.kind === "error" || msg.kind === "plan_ready" || msg.kind === "clarify" || msg.kind === "clarification") {
+      return null;
+    }
+  }
+  return null;
+}
+
 function renderProcessMessage(msg, stepsHtml) {
   if (msg.kind === "clarification" || msg.kind === "clarify") {
-    const answer = msg.payload && msg.payload.answer ? String(msg.payload.answer) : "";
-    const answered = answer ? `<div class="answered">Answered: ${escapeHtml(answer)}</div>` : "";
-    return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
+    return clarifyReceiptHtml(msg);
   }
   if (msg.kind === "mode_notice") {
-    return `<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}</div></div>`;
+    const stage = trailingStageNotice();
+    const spinning = planningWait() && stage && msg.payload && msg.payload.stage_id && stage.payload.stage_id === msg.payload.stage_id && stage.text === msg.text;
+    const extra = spinning ? busyMarkup("") : "";
+    return `<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}${extra}</div></div>`;
   }
   if (msg.kind === "executing") {
     const steps = stepsHtml ? `<div class="running-steps">${stepsHtml}</div>` : "";
@@ -3331,7 +3508,9 @@ function renderChat() {
   }
   if (busy || backgrounded) {
     if (planningWait()) {
-      parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble">${busyMarkup("Planning")}</div></div>`);
+      if (!trailingStageNotice()) {
+        parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble">${busyMarkup("Planning")}</div></div>`);
+      }
     } else {
       const skill = runningSkillName();
       const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
@@ -3431,17 +3610,23 @@ function renderClarifyStepOptions(row, slotName, lock) {
       return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-slot="${escapeHtml(slotName)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
     })
     .join("");
+  const openSpec = row && row.open && typeof row.open === "object" ? row.open : null;
+  const openLabel = openSpec ? String(openSpec.label || "").trim() : "";
   const openLetter = clarifyLetter(items.length);
   const openActive = openSelected ? " selected" : "";
-  const openLabel = row && typeof row === "object" ? String(row.open_label || "").trim() : "";
-  const openCaption = openLabel
-    ? `<span class="clarify-option-label">${escapeHtml(openLabel)}</span>`
+  const openRow = openSpec && slotName
+    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="${escapeAttr(openLabel)}" ${lock} /></div>`
     : "";
-  const openPlaceholder = openLabel ? "" : "请输入 / Please input...";
-  const openRow = slotName
-    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span>${openCaption}<input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="${openPlaceholder}" ${lock} /></div>`
+  const fieldPlaceholder = exampleFromRow(row) || "请输入 / Please input...";
+  const fieldRow = !items.length && !openSpec && slotName
+    ? `<input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="${escapeHtml(fieldPlaceholder)}" ${lock} />`
     : "";
-  return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}</div>`;
+  return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}${fieldRow}</div>`;
+}
+
+function exampleFromRow(row) {
+  if (!row || typeof row !== "object") return "";
+  return String(row.example || row.format || "").trim();
 }
 
 function renderClarification() {

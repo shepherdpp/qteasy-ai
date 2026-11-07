@@ -145,8 +145,11 @@ def infer_effective_kind(payload: Dict[str, Any]) -> str:
     raw = payload if isinstance(payload, dict) else {}
     if _is_ask_payload(raw):
         return "ask"
-    if _clarification_blob(raw):
+    clar = _clarification_blob(raw)
+    if clar and clarification_needs_answer(clar):
         return "clarify"
+    if clar:
+        return "error"
     execution = raw.get("execution") if isinstance(raw.get("execution"), dict) else {}
     status = str(execution.get("status") or "")
     if status in {"success", "partial_failed", "failed"}:
@@ -338,6 +341,9 @@ def project_human_cards(
     assumptions = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
     if clar:
         text = str(clar.get("confirm_prompt") or clar.get("restatement") or "Clarification required.").strip()
+        if not clarification_needs_answer(clar):
+            cards.append(make_card("error", text, {"message": text}))
+            return cards
         pending = list(clar.get("pending") or []) if isinstance(clar.get("pending"), list) else []
         blob = dict(clar)
         blob["pending"] = pending
@@ -957,6 +963,179 @@ def _card_rewrite_ok(source: str, rewritten: str, *, kind: str) -> bool:
     return True
 
 
+def option_answer_label(pending: Any, answer: str) -> str:
+    """选项 id 换成用户看见的标签。对不上时退回原文。
+
+    Parameters
+    ----------
+    pending : dict
+        澄清卡。``pending`` 里是每一格。
+    answer : str
+        选项 id 或开放输入原文。
+
+    Returns
+    -------
+    str
+        标签或原文。
+    """
+
+    text = str(answer or "").strip()
+    blob = pending if isinstance(pending, dict) else {}
+    for item in blob.get("pending") or []:
+        if not isinstance(item, dict):
+            continue
+        for opt in item.get("options") or []:
+            if isinstance(opt, dict) and str(opt.get("id") or "") == text:
+                return str(opt.get("label") or text)
+    return text
+
+
+def choice_rows(pending_item: Any) -> List[Dict[str, str]]:
+    """一格上的预设项，以及至多一条开放项。
+
+    没有 ``options`` 的格子（日期等）返回空列表。那是一个输入字段，不是开放选项。
+
+    Parameters
+    ----------
+    pending_item : dict
+        ``pending[i]``。
+
+    Returns
+    -------
+    list of dict
+        ``kind`` 为 ``option`` 或 ``open``。
+    """
+
+    row = pending_item if isinstance(pending_item, dict) else {}
+    rows: List[Dict[str, str]] = []
+    for item in row.get("options") or []:
+        if not isinstance(item, dict):
+            continue
+        oid = str(item.get("id") or "").strip()
+        if not oid:
+            continue
+        rows.append(
+            {
+                "kind": "option",
+                "id": oid,
+                "label": str(item.get("label") or oid),
+            }
+        )
+    opened = row.get("open") if isinstance(row.get("open"), dict) else None
+    label = str((opened or {}).get("label") or "").strip()
+    if label:
+        rows.append({"kind": "open", "label": label})
+    return rows
+
+
+def clarify_receipt_line(text: str, payload: Any) -> str:
+    """已答澄清的一行回执。有标签时用「用户已选」或 ``Selected``。
+
+    Parameters
+    ----------
+    text : str
+        澄清卡正文，用来判断中英文。
+    payload : dict
+        ``answer`` / ``answer_label``。
+
+    Returns
+    -------
+    str
+        空串表示还没有答案。
+    """
+
+    blob = payload if isinstance(payload, dict) else {}
+    label = str(blob.get("answer_label") or "").strip()
+    answer = str(blob.get("answer") or "").strip()
+    if label:
+        sample = f"{label}\n{text or ''}"
+        if _CJK_RE.search(sample):
+            return f"用户已选 {label}"
+        return f"Selected: {label}"
+    if answer:
+        return f"Answered: {answer}"
+    return ""
+
+
+def clarification_needs_answer(blob: Any) -> bool:
+    """``pending`` 里至少有一格带名字时，才是必须回答的澄清。
+
+    Parameters
+    ----------
+    blob : dict
+        澄清载荷。``pending`` 为空或没有名字时为说明，不是中断。
+
+    Returns
+    -------
+    bool
+        有可答项时为 True。
+    """
+
+    if not isinstance(blob, dict):
+        return False
+    pending = blob.get("pending")
+    if not isinstance(pending, list):
+        return False
+    for item in pending:
+        if isinstance(item, dict) and str(item.get("name") or "").strip():
+            return True
+        if isinstance(item, str) and str(item).strip():
+            return True
+    return False
+
+
+def clarification_is_live(session: Any) -> bool:
+    """Task 仍有未关闭的澄清时，run 里的澄清块才是活卡。
+
+    Parameters
+    ----------
+    session : ConversationState or None
+        已加载的会话。
+
+    Returns
+    -------
+    bool
+        没有会话时为 False。没有可答项、或最近一条 clarify 已答或已跳过时为 False。
+    """
+
+    task = getattr(session, "task", None) if session is not None else None
+    pending = getattr(task, "pending_clarification", None) if task is not None else None
+    if not isinstance(pending, dict) or not clarification_needs_answer(pending):
+        return False
+    for row in reversed(getattr(session, "messages", None) or []):
+        if str(row.get("kind") or "") != "clarify":
+            continue
+        status = str((row.get("payload") or {}).get("status") or "")
+        return status not in {"answered", "skipped"}
+    return True
+
+
+def drop_closed_clarification(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """去掉 run 上的澄清块，避免已关闭的卡被再投影成未答。
+
+    Parameters
+    ----------
+    payload : dict
+        Assistant raw dict。
+
+    Returns
+    -------
+    dict
+        副本。顶层和 ``plan.assumptions`` 都不再带 ``clarification``。
+    """
+
+    raw = dict(payload or {})
+    raw.pop("clarification", None)
+    plan = raw.get("plan")
+    if isinstance(plan, dict):
+        plan = dict(plan)
+        assumptions = dict(plan.get("assumptions") or {})
+        assumptions.pop("clarification", None)
+        plan["assumptions"] = assumptions
+        raw["plan"] = plan
+    return raw
+
+
 def format_human_cards(
     cards: Sequence[Dict[str, Any]],
     *,
@@ -988,9 +1167,9 @@ def format_human_cards(
             lines.append(text)
         if kind == "clarify":
             blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-            answer = str(blob.get("answer") or "").strip()
-            if answer:
-                lines.append(f"Answered: {answer}")
+            receipt = clarify_receipt_line(text, blob)
+            if receipt:
+                lines.append(receipt)
         if kind == "ask":
             sources = []
             blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
