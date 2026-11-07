@@ -895,7 +895,8 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" watch starts clock after elapsed:", "startElapsedClock();\n  if (!executeSseOpen)" in watch)
             print(" poll clears backgrounded:", "backgrounded = false" in poll)
             print(" poll guards confirmable:", "blocks_composer" in poll and "confirmable: false" in poll)
-            print(" poll ignores error dto:", "dto.error" in poll)
+            print(" poll skips non-snapshot:", "!hasSessionSnapshot(dto)" in poll)
+            print(" poll ingests terminal:", "isTerminalRun" in poll and "ingestDto" in poll)
             print(" stop ingests:", "ingestDto" in stop_fn)
             print(" confirm guards sse:", "if (!backgrounded)" in confirm and confirm.find("executeSseOpen = true") > confirm.find("if (!backgrounded)"))
             print(" steps hidden when backgrounded:", "if (backgrounded) return" in steps)
@@ -908,7 +909,10 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("backgrounded = false", poll)
             self.assertIn("blocks_composer", poll)
             self.assertIn("confirmable: false", poll)
-            self.assertIn("dto.error", poll)
+            self.assertIn("!hasSessionSnapshot(dto)", poll)
+            self.assertIn("isTerminalRun", poll)
+            self.assertIn("ingestDto", poll)
+            self.assertNotIn("dto.error", poll)
             self.assertIn("elapsed_s", poll)
             self.assertIn("ingestDto", stop_fn)
             self.assertIn("if (!backgrounded)", confirm)
@@ -916,6 +920,49 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("if (backgrounded) return", steps)
             self.assertIn('backgrounded ? "Background"', now)
             self.assertIn("dto.plan_card", background_fn)
+
+    def test_session_snapshot_projects_run_error(self) -> None:
+        """有 transcript 的快照照常投影；无 transcript 的 error 才当成请求失败。"""
+
+        print("\n[TestAiWorkbenchWeb] session snapshot projects run error")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            pred = _extract_js_function(src, "hasSessionSnapshot")
+            switch_fn = _extract_js_function(src, "switchSession")
+            restore_fn = _extract_js_function(src, "restoreCurrentSession")
+            refresh_fn = _extract_js_function(src, "refreshSessions")
+            revalidate = _extract_js_function(src, "revalidateWaitingSession")
+            stop_fn = _extract_js_function(src, "stopWatchingRun")
+            background_fn = _extract_js_function(src, "backgroundThisRun")
+            print(" predicate:", "Array.isArray(dto.transcript)" in pred)
+            print(" switch snapshot before notice:", switch_fn.find("hasSessionSnapshot(dto)") < switch_fn.find("Session not found."))
+            print(" restore uses snapshot:", "hasSessionSnapshot(dto)" in restore_fn)
+            print(" refresh uses snapshot:", "hasSessionSnapshot(dto)" in refresh_fn)
+            print(" revalidate waits on busy:", "dto.kernel_busy" in revalidate and "isDtoRunning(dto)" in revalidate)
+            print(" stop projects snapshot:", stop_fn.find("hasSessionSnapshot(dto)") < stop_fn.find("ingestDto"))
+            print(" background projects snapshot:", background_fn.find("hasSessionSnapshot(dto)") < background_fn.find("applyServerTranscript"))
+            self.assertIn("Array.isArray(dto.transcript)", pred)
+            self.assertNotIn("!dto.error", switch_fn)
+            self.assertLess(switch_fn.find("hasSessionSnapshot(dto)"), switch_fn.find("Session not found."))
+            self.assertIn("ingestDto", switch_fn)
+            self.assertNotIn("!dto.error", restore_fn)
+            self.assertIn("hasSessionSnapshot(dto)", restore_fn)
+            self.assertIn("applyServerTranscript", restore_fn)
+            self.assertNotIn("!dto.error", refresh_fn)
+            self.assertIn("hasSessionSnapshot(dto)", refresh_fn)
+            self.assertNotIn("dto.error", revalidate)
+            self.assertIn("!hasSessionSnapshot(dto)", revalidate)
+            self.assertIn("dto.kernel_busy", revalidate)
+            self.assertIn("isDtoRunning(dto)", revalidate)
+            self.assertLess(stop_fn.find("!hasSessionSnapshot(dto)"), stop_fn.find("Stop did not complete."))
+            self.assertLess(stop_fn.find("Stop did not complete."), stop_fn.find("ingestDto"))
+            self.assertLess(background_fn.find("!hasSessionSnapshot(dto)"), background_fn.find("Background did not complete."))
+            self.assertLess(background_fn.find("Background did not complete."), background_fn.find("applyServerTranscript"))
 
     def test_live_restore_poll_and_column_splitter(self) -> None:
         """切回 running 不重 POST run-plan；2s GET 轮询；Session|Artifacts 可拖分隔。"""

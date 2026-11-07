@@ -1008,6 +1008,10 @@ function dropRunWatch() {
   }
 }
 
+function hasSessionSnapshot(dto) {
+  return Boolean(dto && Array.isArray(dto.transcript));
+}
+
 function isDtoRunning(dto) {
   return String((dto && dto.execution && dto.execution.status) || "") === "running";
 }
@@ -1065,7 +1069,7 @@ function startLivePoll() {
     const sseOpen = onScreen ? executeSseOpen : Boolean(parked && parked.executeSseOpen);
     if (sseOpen || !owner) return;
     const dto = await api(`/v1/session/${encodeURIComponent(owner)}`);
-    if (dto && dto.error) return;
+    if (!hasSessionSnapshot(dto)) return;
     const stillHere = owner === sessionId;
     const base = stillHere ? state : (parked && parked.state) || null;
     if (!base) return;
@@ -1126,22 +1130,22 @@ async function stopWatchingRun() {
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/cancel-run`, { method: "POST" });
-  if (dto && dto.error) {
-    transcript.push({
-      kind: "error",
-      text: dto.error.message || "Stop did not complete.",
-      payload: dto.error,
-    });
-    persistTranscript();
-    renderChat();
+  if (!hasSessionSnapshot(dto)) {
+    if (dto && dto.error) {
+      transcript.push({
+        kind: "error",
+        text: dto.error.message || "Stop did not complete.",
+        payload: dto.error,
+      });
+      persistTranscript();
+      renderChat();
+    }
     return;
   }
   backgrounded = false;
   dropRunWatch();
-  if (dto && !dto.error) {
-    ingestDto(dto, { appendUser: false });
-    if (dto.transcript) applyServerTranscript(dto);
-  }
+  ingestDto(dto, { appendUser: false });
+  applyServerTranscript(dto);
   renderChat();
   renderNow();
 }
@@ -1149,14 +1153,16 @@ async function stopWatchingRun() {
 async function backgroundThisRun() {
   if (!busy || !sessionId) return;
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/background-run`, { method: "POST" });
-  if (dto && dto.error) {
-    transcript.push({
-      kind: "error",
-      text: dto.error.message || "Background did not complete.",
-      payload: dto.error,
-    });
-    persistTranscript();
-    renderChat();
+  if (!hasSessionSnapshot(dto)) {
+    if (dto && dto.error) {
+      transcript.push({
+        kind: "error",
+        text: dto.error.message || "Background did not complete.",
+        payload: dto.error,
+      });
+      persistTranscript();
+      renderChat();
+    }
     return;
   }
   const controller = runAbort;
@@ -2837,7 +2843,7 @@ async function revalidateWaitingSession(id) {
   if (!watch || (!watch.busy && !watch.backgrounded)) return;
   if (watch.backgrounded || watch.executeSseOpen) return;
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
-  if (!dto || dto.error || dto.kernel_busy || isDtoRunning(dto)) return;
+  if (!dto || dto.kernel_busy || isDtoRunning(dto) || !hasSessionSnapshot(dto)) return;
   const localRows = id === sessionId ? transcript : (watch.transcript || []);
   const server = Array.isArray(dto.transcript) ? dto.transcript : [];
   const visible = server.filter((row) => row && row.kind !== "plan_card" && row.kind !== "step_status");
@@ -2888,7 +2894,7 @@ async function switchSession(id) {
   } finally {
     sessionLoading = false;
   }
-  if (dto && !dto.error) {
+  if (hasSessionSnapshot(dto)) {
     ingestDto(dto);
     applySessionMode(dto);
     applyServerTranscript(dto);
@@ -2912,7 +2918,7 @@ async function switchSession(id) {
     setBusy(true);
   }
   renderPanes();
-  if (dto && !dto.error) applyRunningWatch(dto);
+  if (hasSessionSnapshot(dto)) applyRunningWatch(dto);
   if (dto && dto.kernel_busy && !isDtoRunning(dto) && !busy) setBusy(true);
   applyComposerLock();
   focusComposer();
@@ -2931,7 +2937,7 @@ async function refreshSessions() {
   applyComposerLock();
   if (!finishedHere) return;
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
-  if (dto && !dto.error) {
+  if (hasSessionSnapshot(dto)) {
     ingestDto(dto);
     applyServerTranscript(dto);
   }
@@ -4433,7 +4439,7 @@ async function restoreCurrentSession() {
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
-  if (dto && !dto.error) {
+  if (hasSessionSnapshot(dto)) {
     ingestDto(dto);
     applySessionMode(dto);
     applyServerTranscript(dto);
@@ -4444,7 +4450,7 @@ async function restoreCurrentSession() {
   await refreshProvider();
   await refreshAttachments();
   renderPanes();
-  if (dto && !dto.error) applyRunningWatch(dto);
+  if (hasSessionSnapshot(dto)) applyRunningWatch(dto);
   if (dto && dto.kernel_busy && !isDtoRunning(dto) && !busy) {
     serverKernelOwner = sessionId;
     followServerKernel = true;

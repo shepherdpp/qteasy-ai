@@ -439,6 +439,91 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertTrue(any(k in {"ask", "ask_text", "clarify", "clarification", "plan_ready"} for k in kinds))
             self.assertTrue(any("Plan ready" in str(t) or "Clarif" in str(t) or "qteasy" in str(t).lower() for t in texts))
 
+    def test_get_session_keeps_transcript_when_run_failed(self) -> None:
+        """失败 run 的 GET 仍是快照：transcript 与顶层 error、sidebar job 同时在。"""
+
+        print("\n[TestAiWorkbenchHttp] failed run session keeps transcript")
+        from qteasy_ai.session import ConversationState, SessionStore
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            sid = "s-failed-run"
+            plan_id = "plan_failedsnap01"
+            rid = "run_failedsnap01"
+            store.save_run(
+                rid,
+                {
+                    "run_id": rid,
+                    "plan": {
+                        "plan_id": plan_id,
+                        "steps": [
+                            {
+                                "step_id": "step_1",
+                                "skill_name": "qt.ai.data.kline",
+                                "inputs": {"freq": "daily"},
+                            }
+                        ],
+                    },
+                    "execution": {
+                        "run_id": rid,
+                        "plan_id": plan_id,
+                        "status": "partial_failed",
+                        "steps": [
+                            {
+                                "step_id": "step_1",
+                                "skill_name": "qt.ai.data.kline",
+                                "result": {
+                                    "ok": False,
+                                    "skill_name": "qt.ai.data.kline",
+                                    "error": {
+                                        "code": "KLINE_FETCH_FAILED",
+                                        "message": "invalid freq",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                },
+            )
+            conv = ConversationState.empty(sid)
+            conv.start_task(query="draw the index", job="data.export")
+            conv.task.plan_id = plan_id
+            conv.task.run_id = rid
+            conv.task.mark_done()
+            conv.append_messages(
+                [
+                    {"kind": "user_text", "text": "draw the index", "payload": {}},
+                    {
+                        "kind": "error",
+                        "text": "invalid freq",
+                        "payload": {
+                            "code": "KLINE_FETCH_FAILED",
+                            "message": "invalid freq",
+                        },
+                    },
+                ]
+            )
+            SessionStore(store).save(conv)
+            res = client.get(f"/v1/session/{sid}")
+            body = res.json()
+            rows = body.get("transcript") or []
+            kinds = [row.get("kind") for row in rows]
+            texts = [row.get("text") for row in rows]
+            err = body.get("error") or {}
+            job = ((body.get("sidebar") or {}).get("active_intent") or {}).get("job")
+            print(" status:", res.status_code, "ok:", body.get("ok"))
+            print(" kinds:", kinds)
+            print(" texts:", texts)
+            print(" error code:", err.get("code"), "message:", err.get("message"))
+            print(" job:", job)
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(body.get("ok"))
+            self.assertEqual(kinds, ["user_text", "error"])
+            self.assertEqual(texts, ["draw the index", "invalid freq"])
+            self.assertEqual(err.get("code"), "KLINE_FETCH_FAILED")
+            self.assertEqual(err.get("message"), "invalid freq")
+            self.assertEqual(job, "data.export")
+
     def test_run_plan_optional_sse_keeps_default_json(self) -> None:
         """?stream=1 返回 SSE；默认 POST 仍是 JSON 且含 steps。"""
 
