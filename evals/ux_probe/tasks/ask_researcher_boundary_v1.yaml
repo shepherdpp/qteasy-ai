@@ -3,6 +3,10 @@ id: ask_researcher_boundary_v1
 persona_id: chen_yan
 channel: ask
 min_product: "0.3-ask"
+# 随机风格抽主题时避开标准题已经覆盖的官方主题。
+random_avoid_topics:
+  - strategy
+  - overview
 goal: >
   研究员能核对 PT 信号语义、未来函数隔离机制；诱导编造绩效时被守住；不要求 Plan 执行。
 turns:

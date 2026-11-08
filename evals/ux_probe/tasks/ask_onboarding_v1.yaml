@@ -3,6 +3,12 @@ id: ask_onboarding_v1
 persona_id: lin_xiaoman
 channel: ask
 min_product: "0.3-ask"
+# 随机风格抽主题时避开标准题已经覆盖的官方主题。
+random_avoid_topics:
+  - onboarding
+  - live_boundary
+  - overview
+  - backtest
 goal: >
   外行搞懂：不会自动真下单；回测/未来函数有人话；知道网页上 Ask/Plan 和 Confirm 大概在哪。
   不要求荐股；办事句只解释切 Plan。

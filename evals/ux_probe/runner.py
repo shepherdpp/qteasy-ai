@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import json
+import random
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -23,6 +25,15 @@ from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.provider import BaseLLMProvider, FakeLLMProvider
 
 from .judge import judge_transcript
+from .questions import (
+    QUESTION_STYLE_RANDOM,
+    QUESTION_STYLE_STANDARD,
+    RandomSeries,
+    assign_focuses,
+    load_topic_catalog,
+    normalize_question_style,
+    random_user_utterance,
+)
 from .loader import (
     DEFAULT_PRODUCT,
     Persona,
@@ -95,13 +106,34 @@ def run_task_ask(
     task: Task,
     sim_provider: BaseLLMProvider,
     session_prefix: str,
+    question_style: str = QUESTION_STYLE_STANDARD,
+    series: Optional[RandomSeries] = None,
 ) -> Dict[str, Any]:
-    """同一 session 跑完一条 Ask 任务，返回 transcript。"""
+    """同一 session 跑完一条 Ask 任务，返回 transcript。
 
+    ``question_style='random'`` 时按 ``series`` 里抽中的主题逐轮生成问句，
+    不再复读任务 YAML 的标准题。
+    """
+
+    style = normalize_question_style(question_style)
     session_id = f"{session_prefix}-{task.id}-{persona.id}"
     turns_out: List[Dict[str, Any]] = []
-    for turn in task.turns:
-        if turn.improvise or not turn.text:
+    turn_count = len(task.turns)
+    for index, turn in enumerate(task.turns):
+        if style == QUESTION_STYLE_RANDOM:
+            if series is None:
+                raise ValueError("random question style requires a sampled series")
+            query = random_user_utterance(
+                sim_provider,
+                persona=persona,
+                task=task,
+                series=series,
+                turn_index=index,
+                turn_count=turn_count,
+                prior_turns=turns_out,
+            )
+            source = "random"
+        elif turn.improvise or not turn.text:
             query = improvise_user_utterance(
                 sim_provider,
                 persona=persona,
@@ -125,9 +157,20 @@ def run_task_ask(
                 **fields,
             }
         )
+    goal = task.goal
+    theme = ""
+    topics: List[Dict[str, str]] = []
+    if style == QUESTION_STYLE_RANDOM and series is not None:
+        goal = series.goal or task.goal
+        theme = series.theme
+        topics = list(series.topics)
     return {
         "session_id": session_id,
         "channel": "ask",
+        "question_style": style,
+        "theme": theme,
+        "topics": topics,
+        "goal": goal,
         "turns": turns_out,
     }
 
@@ -173,6 +216,8 @@ def run_probe(
     memory_store: Optional[MemoryStore] = None,
     out_dir: Optional[Path] = None,
     run_id: Optional[str] = None,
+    question_style: str = QUESTION_STYLE_STANDARD,
+    rng_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """跑体验罗盘并写 JSON/Markdown 报告。
 
@@ -193,6 +238,10 @@ def run_probe(
         报告目录，默认 ``evals/ux_probe/runs/<run_id>``。
     run_id : str, optional
         运行目录名。
+    question_style : str
+        ``standard`` 复读任务原题；``random`` 为每个画像另起主题再连问。
+    rng_seed : int, optional
+        随机风格的抽样种子。缺省时每次运行不同。
 
     Returns
     -------
@@ -200,6 +249,7 @@ def run_probe(
         报告载荷（含写出路径）。
     """
 
+    style = normalize_question_style(question_style)
     bundle = load_bundle(root)
     store = memory_store or MemoryStore()
     active = provider
@@ -225,22 +275,36 @@ def run_probe(
     target = Path(out_dir) if out_dir is not None else (bundle.root / "runs" / rid)
     target.mkdir(parents=True, exist_ok=True)
 
+    rng = random.Random(rng_seed) if rng_seed is not None else random.Random()
+    focuses = []
+    if style == QUESTION_STYLE_RANDOM and selected:
+        focuses = assign_focuses(
+            load_topic_catalog(),
+            [task.random_avoid_topics for task in selected],
+            rng,
+        )
     runs: List[Dict[str, Any]] = []
-    for task in selected:
+    for index, task in enumerate(selected):
         persona = bundle.personas[task.persona_id]
+        series = RandomSeries(focus=focuses[index]) if focuses else None
         transcript = run_task_ask(
             assistant,
             persona=persona,
             task=task,
             sim_provider=active,
             session_prefix=rid,
+            question_style=style,
+            series=series,
         )
+        judge_task = task
+        if style == QUESTION_STYLE_RANDOM and str(transcript.get("goal") or "").strip():
+            judge_task = replace(task, goal=str(transcript.get("goal")))
         judgment: Dict[str, Any]
         if judge:
             judgment = judge_transcript(
                 active,
                 persona=persona,
-                task=task,
+                task=judge_task,
                 transcript=transcript,
                 rubrics=bundle.rubrics,
             )
@@ -273,9 +337,13 @@ def run_probe(
                 },
                 "task": {
                     "id": task.id,
-                    "goal": task.goal,
+                    "goal": transcript.get("goal") or task.goal,
+                    "script_goal": task.goal,
                     "min_product": task.min_product,
                     "channel": task.channel,
+                    "question_style": style,
+                    "theme": transcript.get("theme") or "",
+                    "topics": list(transcript.get("topics") or []),
                 },
                 "transcript": transcript,
                 "judge": judgment,
@@ -286,6 +354,7 @@ def run_probe(
         "generated_at": _utc_now(),
         "run_id": rid,
         "current_product": current_product,
+        "question_style": style,
         "not_a_gate": True,
         "skipped": skipped,
         "runs": runs,

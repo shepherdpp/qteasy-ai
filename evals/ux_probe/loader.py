@@ -62,6 +62,7 @@ class Task:
     turns: List[Turn]
     min_product: str = DEFAULT_PRODUCT
     upgrade_of: str = ""
+    random_avoid_topics: List[str] = field(default_factory=list)
     path: Path = field(default_factory=Path)
 
 
@@ -159,6 +160,11 @@ def load_task(path: Path) -> Task:
         turns=turns,
         min_product=str(payload.get("min_product") or DEFAULT_PRODUCT).strip(),
         upgrade_of=str(payload.get("upgrade_of") or "").strip(),
+        random_avoid_topics=[
+            str(item).strip()
+            for item in (payload.get("random_avoid_topics") or [])
+            if str(item).strip()
+        ],
         path=path,
     )
 

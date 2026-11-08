@@ -35,6 +35,11 @@ class TestAiUxProbeLoader(unittest.TestCase):
             ["chen_yan", "lin_xiaoman", "zhou_jie"],
         )
         self.assertIn("ask_onboarding_v1", bundle.tasks)
+        onboarding = bundle.tasks["ask_onboarding_v1"]
+        print(" onboarding avoid:", onboarding.random_avoid_topics)
+        self.assertIn("onboarding", onboarding.random_avoid_topics)
+        self.assertIn("backtest", bundle.tasks["ask_backtest_learn_v1"].random_avoid_topics)
+        self.assertIn("strategy", bundle.tasks["ask_researcher_boundary_v1"].random_avoid_topics)
         self.assertIn("ask_backtest_learn_v1", bundle.tasks)
         self.assertIn("ask_researcher_boundary_v1", bundle.tasks)
         self.assertIn("ask_wow_hp_timing_v1", bundle.tasks)
@@ -65,6 +70,7 @@ class TestAiUxProbeLoader(unittest.TestCase):
         )
         print(" markdown head:", md.splitlines()[:6])
         self.assertIn("非关单", md)
+        self.assertIn("标准（固定题）", md)
         self.assertIn("ask_wow_hp_timing_v1", md)
 
     def test_markdown_report_includes_journey_and_persona_voice(self) -> None:
