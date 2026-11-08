@@ -46,6 +46,20 @@ _FILLABLE = {
     "symbols",
     "asset_pool",
 }
+_NEVER_PROJECT = {"page", "layout", "rows", "htypes", "mode"}
+_PORTFOLIO_SKILL = "qt.ai.hp.portfolio"
+_KLINE_SKILL = "qt.ai.data.kline"
+_INDEX_CODES = {
+    "000001.SH",
+    "000016.SH",
+    "000300.SH",
+    "000905.SH",
+    "000852.SH",
+    "399001.SZ",
+    "399006.SZ",
+    "399300.SZ",
+    "399905.SZ",
+}
 _STOP_WORDS = {
     "please",
     "fetch",
@@ -110,6 +124,10 @@ _LABELS = {
     "statement": "Statement",
     "tables": "Tables",
     "table_name": "Table",
+    "weights": "Weights",
+    "benchmark": "Benchmark",
+    "benchmark_output": "Benchmark output",
+    "adj": "Adjustment",
 }
 _DATE_HINT = (
     "Download/refill requires an explicit start and end date. "
@@ -128,7 +146,31 @@ _HINTS = {
     "strategy_id": "Which built-in strategy? Reply with an id, or use the open input.",
     "freq": "Frequency such as d, w, or m. Other type-correct values are still accepted.",
     "asset_type": "Asset type such as E or FD. Other type-correct values are still accepted.",
+    "weights": "Give weights as numbers, such as 6:4. They stay with the held symbols.",
+    "benchmark": "Which symbol is the benchmark?",
+    "benchmark_output": "tag_along keeps the benchmark beside the portfolio. excess_only keeps only the excess.",
+    "adj": "Use an adjustment mark the data call already accepts, such as b or n.",
 }
+_EXCHANGE_CODE = re.compile(r"\d{6}\.(?:SH|SZ|BJ)", re.IGNORECASE)
+_BENCH_TOKEN = r"(沪深\s*300|csi\s*300|\d{6}\.(?:SH|SZ|BJ))"
+_BENCHMARK_PHRASE = re.compile(
+    r"(?:"
+    r"(?:相对|基准|benchmark)\s*[:=：是为]?\s*" + _BENCH_TOKEN +
+    r"|以\s*" + _BENCH_TOKEN + r"\s*为\s*基准"
+    r")",
+    re.IGNORECASE,
+)
+_WEIGHT_PHRASE = re.compile(
+    r"(?:权重|weights|加权)(?:组合)?\s*[:=：]?\s*"
+    r"(\d+(?:\.\d+)?[%％]?"
+    r"(?:\s*[:：,，比]\s*\d+(?:\.\d+)?[%％]?)+)",
+    re.IGNORECASE,
+)
+_HOLD_COMPARE_JOB = "research.hold_compare"
+_ADJ_PHRASE = re.compile(
+    r"(?:adj|复权)\s*[:=：]?\s*(none|back|forward|fw|b|f|n)\b",
+    re.IGNORECASE,
+)
 _REPHRASE = "No matching job. Rephrase the request, or ask for a short open plan."
 _RECOVERY_ZH = "您的需求无法跟现成的操作模版匹配（job），是否需要我创建一份开放计划？"
 _RECOVERY_EN = "This request does not match a built-in operation template (job). Create an open plan?"
@@ -303,6 +345,51 @@ def mentions_return(query: str) -> bool:
         return True
     lower = text.lower()
     return any(item in lower for item in ("drawdown", "drop", "gain", "rally"))
+
+
+def mentions_excess(query: str) -> bool:
+    """问句是否要超额。确认槽拼回的 ``benchmark_output excess_only`` 不算。"""
+
+    text = str(query or "")
+    if "超额" in text:
+        return True
+    lowered = text.lower().replace("benchmark_output excess_only", " ")
+    return "excess" in lowered
+
+
+def mentions_cumret(query: str) -> bool:
+    """问句是否要累计收益。对数收益不在这里。"""
+
+    text = str(query or "")
+    if "累计收益" in text:
+        return True
+    lower = text.lower()
+    return "cumulative return" in lower or "cumret" in lower
+
+
+def hold_share_codes(query: str) -> List[str]:
+    """问句里的交易所代码和沪深300别名，按出现顺序、不重复。"""
+
+    text = str(query or "")
+    hits: List[Tuple[int, str]] = []
+    for match in _EXCHANGE_CODE.finditer(text):
+        hits.append((match.start(), match.group(0).upper()))
+    lowered = text.lower()
+    for alias, code in (("沪深300", "000300.SH"), ("csi 300", "000300.SH"), ("csi300", "000300.SH")):
+        start = 0
+        needle = alias.lower()
+        while True:
+            pos = lowered.find(needle, start)
+            if pos < 0:
+                break
+            hits.append((pos, code))
+            start = pos + len(needle)
+    hits.sort(key=lambda item: item[0])
+    found: List[str] = []
+    for _, code in hits:
+        if code not in found:
+            found.append(code)
+    return found
 
 
 def dtype_tokens(query: str) -> List[str]:
@@ -733,12 +820,16 @@ def _fill_graph(
             slot["value"] = value
     if _apply_lookback_default(planner, steps, query, projected):
         extras["slot_defaults"] = {"lookback_days": "library"}
+    if job == _HOLD_COMPARE_JOB:
+        _finish_portfolio_graph(steps, query)
     mismatch = align_steps(planner, steps)
     if mismatch:
         return _wire_rejected(planner, steps, query, job, mismatch)
     errors = _take_slot_errors(session)
     open_names = _open_any_of_names(planner, steps, projected)
-    pending = _pending_after_fill(projected, steps, ambiguous, errors, query, open_names, rejected)
+    pending = _pending_after_fill(
+        projected, steps, ambiguous, errors, query, open_names, rejected, job
+    )
     if not pending:
         return steps, extras
     extras.pop("slot_defaults", None)
@@ -918,6 +1009,7 @@ def _pending_after_fill(
     query,
     open_names: Optional[Set[str]] = None,
     rejected: Optional[Set[str]] = None,
+    job: str = "",
 ) -> List[Dict[str, Any]]:
     """必填仍空、窗口组全空、取值被拒、方向不明或回看不是整数时出题。"""
 
@@ -934,6 +1026,8 @@ def _pending_after_fill(
             or slot["name"] in refused
             or _must_ask(slot, steps)
             or slot["name"] == "lookback_days" and _bad_lookback(query)
+            or _ask_benchmark(slot, steps, query, job)
+            or _ask_weights(slot, query, job)
         )
         if not ask:
             continue
@@ -996,16 +1090,24 @@ def _project(
     refused = rejected or set()
     order: List[str] = []
     by_name: Dict[str, Dict[str, Any]] = {}
+    has_portfolio = any(step.skill_name == _PORTFOLIO_SKILL for step in steps)
     for step in steps:
         if step.skill_name == "qt.ai.system.fallback":
             continue
         schema = _schema(planner, step.skill_name)
         grouped = _any_of_member_names(planner, [step])
         for key, spec in schema.items():
-            if key in _SKIP or not isinstance(spec, dict):
+            if key in _SKIP or key in _NEVER_PROJECT or not isinstance(spec, dict):
                 continue
             required = bool(spec.get("required"))
-            if not required and key not in _FILLABLE and key not in grouped and key not in refused:
+            portfolio_key = _portfolio_user_key(has_portfolio, step.skill_name, key)
+            if (
+                not required
+                and key not in _FILLABLE
+                and key not in grouped
+                and key not in refused
+                and not portfolio_key
+            ):
                 continue
             current = (step.inputs or {}).get(key)
             filled = current not in (None, "", [])
@@ -1087,6 +1189,18 @@ def _heuristic(
                 found["names"] = joined
             if "htype_names" in wanted:
                 found["htype_names"] = joined
+    if "benchmark" in wanted:
+        code = _parse_benchmark(query)
+        if code:
+            found["benchmark"] = code
+    if "weights" in wanted:
+        weights = _parse_weights(query)
+        if weights:
+            found["weights"] = weights
+    if "adj" in wanted:
+        adj = _parse_adj(query)
+        if adj:
+            found["adj"] = adj
     return found, ambiguous
 
 
@@ -1725,10 +1839,12 @@ def contract_digest_lines(planner: Any, names: Sequence[str]) -> List[str]:
 
 
 def _write_empty(planner: Any, steps: Sequence[Any], name: str, value: Any) -> bool:
-    """把值写进仍空着的同名输入。已有值不动。"""
+    """把值写进仍空着的同名输入。已有值不动。绘图步上的 shares 留空。"""
 
     wrote = False
     for step in steps:
+        if name == "shares" and step.skill_name == "qt.ai.hp.plot":
+            continue
         schema = _schema(planner, step.skill_name)
         if name not in schema or name in _SKIP:
             continue
@@ -1738,6 +1854,254 @@ def _write_empty(planner: Any, steps: Sequence[Any], name: str, value: Any) -> b
         step.inputs[name] = value
         wrote = True
     return wrote
+
+
+def _portfolio_user_key(has_portfolio: bool, skill_name: str, key: str) -> bool:
+    """组合图上才投影权重、基准、超额输出和复权标记。"""
+
+    if not has_portfolio:
+        return False
+    if skill_name == _PORTFOLIO_SKILL and key in {"weights", "benchmark", "benchmark_output"}:
+        return True
+    return skill_name == _KLINE_SKILL and key == "adj"
+
+
+def _ask_benchmark(slot: Dict[str, Any], steps: Sequence[Any], query: str, job: str = "") -> bool:
+    """持有对比里，说了超额或点了基准却没收下代码时才追问。"""
+
+    if job != _HOLD_COMPARE_JOB:
+        return False
+    if slot.get("name") != "benchmark" or slot.get("filled"):
+        return False
+    if not any(step.skill_name == _PORTFOLIO_SKILL for step in steps):
+        return False
+    if mentions_excess(query):
+        return True
+    return _benchmark_cue(query) and _shares_include_index(steps)
+
+
+def _ask_weights(slot: Dict[str, Any], query: str, job: str = "") -> bool:
+    """说了权重或加权、却没有收到数字时追问，避免静默变成等权。"""
+
+    if job != _HOLD_COMPARE_JOB:
+        return False
+    if slot.get("name") != "weights" or slot.get("filled"):
+        return False
+    return _weight_cue(query)
+
+
+def _weight_cue(query: str) -> bool:
+    """问句是否明确要加权。"""
+
+    text = str(query or "")
+    if "权重" in text or "加权" in text:
+        return True
+    return "weights" in text.lower()
+
+
+def _benchmark_cue(query: str) -> bool:
+    """问句是否提到基准。槽名 ``benchmark_output`` 不算。"""
+
+    text = str(query or "")
+    if "基准" in text:
+        return True
+    scrubbed = text.lower().replace("benchmark_output", " ")
+    return re.search(r"\bbenchmark\b", scrubbed) is not None
+
+
+def _shares_include_index(steps: Sequence[Any]) -> bool:
+    """取数代码里是否已经有已知指数。"""
+
+    for step in steps:
+        if step.skill_name != _KLINE_SKILL:
+            continue
+        codes = _split_codes((step.inputs or {}).get("shares"))
+        if any(code in _INDEX_CODES for code in codes):
+            return True
+    return False
+
+
+def _parse_benchmark(query: str) -> str:
+    """相对、基准是、或以某代码为基准。沪深300收成 000300.SH。"""
+
+    match = _BENCHMARK_PHRASE.search(str(query or ""))
+    if match is None:
+        return ""
+    token = match.group(1) or match.group(2) or ""
+    return _as_share_code(token)
+
+
+def _parse_weights(query: str) -> List[float]:
+    """权重、加权或 weights 后面的数字。6:4、6比4、60%,40% 都收下。"""
+
+    match = _WEIGHT_PHRASE.search(str(query or ""))
+    if match is None:
+        return []
+    values: List[float] = []
+    for part in re.split(r"\s*[:：,，比]\s*", match.group(1)):
+        number = _as_float(str(part).strip().rstrip("%").rstrip("％"))
+        if number is None:
+            return []
+        values.append(number)
+    return values
+
+
+def _parse_adj(query: str) -> str:
+    """只收原子已经认得的复权标记。"""
+
+    match = _ADJ_PHRASE.search(str(query or ""))
+    if match is None:
+        return ""
+    return match.group(1).lower()
+
+
+def _as_share_code(value: Any) -> str:
+    """交易所代码，或沪深300别名。对不上则空字符串。"""
+
+    text = str(value or "").strip()
+    compact = re.sub(r"\s+", "", text).lower()
+    if compact in {"沪深300", "csi300"}:
+        return "000300.SH"
+    code = text.upper()
+    if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", code):
+        return code
+    return ""
+
+
+def _split_codes(value: Any) -> List[str]:
+    """逗号分隔的代码，按原顺序去重。"""
+
+    if isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        raw = str(value or "").replace("，", ",").split(",")
+    found: List[str] = []
+    for item in raw:
+        code = _as_share_code(item)
+        if code and code not in found:
+            found.append(code)
+    return found
+
+
+def _as_weight_list(value: Any) -> List[float]:
+    """已经是数字列表才收下。"""
+
+    if not isinstance(value, (list, tuple)) or isinstance(value, (str, bytes)):
+        return []
+    values: List[float] = []
+    for item in value:
+        number = _as_float(item)
+        if number is None:
+            return []
+        values.append(number)
+    return values
+
+
+def _mixed_equity_index(codes: Sequence[str]) -> bool:
+    """同一份代码里既有指数也有别的标的。"""
+
+    upper = [str(code).upper() for code in codes]
+    has_index = any(code in _INDEX_CODES for code in upper)
+    has_other = any(code not in _INDEX_CODES for code in upper)
+    return has_index and has_other
+
+
+def _pad_weights(shares: Sequence[str], benchmark: str, weights: Sequence[float]) -> List[float]:
+    """按并完之后的顺序，在基准下标补 0。长度对不上就保持原列表。"""
+
+    bench = benchmark.upper()
+    held = [code for code in shares if code != bench]
+    values = [float(item) for item in weights]
+    if len(values) != len(held) or len(values) == len(list(shares)):
+        return values
+    padded: List[float] = []
+    cursor = 0
+    for code in shares:
+        if code == bench:
+            padded.append(0.0)
+        else:
+            padded.append(values[cursor])
+            cursor += 1
+    return padded
+
+
+def _drop_named_steps(steps: List[Any], skill_name: str) -> None:
+    """去掉指定技能，并把后继依赖改到它原来的上游。"""
+
+    removed = {
+        step.step_id: list(step.depends_on or [])
+        for step in steps
+        if step.skill_name == skill_name
+    }
+    if not removed:
+        return
+    kept = [step for step in steps if step.step_id not in removed]
+    for step in kept:
+        wired: List[str] = []
+        for dep in list(step.depends_on or []):
+            parents = removed.get(dep)
+            incoming = parents if parents is not None else [dep]
+            for parent in incoming:
+                if parent not in wired:
+                    wired.append(parent)
+        step.depends_on = wired
+    steps[:] = kept
+
+
+def _finish_portfolio_graph(steps: List[Any], query: str) -> None:
+    """基准并进 shares，补占位权重。已写上的超额输出保持不动，缺省才看问句。"""
+
+    portfolios = [step for step in steps if step.skill_name == _PORTFOLIO_SKILL]
+    if not portfolios:
+        return
+    benchmark = ""
+    for step in portfolios:
+        benchmark = _as_share_code((step.inputs or {}).get("benchmark")) or benchmark
+    if benchmark:
+        for step in portfolios:
+            step.inputs["benchmark"] = benchmark
+    kline_codes: List[str] = []
+    for step in steps:
+        if step.skill_name != _KLINE_SKILL:
+            continue
+        codes = _split_codes((step.inputs or {}).get("shares"))
+        if benchmark and benchmark not in codes:
+            codes.append(benchmark)
+        if codes:
+            step.inputs["shares"] = ",".join(codes)
+        if not kline_codes:
+            kline_codes = list(codes)
+        asset = str((step.inputs or {}).get("asset_type") or "").strip().upper()
+        if asset in {"E", "IDX"} and _mixed_equity_index(codes):
+            step.inputs.pop("asset_type", None)
+    excess_only = False
+    for step in portfolios:
+        weights = _as_weight_list((step.inputs or {}).get("weights"))
+        if benchmark and weights and kline_codes:
+            weights = _pad_weights(kline_codes, benchmark, weights)
+            step.inputs["weights"] = weights
+        if weights:
+            step.inputs["mode"] = "weighted"
+        else:
+            step.inputs.pop("mode", None)
+        current = str((step.inputs or {}).get("benchmark_output") or "").strip()
+        if not benchmark:
+            step.inputs.pop("benchmark", None)
+            step.inputs.pop("benchmark_output", None)
+            current = ""
+        elif not current:
+            current = "excess_only" if mentions_excess(query) else "tag_along"
+            step.inputs["benchmark_output"] = current
+        if current == "excess_only":
+            excess_only = True
+    if not excess_only:
+        return
+    _drop_named_steps(steps, "qt.ai.hp.normalize")
+    for step in steps:
+        if step.skill_name != "qt.ai.hp.cum_return":
+            continue
+        if (step.inputs or {}).get("htypes") in (None, ""):
+            step.inputs["htypes"] = "excess_close"
 
 
 def _is_fallback(steps: Sequence[Any]) -> bool:

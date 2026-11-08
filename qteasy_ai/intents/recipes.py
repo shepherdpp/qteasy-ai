@@ -154,6 +154,8 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
         return []
     if job == "research.screen":
         return _compose_screen(planner, query, q_lower)
+    if job == "research.hold_compare":
+        return _hold_compare_steps(planner, query)
     if job == "strategy.meta":
         return _compose_strategy_meta(planner, query, q_lower)
     if job == "backtest.builtin":
@@ -371,6 +373,80 @@ def _extract_dtype_names(query: str) -> str:
         if name in lower:
             return name
     return ""
+
+
+def _hold_compare_steps(planner: "Planner", query: str) -> List["ToolStep"]:
+    """持有对比：一条组合。没说超额时对齐到 1，说了累计收益就改成简单累计。"""
+
+    from ..slot_graph import hold_share_codes, mentions_cumret, mentions_excess
+
+    market = dict(planner._market_inputs(query) or {})
+    codes = hold_share_codes(query)
+    if codes:
+        market["shares"] = ",".join(codes)
+    excess = mentions_excess(query)
+    cumret = mentions_cumret(query)
+    steps = [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.kline",
+            inputs=market,
+        ),
+        planner._make_step(
+            step_id="step_2",
+            skill_name="qt.ai.hp.portfolio",
+            inputs={},
+            depends_on=["step_1"],
+        ),
+    ]
+    if excess and not cumret:
+        steps.append(
+            planner._make_step(
+                step_id="step_3",
+                skill_name="qt.ai.hp.plot",
+                inputs={},
+                depends_on=["step_2"],
+            )
+        )
+        return steps
+    if cumret:
+        transform: Dict[str, Any] = {"method": "simple"}
+        if excess:
+            transform["htypes"] = "excess_close"
+        steps.append(
+            planner._make_step(
+                step_id="step_3",
+                skill_name="qt.ai.hp.cum_return",
+                inputs=transform,
+                depends_on=["step_2"],
+            )
+        )
+        steps.append(
+            planner._make_step(
+                step_id="step_4",
+                skill_name="qt.ai.hp.plot",
+                inputs={},
+                depends_on=["step_3"],
+            )
+        )
+        return steps
+    steps.append(
+        planner._make_step(
+            step_id="step_3",
+            skill_name="qt.ai.hp.normalize",
+            inputs={},
+            depends_on=["step_2"],
+        )
+    )
+    steps.append(
+        planner._make_step(
+            step_id="step_4",
+            skill_name="qt.ai.hp.plot",
+            inputs={},
+            depends_on=["step_3"],
+        )
+    )
+    return steps
 
 
 def _summary_steps(planner: "Planner", query: str) -> List["ToolStep"]:

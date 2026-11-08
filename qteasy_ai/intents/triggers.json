@@ -15,6 +15,8 @@
     {"job": "research.screen", "all": ["跌幅", "股票"]},
     {"job": "research.screen", "all": ["跌幅", "行业"]},
     {"job": "research.screen", "all": ["涨幅", "股票"]},
+    {"job": "research.hold_compare", "any": ["持有对比", "等权组合", "一条组合", "加权组合"]},
+    {"job": "research.hold_compare", "all": ["权重", "组合"]},
     {"job": "research.screen", "all": ["drawdown", "industry"]},
     {"job": "strategy.meta", "any": ["built-in", "built in", "builtin", "strategy_meta"]},
     {"job": "strategy.meta", "all": ["strategy", "parameter"]},
