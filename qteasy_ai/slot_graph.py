@@ -167,6 +167,51 @@ _WEIGHT_PHRASE = re.compile(
     re.IGNORECASE,
 )
 _HOLD_COMPARE_JOB = "research.hold_compare"
+_DIAGNOSIS_JOBS = {"data.summary", "data.export"}
+_DIAGNOSIS_KEYS = {
+    "qt.ai.data.kline": {"shares", "start", "end", "freq", "asset_type", "adj"},
+    "qt.ai.hp.describe": {"view", "n"},
+    "qt.ai.hp.volatility": {
+        "window",
+        "price_htype",
+        "method",
+        "annualize",
+        "periods_per_year",
+    },
+    "qt.ai.hp.returns": {"price_htype", "method", "periods", "dropna"},
+    "qt.ai.hp.plot": {"highlight", "max_shares_per_figure", "page", "layout"},
+}
+_DIAGNOSIS_MODEL_SKIP = {
+    "window",
+    "price_htype",
+    "method",
+    "annualize",
+    "periods_per_year",
+    "periods",
+    "dropna",
+    "view",
+    "n",
+    "highlight",
+    "max_shares_per_figure",
+    "page",
+    "layout",
+    "adj",
+}
+_DIAGNOSIS_DEFAULTS = {
+    "view": "shape",
+    "n": 5,
+    "window": 20,
+    "price_htype": "close",
+    "method": "simple",
+    "annualize": True,
+    "periods": 1,
+    "dropna": False,
+    "max_shares_per_figure": 5,
+    "page": 1,
+    "layout": "auto",
+}
+_RETURN_SKILL = "qt.ai.hp.returns"
+_VOL_SKILL = "qt.ai.hp.volatility"
 _ADJ_PHRASE = re.compile(
     r"(?:adj|复权)\s*[:=：]?\s*(none|back|forward|fw|b|f|n)\b",
     re.IGNORECASE,
@@ -776,7 +821,7 @@ def _fill_graph(
     rejected = _canonicalize_steps(planner, steps)
     _drop_ungrounded_bounds(planner, steps, query)
     extras: Dict[str, Any] = {}
-    projected = _project(planner, steps, rejected)
+    projected = _project(planner, steps, rejected, job)
     confirmed = _confirmed_values(session)
     for slot in projected:
         if slot["filled"] or slot["name"] not in confirmed:
@@ -788,15 +833,18 @@ def _fill_graph(
     empty = [slot for slot in projected if not slot["filled"]]
     window_names = _any_of_member_names(planner, steps)
     ask_model = [slot for slot in empty if slot["name"] not in window_names]
-    required_empty = [slot for slot in ask_model if slot["required"] or _must_ask(slot, steps)]
+    model_slots = ask_model
+    if job in _DIAGNOSIS_JOBS:
+        model_slots = [slot for slot in ask_model if slot["name"] not in _DIAGNOSIS_MODEL_SKIP]
+    required_empty = [slot for slot in model_slots if slot["required"] or _must_ask(slot, steps)]
     model: Dict[str, Any] = {}
     if required_empty and getattr(planner, "provider", None) is not None:
         parsed = _parse_model_slots(
-            planner.provider.chat(_fill_prompt(ask_model, query)),
-            [slot["name"] for slot in ask_model],
+            planner.provider.chat(_fill_prompt(model_slots, query)),
+            [slot["name"] for slot in model_slots],
         )
         model = parsed or {}
-    for slot in ask_model:
+    for slot in model_slots:
         if slot["name"] not in model:
             continue
         value = coerce_slot_value(slot, model[slot["name"]])
@@ -820,6 +868,9 @@ def _fill_graph(
             slot["value"] = value
     if _apply_lookback_default(planner, steps, query, projected):
         extras["slot_defaults"] = {"lookback_days": "library"}
+    if job in _DIAGNOSIS_JOBS:
+        _bake_describe_view(steps, projected)
+        _remember_diagnosis_defaults(session, projected)
     if job == _HOLD_COMPARE_JOB:
         _finish_portfolio_graph(steps, query)
     mismatch = align_steps(planner, steps)
@@ -831,6 +882,9 @@ def _fill_graph(
         projected, steps, ambiguous, errors, query, open_names, rejected, job
     )
     if not pending:
+        choice = _statistic_options(steps)
+        if choice:
+            extras["statistic_options"] = choice
         return steps, extras
     extras.pop("slot_defaults", None)
     extras["accepted_steps"] = _accepted_snapshot(steps)
@@ -1084,6 +1138,7 @@ def _project(
     planner: Any,
     steps: Sequence[Any],
     rejected: Optional[Set[str]] = None,
+    job: str = "",
 ) -> List[Dict[str, Any]]:
     """按图上的 inputs_schema 投影。同名键并成一格，已有值写回空位。"""
 
@@ -1091,18 +1146,26 @@ def _project(
     order: List[str] = []
     by_name: Dict[str, Dict[str, Any]] = {}
     has_portfolio = any(step.skill_name == _PORTFOLIO_SKILL for step in steps)
+    diagnosis = job in _DIAGNOSIS_JOBS
     for step in steps:
         if step.skill_name == "qt.ai.system.fallback":
             continue
         schema = _schema(planner, step.skill_name)
         grouped = _any_of_member_names(planner, [step])
+        allowed = _DIAGNOSIS_KEYS.get(step.skill_name, set()) if diagnosis else set()
         for key, spec in schema.items():
-            if key in _SKIP or key in _NEVER_PROJECT or not isinstance(spec, dict):
+            if not isinstance(spec, dict) or key in _SKIP:
+                continue
+            if diagnosis and step.skill_name == "qt.ai.hp.plot" and key == "shares":
+                continue
+            diagnosis_key = diagnosis and key in allowed
+            if not diagnosis_key and (key in _NEVER_PROJECT):
                 continue
             required = bool(spec.get("required"))
             portfolio_key = _portfolio_user_key(has_portfolio, step.skill_name, key)
             if (
-                not required
+                not diagnosis_key
+                and not required
                 and key not in _FILLABLE
                 and key not in grouped
                 and key not in refused
@@ -1201,6 +1264,7 @@ def _heuristic(
         adj = _parse_adj(query)
         if adj:
             found["adj"] = adj
+    found.update(_parse_diagnosis(query, wanted))
     return found, ambiguous
 
 
@@ -1946,10 +2010,189 @@ def _parse_weights(query: str) -> List[float]:
     return values
 
 
-def _parse_adj(query: str) -> str:
-    """只收原子已经认得的复权标记。"""
+def _parse_diagnosis(query: str, wanted: Set[str]) -> Dict[str, Any]:
+    """体检可选槽。只填问句里写明的项。"""
 
-    match = _ADJ_PHRASE.search(str(query or ""))
+    if not wanted:
+        return {}
+    text = str(query or "")
+    lower = text.lower()
+    found: Dict[str, Any] = {}
+    if "window" in wanted:
+        window = _parse_window(text)
+        if window is not None:
+            found["window"] = window
+    if "periods" in wanted:
+        periods = _parse_return_periods(text)
+        if periods is not None:
+            found["periods"] = periods
+    if "method" in wanted:
+        if "对数" in text or re.search(r"\blog\b", lower):
+            found["method"] = "log"
+        elif "简单收益" in text or re.search(r"\bsimple\b", lower):
+            found["method"] = "simple"
+    if "annualize" in wanted and "不年化" in text:
+        found["annualize"] = False
+    if "price_htype" in wanted:
+        column = _parse_price_column(text)
+        if column:
+            found["price_htype"] = column
+    view, rows = _parse_view(text)
+    if view and "view" in wanted:
+        found["view"] = view
+    if rows is not None and "n" in wanted:
+        found["n"] = rows
+    if "highlight" in wanted:
+        if "最高点" in text:
+            found["highlight"] = "max"
+        elif "最低点" in text:
+            found["highlight"] = "min"
+    if "page" in wanted:
+        page = _parse_page(text)
+        if page is not None:
+            found["page"] = page
+    if "layout" in wanted:
+        if "叠在一起" in text:
+            found["layout"] = "overlay"
+        elif "分开画" in text:
+            found["layout"] = "stack"
+    return found
+
+
+def _parse_window(text: str) -> Optional[int]:
+    """紧挨波动或窗口的天数。单独的「N 日」不算。"""
+
+    patterns = (
+        r"(\d{1,4})\s*(?:日|天)\s*(?:波动|窗口|volatility|window)",
+        r"(?:波动率?|volatility|窗口|window)\D{0,6}(\d{1,4})",
+        r"\bwindow\s*(\d{1,4})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _parse_return_periods(text: str) -> Optional[int]:
+    """紧挨收益的间隔。``5日收益`` 是 5。"""
+
+    match = re.search(r"(\d{1,4})\s*(?:日|天)\s*收益", text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _parse_price_column(text: str) -> str:
+    """开盘、最高、最低、收盘。最高点留给高亮，不当成价格列。"""
+
+    lower = text.lower()
+    if "开盘" in text or re.search(r"\bopen\b", lower):
+        return "open"
+    if "收盘" in text or re.search(r"\bclose\b", lower):
+        return "close"
+    if "最高价" in text or ("最高" in text and "最高点" not in text) or re.search(r"\bhigh\b", lower):
+        return "high"
+    if "最低价" in text or ("最低" in text and "最低点" not in text) or re.search(r"\blow\b", lower):
+        return "low"
+    return ""
+
+
+def _parse_view(text: str) -> Tuple[str, Optional[int]]:
+    """摘要视图。前 N 行是 head，后 N 行是 tail。"""
+
+    lower = text.lower()
+    if "有哪些列" in text or re.search(r"\bhtypes\b", lower):
+        return "htypes", None
+    if "有哪些标的" in text:
+        return "shares", None
+    head = re.search(r"前\s*(\d+)\s*行", text)
+    if head:
+        return "head", int(head.group(1))
+    if re.search(r"\bhead\b", lower):
+        return "head", None
+    tail = re.search(r"后\s*(\d+)\s*行", text)
+    if tail:
+        return "tail", int(tail.group(1))
+    if re.search(r"\btail\b", lower):
+        return "tail", None
+    return "", None
+
+
+def _parse_page(text: str) -> Optional[int]:
+    """第 N 页或 page N。"""
+
+    match = re.search(r"第\s*(\d+)\s*页", text)
+    if match is None:
+        match = re.search(r"\bpage\s*(\d+)\b", text, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _bake_describe_view(steps: Sequence[Any], projected: Sequence[Dict[str, Any]]) -> None:
+    """没指定视图时把 shape 写进摘要步。已经有值或已确认的不覆盖。"""
+
+    for step in steps:
+        if step.skill_name != "qt.ai.hp.describe":
+            continue
+        if (step.inputs or {}).get("view") not in (None, ""):
+            continue
+        step.inputs["view"] = "shape"
+    for slot in projected:
+        if slot.get("name") != "view" or slot.get("filled"):
+            continue
+        slot["filled"] = True
+        slot["value"] = "shape"
+
+
+def _remember_diagnosis_defaults(session: Any, projected: Sequence[Dict[str, Any]]) -> None:
+    """可选槽的库默认进侧栏，不写进步骤。已有槽不覆盖。"""
+
+    if session is None or getattr(session, "task", None) is None:
+        return
+    existing = set((session.task.slots or {}).keys())
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if name not in _DIAGNOSIS_DEFAULTS or name in existing:
+            continue
+        if slot.get("filled") and name != "view":
+            continue
+        if name == "view" and slot.get("filled") and slot.get("value") not in (None, "", "shape"):
+            continue
+        session.set_slot(name, _DIAGNOSIS_DEFAULTS[name], source="default", confirmed=False)
+
+
+def _statistic_options(steps: Sequence[Any]) -> Dict[str, Any]:
+    """统计步上的两选。没有这一步时为空。"""
+
+    current = ""
+    for step in steps:
+        if step.skill_name in {_VOL_SKILL, _RETURN_SKILL}:
+            current = step.skill_name
+            break
+    if not current:
+        return {}
+    return {
+        "current": current,
+        "options": [
+            {"id": _VOL_SKILL, "label": "Volatility"},
+            {"id": _RETURN_SKILL, "label": "Returns"},
+        ],
+    }
+
+
+def _parse_adj(query: str) -> str:
+    """只收原子已经认得的复权标记。前复权是 f，后复权是 b。"""
+
+    text = str(query or "")
+    if "前复权" in text:
+        return "f"
+    if "后复权" in text:
+        return "b"
+    if "不复权" in text:
+        return "n"
+    match = _ADJ_PHRASE.search(text)
     if match is None:
         return ""
     return match.group(1).lower()

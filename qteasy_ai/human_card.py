@@ -419,17 +419,15 @@ def project_human_cards(
             confirmable=confirmable,
         )
         text = "\n".join(brief)
-        cards.append(
-            make_card(
-                "plan_ready",
-                text,
-                {
-                    "plan_id": plan_id,
-                    "run_id": run_id,
-                    "confirmable": confirmable,
-                },
-            )
-        )
+        ready_payload: Dict[str, Any] = {
+            "plan_id": plan_id,
+            "run_id": run_id,
+            "confirmable": confirmable,
+        }
+        choice = assumptions.get("statistic_options") if isinstance(assumptions, dict) else None
+        if isinstance(choice, dict) and choice.get("options"):
+            ready_payload["statistic_options"] = choice
+        cards.append(make_card("plan_ready", text, ready_payload))
 
     if err:
         cards.append(make_card("error", _error_card_text(err), dict(err)))
@@ -1531,7 +1529,12 @@ def _slim_plan_ready_lines(
         "To execute, say so in Plan mode (run this plan / 执行上面的计划) or use Confirm."
     )
     lines.append("To discuss only, say just discuss / 本次只讨论 (Ask; no plan).")
-    del plan
+    assumptions = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
+    choice = assumptions.get("statistic_options") if isinstance(assumptions, dict) else None
+    if isinstance(choice, dict) and choice.get("options"):
+        current = str(choice.get("current") or "")
+        shown = "returns" if current.endswith("returns") else "volatility"
+        lines.append(f"Statistic: {shown}. Reply 收益 or 波动 to switch that step.")
     return lines
 
 

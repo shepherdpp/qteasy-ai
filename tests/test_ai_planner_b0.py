@@ -92,7 +92,7 @@ class TestAiPlannerB0(unittest.TestCase):
         print(" skills:", skill_names)
         self.assertEqual(
             skill_names,
-            ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
+            ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
         )
         self.assertEqual(plan.steps[0].inputs.get("shares"), "000300.SH")
 
@@ -106,7 +106,7 @@ class TestAiPlannerB0(unittest.TestCase):
         print(" skills:", skill_names)
         self.assertEqual(
             skill_names,
-            ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
+            ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
         )
         self.assertNotIn("qt.ai.env.overview_tables", skill_names)
 
@@ -127,7 +127,7 @@ class TestAiPlannerB0(unittest.TestCase):
         self.assertGreaterEqual(len(plan.steps), 2)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.env.overview_tables")
         self.assertIn("qt.ai.data.kline", skill_names)
-        self.assertEqual(plan.steps[-1].skill_name, "qt.ai.hp.describe")
+        self.assertEqual(plan.steps[-1].skill_name, "qt.ai.hp.volatility")
         kline = next(step for step in plan.steps if step.skill_name == "qt.ai.data.kline")
         self.assertEqual(plan.steps[-1].depends_on, [kline.step_id])
 

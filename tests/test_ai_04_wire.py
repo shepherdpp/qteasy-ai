@@ -148,12 +148,13 @@ class TestAi04Wire(unittest.TestCase):
         print(" summary skills:", [row["skill_name"] for row in accepted])
         print(" summary reason:", summary.steps[0].inputs.get("reason"))
         volatility = next(row for row in accepted if row["skill_name"] == "qt.ai.hp.volatility")
-        describe = next(row for row in accepted if row["skill_name"] == "qt.ai.hp.describe")
         print(" volatility inputs:", volatility["inputs"])
-        print(" describe depends:", describe["depends_on"])
+        print(" volatility depends:", volatility["depends_on"])
+        self.assertEqual([row["skill_name"] for row in accepted], ["qt.ai.data.kline", "qt.ai.hp.volatility"])
         self.assertNotEqual(summary.steps[0].inputs.get("reason"), "wire_product_mismatch")
         self.assertNotIn("as_panel", volatility["inputs"])
-        self.assertEqual(describe["depends_on"], ["step_1"])
+        self.assertEqual(volatility["depends_on"], ["step_1"])
+        self.assertFalse(any(row["skill_name"] == "qt.ai.hp.describe" for row in accepted))
 
         exported = planner.build_plan("export png 000300.SH", mode="plan")
         export_names = [row["skill_name"] for row in _accepted(exported)]

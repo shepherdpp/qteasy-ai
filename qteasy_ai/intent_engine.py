@@ -132,6 +132,9 @@ class IntentEngine:
 
         hits = self._trigger_hits(raw, q_lower)
         hits.discard("unsafe")
+        # 只消解体检这两条。其余双触发仍澄清：筛选加波动率的用例要求不再 tiebreak。
+        if {"data.summary", "data.export"} <= hits:
+            hits.discard("data.export")
         if len(hits) == 1:
             job = next(iter(hits))
             if job not in official and job not in {"route_to_ask"}:

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Any, Dict, List, TYPE_CHECKING
 
@@ -139,10 +140,8 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
         ]
     if job == "env.ready":
         return env_ready_steps(planner)
-    if job == "data.summary":
-        return _summary_steps(planner, query)
-    if job == "data.export":
-        return _export_steps(planner, query)
+    if job in {"data.summary", "data.export"}:
+        return _diagnosis_steps(planner, query, job)
     if job == "data.refill":
         steps = planner._infer_refill_steps(query=query, q_lower=q_lower, skip_query_guard=True)
         return steps if steps is not None else _not_supported(planner, query)
@@ -449,48 +448,108 @@ def _hold_compare_steps(planner: "Planner", query: str) -> List["ToolStep"]:
     return steps
 
 
-def _summary_steps(planner: "Planner", query: str) -> List["ToolStep"]:
-    """K 线摘要：取面板、滚动波动率、结构行数。"""
+_RETURN_SKILL = "qt.ai.hp.returns"
+_VOL_SKILL = "qt.ai.hp.volatility"
+_RETURN_CUE = re.compile(
+    r"收益率|简单收益|对数收益|daily\s+return|(?<!累计)收益|\breturns?\b",
+    re.IGNORECASE,
+)
+_SUMMARY_CUES = ("摘要", "summary", "交易天数", "trading day", "n_rows")
+_PLOT_LATIN = ("export", "png", "candle")
+_PLOT_CJK = ("导出", "绘图", "出图", "蜡烛")
+_SHARE_TOKEN = re.compile(r"沪深\s*300|csi\s*300|\d{6}\.(?:SH|SZ|BJ)", re.IGNORECASE)
 
-    market = planner._market_inputs(query)
-    return [
+
+def _diagnosis_steps(planner: "Planner", query: str, job: str) -> List["ToolStep"]:
+    """快速体检：取行情后按问句挂摘要、一个统计量和出图。
+
+    三片叶子都只依赖取数。``view`` 不写在这里，空着时由填槽补 ``shape``。
+
+    Parameters
+    ----------
+    planner : Planner
+        用来生成步骤和抽取行情窗口。
+    query : str
+        原始问句。跟进时可能已拼上最初那句。
+    job : str
+        ``data.summary`` 或 ``data.export``。只影响「只说了导出」时是否出图。
+
+    Returns
+    -------
+    list of ToolStep
+        保序子集：取数、摘要、统计、出图。
+    """
+
+    market = dict(planner._market_inputs(query) or {})
+    codes = _diagnosis_shares(query)
+    if codes:
+        market["shares"] = codes
+    text = str(query or "")
+    lower = text.lower()
+    wants_summary = any(item in lower or item in text for item in _SUMMARY_CUES) or _wants_view(text)
+    wants_returns = _RETURN_CUE.search(text) is not None
+    wants_vol = re.search(r"波动|volatility", text, flags=re.IGNORECASE) is not None
+    wants_plot = any(item in lower for item in _PLOT_LATIN) or any(item in text for item in _PLOT_CJK)
+    include_stat = wants_summary or wants_returns or wants_vol
+    include_plot = wants_plot or (job == "data.export" and not wants_summary and not include_stat)
+    forced = str(getattr(planner, "_diagnosis_statistic", "") or "")
+    if forced in {_RETURN_SKILL, _VOL_SKILL}:
+        stat_name = forced
+        include_stat = True
+    else:
+        stat_name = _RETURN_SKILL if wants_returns else _VOL_SKILL
+    steps = [
         planner._make_step(
             step_id="step_1",
             skill_name="qt.ai.data.kline",
             inputs=market,
-        ),
-        planner._make_step(
-            step_id="step_2",
-            skill_name="qt.ai.hp.volatility",
-            inputs={},
-            depends_on=["step_1"],
-        ),
-        planner._make_step(
-            step_id="step_3",
-            skill_name="qt.ai.hp.describe",
-            inputs={"view": "shape"},
-            depends_on=["step_1"],
-        ),
+        )
     ]
+    leaves: List[tuple] = []
+    if wants_summary:
+        leaves.append(("qt.ai.hp.describe", {}))
+    if include_stat:
+        leaves.append((stat_name, {}))
+    if include_plot:
+        leaves.append(("qt.ai.hp.plot", {}))
+    for offset, (skill_name, inputs) in enumerate(leaves, start=2):
+        steps.append(
+            planner._make_step(
+                step_id=f"step_{offset}",
+                skill_name=skill_name,
+                inputs=dict(inputs),
+                depends_on=["step_1"],
+            )
+        )
+    return steps
 
 
-def _export_steps(planner: "Planner", query: str) -> List["ToolStep"]:
-    """K 线导出：取面板后画一页静态图。不传 plot_type。"""
+def _wants_view(query: str) -> bool:
+    """问句是否在要一种面板视图，而不只是波动或出图。"""
 
-    market = planner._market_inputs(query)
-    return [
-        planner._make_step(
-            step_id="step_1",
-            skill_name="qt.ai.data.kline",
-            inputs=market,
-        ),
-        planner._make_step(
-            step_id="step_2",
-            skill_name="qt.ai.hp.plot",
-            inputs={},
-            depends_on=["step_1"],
-        ),
-    ]
+    text = str(query or "")
+    lower = text.lower()
+    if re.search(r"\b(?:head|tail|htypes)\b", lower):
+        return True
+    if any(item in text for item in ("有哪些列", "有哪些标的")):
+        return True
+    return re.search(r"[前后]\s*\d+\s*行", text) is not None
+
+
+def _diagnosis_shares(query: str) -> str:
+    """同一句里的交易所代码按出现顺序收齐。沪深 300 收成 000300.SH。"""
+
+    found: List[str] = []
+    for match in _SHARE_TOKEN.finditer(str(query or "")):
+        token = match.group(0)
+        compact = re.sub(r"\s+", "", token).lower()
+        if compact in {"沪深300", "csi300"}:
+            code = "000300.SH"
+        else:
+            code = token.upper()
+        if code not in found:
+            found.append(code)
+    return ",".join(found)
 
 
 def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolStep"]:

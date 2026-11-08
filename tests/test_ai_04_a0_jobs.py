@@ -31,8 +31,8 @@ from qteasy_ai.skills.hp_volatility import build_hp_volatility_skill
 
 _SUMMARY = [
     "qt.ai.data.kline",
-    "qt.ai.hp.volatility",
     "qt.ai.hp.describe",
+    "qt.ai.hp.volatility",
 ]
 _EXPORT = ["qt.ai.data.kline", "qt.ai.hp.plot"]
 _SCREEN = [
@@ -108,7 +108,7 @@ class TestAi04A0Recipes(unittest.TestCase):
         self.planner = Planner(build_default_registry(), env_facts={})
 
     def test_summary_job_is_kline_vol_describe(self) -> None:
-        """波动率金句仍进 data.summary，叶子是取数、滚动波动率和结构摘要。"""
+        """波动率金句仍进 data.summary，叶子是取数、结构摘要和波动。"""
 
         print("\n[TestAi04A0Recipes] summary chain")
         query = "kline summary of 000300.SH"
@@ -119,14 +119,14 @@ class TestAi04A0Recipes(unittest.TestCase):
         print(" skills:", names)
         print(" legacy:", _names(legacy))
         print(" depends:", [step.depends_on for step in plan.steps])
-        print(" describe inputs:", plan.steps[2].inputs)
+        print(" describe inputs:", plan.steps[1].inputs)
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
         self.assertEqual(names, _SUMMARY)
         self.assertEqual(_names(legacy), _SUMMARY)
         self.assertEqual(plan.steps[0].inputs.get("shares"), "000300.SH")
         self.assertEqual(plan.steps[1].depends_on, ["step_1"])
         self.assertEqual(plan.steps[2].depends_on, ["step_1"])
-        self.assertEqual(plan.steps[2].inputs.get("view"), "shape")
+        self.assertEqual(plan.steps[1].inputs.get("view"), "shape")
         self.assertNotIn("qt.ai.data.summary_kline", names)
         self.assertNotIn("plot_type", plan.steps[0].inputs)
 
@@ -202,7 +202,11 @@ class TestAi04A0Recipes(unittest.TestCase):
             payload = executor.execute(plan, confirm=True)
             text = Path(payload["run_file"]).read_text(encoding="utf-8")
             saved = json.loads(text)
-        describe = payload["execution"]["steps"][-1]["result"]
+        describe = next(
+            row["result"]
+            for row in payload["execution"]["steps"]
+            if row.get("skill_name") == "qt.ai.hp.describe"
+        )
         kline_payload = saved["execution"]["steps"][0]["result"]["payload"]
         print(" calls:", calls["n"])
         print(" describe metrics:", describe.get("metrics"))

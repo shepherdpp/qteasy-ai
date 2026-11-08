@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .identity import prefix_system_prompt
 from .intent_engine import IntentEngine, IntentDecision
-from .intents.recipes import _compose_screen, _export_steps, _summary_steps, compose_recipe, env_ready_steps
+from .intents.recipes import _compose_screen, _diagnosis_steps, compose_recipe, env_ready_steps
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
 from .runtime import SkillRuntime
@@ -247,12 +247,14 @@ class Planner:
         query = user_query.strip()
         q_lower = query.lower()
         self._market_overrides = self._confirmed_market_overrides(session)
+        self._diagnosis_statistic = ""
         self.intent_engine.provider = self.provider
         task = getattr(session, "task", None) if session is not None else None
         origin_text = str(getattr(task, "user_query", "") or "") if task is not None else ""
         if not origin_text:
             origin_text = query
         skip = bool(skip_classify and task is not None and str(getattr(task, "job", "") or ""))
+        self._diagnosis_statistic = self._statistic_followup(session, user_query, skip)
         forced = str(forced_job or "").strip()
         resumed = [row for row in (resume_steps or []) if isinstance(row, dict) and row.get("skill_name")]
         if resumed:
@@ -403,6 +405,7 @@ class Planner:
         if intent_flags:
             assumptions["intent_flags"] = intent_flags
         self._market_overrides = None
+        self._diagnosis_statistic = ""
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=user_query,
@@ -473,6 +476,36 @@ class Planner:
         """人读槽名。回填键用这份名单，不另写列名元组。"""
 
         return [str(item.get("name") or "") for item in self._job_slots(job) if item.get("name")]
+
+    def _statistic_followup(self, session: Any, user_query: str, skip: bool) -> str:
+        """跟进时把「收益 / 波动」收成统计步技能名。整句重问仍按问句里的词。"""
+
+        if not skip or session is None:
+            return ""
+        task = getattr(session, "task", None)
+        job = str(getattr(task, "job", "") or "") if task is not None else ""
+        if task is None or job not in {"data.summary", "data.export"}:
+            return ""
+        mapping = {
+            "收益": "qt.ai.hp.returns",
+            "returns": "qt.ai.hp.returns",
+            "return": "qt.ai.hp.returns",
+            "qt.ai.hp.returns": "qt.ai.hp.returns",
+            "波动": "qt.ai.hp.volatility",
+            "波动率": "qt.ai.hp.volatility",
+            "volatility": "qt.ai.hp.volatility",
+            "qt.ai.hp.volatility": "qt.ai.hp.volatility",
+        }
+        chosen = mapping.get(str(user_query or "").strip().lower(), "")
+        flags = dict(getattr(task, "flags", None) or {})
+        if chosen:
+            flags["statistic_skill"] = chosen
+            task.flags = flags
+            return chosen
+        saved = str(flags.get("statistic_skill") or "")
+        if saved in {"qt.ai.hp.returns", "qt.ai.hp.volatility"}:
+            return saved
+        return ""
 
     def _confirmed_market_overrides(self, session: Any) -> Dict[str, Any]:
         """已确认槽。有 ``slots`` 的 Job 只回填这些键；否则仍是标的、日期和频率。"""
@@ -1226,10 +1259,10 @@ class Planner:
             return self._factor_ic_steps(query)
 
         if self._is_summary_query(q_lower):
-            return _summary_steps(self, query)
+            return _diagnosis_steps(self, query, "data.summary")
 
         if any(word in q_lower for word in ["kline", "candle", "k线", "绘图", "导出", "png", "export"]):
-            return _export_steps(self, query)
+            return _diagnosis_steps(self, query, "data.export")
 
         return [
             self._make_step(
@@ -1896,8 +1929,8 @@ class Planner:
 
         当前支持抽取：
         - 标的：`000001.SH/000001.SZ/000001.BJ`，或 6 位数字（默认补 `.SH`）；
-        - 日期：`YYYYMMDD` / `YYYY-MM-DD` / `YYYY/MM/DD`；
-        - 频率：`1min/5min/15min/30min/60min/d/w/m`。
+        - 日期：`YYYYMMDD` / `YYYY-MM-DD` / `YYYY/MM/DD`，以及今年、近一年、某一年；
+        - 频率：`1min/5min/15min/30min/60min/d/w/m`，以及日线、周线、月线。
 
         返回值仅包含命中的字段，未命中的字段由技能内部使用默认值。
         ``overrides`` 里已确认的 shares/start/end/freq 盖过问句中先出现的旧值。
@@ -1927,6 +1960,21 @@ class Planner:
             if y1 <= y2:
                 result["start"] = f"{y1:04d}0101"
                 result["end"] = f"{y2:04d}1231"
+        if "start" not in result:
+            today = datetime.date.today()
+            if "今年" in query:
+                result["start"] = f"{today.year:04d}0101"
+                result["end"] = f"{today.year:04d}1231"
+            elif "近一年" in query:
+                start = today - datetime.timedelta(days=365)
+                result["start"] = start.strftime("%Y%m%d")
+                result["end"] = today.strftime("%Y%m%d")
+            else:
+                one_year = re.search(r"(20\d{2})\s*年", query)
+                if one_year:
+                    year = int(one_year.group(1))
+                    result["start"] = f"{year:04d}0101"
+                    result["end"] = f"{year:04d}1231"
         alias_map = {
             "沪深300": "000300.SH",
             "csi300": "000300.SH",
@@ -1954,6 +2002,12 @@ class Planner:
         freq_match = re.search(r"\b(1min|5min|15min|30min|60min|d|w|m)\b", query, flags=re.IGNORECASE)
         if freq_match:
             result["freq"] = freq_match.group(1)
+        elif "月线" in query:
+            result["freq"] = "m"
+        elif "周线" in query:
+            result["freq"] = "w"
+        elif "日线" in query:
+            result["freq"] = "d"
         for key in ("shares", "start", "end", "freq"):
             if not overrides:
                 break

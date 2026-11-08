@@ -22,8 +22,8 @@
 | `env.ready` | Plan | `qt.ai.env.check_tushare` → 四次 `qt.ai.datasource.table_info`（`stock_daily` / `index_daily` / `trade_calendar` / `stock_basic`） | 只读 guide | `getting_started.md`；`tutorials/1-get-started.md` | BJ-ENV |
 | `data.refill` | Plan | `qt.ai.data.refill_basic_equity_and_index` | 网络 + 写库；无日期 → clarify | `tutorials/2.0-get-data.md` | BJ-REFILL；缺槽 BJ-REFILL-C |
 | `data.read` | Plan | 按 channel：`qt.ai.data.history` / `qt.ai.data.reference` / `qt.ai.data.static` | 只读三入口 | `2.0-get-data.md`；DataType 三入口 | BJ-READ-H / R / S |
-| `data.summary` | Plan | `qt.ai.data.kline` → `qt.ai.hp.volatility` 与 `qt.ai.hp.describe` | 只读 | `2.4-historypanel-basics.md`；`2.5-historypanel-data-analysis.md` | BJ-SUM |
-| `data.export` | Plan | `qt.ai.data.kline` → `qt.ai.hp.plot` | 写图文件 | 同上 / getting started 看 K 线 | BJ-EXP |
+| `data.summary` | Plan | 与 `data.export` 同一张表：取行情后按问句省略摘要、波动或收益、出图。窗口、算法、复权、视图和图参数可填，缺了用技能默认 | 只读 | `2.4-historypanel-basics.md`；`2.5-historypanel-data-analysis.md` | BJ-SUM |
+| `data.export` | Plan | 同一张表。只说导出时留下取数和出图；摘要或统计词出现时再挂上对应步 | 写图文件 | 同上 / getting started 看 K 线 | BJ-EXP
 | `research.screen` | Plan | `universe_filter` → 可选 `price_predicate` → `project_universe` | 只读；**无**申万 DSL | 2.5 入门 | BJ-SCR（有谓语） |
 | `research.factor_ic` | Plan | `qt.ai.research.factor_ic_summary` | 只读；缺代码/日期/列名 → clarify | 2.5 / `qteasy.research` | BJ-IC |
 | `strategy.meta` | Plan | `strategy_meta.list` 或 `.get` | 只读 | `3-start-first-strategy.md`；`4-build-in-strategies.md` | BJ-META-L / G |
