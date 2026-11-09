@@ -133,8 +133,12 @@ class TestAiKbC2Data(unittest.TestCase):
         question = "怎么看本地已经有哪些数据"
         payload = engine.ask(question).to_dict()
         print(" sources:", payload.get("sources"))
+        print(" mentions table_rows:", "table_rows" in payload.get("answer", ""))
         self.assertEqual(payload["sources"][0], "datasource_local")
         self.assertNotIn("env_ready", payload["sources"])
+        self.assertIn("table_rows", payload["answer"])
+        self.assertIn("pk_min", payload["answer"])
+        self.assertIn("pk_max", payload["answer"])
 
     def test_three_entries_narrative_and_minimum_tables(self) -> None:
         """三入口叙事含历史与参考入口；起步卡点名五张表。"""

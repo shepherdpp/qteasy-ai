@@ -47,18 +47,25 @@ _ASK_SYSTEM_PROMPT = (
     "concept questions. Do not treat assistant.preview as the only next step "
     "for beginners; if the workbench entry card is not selected, say you do not "
     "know where the web buttons are. "
+    "If the user numbered several questions, answer each number before any boundary reminder. "
+    "State the same boundary, and the same list of what the cards do not say, at most once. "
+    "Do not tell the user the words 片段, 策展关联, or 实名指针. "
+    "If the user misstates the previous turn, correct it in one plain sentence. "
+    "Do not open with 先修正一点. "
     "If the snippets are insufficient, say so and suggest Plan mode."
 )
 
 _PLAIN_LANGUAGE_WRITER_CLAUSE = (
     "先人话：优先用日常说法解释；标识符后置或省略，"
     "除非用户明确要看符号或代码。"
+    "不要贴出代码块，也不要把 op.set_parameter 这类调用写进正文。"
 )
 _BACKTEST_OPTIMIZE_OOS_WRITER_CLAUSE = (
     "When a selected card is about backtest or optimize, you may add one "
     "annotated general principle: split history into an earlier window and a "
     "later window and run each once; do not compare by return alone. "
-    "Do not invent a cut date, split ratio, or claim a handbook comparison protocol."
+    "Do not invent a cut date, split ratio, or claim a handbook comparison protocol. "
+    "Say that principle at most once in the answer."
 )
 
 _PLAIN_LANGUAGE_SIGNALS = (
@@ -67,6 +74,8 @@ _PLAIN_LANGUAGE_SIGNALS = (
     "我妈能懂",
     "别讲术语",
     "别给代码",
+    "别跟我说代码",
+    "不要代码",
     "大白话",
     "说人话",
     "讲太复杂",
@@ -251,7 +260,9 @@ _CARD_SYSTEM_PROMPT = (
     "Use only ids from the menu, or a depth-1 neighbor of a menu card you also select. "
     "When one question covers multiple matters, pick one card per matter you can cover "
     "(still at most 3 ids). If a matter has no matching card, still select cards for the "
-    "matters that do; do not reply with {\"uncertain\": true} for the whole question."
+    "matters that do; do not reply with {\"uncertain\": true} for the whole question. "
+    "If workbench_entry is on the menu and the question asks which web button to click, "
+    "select workbench_entry."
 )
 
 _COMPOSE_CLAUSES = {
@@ -261,7 +272,8 @@ _COMPOSE_CLAUSES = {
 }
 _NO_CURATED_RELATION = (
     "No curated relation links these cards. "
-    "Answer only the selected cards and say that there is no curated relation (没有策展关联)."
+    "Answer each selected card on its own. "
+    "Do not tell the user the words 策展关联, 片段, or 实名指针."
 )
 def _topic_value(topic_ids: Sequence[str]) -> Any:
     """一个主题写成字符串，多个主题保持注册表顺序的列表。"""
@@ -915,6 +927,10 @@ class AskEngine:
             + "、".join(_PLAIN_LANGUAGE_SIGNALS)
         )
         lines.append(f"Question: {query}")
+        lines.append(
+            "If the question also asks which web button to click "
+            "(点哪个, 按钮, 网页), include onboarding as the second topic."
+        )
         if history:
             lines.append(
                 "Reply with JSON only. topics and prior may be used alone or together. "
@@ -984,6 +1000,10 @@ class AskEngine:
         lines.append(
             "When the question expands one numbered item and a details edge lists that item, "
             "include both the parent menu card and that target."
+        )
+        lines.append(
+            "If workbench_entry is on this menu and the question asks which web button to click, "
+            "select workbench_entry."
         )
         lines.append(
             'Reply with JSON only: {"ids": ["<id>"]} using 1 to 3 ids from this menu '

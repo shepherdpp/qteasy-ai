@@ -42,8 +42,14 @@ class TestAiAskR3WriterRegister(unittest.TestCase):
         self.assertIn("switch to plan only for actionable", lowered)
         self.assertIn("assistant.preview", lowered)
         self.assertIn("do not know where the web buttons", lowered)
+        self.assertIn("answer each number", lowered)
+        self.assertIn("at most once", lowered)
+        self.assertIn("片段", _ASK_SYSTEM_PROMPT)
+        self.assertIn("先修正一点", _ASK_SYSTEM_PROMPT)
         self.assertIn("先人话", _PLAIN_LANGUAGE_WRITER_CLAUSE)
         self.assertIn("标识符后置", _PLAIN_LANGUAGE_WRITER_CLAUSE)
+        self.assertIn("不要贴出代码块", _PLAIN_LANGUAGE_WRITER_CLAUSE)
+        self.assertIn("op.set_parameter", _PLAIN_LANGUAGE_WRITER_CLAUSE)
         self.assertNotIn("先人话", _ASK_SYSTEM_PROMPT)
 
     def test_topic_system_mentions_plain_language_field(self) -> None:
@@ -61,6 +67,8 @@ class TestAiAskR3WriterRegister(unittest.TestCase):
 
         print("\n[TestAiAskR3WriterRegister] heuristic 词表粘住")
         self.assertTrue(query_requests_plain_language("说人话讲讲回测是什么"))
+        self.assertTrue(query_requests_plain_language("别跟我说代码"))
+        self.assertTrue(query_requests_plain_language("不要代码，回测是什么"))
         self.assertFalse(query_requests_plain_language("如何用qteasy回测"))
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = QteasyAssistant(memory_store=MemoryStore(base_dir=temp_dir))

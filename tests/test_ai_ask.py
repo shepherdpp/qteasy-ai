@@ -687,6 +687,27 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertIn("A built-in backtest Job needs", writer_prompt)
             self.assertEqual(second.get("sources"), ["backtest_intro"])
 
+    def test_button_question_prompts_name_onboarding_and_workbench(self) -> None:
+        """问网页按钮时，定主题提示带 onboarding，点卡提示选 workbench_entry。"""
+
+        print("\n[TestAiAskEngine] 网页按钮走已有工作台卡")
+        fake = self._protocol(
+            ["optimize", "onboarding"],
+            ["optimize_intro", "workbench_entry"],
+            answer="在作曲区的模式徽章里选 Plan。",
+        )
+        payload = AskEngine(knowledge_base=self.kb, provider=fake).ask(
+            "优化在网页上点哪个按钮"
+        ).to_dict()
+        print(" topic hint:", "include onboarding as the second topic" in fake.prompts[0])
+        print(" card hint:", "select workbench_entry" in fake.prompts[1])
+        print(" sources:", payload.get("sources"))
+        self._assert_no_plan_execution(payload)
+        self.assertIn("include onboarding as the second topic", fake.prompts[0])
+        self.assertIn("点哪个", fake.prompts[0])
+        self.assertIn("select workbench_entry", fake.prompts[1])
+        self.assertEqual(payload.get("sources"), ["optimize_intro", "workbench_entry"])
+
     def test_bad_prior_or_uncertain_does_not_call_writer(self) -> None:
         """没有 topics 时，点名对不上或 uncertain 不调用作家。"""
 
@@ -1230,7 +1251,7 @@ class TestAiAskEngine(unittest.TestCase):
                 self.assertNotIn("plan_id", encoded)
 
     def test_selected_cards_without_edge_state_no_curated_relation(self) -> None:
-        """选中集内部没有边时只答这些卡，并说明没有策展关联。"""
+        """选中集内部没有边时各自作答，不对用户说策展关联。"""
 
         print("\n[TestAiAskEngine] 无策展边")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1242,18 +1263,20 @@ class TestAiAskEngine(unittest.TestCase):
             fake = self._protocol(
                 ["backtest"],
                 ["alpha", "zeta"],
-                answer="只说明这两张卡，没有策展关联。",
+                answer="这两张说明各自讲一件事。",
             )
             payload = AskEngine(knowledge_base=kb, provider=fake).ask("alpha 和 zeta 有什么关系").to_dict()
             print(" sources:", payload.get("sources"))
             print(" writer:", fake.prompts[2])
             self._assert_no_plan_execution(payload)
             self.assertEqual(payload["sources"], ["alpha", "zeta"])
-            self.assertIn("没有策展关联", fake.prompts[2])
+            self.assertIn("Answer each selected card on its own", fake.prompts[2])
+            self.assertIn("Do not tell the user the words 策展关联", fake.prompts[2])
+            self.assertNotIn("say that there is no curated relation", fake.prompts[2])
             self.assertNotIn(_CONTRAST_CLAUSE, fake.prompts[2])
             self.assertNotIn("NARR-ZETA", fake.prompts[1])
             self.assertIn("NARR-ZETA", fake.prompts[2])
-            self.assertEqual(payload["answer"], "只说明这两张卡，没有策展关联。")
+            self.assertEqual(payload["answer"], "这两张说明各自讲一件事。")
 
     def test_depth2_id_is_dropped_and_body_stays_out(self) -> None:
         """深度 2 的 id 丢掉，正文不进作家提示。"""

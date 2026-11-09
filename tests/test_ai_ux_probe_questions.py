@@ -178,6 +178,40 @@ class TestAiUxProbeQuestions(unittest.TestCase):
         self.assertIn(task.turns[0].text, fake.prompts[0])
         self.assertIn("周姐", fake.prompts[0])
 
+    def test_random_followup_keeps_full_prior_answer(self) -> None:
+        """追问提示带上超过 800 字的上一答全文，尾句不被截掉。"""
+
+        print("\n[TestAiUxProbeQuestions] 追问保留上一答全文")
+        bundle = load_bundle()
+        persona = bundle.personas["zhou_jie"]
+        task = bundle.tasks["ask_backtest_learn_v1"]
+        focus = TopicFocus(
+            primary_id="overview",
+            primary_scope="模块如何串联",
+            extra_id="optimize",
+            extra_scope="优化解释",
+        )
+        series = RandomSeries(focus=focus, theme="模块怎么串", goal="看懂流水线")
+        tail = "TAIL-MARKER-留痕靠自己抄日期。"
+        long_answer = ("流水线从数据到回测。" * 80) + tail
+        print(" prior answer chars:", len(long_answer))
+        follow = "留痕那段你还没说完？"
+        fake = FakeLLMProvider(replies=[follow])
+        text = random_user_utterance(
+            fake,
+            persona=persona,
+            task=task,
+            series=series,
+            turn_index=2,
+            turn_count=len(task.turns),
+            prior_turns=[{"query": "模块怎么串？", "answer": long_answer}],
+        )
+        print(" tail in prompt:", tail in fake.prompts[0])
+        self.assertEqual(text, follow)
+        self.assertGreater(len(long_answer), 800)
+        self.assertIn(tail, fake.prompts[0])
+        self.assertIn(long_answer, fake.prompts[0])
+
     def test_markdown_shows_random_theme(self) -> None:
         """随机风格的人读报告写出风格、本轮主题和覆盖主题。"""
 

@@ -30,6 +30,7 @@ from .questions import (
     QUESTION_STYLE_STANDARD,
     RandomSeries,
     assign_focuses,
+    format_prior_turns,
     load_topic_catalog,
     normalize_question_style,
     random_user_utterance,
@@ -80,10 +81,6 @@ def improvise_user_utterance(
         "Stay in character. Output ONLY the next user message in the user's language. "
         "No markdown fences. Do not ask for guaranteed profits or live order placement."
     )
-    history = []
-    for item in prior_turns:
-        history.append(f"USER: {item.get('query')}")
-        history.append(f"ASSISTANT: {str(item.get('answer') or '')[:800]}")
     user = (
         f"Persona name: {persona.display_name}\n"
         f"Role: {persona.role}\n"
@@ -92,7 +89,7 @@ def improvise_user_utterance(
         f"Taboos: {persona.taboos}\n"
         f"Task goal: {task.goal}\n"
         f"Hint for this turn: {turn.hint or 'Continue toward the goal.'}\n"
-        f"Prior turns:\n" + ("\n".join(history) if history else "(none)") + "\n"
+        f"Prior turns:\n" + format_prior_turns(prior_turns) + "\n"
         "Write the next user utterance now."
     )
     text = str(provider.chat(user, system_prompt=system) or "").strip()

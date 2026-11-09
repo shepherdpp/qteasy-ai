@@ -308,6 +308,27 @@ def _opening_prompts(
     return system, user
 
 
+def format_prior_turns(prior_turns: Sequence[Mapping[str, Any]]) -> str:
+    """把已发生的问答写成追问提示。上一答全文进入提示。
+
+    Parameters
+    ----------
+    prior_turns : sequence of mapping
+        每轮含 ``query`` 与 ``answer``。
+
+    Returns
+    -------
+    str
+        ``USER`` / ``ASSISTANT`` 行。没有历史时为 ``(none)``。
+    """
+
+    lines: List[str] = []
+    for item in prior_turns:
+        lines.append(f"USER: {item.get('query')}")
+        lines.append(f"ASSISTANT: {str(item.get('answer') or '')}")
+    return "\n".join(lines) if lines else "(none)"
+
+
 def _followup_prompts(
     persona: Persona,
     task: Task,
@@ -324,10 +345,6 @@ def _followup_prompts(
         "No markdown fences, no JSON. "
         "Do not ask for stock tips, guaranteed profits, or live order placement."
     )
-    history = []
-    for item in prior_turns:
-        history.append(f"USER: {item.get('query')}")
-        history.append(f"ASSISTANT: {str(item.get('answer') or '')[:800]}")
     last = turn_index >= turn_count - 1
     if last:
         step = (
@@ -347,7 +364,7 @@ def _followup_prompts(
         + f"Extra scope: {series.focus.extra_scope}\n"
         + f"Turn {turn_index + 1} of {turn_count}. {step}\n"
         + "Prior turns:\n"
-        + ("\n".join(history) if history else "(none)")
+        + format_prior_turns(prior_turns)
         + "\nWrite the next user utterance now."
     )
     return system, user
