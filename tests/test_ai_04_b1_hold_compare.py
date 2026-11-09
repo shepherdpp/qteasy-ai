@@ -26,6 +26,7 @@ from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
+from qteasy_ai.slot_graph import parse_card_answers
 from qteasy_ai.skills.data_kline import build_data_kline_skill
 from qteasy_ai.skills.hp_plot import build_hp_plot_skill
 from qteasy_ai.skills.hp_study import (
@@ -397,7 +398,8 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         self.assertNotIn(canned.steps[0].inputs.get("asset_type"), ("E", "IDX"))
         self.assertNotIn("supported_skill", blob)
         self.assertNotIn('"page"', blob)
-        self.assertNotIn('"mode"', blob)
+        self.assertEqual(canned.steps[1].inputs.get("mode"), "equal")
+        self.assertNotIn("weighted", blob)
         self.assertNotIn('"htypes"', blob)
         self.assertNotIn('"layout"', blob)
         self.assertNotIn('"rows"', blob)
@@ -561,6 +563,70 @@ class TestAi04B1HoldCompare(unittest.TestCase):
             ["qt.ai.data.kline", "qt.ai.hp.portfolio", "qt.ai.hp.normalize"],
         )
         self.assertEqual(open_plan.steps[1].inputs.get("benchmark_output"), "tag_along")
+
+    def test_commit_blocks_partial_symbols_and_weight_text(self) -> None:
+        """裸代码不能只留下第一只。1:1 和等权要先变成数字或 equal。"""
+
+        print("\n[TestAi04B1] 提交挡住部分代码和权重原文")
+        pair = self.planner.build_plan("600519 和 000858 做一条等权组合", mode="plan")
+        pair_codes = str(pair.steps[0].inputs.get("shares") or "")
+        print(" pair skills:", _skills(pair))
+        print(" pair shares:", pair_codes)
+        self.assertEqual(
+            _skills(pair),
+            ["qt.ai.data.kline", "qt.ai.hp.portfolio", "qt.ai.hp.normalize", "qt.ai.hp.plot"],
+        )
+        self.assertEqual(pair_codes, "600519.SH,000858.SZ")
+        self.assertNotEqual(pair_codes, "600519.SH")
+        self.assertEqual(pair.steps[1].inputs.get("mode"), "equal")
+        self.assertNotIn("weights", pair.steps[1].inputs)
+
+        weekly = self.planner.build_plan(
+            "000001 与 000300，并说明 000300 是指数，取数周线，做一条等权组合",
+            mode="plan",
+        )
+        accepted = (weekly.assumptions or {}).get("accepted_steps") or []
+        print(" weekly job:", weekly.planner_trace.get("intent_job"))
+        print(" weekly pending:", _pending_names(weekly))
+        print(" weekly accepted:", accepted)
+        self.assertEqual(weekly.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertIn("shares", _pending_names(weekly))
+        freq_steps = [
+            row for row in accepted if str((row.get("inputs") or {}).get("freq") or "") == "w"
+        ]
+        self.assertEqual([row.get("skill_name") for row in freq_steps], ["qt.ai.data.kline"])
+
+        pending = [{"name": "weights", "type": "array"}]
+        one, one_errors = parse_card_answers(pending, {"weights": "1:1"})
+        even, even_errors = parse_card_answers(pending, {"weights": "等权"})
+        six, six_errors = parse_card_answers(pending, {"weights": "6:4"})
+        print(" card 1:1:", one, one_errors)
+        print(" card equal:", even, even_errors)
+        print(" card 6:4:", six, six_errors)
+        self.assertEqual(one.get("weights"), [1.0, 1.0])
+        self.assertEqual(even.get("weights"), {"mode": "equal"})
+        self.assertEqual(six.get("weights"), [6.0, 4.0])
+        self.assertFalse(one_errors or even_errors or six_errors)
+
+        def _follow(label: str, value: object) -> None:
+            state = ConversationState.empty(f"b1-weight-{label}")
+            state.start_task(query="000001.SZ 和 000002.SZ 做一条加权组合", job="research.hold_compare")
+            state.set_slot("weights", value, source="user", confirmed=True)
+            plan = self.planner.build_plan(label, session=state, skip_classify=True)
+            blob = json.dumps([dict(step.inputs) for step in plan.steps], ensure_ascii=False)
+            print(" follow", label, "skills:", _skills(plan))
+            print(" follow inputs:", blob)
+            self.assertNotIn(label, blob)
+            if label == "等权":
+                self.assertEqual(plan.steps[1].inputs.get("mode"), "equal")
+                self.assertNotIn("weights", plan.steps[1].inputs)
+            else:
+                self.assertEqual(plan.steps[1].inputs.get("mode"), "weighted")
+                self.assertNotIsInstance(plan.steps[1].inputs.get("weights"), str)
+
+        _follow("1:1", one["weights"])
+        _follow("等权", even["weights"])
+        _follow("6:4", six["weights"])
 
     def test_executor_runs_planned_inputs(self) -> None:
         """假取数按计划跑到出图。补过占位的权重和并列基准都进原子。"""

@@ -191,7 +191,17 @@ class IntentEngine:
     def _llm_classify(self, query: str, allowed: Set[str]) -> IntentDecision:
         """Mode-D：只信 LLM 协议；唯一合法且确定才接受。"""
 
-        parsed = self._ask_llm_job(query, allowed)
+        from .slot_graph import split_prior_question
+
+        head, tail = split_prior_question(query)
+        if tail and not head:
+            return IntentDecision(
+                job="clarify",
+                source="rule",
+                rationale="prior_question",
+                llm_called=False,
+            )
+        parsed = self._ask_llm_job(head or query, allowed)
         if parsed.kind == "accept":
             return IntentDecision(
                 job=parsed.job,

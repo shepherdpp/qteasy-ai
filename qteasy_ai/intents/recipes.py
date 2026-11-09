@@ -93,6 +93,22 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
                 ),
             )
         ]
+    if job == "clarify" and decision.rationale == "prior_question":
+        hint = str((decision.flags or {}).get("prior_reply") or "没有可对照的运行。")
+        return [
+            planner._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.system.fallback",
+                inputs=planner._fallback_step_inputs(
+                    query=query,
+                    action="clarify_required",
+                    reason="prior_question",
+                    hint=hint,
+                    missing_info="none",
+                    next_step="Answer from the previous committed inputs.",
+                ),
+            )
+        ]
     if job == "clarify":
         if decision.rationale == "multi_high_risk_intent":
             return [
@@ -375,16 +391,23 @@ def _extract_dtype_names(query: str) -> str:
 
 
 def _hold_compare_steps(planner: "Planner", query: str) -> List["ToolStep"]:
-    """持有对比：一条组合。没说超额时对齐到 1，说了累计收益就改成简单累计。"""
+    """持有对比：一条组合。形状和代码、频率都来自同一次提交。"""
 
-    from ..slot_graph import hold_share_codes, mentions_cumret, mentions_excess
+    from ..slot_graph import commit_query
 
+    committed = commit_query(query)
     market = dict(planner._market_inputs(query) or {})
-    codes = hold_share_codes(query)
-    if codes:
-        market["shares"] = ",".join(codes)
-    excess = mentions_excess(query)
-    cumret = mentions_cumret(query)
+    unresolved = {str(item.get("name") or "") for item in committed["unresolved"]}
+    if "shares" in unresolved or committed["values"].get("shares"):
+        market.pop("shares", None)
+    if committed["values"].get("shares"):
+        market["shares"] = committed["values"]["shares"]
+    if "freq" in unresolved:
+        market.pop("freq", None)
+    elif committed["values"].get("freq"):
+        market["freq"] = committed["values"]["freq"]
+    excess = bool(committed["excess"])
+    cumret = bool(committed["cumret"])
     steps = [
         planner._make_step(
             step_id="step_1",

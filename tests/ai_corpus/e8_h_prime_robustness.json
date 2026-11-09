@@ -345,10 +345,10 @@
       "family": "r_multi",
       "query": "show kline summary 000300.SH from 20241231 to 20240101",
       "mode": "R",
-      "expected_job": "clarify",
+      "expected_job": "data.summary",
       "expected_source": "rule",
-      "expected_rationale_contains": "multi_trigger",
-      "notes": "summary+export 倒置日期句"
+      "expected_rationale_contains": "single_trigger",
+      "notes": "summary 与 kline 同时命中时收成 summary。倒置日期不在分类层拆开"
     },
     {
       "id": "DP-UNC",

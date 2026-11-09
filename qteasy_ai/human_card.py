@@ -17,7 +17,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
-from .slot_graph import clarification_skips_polish
+from .slot_graph import clarification_skips_polish, committed_fact_lines
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
 HUMAN_CARD_KINDS = frozenset(
@@ -1535,6 +1535,7 @@ def _slim_plan_ready_lines(
         current = str(choice.get("current") or "")
         shown = "returns" if current.endswith("returns") else "volatility"
         lines.append(f"Statistic: {shown}. Reply 收益 or 波动 to switch that step.")
+    lines.extend(committed_fact_lines(card_steps))
     return lines
 
 
@@ -1560,6 +1561,44 @@ def _result_next(plan: Dict[str, Any], status: str) -> Tuple[Optional[str], Opti
     return _OPEN_RESULT_NEXT, "open"
 
 
+def _static_portfolio_conflicts(sentence: str, facts: Sequence[str]) -> bool:
+    """已有提交投影时，丢掉和输入相反的「基准留在旁边」。"""
+
+    if not facts:
+        return False
+    text = str(sentence or "")
+    lowered = text.lower()
+    if "beside" in lowered or "基准留在旁边" in text:
+        return True
+    return False
+
+
+def _committed_count_differs(plan: Dict[str, Any], execution: Dict[str, Any]) -> bool:
+    """结果里的标的个数和已提交代码名单不一致。"""
+
+    codes: List[str] = []
+    for row in _plan_step_rows(plan):
+        if row.get("skill_name") != "qt.ai.data.kline":
+            continue
+        codes = [item.strip() for item in str((row.get("inputs") or {}).get("shares") or "").split(",") if item.strip()]
+    if not codes:
+        return False
+    for raw in execution.get("steps") or []:
+        if not isinstance(raw, dict):
+            continue
+        result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        count = metrics.get("n_shares")
+        if count is None:
+            continue
+        try:
+            if int(count) != len(codes):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _slim_result_lines(
     *,
     plan: Dict[str, Any],
@@ -1569,6 +1608,9 @@ def _slim_result_lines(
     """result 人读句：按 expected_artifact 说明产物，并保留已有标量。"""
 
     status = str(execution.get("status") or "").strip() or "unknown"
+    facts = committed_fact_lines(_plan_step_rows(plan))
+    if _committed_count_differs(plan, execution):
+        facts = [item.replace("beside the portfolio", "committed inputs") for item in facts]
     sentences = [
         sentence
         for sentence in (
@@ -1576,13 +1618,16 @@ def _slim_result_lines(
             for item in (execution.get("steps") or [])
             if isinstance(item, dict)
         )
-        if sentence
+        if sentence and not _static_portfolio_conflicts(sentence, facts)
     ]
     lines: List[str] = []
     if status == "success":
-        if sentences:
+        if sentences or facts:
             for sentence in sentences:
                 lines.append(f"**Run succeeded.** {sentence}")
+                lines.append("")
+            lines.extend(facts)
+            if facts:
                 lines.append("")
         else:
             lines.extend(["**Run succeeded.**", "", "No rows or metrics in the result.", ""])

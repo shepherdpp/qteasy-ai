@@ -585,6 +585,17 @@ def parse_card_answers(
         if not illegal and name in model and raw_text in option_ids and str(model[name]).strip() != raw_text:
             errors[name] = f"{raw_text!r} was changed to {model[name]!r}. The selected option was not kept."
             continue
+        if name == "weights":
+            parsed = commit_weight_text(raw_text)
+            if parsed["status"] == "value" and parsed["values"].get("mode") == "equal":
+                accepted[name] = {"mode": "equal"}
+                continue
+            if parsed["status"] == "value":
+                accepted[name] = list(parsed["values"].get("weights") or [])
+                continue
+            if parsed["status"] == "unresolved":
+                errors[name] = str(parsed.get("reason") or f"{raw_text!r} cannot be accepted for this field.")
+                continue
         if not illegal and name in model:
             value = coerce_slot_value(spec, model[name])
             if value is None:
@@ -871,7 +882,10 @@ def _fill_graph(
     if job in _DIAGNOSIS_JOBS:
         _bake_describe_view(steps, projected)
         _remember_diagnosis_defaults(session, projected)
+    force_names: Set[str] = set()
     if job == _HOLD_COMPARE_JOB:
+        force_names = _enforce_hold_commit(steps, query, set(confirmed))
+        _sync_projected(planner, steps, projected)
         _finish_portfolio_graph(steps, query)
     mismatch = align_steps(planner, steps)
     if mismatch:
@@ -879,7 +893,7 @@ def _fill_graph(
     errors = _take_slot_errors(session)
     open_names = _open_any_of_names(planner, steps, projected)
     pending = _pending_after_fill(
-        projected, steps, ambiguous, errors, query, open_names, rejected, job
+        projected, steps, ambiguous, errors, query, open_names, rejected, job, force_names
     )
     if not pending:
         choice = _statistic_options(steps)
@@ -1064,11 +1078,13 @@ def _pending_after_fill(
     open_names: Optional[Set[str]] = None,
     rejected: Optional[Set[str]] = None,
     job: str = "",
+    force_names: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """必填仍空、窗口组全空、取值被拒、方向不明或回看不是整数时出题。"""
 
     opened = open_names or set()
     refused = rejected or set()
+    forced = force_names or set()
     rows: List[Dict[str, Any]] = []
     seen = set()
     for slot in projected:
@@ -1078,6 +1094,7 @@ def _pending_after_fill(
             slot["required"]
             or slot["name"] in opened
             or slot["name"] in refused
+            or slot["name"] in forced
             or _must_ask(slot, steps)
             or slot["name"] == "lookback_days" and _bad_lookback(query)
             or _ask_benchmark(slot, steps, query, job)
@@ -1957,7 +1974,7 @@ def _ask_weights(slot: Dict[str, Any], query: str, job: str = "") -> bool:
 def _weight_cue(query: str) -> bool:
     """问句是否明确要加权。"""
 
-    text = str(query or "")
+    text = _weight_text(query)
     if "权重" in text or "加权" in text:
         return True
     return "weights" in text.lower()
@@ -1993,6 +2010,423 @@ def _parse_benchmark(query: str) -> str:
         return ""
     token = match.group(1) or match.group(2) or ""
     return _as_share_code(token)
+
+
+_UNIQUE_INDEX = {
+    "000016": "000016.SH",
+    "000300": "000300.SH",
+    "000905": "000905.SH",
+    "000852": "000852.SH",
+    "399001": "399001.SZ",
+    "399006": "399006.SZ",
+    "399300": "399300.SZ",
+    "399905": "399905.SZ",
+}
+_AMBIGUOUS_BARE = {"000001"}
+_EQUAL_PHRASES = ("等权", "一样重要", "一样重", "equal weight", "equally weighted")
+_FREQ_WORDS = (
+    ("周线", "w"),
+    ("周频", "w"),
+    ("按周", "w"),
+    ("日线", "d"),
+    ("日频", "d"),
+    ("月线", "m"),
+    ("月频", "m"),
+)
+_HOLD_MENTIONS = (
+    "放一起",
+    "放在一起",
+    "一条线",
+    "等权",
+    "持有对比",
+    "做一条组合",
+    "一条组合",
+    "一样重要",
+)
+_CHART_MENTIONS = ("出图", "一条线", "看图", "画一张", "图表")
+_PRIOR_QUESTION = re.compile(r"(是一回事吗|跟上次|跟你这次)")
+
+
+def _empty_commit() -> Dict[str, Any]:
+    """一次提交的空结果。"""
+
+    return {
+        "values": {},
+        "unresolved": [],
+        "mentioned": [],
+        "excess": False,
+        "cumret": False,
+    }
+
+
+def _symbol_tokens(text: str) -> List[Tuple[int, str, str]]:
+    """按出现顺序抽出带后缀代码、沪深300 和裸六位。"""
+
+    hits: List[Tuple[int, str, str]] = []
+    for match in _EXCHANGE_CODE.finditer(text):
+        hits.append((match.start(), "suffixed", match.group(0).upper()))
+    lowered = text.lower()
+    for alias, code in (("沪深300", "000300.SH"), ("csi 300", "000300.SH"), ("csi300", "000300.SH")):
+        start = 0
+        needle = alias.lower()
+        while True:
+            pos = lowered.find(needle, start)
+            if pos < 0:
+                break
+            hits.append((pos, "alias", code))
+            start = pos + len(needle)
+    covered = [(pos, pos + 9) for pos, kind, _code in hits if kind == "suffixed"]
+    for match in re.finditer(r"(?<!\d)(\d{6})(?!\d)", text):
+        start = match.start()
+        if any(left <= start < right for left, right in covered):
+            continue
+        hits.append((start, "bare", match.group(1)))
+    hits.sort(key=lambda item: item[0])
+    return hits
+
+
+def _resolve_bare(digits: str, text: str, pos: int) -> Tuple[str, str]:
+    """裸六位收成唯一代码。两义或没有交易所时返回空代码和原因。"""
+
+    window = text[pos : pos + 18]
+    if digits in _AMBIGUOUS_BARE:
+        if "股票" in window or "个股" in window:
+            return digits + ".SZ", ""
+        if "指数" in window and "不是指数" not in window:
+            return digits + ".SH", ""
+        return "", f"{digits} matches both an index and a stock."
+    if digits in _UNIQUE_INDEX:
+        return _UNIQUE_INDEX[digits], ""
+    if digits.startswith("6"):
+        return digits + ".SH", ""
+    if digits.startswith(("0", "3")):
+        return digits + ".SZ", ""
+    if digits.startswith(("4", "8")):
+        return digits + ".BJ", ""
+    return "", f"{digits} has no exchange suffix."
+
+
+def commit_shares(query: str) -> Dict[str, Any]:
+    """代码一次提交。部分命中不算完成，公司名不猜代码。
+
+    Returns
+    -------
+    dict
+        ``status`` 为 ``absent`` / ``value`` / ``unresolved``。
+        ``value`` 是逗号分隔的代码。``reason`` 是未完成原因。
+    """
+
+    text = str(query or "")
+    tokens = _symbol_tokens(text)
+    if not tokens:
+        return {"status": "absent", "value": "", "reason": ""}
+    found: List[str] = []
+    for pos, kind, token in tokens:
+        if kind == "bare":
+            code, reason = _resolve_bare(token, text, pos)
+        else:
+            code, reason = token, ""
+        if reason or not code:
+            return {
+                "status": "unresolved",
+                "value": "",
+                "reason": reason or "A named symbol was not resolved.",
+            }
+        if code not in found:
+            found.append(code)
+    return {"status": "value", "value": ",".join(found), "reason": ""}
+
+
+def _freq_mentioned(text: str) -> bool:
+    """问句是否点了频率。"""
+
+    if any(word in text for word, _code in _FREQ_WORDS):
+        return True
+    return "频率" in text or bool(re.search(r"\bfreq\b", text, flags=re.IGNORECASE))
+
+
+def commit_freq(query: str) -> Dict[str, Any]:
+    """频率一次提交。点了名却收不成时不靠缺省日线通过。
+
+    Returns
+    -------
+    dict
+        ``status`` / ``value`` / ``reason``。
+    """
+
+    text = str(query or "")
+    for word, code in _FREQ_WORDS:
+        if word in text:
+            return {"status": "value", "value": code, "reason": ""}
+    match = re.search(
+        r"\bfreq\s*[:=：]\s*(1min|5min|15min|30min|60min|d|w|m)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return {"status": "value", "value": match.group(1).lower(), "reason": ""}
+    if _freq_mentioned(text):
+        return {"status": "unresolved", "value": "", "reason": "Frequency was mentioned but not recognized."}
+    return {"status": "absent", "value": "", "reason": ""}
+
+
+def _ratio_values(text: str) -> List[float]:
+    """冒号、比号或百分数列表。没有完整比例则空列表。"""
+
+    match = re.search(
+        r"(\d+(?:\.\d+)?[%％]?(?:\s*[:：比,/，]\s*\d+(?:\.\d+)?[%％]?)+)",
+        str(text or ""),
+    )
+    if match is None:
+        return []
+    values: List[float] = []
+    for part in re.split(r"\s*[:：比,/，]\s*", match.group(1)):
+        number = _as_float(str(part).strip().rstrip("%").rstrip("％"))
+        if number is None:
+            return []
+        values.append(float(number))
+    return values
+
+
+def _weight_text(text: str) -> str:
+    """去掉「不参与权重」，避免把否定句当成要加权。"""
+
+    return str(text or "").replace("不参与权重", " ")
+
+
+def commit_weight_text(text: str) -> Dict[str, Any]:
+    """权重说法一次提交。数字收成列表，等权不带 weights。
+
+    Parameters
+    ----------
+    text : str
+        原句或澄清卡上的回答。
+
+    Returns
+    -------
+    dict
+        ``status`` 为 ``absent`` / ``value`` / ``unresolved``。
+        ``values`` 含 ``mode``，加权时还有 ``weights``。
+    """
+
+    raw = _weight_text(text)
+    ratio = _ratio_values(raw)
+    if ratio:
+        return {"status": "value", "values": {"mode": "weighted", "weights": ratio}, "reason": ""}
+    folded = raw.lower()
+    if any(phrase in raw or phrase in folded for phrase in _EQUAL_PHRASES):
+        return {"status": "value", "values": {"mode": "equal"}, "reason": ""}
+    mentioned = (
+        "权重" in raw
+        or "加权" in raw
+        or "轻重" in raw
+        or "weights" in folded
+    )
+    if mentioned:
+        return {
+            "status": "unresolved",
+            "values": {},
+            "reason": "Weight language was not a number list or equal weight.",
+        }
+    return {"status": "absent", "values": {}, "reason": ""}
+
+
+def commit_query(query: str) -> Dict[str, Any]:
+    """从一句问话提交代码、频率、权重和基准。未完成的键不写入 values。
+
+    Returns
+    -------
+    dict
+        ``values`` / ``unresolved`` / ``mentioned`` / ``excess`` / ``cumret``。
+    """
+
+    text = str(query or "")
+    out = _empty_commit()
+    out["excess"] = mentions_excess(text)
+    out["cumret"] = mentions_cumret(text)
+    shares = commit_shares(text)
+    if shares["status"] == "value":
+        out["values"]["shares"] = shares["value"]
+        out["mentioned"].append("shares")
+    elif shares["status"] == "unresolved":
+        out["unresolved"].append({"name": "shares", "reason": shares["reason"]})
+        out["mentioned"].append("shares")
+    freq = commit_freq(text)
+    if freq["status"] == "value":
+        out["values"]["freq"] = freq["value"]
+        out["mentioned"].append("freq")
+    elif freq["status"] == "unresolved":
+        out["unresolved"].append({"name": "freq", "reason": freq["reason"]})
+        out["mentioned"].append("freq")
+    weights = commit_weight_text(text)
+    if weights["status"] == "value":
+        out["values"].update(weights["values"])
+        out["mentioned"].append("weights")
+    elif weights["status"] == "unresolved":
+        out["unresolved"].append({"name": "weights", "reason": weights["reason"]})
+        out["mentioned"].append("weights")
+    benchmark = _parse_benchmark(text)
+    if benchmark:
+        out["values"]["benchmark"] = benchmark
+        out["mentioned"].append("benchmark")
+    elif _benchmark_cue(text):
+        out["unresolved"].append({"name": "benchmark", "reason": "Benchmark was mentioned without a symbol."})
+        out["mentioned"].append("benchmark")
+    return out
+
+
+def normalize_portfolio_weight(inputs: Dict[str, Any]) -> str:
+    """把组合步上的权重收成合法调用。返回未完成原因，成功则空串。
+
+    Parameters
+    ----------
+    inputs : dict
+        组合步的 inputs。就地改写。
+
+    Returns
+    -------
+    str
+        未完成原因。已经合法时为空串。
+    """
+
+    raw = inputs.get("weights")
+    if isinstance(raw, dict) and str(raw.get("mode") or "") == "equal":
+        inputs.pop("weights", None)
+        inputs["mode"] = "equal"
+        return ""
+    if isinstance(raw, str):
+        parsed = commit_weight_text(raw)
+        if parsed["status"] != "value":
+            inputs.pop("weights", None)
+            return str(parsed.get("reason") or "weights")
+        if parsed["values"].get("mode") == "equal":
+            inputs.pop("weights", None)
+            inputs["mode"] = "equal"
+            return ""
+        raw = parsed["values"].get("weights")
+        inputs["weights"] = raw
+    weights = _as_weight_list(inputs.get("weights"))
+    if weights:
+        inputs["weights"] = weights
+        inputs["mode"] = "weighted"
+        return ""
+    if str(inputs.get("mode") or "") == "equal":
+        inputs.pop("weights", None)
+        return ""
+    if raw not in (None, "", []):
+        inputs.pop("weights", None)
+        return "Weight value is not a number list."
+    return ""
+
+
+def wants_chart(query: str) -> bool:
+    """问句是否要点一张图或一条线。"""
+
+    text = str(query or "")
+    return any(phrase in text for phrase in _CHART_MENTIONS)
+
+
+def looks_like_hold_compare(query: str) -> bool:
+    """这句在分类不确定时仍像持有对比。"""
+
+    text = str(query or "")
+    if any(phrase in text for phrase in _HOLD_MENTIONS):
+        return True
+    return "组合" in text and len(re.findall(r"(?<!\d)\d{6}(?!\d)", text)) >= 2
+
+
+def split_prior_question(query: str) -> Tuple[str, str]:
+    """拆开指向上一轮的反问。返回任务句和反问，反问不参与分类。"""
+
+    text = str(query or "").strip()
+    match = _PRIOR_QUESTION.search(text)
+    if match is None:
+        return text, ""
+    head = text[: match.start()].strip(" ，,。;；")
+    tail = text[match.start() :].strip()
+    return head, tail
+
+
+def prior_turn_reply(meta: str, slots: Optional[Dict[str, Any]]) -> str:
+    """用上一轮已提交的值回答反问。没有提交则说明没有可对照的运行。"""
+
+    if not str(meta or "").strip():
+        return ""
+    values = dict(slots or {})
+    if not values:
+        return "没有可对照的运行。"
+    shares = values.get("shares", "")
+    freq = values.get("freq") or "d"
+    mode = values.get("mode") or "equal"
+    return f"上一轮提交的是 shares={shares}, freq={freq}, mode={mode}。"
+
+
+def commit_open_graph(steps: Sequence[Any], query: str) -> str:
+    """开放图走同一次组合提交。要图却没有绘图步时返回原因。
+
+    Parameters
+    ----------
+    steps : sequence
+        已通过接线检查的步骤。
+    query : str
+        用户原句。
+
+    Returns
+    -------
+    str
+        空串表示可以确认。否则是未完成原因。
+    """
+
+    for step in steps:
+        if getattr(step, "skill_name", "") != _PORTFOLIO_SKILL:
+            continue
+        reason = normalize_portfolio_weight(step.inputs)
+        if reason:
+            return reason
+    if wants_chart(query) and not any(getattr(step, "skill_name", "") == "qt.ai.hp.plot" for step in steps):
+        return "A chart was requested but the plan has no plot step."
+    return ""
+
+
+def committed_fact_lines(steps: Sequence[Any]) -> List[str]:
+    """从已写入的 inputs 投影代码、频率、复权、权重和基准角色。"""
+
+    lines: List[str] = []
+    for step in steps:
+        skill = str(getattr(step, "skill_name", "") or "")
+        if isinstance(step, dict):
+            skill = str(step.get("skill_name") or "")
+            inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+        else:
+            inputs = getattr(step, "inputs", None) or {}
+        if not isinstance(inputs, dict):
+            continue
+        if skill == _KLINE_SKILL:
+            shares = str(inputs.get("shares") or "").strip()
+            if shares:
+                freq = str(inputs.get("freq") or "d")
+                adj = str(inputs.get("adj") or "").strip()
+                line = f"Fetched {shares} at freq={freq}."
+                if adj:
+                    line = f"Fetched {shares} at freq={freq}, adj={adj}."
+                lines.append(line)
+        if skill == _PORTFOLIO_SKILL:
+            mode = str(inputs.get("mode") or "equal")
+            weights = inputs.get("weights")
+            benchmark = str(inputs.get("benchmark") or "").strip()
+            output = str(inputs.get("benchmark_output") or "").strip()
+            if mode == "weighted" and isinstance(weights, (list, tuple)):
+                bits = f"Portfolio mode=weighted weights={list(weights)}"
+            else:
+                bits = "Portfolio mode=equal"
+            if benchmark and output == "excess_only":
+                bits += f", benchmark={benchmark} as excess"
+            elif benchmark:
+                bits += f", benchmark={benchmark} beside the portfolio"
+            else:
+                bits += ", no benchmark"
+            lines.append(bits + ".")
+    return lines
 
 
 def _parse_weights(query: str) -> List[float]:
@@ -2291,6 +2725,93 @@ def _drop_named_steps(steps: List[Any], skill_name: str) -> None:
     steps[:] = kept
 
 
+def _set_on_skill(steps: Sequence[Any], skill_name: str, name: str, value: Any) -> None:
+    """把值写进指定技能的输入。已有步骤都覆盖。"""
+
+    for step in steps:
+        if step.skill_name != skill_name:
+            continue
+        step.inputs[name] = value
+
+
+def _clear_on_skill(steps: Sequence[Any], skill_name: str, name: str) -> None:
+    """从指定技能的输入里去掉一个键。"""
+
+    for step in steps:
+        if step.skill_name != skill_name:
+            continue
+        step.inputs.pop(name, None)
+
+
+def _sync_projected(planner: Any, steps: Sequence[Any], projected: Sequence[Dict[str, Any]]) -> None:
+    """按步骤上的现值重算投影槽是否已填。"""
+
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        found = None
+        for step in steps:
+            if name == "shares" and step.skill_name == "qt.ai.hp.plot":
+                continue
+            schema = _schema(planner, step.skill_name)
+            if name not in schema:
+                continue
+            current = (step.inputs or {}).get(name)
+            if current not in (None, "", []):
+                found = current
+                break
+        if found is None:
+            slot["filled"] = False
+            slot["value"] = None
+        else:
+            slot["filled"] = True
+            slot["value"] = found
+
+
+def _enforce_hold_commit(steps: List[Any], query: str, confirmed: Set[str]) -> Set[str]:
+    """持有对比以一次提交覆盖启发式的部分值。返回仍未完成的槽名。
+
+    Parameters
+    ----------
+    steps : list
+        当前步骤。
+    query : str
+        本轮可见问句。
+    confirmed : set of str
+        用户已经确认的槽。这些键不覆盖。
+
+    Returns
+    -------
+    set of str
+        提到了但没有提交成功的槽名。
+    """
+
+    committed = commit_query(query)
+    unresolved = {str(item.get("name") or "") for item in committed["unresolved"]}
+    values = committed["values"]
+    if "shares" not in confirmed:
+        if "shares" in unresolved:
+            _clear_on_skill(steps, _KLINE_SKILL, "shares")
+        elif values.get("shares"):
+            _set_on_skill(steps, _KLINE_SKILL, "shares", values["shares"])
+    if "freq" not in confirmed:
+        if "freq" in unresolved:
+            _clear_on_skill(steps, _KLINE_SKILL, "freq")
+        elif values.get("freq"):
+            _set_on_skill(steps, _KLINE_SKILL, "freq", values["freq"])
+    if "benchmark" not in confirmed and values.get("benchmark"):
+        _set_on_skill(steps, _PORTFOLIO_SKILL, "benchmark", values["benchmark"])
+    if "weights" not in confirmed:
+        if "weights" in unresolved:
+            _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+        elif values.get("mode") == "equal":
+            _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+            _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
+        elif values.get("weights"):
+            _set_on_skill(steps, _PORTFOLIO_SKILL, "weights", list(values["weights"]))
+            _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "weighted")
+    return {name for name in unresolved if name not in confirmed}
+
+
 def _finish_portfolio_graph(steps: List[Any], query: str) -> None:
     """基准并进 shares，补占位权重。已写上的超额输出保持不动，缺省才看问句。"""
 
@@ -2319,13 +2840,14 @@ def _finish_portfolio_graph(steps: List[Any], query: str) -> None:
             step.inputs.pop("asset_type", None)
     excess_only = False
     for step in portfolios:
+        normalize_portfolio_weight(step.inputs)
         weights = _as_weight_list((step.inputs or {}).get("weights"))
         if benchmark and weights and kline_codes:
             weights = _pad_weights(kline_codes, benchmark, weights)
             step.inputs["weights"] = weights
         if weights:
             step.inputs["mode"] = "weighted"
-        else:
+        elif str((step.inputs or {}).get("mode") or "") != "equal":
             step.inputs.pop("mode", None)
         current = str((step.inputs or {}).get("benchmark_output") or "").strip()
         if not benchmark:

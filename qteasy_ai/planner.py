@@ -41,9 +41,13 @@ from .slot_decl import (
 )
 from .slot_graph import (
     apply_slot_layer,
+    commit_open_graph,
     contract_digest_lines,
     date_pending_rows,
+    looks_like_hold_compare,
     polish_clarification,
+    prior_turn_reply,
+    split_prior_question,
     strategy_id_options,
 )
 from .wire import align_steps, choice_card
@@ -301,7 +305,35 @@ class Planner:
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
         else:
-            decision = self.intent_engine.classify(user_query.strip())
+            head, tail = split_prior_question(user_query.strip())
+            prior_slots = self._prior_commit_values(session)
+            reply = prior_turn_reply(tail, prior_slots)
+            if tail and not head:
+                decision = IntentDecision(
+                    job="clarify",
+                    source="rule",
+                    rationale="prior_question",
+                    flags={"prior_reply": reply},
+                    llm_called=False,
+                )
+            else:
+                decision = self.intent_engine.classify(head or user_query.strip())
+                if (
+                    decision.job == "clarify"
+                    and decision.rationale == "llm_uncertain"
+                    and looks_like_hold_compare(head or user_query.strip())
+                ):
+                    decision = IntentDecision(
+                        job="research.hold_compare",
+                        source="rule",
+                        rationale="commit_mention",
+                        llm_called=True,
+                    )
+                query = head or query
+                q_lower = query.lower()
+            if tail and reply:
+                decision.flags = dict(decision.flags or {})
+                decision.flags["prior_reply"] = reply
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
@@ -335,6 +367,9 @@ class Planner:
             "intent_source": decision.source,
             "intent_rationale": decision.rationale,
         }
+        prior_reply = str((decision.flags or {}).get("prior_reply") or "")
+        if prior_reply:
+            assumptions["prior_reply"] = prior_reply
         assumptions.update(gate_extras)
         for step in steps:
             if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):
@@ -449,6 +484,23 @@ class Planner:
             return
         clar["accepted_steps"] = list(snapshot)
         clar["resume_job"] = "open"
+
+    def _prior_commit_values(self, session: Any) -> Dict[str, Any]:
+        """上一轮已经确认的槽。新任务换掉旧槽时读装配层留下的快照。"""
+
+        snapped = getattr(session, "prior_inputs", None) if session is not None else None
+        if isinstance(snapped, dict) and snapped:
+            return dict(snapped)
+        task = getattr(session, "task", None) if session is not None else None
+        slots = getattr(task, "slots", {}) or {} if task is not None else {}
+        values: Dict[str, Any] = {}
+        for name, slot in slots.items():
+            if not getattr(slot, "confirmed", False):
+                continue
+            value = getattr(slot, "value", None)
+            if value not in (None, ""):
+                values[str(name)] = value
+        return values
 
     @staticmethod
     def _session_query_text(user_query: str, session: Any) -> str:
@@ -860,6 +912,23 @@ class Planner:
             )
             steps.append(step)
         mismatch = align_steps(self, steps)
+        if not mismatch:
+            blocked = commit_open_graph(steps, query)
+            if blocked:
+                return [
+                    self._make_step(
+                        step_id="step_1",
+                        skill_name="qt.ai.system.fallback",
+                        inputs=self._fallback_step_inputs(
+                            query=query,
+                            action="clarify_required",
+                            reason=blocked,
+                            hint=blocked,
+                            missing_info="none",
+                            next_step="The open plan did not pass the parameter commit.",
+                        ),
+                    )
+                ], ""
         if mismatch:
             card = choice_card(self, steps, query)
             return [
@@ -1970,9 +2039,20 @@ class Planner:
                 result["start"] = start.strftime("%Y%m%d")
                 result["end"] = today.strftime("%Y%m%d")
             else:
-                one_year = re.search(r"(20\d{2})\s*年", query)
-                if one_year:
-                    year = int(one_year.group(1))
+                # 「到 2023 年」只给结束日。单独的「2023年」才是从元旦到年末。
+                end_bound = re.search(
+                    r"(?:到|至|until|\bto\b)\s*(20\d{2})\s*年?",
+                    query,
+                    flags=re.IGNORECASE,
+                )
+                full_year = re.search(r"(20\d{2})\s*年", query)
+                if end_bound is not None and (
+                    full_year is None or end_bound.group(1) == full_year.group(1)
+                ):
+                    year = int(end_bound.group(1))
+                    result["end"] = f"{year:04d}1231"
+                elif full_year is not None:
+                    year = int(full_year.group(1))
                     result["start"] = f"{year:04d}0101"
                     result["end"] = f"{year:04d}1231"
         alias_map = {

@@ -324,7 +324,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
 
         print("\n[TestAi04A6] 意图未解恢复卡与非法 open")
         planner = Planner(self.registry, env_facts={})
-        zh = "取日线、算收益、出一页图"
+        zh = "取日线、出一页图"
         for query in ("please fetch …", "xyzzy unmatched formula 12345", zh):
             plan = planner.build_plan(query, mode="plan")
             row = _pending(plan)[0]

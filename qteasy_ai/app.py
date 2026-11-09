@@ -1807,7 +1807,18 @@ class QteasyAssistant:
                 user_answered = True
                 skip_classify = bool(state.task and state.task.job)
             elif gate.kind == "new_intent":
-                peek = self.planner.intent_engine.classify(asked)
+                from .slot_graph import split_prior_question
+
+                head, tail = split_prior_question(asked)
+                if tail and state.task is not None:
+                    state.prior_inputs = {
+                        str(name): slot.value
+                        for name, slot in (state.task.slots or {}).items()
+                        if getattr(slot, "confirmed", False) and slot.value not in (None, "")
+                    }
+                else:
+                    state.prior_inputs = {}
+                peek = self.planner.intent_engine.classify(head or asked)
                 if str(getattr(peek, "job", "") or "") == "route_to_ask":
                     dummy = ToolPlan(
                         plan_id="",
