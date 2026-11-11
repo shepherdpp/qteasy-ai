@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import code_spec, weights_spec
 from .hp_panel import english_message, failed, panel_from_upstream
 from .preview_rows import tabular_preview_rows
 
@@ -432,10 +433,10 @@ def build_hp_portfolio_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
     schema = {
         "htypes": {"type": "string", "required": False},
         "mode": {"type": "string", "required": False},
-        "weights": {"type": "array", "required": False},
+        "weights": weights_spec(),
         "mask": {"type": "object", "required": False},
         "groups": {"type": "object", "required": False},
-        "benchmark": {"type": "string", "required": False},
+        "benchmark": code_spec(required=False),
         "benchmark_output": {"type": "string", "required": False},
         "new_share_name": {"type": "string", "required": False},
         "normalize_weights": {"type": "boolean", "required": False},

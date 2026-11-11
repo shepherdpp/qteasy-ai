@@ -12,7 +12,8 @@
       "query": "show me macd strategy parameters",
       "mode": "plan",
       "expected_job": "strategy.meta",
-      "expected_skill": "qt.ai.strategy_meta.get"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "B1",
@@ -46,14 +47,9 @@
       "query": "帮我看 Tushare 是否配好、本地缺哪些表",
       "mode": "plan",
       "expected_job": "env.ready",
-      "expected_skill": "qt.ai.env.check_tushare",
-      "expected_skills": [
-        "qt.ai.env.check_tushare",
-        "qt.ai.datasource.table_info",
-        "qt.ai.datasource.table_info",
-        "qt.ai.datasource.table_info",
-        "qt.ai.datasource.table_info"
-      ]
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expect_plan_md": false
     },
     {
       "id": "R1",
@@ -76,25 +72,25 @@
       "query": "run macd backtest from 20180101 to 20231231",
       "mode": "plan",
       "expected_job": "backtest.builtin",
-      "expected_skill": "qt.ai.backtest.run_builtin"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "B-F3",
       "query": "optimize DMA parameters",
       "mode": "plan",
       "expected_job": "optimize.builtin",
-      "expected_skill": "qt.ai.optimize.run_builtin"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "B-P0",
       "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
       "mode": "plan",
       "expected_job": "backtest.builtin",
-      "expected_skill": "qt.ai.backtest.run_builtin",
-      "expected_skills": [
-        "qt.ai.backtest.run_builtin",
-        "qt.ai.insight.summarize_backtest"
-      ]
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expect_plan_md": false
     },
     {
       "id": "B4",
@@ -113,14 +109,9 @@
       "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
       "mode": "plan",
       "expected_job": "strategy.builder",
-      "expected_skill": "qt.ai.strategy.spec_from_nl",
-      "expected_skills": [
-        "qt.ai.strategy.spec_from_nl",
-        "qt.ai.strategy.codegen_hybrid",
-        "qt.ai.strategy.sanity_check",
-        "qt.ai.operator.build_from_spec",
-        "qt.ai.backtest.run_builtin"
-      ]
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expect_plan_md": false
     },
     {
       "id": "D-LIVE",

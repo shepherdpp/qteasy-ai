@@ -299,7 +299,7 @@ class Planner:
                 source="session",
                 rationale="session_followup",
             )
-            query = self._session_query_text(user_query, session)
+            query = origin_text
             q_lower = query.lower()
             candidate_source = "session"
             downgrade_reason = ""

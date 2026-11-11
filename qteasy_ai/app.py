@@ -79,12 +79,12 @@ from .session import (
 from .session_gate import (
     GateDecision,
     SessionGate,
-    extract_patches,
     extract_plan_id,
     is_discuss_only,
     is_execute_plan_utterance,
     is_skip_clarify,
     merge_facts,
+    new_task_patches,
 )
 from .side_effects import plan_has_high_side_effect
 
@@ -1838,12 +1838,12 @@ class QteasyAssistant:
                 if topic_skipped:
                     state.cancel_task()
                 state.start_task(query=asked)
-                merge_facts(state, extract_patches(asked), source="extracted", confirmed=True)
+                merge_facts(state, new_task_patches(asked), source="extracted", confirmed=True)
                 skip_classify = False
             else:
                 if state.task is None:
                     state.start_task(query=asked)
-                merge_facts(state, extract_patches(asked), source="extracted", confirmed=True)
+                merge_facts(state, new_task_patches(asked), source="extracted", confirmed=True)
 
         plan = self.planner.build_plan(
             asked or query,
@@ -1928,7 +1928,7 @@ class QteasyAssistant:
         if cancelled:
             state.cancel_task()
         state.start_task(query=text)
-        merge_facts(state, extract_patches(text), source="extracted", confirmed=True)
+        merge_facts(state, new_task_patches(text), source="extracted", confirmed=True)
         plan = self.planner.build_plan(text, mode="plan", session=state, profile=profile)
         if cancelled:
             plan.assumptions = dict(plan.assumptions or {})

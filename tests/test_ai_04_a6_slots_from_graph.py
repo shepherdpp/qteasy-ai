@@ -84,9 +84,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             ]
         )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(screen, mode="plan")
-        fill_prompts = [text for text in fake.prompts if text.startswith("Fill only these empty slots.")]
+        fill_prompts = [text for text in fake.prompts if text.startswith("Slot protocol.")]
         slot_lines = [
-            line.split(":", 1)[1].strip()
+            line.split(":", 1)[1].strip().split()[0]
             for text in fill_prompts
             for line in text.splitlines()
             if line.startswith("slot:")
@@ -315,9 +315,12 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             mode="plan",
         )
         print(" canned skill:", canned.steps[0].skill_name, canned.steps[0].inputs)
-        self.assertEqual(canned.steps[0].skill_name, "qt.ai.data.static")
-        self.assertEqual(canned.steps[0].inputs.get("names"), "industry,stock_name")
-        self.assertEqual(canned.steps[0].inputs.get("shares"), "000001.SZ")
+        accepted = (canned.assumptions or {}).get("accepted_steps") or []
+        static = next((row for row in accepted if row.get("skill_name") == "qt.ai.data.static"), {})
+        print(" canned accepted:", static.get("inputs"))
+        self.assertEqual(canned.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual((static.get("inputs") or {}).get("names"), "industry,stock_name")
+        self.assertNotIn("shares", static.get("inputs") or {})
 
     def test_unresolved_cards_have_no_supported_skill(self) -> None:
         """对不上的话给出恢复卡；非法 open 仍没有待填槽，也没有 supported_skill。"""

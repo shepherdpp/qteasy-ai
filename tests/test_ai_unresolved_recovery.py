@@ -162,8 +162,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual(clar.get("text"), _ZH_PROMPT)
             self.assertEqual((clar["payload"]["pending"][0].get("open") or {}).get("label"), "重写需求")
             self.assertNotIn("open_label", clar["payload"]["pending"][0])
-            self.assertIsNotNone(shares)
-            self.assertEqual(shares.value, "000300.SH")
+            self.assertIsNone(shares)
             self.assertNotIn("unresolved_intent", before.task.slots)
             catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
             self.assertEqual(len(catalogs), 2)
@@ -191,7 +190,8 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual(len(allowed), 1)
             self.assertFalse(fake.prompts[-1].startswith("Official and system Job ids:"))
             self.assertNotIn("unresolved_intent", after.task.slots)
-            self.assertEqual(after.task.slots["shares"].value, "000300.SH")
+            self.assertNotIn("shares", after.task.slots)
+            self.assertEqual(plan["steps"][0]["inputs"].get("shares"), "000300.SH")
 
     def test_compose_open_too_many_steps_stays_a_reason_card(self) -> None:
         """强制 open 后步数超限，仍是 open_* 说明，没有恢复卡。"""

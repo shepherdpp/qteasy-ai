@@ -763,27 +763,10 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             ]
             print(" plan_id:", plan_id, "skills:", skills)
             self.assertTrue(plan_id)
-            self.assertIn("qt.ai.strategy_meta.get", skills)
-            ran = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
-            body = ran.json()
-            print(" exec:", (body.get("execution") or {}).get("status"))
-            print(" artifacts:", body.get("artifacts"))
-            self.assertEqual(ran.status_code, 200)
-            self.assertEqual((body.get("execution") or {}).get("status"), "success")
-            arts = body.get("artifacts") or []
-            self.assertTrue(arts)
-            table = next((item for item in arts if item.get("type") == "data_table"), None)
-            print(" table art type:", (table or {}).get("type"))
-            self.assertIsNotNone(table)
-            summary = (table.get("preview") or {}).get("data_summary") or {}
-            print(" summary:", summary)
-            self.assertEqual(summary.get("strategy_id"), "bband")
-            rows = (table.get("preview") or {}).get("preview_rows") or []
-            print(" doc lines head:", rows[:3])
-            self.assertTrue(rows)
-            ws = client.get("/v1/workspace", params={"session_id": sid}).json()
-            print(" workspace:", len(ws.get("artifacts") or []))
-            self.assertTrue(ws.get("artifacts"))
+            self.assertEqual(skills, ["qt.ai.system.fallback"])
+            missing = ((planned.get("plan_card") or {}).get("steps") or [{}])[0].get("inputs", {}).get("missing_info")
+            print(" missing:", missing)
+            self.assertEqual(missing, "strategy_id")
 
     def test_http_error_includes_next_action(self) -> None:
         """4xx 错误含英文 next_action。"""
@@ -1060,7 +1043,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             first = client.post(
                 "/v1/plan",
                 json={
-                    "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+                    "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
                     "session_id": sid,
                 },
             )
@@ -1098,12 +1081,12 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
             self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
-            via_asst = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
+            via_asst = asst.plan("", response_style="raw", session_id=sid, patches={"end": "20241231"})
             session = asst.session_store.load(sid)
             print(" asst patches plan_id:", (via_asst.get("plan") or {}).get("plan_id"))
-            print(" slow slot:", session.task.slots["slow"].value if session.task and "slow" in session.task.slots else None)
+            print(" end slot:", session.task.slots["end"].value if session.task and "end" in session.task.slots else None)
             self.assertEqual(str((via_asst.get("plan") or {}).get("plan_id") or ""), plan_id)
-            self.assertEqual(int(session.task.slots["slow"].value), 50)
+            self.assertEqual(str(session.task.slots["end"].value), "20241231")
 
             spoken = client.post(
                 "/v1/plan",

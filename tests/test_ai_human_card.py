@@ -494,7 +494,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             asst = QteasyAssistant(registry=build_default_registry(), memory_store=store)
             sid = "s-slot"
             first = asst.plan(
-                "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+                "get_history_data close for 000300.SH from 20240101 to 20240131",
                 response_style="raw",
                 session_id=sid,
             )
@@ -506,18 +506,18 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertTrue(first_id)
             self.assertTrue(first_run)
 
-            second = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
+            second = asst.plan("", response_style="raw", session_id=sid, patches={"start": "20200101"})
             second_id = str((second.get("plan") or {}).get("plan_id") or "")
             second_run = str(second.get("run_id") or "")
             session = asst.session_store.load(sid)
             notices = [row for row in session.messages if row.get("kind") == "mode_notice"]
-            print(" second:", second_id, second_run, "slow:", (session.task.slots.get("slow").value if session.task and "slow" in session.task.slots else None))
+            print(" second:", second_id, second_run, "start:", (session.task.slots.get("start").value if session.task and "start" in session.task.slots else None))
             print(" notices:", [row.get("text") for row in notices])
             self.assertEqual(second_id, first_id)
             self.assertEqual(second_run, first_run)
-            self.assertEqual(int(session.task.slots["slow"].value), 50)
+            self.assertEqual(str(session.task.slots["start"].value), "20200101")
             self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
-            self.assertTrue(any("Accepted slow = 50." in str(row.get("text") or "") for row in notices))
+            self.assertTrue(any("Accepted start = 20200101." in str(row.get("text") or "") for row in notices))
             self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
             spoken = asst.plan("把慢线改成 50", response_style="raw", session_id=sid)

@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 import pandas as pd
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
-from ..slot_graph import asset_type_spec, freq_spec
+from ..slot_graph import asset_type_spec, code_spec, date_field_spec, freq_spec
 from .hp_panel import as_history_panel, english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -48,9 +48,9 @@ def build_data_kline_skill(
         version="0.1.0",
         summary="Read a local OHLCV HistoryPanel via get_kline.",
         inputs_schema={
-            "shares": {"type": "string", "required": True},
-            "start": {"type": "string", "required": False},
-            "end": {"type": "string", "required": False},
+            "shares": code_spec(required=True),
+            "start": date_field_spec("start", required=False, constraint=""),
+            "end": date_field_spec("end", required=False, constraint=""),
             "rows": {"type": "integer", "required": False},
             "freq": freq_spec(),
             "adj": {"type": "string", "required": False},

@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
-from ..slot_graph import asset_type_spec, dtype_spec
+from ..slot_graph import asset_type_spec, code_spec, dtype_spec
 from .hp_panel import english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -47,7 +47,7 @@ def build_data_static_skill(
         summary="Read local static attributes for named shares via get_static_data.",
         inputs_schema={
             "names": dtype_spec(required=True),
-            "shares": {"type": "string", "required": True},
+            "shares": code_spec(required=True),
             "asset_type": asset_type_spec(),
         },
         outputs_schema={"payload": "dict"},

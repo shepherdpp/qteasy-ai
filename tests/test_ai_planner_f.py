@@ -65,23 +65,22 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id="s-refill",
             )
             names = [s["skill_name"] for s in second["plan"]["steps"]]
-            refill = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.refill_basic_equity_and_index"]
             print(" second skills:", names)
             print(" second trace:", second["plan"].get("planner_trace"))
-            print(" refill inputs:", refill[0]["inputs"] if refill else None)
+            print(" second missing:", second["plan"]["steps"][0]["inputs"].get("missing_info"))
             self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "data.refill")
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
-            self.assertTrue(refill)
-            self.assertEqual(refill[0]["inputs"].get("start"), "20240101")
-            self.assertEqual(refill[0]["inputs"].get("end"), "20241231")
+            self.assertEqual(names, ["qt.ai.system.fallback"])
+            self.assertEqual(second["plan"]["steps"][0]["inputs"].get("missing_info"), "start")
 
             store = SessionStore(assistant.memory_store)
             filled = store.load("s-refill")
             print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
             print(" filled status:", filled.task.status)
-            self.assertTrue(filled.task.slots["start"].confirmed)
+            self.assertNotIn("start", filled.task.slots)
+            self.assertEqual(filled.task.slots["end"].value, "20241231")
             self.assertTrue(filled.task.slots["end"].confirmed)
-            self.assertEqual(filled.task.status, "ready")
+            self.assertEqual(filled.task.status, "clarifying")
 
             confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
             cnames = [s["skill_name"] for s in confirm["plan"]["steps"]]
@@ -221,16 +220,12 @@ class TestAiPlannerF(unittest.TestCase):
             plan = raw["plan"]
             bt = [s for s in plan["steps"] if s["skill_name"] == "qt.ai.backtest.run_builtin"]
             print(" skills:", [s["skill_name"] for s in plan["steps"]])
-            print(" bt inputs:", bt[0]["inputs"] if bt else None)
-            print(" assumptions:", plan.get("assumptions"))
-            print(" narrative:", pretty.narrative)
-            self.assertTrue(bt)
-            self.assertEqual(bt[0]["inputs"].get("asset_pool"), "000300.SH")
-            self.assertEqual((plan.get("assumptions") or {}).get("slot_defaults", {}).get("shares"), "profile")
-            self.assertIn("profile", pretty.narrative.lower())
+            print(" missing:", plan["steps"][0]["inputs"].get("missing_info"))
+            self.assertFalse(bt)
+            self.assertEqual(plan["steps"][0]["inputs"].get("missing_info"), "strategy_id")
             store = SessionStore(assistant.memory_store)
             state = store.load("s-def")
-            print(" shares slot:", state.task.slots["shares"].to_dict())
+            print(" slots:", {k: v.to_dict() for k, v in state.task.slots.items()})
             self.assertEqual(state.task.slots["shares"].value, "000300.SH")
             self.assertEqual(state.task.slots["shares"].source, "default")
             self.assertFalse(state.task.slots["shares"].confirmed)
@@ -247,9 +242,10 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id="s-none",
             )
             bt = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.backtest.run_builtin"]
-            print(" bt inputs:", bt[0]["inputs"] if bt else None)
-            self.assertTrue(bt)
-            self.assertFalse(bt[0]["inputs"].get("asset_pool"))
+            print(" skills:", [s["skill_name"] for s in payload["plan"]["steps"]])
+            print(" missing:", payload["plan"]["steps"][0]["inputs"].get("missing_info"))
+            self.assertFalse(bt)
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "strategy_id")
             store = SessionStore(assistant.memory_store)
             state = store.load("s-none")
             print(" slots:", {k: v.to_dict() for k, v in state.task.slots.items()})

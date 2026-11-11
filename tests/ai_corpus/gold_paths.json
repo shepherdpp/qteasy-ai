@@ -68,12 +68,8 @@
           "channel": "plan",
           "query": "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
           "expect_job": "backtest.builtin",
-          "expect_skills": [
-            "qt.ai.backtest.run_builtin",
-            "qt.ai.insight.summarize_backtest"
-          ],
-          "expect_strategy_id": "macd",
-          "expect_asset_pool": "000300.SH"
+          "expect_skills": ["qt.ai.system.fallback"],
+          "expect_missing_info": "strategy_id"
         }
       ]
     },

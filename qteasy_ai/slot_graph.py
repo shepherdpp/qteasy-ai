@@ -5,7 +5,7 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-11-03
 # Desc:
-# 从已组成的步骤图投影用户槽，分次填槽，
+# 从已组成的步骤图投影用户槽，只做一次填槽，
 # 并校验澄清卡的润色与点选。
 # ======================================
 
@@ -219,7 +219,7 @@ _ADJ_PHRASE = re.compile(
 _REPHRASE = "No matching job. Rephrase the request, or ask for a short open plan."
 _RECOVERY_ZH = "您的需求无法跟现成的操作模版匹配（job），是否需要我创建一份开放计划？"
 _RECOVERY_EN = "This request does not match a built-in operation template (job). Create an open plan?"
-_FILL_PREFIX = "Fill only these empty slots."
+_FILL_PREFIX = "Slot protocol. Examples are not values."
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _LOOKBACK_DAY = re.compile(r"(?<!\d)(\d{1,4})\s*(?:日|天|days?|d)\b", re.IGNORECASE)
 _BAD_LOOKBACK = re.compile(
@@ -287,6 +287,35 @@ def dtype_spec(*, required: bool) -> Dict[str, Any]:
     """
 
     return {"type": "string", "required": required, "resolve": "dtype"}
+
+
+def code_spec(*, required: bool) -> Dict[str, Any]:
+    """代码槽。后缀和别名在同一次填写里收束。
+
+    Parameters
+    ----------
+    required : bool
+        是否必填。
+
+    Returns
+    -------
+    dict
+        带 ``resolve=code`` 的字符串字段。
+    """
+
+    return {"type": "string", "required": required, "resolve": "code"}
+
+
+def weights_spec() -> Dict[str, Any]:
+    """权重槽。``mode`` 跟这一格一起提交，不单独投影。
+
+    Returns
+    -------
+    dict
+        带 ``resolve=weights`` 的数组字段。
+    """
+
+    return {"type": "array", "required": False, "resolve": "weights"}
 
 
 def date_bound_presentation(name: str) -> Dict[str, str]:
@@ -830,63 +859,54 @@ def _fill_graph(
     if _bind_upstream(planner, steps):
         return _missing_upstream(planner, query)
     rejected = _canonicalize_steps(planner, steps)
-    _drop_ungrounded_bounds(planner, steps, query)
     extras: Dict[str, Any] = {}
     projected = _project(planner, steps, rejected, job)
     confirmed = _confirmed_values(session)
+    if job != "open":
+        _clear_open_prewrite(steps, projected, set(confirmed))
     for slot in projected:
         if slot["filled"] or slot["name"] not in confirmed:
             continue
-        value = coerce_slot_value(slot, confirmed[slot["name"]])
+        raw = confirmed[slot["name"]]
+        if slot["name"] == "weights" and isinstance(raw, dict) and str(raw.get("mode") or "") == "equal":
+            _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
+            slot["filled"] = True
+            slot["value"] = raw
+            continue
+        value = coerce_slot_value(slot, raw)
         if value is not None and _write_empty(planner, steps, slot["name"], value):
             slot["filled"] = True
             slot["value"] = value
-    empty = [slot for slot in projected if not slot["filled"]]
-    window_names = _any_of_member_names(planner, steps)
-    ask_model = [slot for slot in empty if slot["name"] not in window_names]
-    model_slots = ask_model
-    if job in _DIAGNOSIS_JOBS:
-        model_slots = [slot for slot in ask_model if slot["name"] not in _DIAGNOSIS_MODEL_SKIP]
-    required_empty = [slot for slot in model_slots if slot["required"] or _must_ask(slot, steps)]
-    model: Dict[str, Any] = {}
-    if required_empty and getattr(planner, "provider", None) is not None:
-        parsed = _parse_model_slots(
-            planner.provider.chat(_fill_prompt(model_slots, query)),
-            [slot["name"] for slot in model_slots],
+    for name, raw in confirmed.items():
+        if any(str(slot.get("name") or "") == name for slot in projected):
+            continue
+        _write_empty(planner, steps, name, raw)
+    open_slots = [slot for slot in projected if not slot["filled"]]
+    submitted: Dict[str, Any] = {}
+    ambiguous: List[str] = []
+    provider = getattr(planner, "provider", None)
+    if provider is not None and job != "open" and open_slots:
+        submitted = _parse_model_slots(
+            provider.chat(_fill_prompt(planner, open_slots, query)),
+            [slot["name"] for slot in open_slots],
+        ) or {}
+    elif provider is None:
+        submitted, ambiguous = _heuristic(
+            planner,
+            query,
+            open_slots,
+            dtype_query=_utterance_without_slots(query, session),
         )
-        model = parsed or {}
-    for slot in model_slots:
-        if slot["name"] not in model:
-            continue
-        value = coerce_slot_value(slot, model[slot["name"]])
-        if value is not None and _write_empty(planner, steps, slot["name"], value):
-            slot["filled"] = True
-            slot["value"] = value
-    heuristic, ambiguous = _heuristic(
-        planner,
-        query,
-        [slot for slot in projected if not slot["filled"]],
-        dtype_query=_utterance_without_slots(query, session),
-    )
-    for slot in projected:
-        if slot["filled"] or slot["name"] not in heuristic:
-            continue
-        if slot["name"] in {"names", "htype_names"} and ambiguous:
-            continue
-        value = coerce_slot_value(slot, heuristic[slot["name"]])
-        if value is not None and _write_empty(planner, steps, slot["name"], value):
-            slot["filled"] = True
-            slot["value"] = value
+    force_names = _review_submission(planner, steps, projected, submitted, query, set(confirmed))
     if _apply_lookback_default(planner, steps, query, projected):
         extras["slot_defaults"] = {"lookback_days": "library"}
     if job in _DIAGNOSIS_JOBS:
         _bake_describe_view(steps, projected)
         _remember_diagnosis_defaults(session, projected)
-    force_names: Set[str] = set()
     if job == _HOLD_COMPARE_JOB:
-        force_names = _enforce_hold_commit(steps, query, set(confirmed))
         _sync_projected(planner, steps, projected)
         _finish_portfolio_graph(steps, query)
+        _sync_projected(planner, steps, projected)
     mismatch = align_steps(planner, steps)
     if mismatch:
         return _wire_rejected(planner, steps, query, job, mismatch)
@@ -1098,7 +1118,7 @@ def _pending_after_fill(
             or _must_ask(slot, steps)
             or slot["name"] == "lookback_days" and _bad_lookback(query)
             or _ask_benchmark(slot, steps, query, job)
-            or _ask_weights(slot, query, job)
+            or _ask_weights(slot, query, job, steps)
         )
         if not ask:
             continue
@@ -1162,7 +1182,6 @@ def _project(
     refused = rejected or set()
     order: List[str] = []
     by_name: Dict[str, Dict[str, Any]] = {}
-    has_portfolio = any(step.skill_name == _PORTFOLIO_SKILL for step in steps)
     diagnosis = job in _DIAGNOSIS_JOBS
     for step in steps:
         if step.skill_name == "qt.ai.system.fallback":
@@ -1179,15 +1198,17 @@ def _project(
             if not diagnosis_key and (key in _NEVER_PROJECT):
                 continue
             required = bool(spec.get("required"))
-            portfolio_key = _portfolio_user_key(has_portfolio, step.skill_name, key)
-            if (
-                not diagnosis_key
-                and not required
-                and key not in _FILLABLE
-                and key not in grouped
-                and key not in refused
-                and not portfolio_key
-            ):
+            contract = bool(
+                required
+                or key in grouped
+                or key in refused
+                or spec.get("resolve")
+                or spec.get("format")
+                or spec.get("enum")
+                or spec.get("aliases")
+                or spec.get("vocabulary")
+            )
+            if not diagnosis_key and not contract:
                 continue
             current = (step.inputs or {}).get(key)
             filled = current not in (None, "", [])
@@ -1249,14 +1270,23 @@ def _heuristic(
 ) -> Tuple[Dict[str, Any], List[str]]:
     """按槽的类型从问句收值。覆盖不全时留下仍缺的必填。"""
 
-    wanted = {slot["name"] for slot in slots}
+    wanted = {slot["name"]: slot for slot in slots}
     found: Dict[str, Any] = {}
-    market = planner._market_inputs(query)
-    for key in ("shares", "start", "end", "freq"):
-        if key in wanted and market.get(key) not in (None, ""):
-            found[key] = market[key]
-    if "symbols" in wanted and market.get("shares"):
-        found["symbols"] = market["shares"]
+    if any(str(slot.get("format") or "") == "YYYYMMDD" for slot in slots):
+        market = planner._market_inputs(query) if hasattr(planner, "_market_inputs") else {}
+        if isinstance(market, dict):
+            for key in ("start", "end"):
+                if key in wanted and market.get(key) not in (None, ""):
+                    found[key] = market[key]
+    found.update(_heuristic_codes(query, [slot for slot in slots if str(slot.get("resolve") or "") == "code"]))
+    if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
+        weights = commit_weight_text(query)
+        if weights["status"] == "value":
+            found.update(weights["values"])
+    if "freq" in wanted:
+        freq = commit_freq(query)
+        if freq["status"] == "value":
+            found["freq"] = freq["value"]
     screen = _parse_screen(query)
     for key in ("industry", "threshold", "metric", "lookback_days"):
         if key in wanted and screen.get(key) not in (None, ""):
@@ -1269,19 +1299,11 @@ def _heuristic(
                 found["names"] = joined
             if "htype_names" in wanted:
                 found["htype_names"] = joined
-    if "benchmark" in wanted:
-        code = _parse_benchmark(query)
-        if code:
-            found["benchmark"] = code
-    if "weights" in wanted:
-        weights = _parse_weights(query)
-        if weights:
-            found["weights"] = weights
     if "adj" in wanted:
         adj = _parse_adj(query)
         if adj:
             found["adj"] = adj
-    found.update(_parse_diagnosis(query, wanted))
+    found.update(_parse_diagnosis(query, set(wanted)))
     return found, ambiguous
 
 
@@ -1472,12 +1494,29 @@ def _option_ids(spec: Dict[str, Any]) -> List[str]:
     return [str(item.get("id")) for item in (spec.get("options") or []) if isinstance(item, dict) and item.get("id") is not None]
 
 
-def _fill_prompt(slots: Sequence[Dict[str, Any]], query: str) -> str:
-    """填槽提示只列出还空着的投影槽。"""
+def _fill_prompt(planner: Any, slots: Sequence[Dict[str, Any]], query: str) -> str:
+    """一次协议列出还开着的投影槽和 schema 合同。例子不是提交值。"""
 
     lines = [_FILL_PREFIX]
     for slot in slots:
-        lines.append(f"slot: {slot['name']}")
+        bits = [f"slot: {slot['name']}", f"type={slot.get('type') or 'string'}"]
+        if slot.get("required"):
+            bits.append("required")
+        if slot.get("enum"):
+            bits.append("enum=" + ",".join(str(item) for item in slot.get("enum") or []))
+        if slot.get("aliases"):
+            bits.append("aliases=" + ",".join(f"{key}->{value}" for key, value in slot.get("aliases").items()))
+        if slot.get("format"):
+            bits.append(f"format={slot.get('format')}")
+        if slot.get("resolve"):
+            bits.append(f"resolve={slot.get('resolve')}")
+        if slot.get("example"):
+            bits.append(f"example={slot.get('example')} (not a value)")
+        if slot.get("constraint"):
+            bits.append(f"constraint={slot.get('constraint')}")
+        lines.append(" ".join(bits))
+    if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
+        lines.append("mode is submitted with weights. It is not a separate slot.")
     lines.append("User text:")
     lines.append(str(query or ""))
     lines.append("Reply with a JSON object. Keys must be the slot names above.")
@@ -1509,6 +1548,8 @@ def _parse_model_slots(raw: str, names: Sequence[str]) -> Optional[Dict[str, Any
     if ("job" in payload or "steps" in payload) and not wanted.intersection(source):
         return None
     found = {name: source[name] for name in wanted if name in source}
+    if "weights" in wanted and "mode" in source:
+        found["mode"] = source["mode"]
     if not found:
         return None
     return found
@@ -1958,16 +1999,19 @@ def _ask_benchmark(slot: Dict[str, Any], steps: Sequence[Any], query: str, job: 
         return False
     if mentions_excess(query):
         return True
-    return _benchmark_cue(query) and _shares_include_index(steps)
+    return _benchmark_cue(query)
 
 
-def _ask_weights(slot: Dict[str, Any], query: str, job: str = "") -> bool:
+def _ask_weights(slot: Dict[str, Any], query: str, job: str = "", steps: Sequence[Any] = ()) -> bool:
     """说了权重或加权、却没有收到数字时追问，避免静默变成等权。"""
 
     if job != _HOLD_COMPARE_JOB:
         return False
     if slot.get("name") != "weights" or slot.get("filled"):
         return False
+    for step in steps:
+        if step.skill_name == _PORTFOLIO_SKILL and str((step.inputs or {}).get("mode") or "") == "equal":
+            return False
     return _weight_cue(query)
 
 
@@ -1988,18 +2032,6 @@ def _benchmark_cue(query: str) -> bool:
         return True
     scrubbed = text.lower().replace("benchmark_output", " ")
     return re.search(r"\bbenchmark\b", scrubbed) is not None
-
-
-def _shares_include_index(steps: Sequence[Any]) -> bool:
-    """取数代码里是否已经有已知指数。"""
-
-    for step in steps:
-        if step.skill_name != _KLINE_SKILL:
-            continue
-        codes = _split_codes((step.inputs or {}).get("shares"))
-        if any(code in _INDEX_CODES for code in codes):
-            return True
-    return False
 
 
 def _parse_benchmark(query: str) -> str:
@@ -2088,16 +2120,11 @@ def _symbol_tokens(text: str) -> List[Tuple[int, str, str]]:
 def _resolve_bare(digits: str, text: str, pos: int) -> Tuple[str, str]:
     """裸六位收成唯一代码。两义或没有交易所时返回空代码和原因。"""
 
-    window = text[pos : pos + 18]
     if digits in _AMBIGUOUS_BARE:
-        if "股票" in window or "个股" in window:
-            return digits + ".SZ", ""
-        if "指数" in window and "不是指数" not in window:
-            return digits + ".SH", ""
         return "", f"{digits} matches both an index and a stock."
     if digits in _UNIQUE_INDEX:
         return _UNIQUE_INDEX[digits], ""
-    if digits.startswith("6"):
+    if digits.startswith(("5", "6")):
         return digits + ".SH", ""
     if digits.startswith(("0", "3")):
         return digits + ".SZ", ""
@@ -2125,7 +2152,14 @@ def commit_shares(query: str) -> Dict[str, Any]:
         if kind == "bare":
             code, reason = _resolve_bare(token, text, pos)
         else:
-            code, reason = token, ""
+            code = token
+            if _suffix_conflict(code):
+                return {
+                    "status": "unresolved",
+                    "value": "",
+                    "reason": f"{code} suffix does not match its prefix.",
+                }
+            reason = ""
         if reason or not code:
             return {
                 "status": "unresolved",
@@ -2214,6 +2248,12 @@ def commit_weight_text(text: str) -> Dict[str, Any]:
     if ratio:
         return {"status": "value", "values": {"mode": "weighted", "weights": ratio}, "reason": ""}
     folded = raw.lower()
+    if _negates_equal(raw):
+        return {
+            "status": "unresolved",
+            "values": {},
+            "reason": "Equal weight was negated.",
+        }
     if any(phrase in raw or phrase in folded for phrase in _EQUAL_PHRASES):
         return {"status": "value", "values": {"mode": "equal"}, "reason": ""}
     mentioned = (
@@ -2637,7 +2677,7 @@ def _as_share_code(value: Any) -> str:
 
     text = str(value or "").strip()
     compact = re.sub(r"\s+", "", text).lower()
-    if compact in {"沪深300", "csi300"}:
+    if "沪深300" in compact or compact in {"csi300"} or "csi300" in compact:
         return "000300.SH"
     code = text.upper()
     if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", code):
@@ -2767,6 +2807,289 @@ def _sync_projected(planner: Any, steps: Sequence[Any], projected: Sequence[Dict
             slot["value"] = found
 
 
+def _clear_open_prewrite(steps: Sequence[Any], projected: Sequence[Dict[str, Any]], confirmed: Set[str]) -> None:
+    """清掉未确认投影槽上的预写。已确认的值留下。"""
+
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if name in confirmed:
+            continue
+        for step in steps:
+            inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else None
+            if inputs is not None:
+                inputs.pop(name, None)
+        slot["filled"] = False
+        slot["value"] = None
+
+
+def _expected_stock_suffix(digits: str) -> str:
+    """股票前缀表对应的后缀。认不出则空串。"""
+
+    if digits.startswith(("5", "6")):
+        return "SH"
+    if digits.startswith(("0", "3")):
+        return "SZ"
+    if digits.startswith(("4", "8")):
+        return "BJ"
+    return ""
+
+
+def _suffix_conflict(code: str) -> bool:
+    """股票后缀和前缀表不一致。指数表和已写后缀的 000001 不是冲突。"""
+
+    text = str(code or "").upper()
+    if text in set(_UNIQUE_INDEX.values()) or text in {"000001.SH", "000001.SZ"}:
+        return False
+    digits, dot, suffix = text.partition(".")
+    if not dot or digits in _UNIQUE_INDEX:
+        return False
+    expected = _expected_stock_suffix(digits)
+    if not expected:
+        return False
+    return suffix != expected
+
+
+def _negates_equal(text: str) -> bool:
+    """句中否定等权。"""
+
+    return re.search(r"(?:不要|别|并非|不是).{0,6}等权", str(text or "")) is not None
+
+
+def _user_wrote_code(code: str, query: str) -> bool:
+    """用户原文里有这只代码，或有能对上的别名。裸 000001 必须写出后缀。"""
+
+    text = str(query or "")
+    upper = str(code or "").upper()
+    if upper and upper in text.upper():
+        return True
+    compact = re.sub(r"\s+", "", text)
+    if upper == "000300.SH" and ("沪深300" in compact or "csi300" in compact.lower()):
+        return True
+    digits = upper.split(".", 1)[0]
+    if digits == "000001":
+        return False
+    return bool(digits) and digits in text
+
+
+def _normalize_code_value(value: Any, query: str) -> Optional[str]:
+    """把已经放进某一格的代码收成合法形式。收不下则 ``None``。"""
+
+    text = _joined_text(value)
+    if not text:
+        return None
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    found: List[str] = []
+    for part in parts:
+        code = _as_share_code(part)
+        if not code and re.fullmatch(r"\d{6}", part):
+            code, reason = _resolve_bare(part, query, text.find(part))
+            if reason or not code:
+                return None
+        if not code or _suffix_conflict(code) or not _user_wrote_code(code, query):
+            return None
+        if code not in found:
+            found.append(code)
+    return ",".join(found) if found else None
+
+
+def _heuristic_codes(query: str, slots: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """一次启发式先选定代码格，再收束别名。"""
+
+    names = {str(slot.get("name") or "") for slot in slots}
+    if not names:
+        return {}
+    found: Dict[str, Any] = {}
+    benchmark = ""
+    if "benchmark" in names:
+        benchmark = _parse_benchmark(query)
+        if benchmark:
+            found["benchmark"] = benchmark
+    shares = commit_shares(query)
+    if shares["status"] != "value" or not shares.get("value"):
+        return found
+    codes = [code for code in str(shares["value"]).split(",") if code and code != benchmark]
+    target = "shares" if "shares" in names else ("symbols" if "symbols" in names else "")
+    if target and codes:
+        found[target] = ",".join(codes)
+    elif target and not benchmark:
+        found[target] = str(shares["value"])
+    return found
+
+
+def _drop_card_examples(steps: Sequence[Any], query: str) -> None:
+    """卡片例子不是提交值，除非原文里就有这个数字。"""
+
+    for step in steps:
+        inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else None
+        if inputs is None:
+            continue
+        for name in ("start", "end"):
+            current = str(inputs.get(name) or "")
+            example = str(date_bound_presentation(name).get("example") or "")
+            if current and current == example and example not in str(query or ""):
+                inputs.pop(name, None)
+
+
+def _held_codes(steps: Sequence[Any]) -> List[str]:
+    """持有代码。基准不计入只数。"""
+
+    benchmark = ""
+    for step in steps:
+        if step.skill_name == _PORTFOLIO_SKILL:
+            benchmark = _as_share_code((step.inputs or {}).get("benchmark")) or benchmark
+    codes: List[str] = []
+    for step in steps:
+        if step.skill_name != _KLINE_SKILL:
+            continue
+        for code in _split_codes((step.inputs or {}).get("shares")):
+            if code != benchmark and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _clear_weight_mode(steps: Sequence[Any]) -> None:
+    """清掉组合步上的权重和 mode。"""
+
+    for step in steps:
+        if step.skill_name != _PORTFOLIO_SKILL:
+            continue
+        step.inputs.pop("weights", None)
+        step.inputs.pop("mode", None)
+
+
+def _review_submission(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    submitted: Dict[str, Any],
+    query: str,
+    confirmed: Set[str],
+) -> Set[str]:
+    """检验这一次提交。通过的写入空位，没通过的保持未完成。"""
+
+    force: Set[str] = set()
+    by_name = {str(slot.get("name") or ""): slot for slot in projected}
+    for name, slot in by_name.items():
+        if name in confirmed or name not in submitted:
+            continue
+        kind = str(slot.get("resolve") or "")
+        value: Any
+        if kind == "code":
+            value = _normalize_code_value(submitted.get(name), query)
+        elif kind == "weights":
+            value = _as_weight_list(submitted.get(name))
+        elif str(slot.get("format") or "") == "YYYYMMDD":
+            text = re.sub(r"\D", "", str(submitted.get(name) or ""))
+            example = str(slot.get("example") or date_bound_presentation(name).get("example") or "")
+            if len(text) != 8 or (example and text == example and example not in str(query or "")):
+                value = None
+            else:
+                value = text
+        elif kind == "dtype" or slot.get("enum") or slot.get("aliases"):
+            value = coerce_slot_value(slot, submitted.get(name))
+        else:
+            value = coerce_slot_value(slot, submitted.get(name))
+        if value in (None, "", []):
+            continue
+        if _write_empty(planner, steps, name, value):
+            slot["filled"] = True
+            slot["value"] = value
+    mode = str(submitted.get("mode") or "")
+    if "weights" not in confirmed and mode in {"equal", "weighted"}:
+        if _negates_equal(query) and mode == "equal":
+            force.add("weights")
+        else:
+            if mode == "equal":
+                _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+            _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", mode)
+    if _negates_equal(query):
+        for step in steps:
+            if step.skill_name == _PORTFOLIO_SKILL and str((step.inputs or {}).get("mode") or "") == "equal":
+                step.inputs.pop("mode", None)
+        force.add("weights")
+    if "weights" not in confirmed:
+        weights = []
+        for step in steps:
+            if step.skill_name == _PORTFOLIO_SKILL:
+                weights = _as_weight_list((step.inputs or {}).get("weights"))
+        held = _held_codes(steps)
+        if weights and held and len(weights) != len(held):
+            _clear_weight_mode(steps)
+            force.add("weights")
+    _drop_card_examples(steps, query)
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if name not in {"start", "end"}:
+            continue
+        current = None
+        for step in steps:
+            value = (step.inputs or {}).get(name)
+            if value not in (None, "", []):
+                current = value
+                break
+        if current in (None, "", []):
+            slot["filled"] = False
+            slot["value"] = None
+    return force
+
+
+def _clarification_symbol(text: str) -> str:
+    """澄清回答里的单只代码或沪深300别名。"""
+
+    raw = str(text or "").strip()
+    alias = _as_share_code(raw)
+    if alias:
+        return alias
+    match = _EXCHANGE_CODE.search(raw)
+    if match:
+        return match.group(0).upper()
+    return ""
+
+
+def bind_clarification_text(names: Sequence[str], text: str) -> Dict[str, Any]:
+    """澄清回答只绑定正在问的那一格。
+
+    Parameters
+    ----------
+    names : sequence of str
+        当前卡片还在问的槽名。
+    text : str
+        用户这一轮的原文。
+
+    Returns
+    -------
+    dict
+        槽名到值。认不出或像一句新任务时为空。
+    """
+
+    raw = str(text or "").strip()
+    if re.search(r"等权组合|一条组合|做一条", raw):
+        return {}
+    pending = [str(name) for name in names if str(name or "").strip()]
+    if not pending:
+        return {}
+    if "benchmark" in pending and "shares" not in pending:
+        symbol = _clarification_symbol(raw)
+        if symbol:
+            return {"benchmark": symbol}
+    if pending == ["shares"]:
+        symbol = _clarification_symbol(raw)
+        if symbol:
+            return {"shares": symbol}
+    end_only = re.search(r"(?:到|至|until|\bto\b)\s*(20\d{2})\s*年?", raw, flags=re.IGNORECASE)
+    if end_only and "end" in pending:
+        return {"end": f"{int(end_only.group(1)):04d}1231"}
+    dates = re.findall(r"(?<!\d)(20\d{6})(?!\d)", raw)
+    if len(dates) == 1:
+        if "start" in pending and "end" in pending:
+            return {"start": dates[0]}
+        if "end" in pending:
+            return {"end": dates[0]}
+        if "start" in pending:
+            return {"start": dates[0]}
+    return {}
+
+
 def _enforce_hold_commit(steps: List[Any], query: str, confirmed: Set[str]) -> Set[str]:
     """持有对比以一次提交覆盖启发式的部分值。返回仍未完成的槽名。
 
@@ -2847,7 +3170,7 @@ def _finish_portfolio_graph(steps: List[Any], query: str) -> None:
             step.inputs["weights"] = weights
         if weights:
             step.inputs["mode"] = "weighted"
-        elif str((step.inputs or {}).get("mode") or "") != "equal":
+        elif str((step.inputs or {}).get("mode") or "") not in {"equal", "weighted"}:
             step.inputs.pop("mode", None)
         current = str((step.inputs or {}).get("benchmark_output") or "").strip()
         if not benchmark:

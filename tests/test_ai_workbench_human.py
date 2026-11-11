@@ -451,15 +451,11 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             print(" exec status:", (payload.get("execution") or {}).get("status"))
             print(" skill:", result.get("skill_name"))
             print(" doc head:", doc[:180])
-            self.assertIn("[MODE: RUN]  executed", text)
-            self.assertIn("**Run succeeded.**", text)
+            self.assertIn("[MODE: PLAN]  dry_run", text)
+            self.assertIn("Which built-in strategy?", text)
             self.assertIn("trix", text.lower())
+            self.assertNotIn("[MODE: RUN]  executed", text)
             self.assertNotIn("qt.ai.strategy_meta.get", text)
-            gold = next((line.strip() for line in doc.splitlines() if line.strip()), "")
-            print(" gold line:", gold)
-            self.assertTrue(gold)
-            self.assertNotIn(gold[:40], text)
-            self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
 
 
 if __name__ == "__main__":

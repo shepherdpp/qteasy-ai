@@ -215,7 +215,7 @@ class TestAiGoldPaths(unittest.TestCase):
             self.assertNotIn("L2-ANSWER-MARKER", writer_prompt)
 
     def _assert_plan_step(self, payload: Mapping[str, Any], step: Mapping[str, Any]) -> None:
-        """Plan 步：已有回测金句的步骤与副作用可见，未确认不执行。"""
+        """Plan 步：策略编号被清掉后停在澄清，不执行。"""
 
         plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
         execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
@@ -224,28 +224,16 @@ class TestAiGoldPaths(unittest.TestCase):
         trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), dict) else {}
         first = plan_steps[0] if plan_steps else {}
         inputs = first.get("inputs") if isinstance(first.get("inputs"), dict) else {}
-        effects = first.get("side_effects") if isinstance(first.get("side_effects"), dict) else {}
-        cards = list(payload.get("human_cards") or [])
-        ready = next((item for item in cards if item.get("kind") == "plan_ready"), {})
-        ready_text = str(ready.get("text") or "")
         print(" job:", trace.get("intent_job"))
         print(" skills:", names)
-        print(" strategy_id:", inputs.get("strategy_id"))
-        print(" asset_pool:", inputs.get("asset_pool"))
-        print(" side_effects:", effects)
+        print(" missing:", inputs.get("missing_info"))
         print(" execution:", execution.get("status"), execution.get("steps"))
-        print(" plan_ready:", ready_text)
         self.assertEqual(trace.get("intent_job"), step.get("expect_job"))
         self.assertEqual(names, list(step.get("expect_skills") or []))
-        self.assertEqual(str(inputs.get("strategy_id") or "").lower(), step.get("expect_strategy_id"))
-        self.assertEqual(inputs.get("asset_pool"), step.get("expect_asset_pool"))
-        self.assertTrue(effects.get("filesystem_write"))
-        self.assertTrue(effects.get("heavy_compute"))
+        self.assertEqual(inputs.get("missing_info"), step.get("expect_missing_info"))
+        self.assertEqual(inputs.get("fallback_action"), "clarify_required")
         self.assertEqual(execution.get("status"), "dry_run")
         self.assertEqual(execution.get("steps"), [])
-        self.assertIn("qt.ai.backtest.run_builtin", str(payload.get("plan_md") or ""))
-        self.assertIn("Plan ready.", ready_text)
-        self.assertIn("needs confirm", ready_text)
 
     def _query_of(self, step_id: str) -> str:
         """注册表里某一步的用户句。"""

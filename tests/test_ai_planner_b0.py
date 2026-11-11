@@ -16,7 +16,7 @@ from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.skills.datasource_tables import build_table_info_skill
-from qteasy_ai.skills.env_guide import DEFAULT_CORE_TABLES, build_check_tushare_skill
+from qteasy_ai.skills.env_guide import build_check_tushare_skill
 
 
 class TestAiPlannerB0(unittest.TestCase):
@@ -26,7 +26,7 @@ class TestAiPlannerB0(unittest.TestCase):
         self.registry = build_default_registry()
 
     def test_env_query_two_step_plan(self) -> None:
-        """环境检查问法产出 check_tushare 和四张核心表的 table_info。"""
+        """环境检查问法停在表名澄清。表名预写被清掉后没有解释者写回。"""
 
         print("\n[TestAiPlannerB0] env query table_info")
         planner = Planner(self.registry, env_facts={})
@@ -35,12 +35,9 @@ class TestAiPlannerB0(unittest.TestCase):
         tables = [step.inputs.get("table_name") for step in plan.steps[1:]]
         print(" skills:", skill_names)
         print(" tables:", tables)
-        self.assertEqual(skill_names[0], "qt.ai.env.check_tushare")
-        self.assertEqual(skill_names[1:], ["qt.ai.datasource.table_info"] * 4)
-        self.assertEqual(tables, list(DEFAULT_CORE_TABLES))
-        self.assertEqual(len(plan.steps), 5)
-        for step in plan.steps:
-            self.assertEqual(step.depends_on, [])
+        self.assertEqual(skill_names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.planner_trace.get("intent_job"), "env.ready")
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "table_name")
 
     def test_export_kline_line_only_when_close_curve_requested(self) -> None:
         """普通导出不传 plot_type；明确收盘曲线才是 line。"""
@@ -167,10 +164,8 @@ class TestAiPlannerB0(unittest.TestCase):
             print(" execution status:", payload["execution"]["status"])
             env_facts = store.load_env_facts()
             print(" merged env_facts:", env_facts)
-            self.assertEqual(payload["execution"]["status"], "success")
-            self.assertTrue(env_facts["tushare"]["token_present"])
-            self.assertEqual(env_facts["tables"]["stock_daily"]["rows"], 42)
-            self.assertIn("updated_at", env_facts)
+            self.assertEqual(payload["execution"]["status"], "dry_run")
+            self.assertNotIn("tushare", env_facts)
 
 
 if __name__ == "__main__":

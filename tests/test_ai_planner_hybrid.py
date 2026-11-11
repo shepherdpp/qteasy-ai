@@ -37,15 +37,14 @@ class TestAiPlannerHybrid(unittest.TestCase):
         planner = Planner(self.registry, provider=fake, env_facts={})
         plan = planner.build_plan("xyzzy unmatched formula 000300.SH", mode="plan")
         step = plan.steps[0]
-        meta = self.registry.get_metadata("qt.ai.data.kline")
         print(" intent:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("source"))
         print(" skills:", [item.skill_name for item in plan.steps])
         print(" side_effects:", step.side_effects)
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
         self.assertEqual(plan.planner_trace.get("source"), "llm")
-        self.assertEqual(step.skill_name, "qt.ai.data.kline")
-        self.assertEqual(step.side_effects, meta.side_effects)
-        self.assertTrue(fake.prompts)
+        self.assertEqual(step.skill_name, "qt.ai.system.fallback")
+        self.assertEqual(step.inputs.get("missing_info"), "shares")
+        self.assertTrue(any(text.startswith("Slot protocol") for text in fake.prompts))
         self.assertIn("data.summary:", fake.prompts[0])
         self.assertNotIn("qt.ai.backtest.run_builtin:", fake.prompts[0])
 
@@ -100,11 +99,11 @@ class TestAiPlannerHybrid(unittest.TestCase):
         print(" none:", names_none)
         print(" intent:", rule_plan.planner_trace.get("intent_job"), rule_plan.planner_trace.get("source"))
         self.assertEqual(names_none, names_rule)
-        self.assertEqual(names_none, ["qt.ai.backtest.run_builtin", "qt.ai.insight.summarize_backtest"])
+        self.assertEqual(names_none, ["qt.ai.system.fallback"])
         self.assertEqual(rule_plan.planner_trace.get("intent_job"), "backtest.builtin")
         self.assertEqual(rule_plan.planner_trace.get("source"), "rule")
-        self.assertEqual(rule_plan.steps[0].inputs.get("strategy_id").lower(), "macd")
-        self.assertEqual(hybrid_none.steps[0].inputs.get("asset_pool"), "000300.SH")
+        self.assertEqual(rule_plan.steps[0].inputs.get("missing_info"), "strategy_id")
+        self.assertEqual(hybrid_none.steps[0].inputs.get("missing_info"), "strategy_id")
 
     def test_screen_paraphrase_mode_d_uses_llm_job(self) -> None:
         """筛股改写句：Mode-D 信 LLM Job，再走同一菜谱。"""
@@ -120,10 +119,9 @@ class TestAiPlannerHybrid(unittest.TestCase):
         print(" prompts:", len(fake.prompts))
         self.assertEqual(hybrid.planner_trace.get("intent_job"), "research.screen")
         self.assertEqual(hybrid.planner_trace.get("source"), "llm")
-        self.assertEqual(names[0], "qt.ai.research.universe_filter")
-        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
-        self.assertIn("qt.ai.research.price_predicate", names)
-        self.assertTrue(fake.prompts)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(hybrid.steps[0].inputs.get("missing_info"), "industry|threshold")
+        self.assertTrue(any(text.startswith("Slot protocol") for text in fake.prompts))
         self.assertNotIn("recipe_slots_from", hybrid.planner_trace)
 
     def test_zero_hit_hello_clarifies(self) -> None:

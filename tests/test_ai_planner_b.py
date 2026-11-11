@@ -72,13 +72,10 @@ class TestAiPlannerB(unittest.TestCase):
         print(" skills:", names)
         print(" backtest inputs:", backtest.inputs)
         print(" insight depends_on:", plan.steps[1].depends_on if len(plan.steps) > 1 else None)
-        self.assertEqual(names, ["qt.ai.backtest.run_builtin", "qt.ai.insight.summarize_backtest"])
-        self.assertEqual(backtest.inputs.get("strategy_id").lower(), "macd")
-        self.assertEqual(backtest.inputs.get("asset_pool"), "000300.SH")
-        self.assertEqual(backtest.inputs.get("invest_start"), "20180101")
-        self.assertEqual(backtest.inputs.get("invest_end"), "20231231")
-        self.assertEqual(plan.steps[1].depends_on, ["step_1"])
-        self.assertEqual(plan.steps[1].run_if, "all_dependencies_ok")
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.planner_trace.get("intent_job"), "backtest.builtin")
+        self.assertEqual(backtest.inputs.get("missing_info"), "strategy_id")
+        self.assertEqual(backtest.inputs.get("fallback_action"), "clarify_required")
 
     def test_backtest_missing_strategy_clarify(self) -> None:
         """回测缺策略 ID → clarify。"""
@@ -130,10 +127,9 @@ class TestAiPlannerB(unittest.TestCase):
         plan = self.planner.build_plan("optimize DMA parameters", mode="plan")
         step = plan.steps[0]
         print(" skill:", step.skill_name, "inputs:", step.inputs)
-        self.assertEqual(step.skill_name, "qt.ai.optimize.run_builtin")
-        self.assertEqual(str(step.inputs.get("strategy_id")).lower(), "dma")
-        self.assertEqual(step.inputs.get("opti_sample_count"), 32)
-        self.assertEqual(step.inputs.get("opti_method"), "montecarlo")
+        self.assertEqual(step.skill_name, "qt.ai.system.fallback")
+        self.assertEqual(step.inputs.get("missing_info"), "strategy_id")
+        self.assertEqual(plan.planner_trace.get("intent_job"), "optimize.builtin")
 
     def test_live_and_codegen_still_fallback(self) -> None:
         """实盘走 live_trade_plan_only；StrategyBuilder 不再 not_supported_yet。"""

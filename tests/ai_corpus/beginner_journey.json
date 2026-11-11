@@ -22,16 +22,12 @@
       "mode": "plan",
       "query": "帮我看 Tushare 是否配好、本地缺哪些表",
       "expected_job": "env.ready",
-      "expected_skills": [
-        "qt.ai.env.check_tushare",
-        "qt.ai.datasource.table_info",
-        "qt.ai.datasource.table_info",
-        "qt.ai.datasource.table_info",
-        "qt.ai.datasource.table_info"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "table_name",
       "tutorial": "docs/source/getting_started.md",
-      "run_policy": "plan_only",
-      "notes": "gold E1"
+      "run_policy": "clarify",
+      "notes": "表名是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-REFILL",
@@ -158,10 +154,12 @@
       "mode": "plan",
       "query": "show me macd strategy parameters",
       "expected_job": "strategy.meta",
-      "expected_skills": ["qt.ai.strategy_meta.get"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "strategy_id",
       "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
-      "run_policy": "plan_only",
-      "notes": "gold A2"
+      "run_policy": "clarify",
+      "notes": "策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-BT",
@@ -169,13 +167,12 @@
       "mode": "plan",
       "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
       "expected_job": "backtest.builtin",
-      "expected_skills": [
-        "qt.ai.backtest.run_builtin",
-        "qt.ai.insight.summarize_backtest"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "strategy_id",
       "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
-      "run_policy": "plan_only",
-      "notes": "gold B-P0-dash"
+      "run_policy": "clarify",
+      "notes": "策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-SB",
@@ -183,16 +180,12 @@
       "mode": "plan",
       "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
       "expected_job": "strategy.builder",
-      "expected_skills": [
-        "qt.ai.strategy.spec_from_nl",
-        "qt.ai.strategy.codegen_hybrid",
-        "qt.ai.strategy.sanity_check",
-        "qt.ai.operator.build_from_spec",
-        "qt.ai.backtest.run_builtin"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "query|strategy_id",
       "tutorial": "docs/source/tutorials/5-first-self-defined-strategy.md",
-      "run_policy": "plan_only",
-      "notes": "gold D1"
+      "run_policy": "clarify",
+      "notes": "问句和策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-OPT",
@@ -200,10 +193,12 @@
       "mode": "plan",
       "query": "optimize DMA parameters",
       "expected_job": "optimize.builtin",
-      "expected_skills": ["qt.ai.optimize.run_builtin"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "strategy_id",
       "tutorial": "docs/source/tutorials/Tutorial 06 - 交易策略的优化.md",
-      "run_policy": "plan_only",
-      "notes": "gold B-F3"
+      "run_policy": "clarify",
+      "notes": "策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-INS",

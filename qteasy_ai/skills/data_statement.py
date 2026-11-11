@@ -18,6 +18,7 @@ from functools import lru_cache
 from typing import Any, Callable, Optional, Sequence
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import code_spec
 from .hp_panel import english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -190,7 +191,7 @@ def build_data_statement_skill(
         version="0.1.0",
         summary="Read one reporting period of income, balance, or cashflow via get_history_data.",
         inputs_schema={
-            "shares": {"type": "string", "required": True},
+            "shares": code_spec(required=True),
             "period": {"type": "string", "required": True},
             "statement": {
                 "type": "string",

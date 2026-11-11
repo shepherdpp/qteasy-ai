@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .planner import Planner
+from .slot_graph import bind_clarification_text
 from .provider import BaseLLMProvider
 from .session import ConversationState, is_live_backgrounded
 
@@ -82,6 +83,10 @@ class SessionGate:
         hatch = _hatch_decision(session, text)
         if hatch is not None:
             return hatch
+        if session.task_status() == "clarifying":
+            bound = bind_clarification_text(_pending_slot_names(session), text)
+            if bound:
+                return GateDecision(kind="fill_slot", patches=bound, rationale="answers_slot")
         if answers_pending_slot(session, text):
             patches = extract_patches(text)
             missing = list(session.task.missing) if session.task is not None else []
@@ -238,6 +243,32 @@ def extract_patches(text: str) -> Dict[str, Any]:
     named = re.search(r"(?:named|叫)\s+([A-Za-z0-9_]+)", text, flags=re.IGNORECASE)
     if named:
         patches["name"] = named.group(1)
+    return patches
+
+
+def _pending_slot_names(session: ConversationState) -> List[str]:
+    """当前卡片还在问的槽名。没有行时用 missing。"""
+
+    task = session.task
+    if task is None:
+        return []
+    pending = task.pending_clarification if isinstance(task.pending_clarification, dict) else {}
+    names = [
+        str(item.get("name") or "")
+        for item in (pending.get("pending") or [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    if names:
+        return names
+    return [str(item) for item in (task.missing or [])]
+
+
+def new_task_patches(text: str) -> Dict[str, Any]:
+    """新任务不把代码、频率和日期标成已确认。"""
+
+    patches = extract_patches(text)
+    for key in ("shares", "freq", "start", "end"):
+        patches.pop(key, None)
     return patches
 
 

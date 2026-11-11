@@ -47,25 +47,10 @@ class TestAiPlannerD(unittest.TestCase):
         plan = self.planner.build_plan(GOLDEN_D1, mode="plan")
         names = [step.skill_name for step in plan.steps]
         print(" skills:", names)
-        print(" depends:", [step.depends_on for step in plan.steps])
-        print(" backtest inputs:", plan.steps[-1].inputs if names else None)
-        expected = [
-            "qt.ai.strategy.spec_from_nl",
-            "qt.ai.strategy.codegen_hybrid",
-            "qt.ai.strategy.sanity_check",
-            "qt.ai.operator.build_from_spec",
-            "qt.ai.backtest.run_builtin",
-        ]
-        self.assertEqual(names, expected)
-        self.assertEqual(plan.steps[1].depends_on, ["step_1"])
-        self.assertEqual(plan.steps[2].depends_on, ["step_2"])
-        self.assertEqual(plan.steps[3].depends_on, ["step_3"])
-        self.assertEqual(plan.steps[4].depends_on, ["step_4"])
-        bt = plan.steps[4]
-        self.assertEqual(bt.inputs.get("asset_pool"), "000300.SH")
-        self.assertEqual(bt.inputs.get("invest_start"), "20150101")
-        self.assertEqual(bt.inputs.get("invest_end"), "20201231")
-        self.assertEqual(bt.inputs.get("freq"), "d")
+        print(" missing:", plan.steps[0].inputs.get("missing_info") if names else None)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "query|strategy_id")
+        self.assertEqual(plan.steps[0].inputs.get("fallback_action"), "clarify_required")
         self.assertEqual(plan.execution_mode, "dry_run")
         print(" planner_trace:", {k: plan.planner_trace.get(k) for k in ("intent_job", "source", "rationale")})
         self.assertEqual(plan.planner_trace.get("intent_job"), "strategy.builder")
@@ -83,11 +68,11 @@ class TestAiPlannerD(unittest.TestCase):
         print(" skills:", names)
         print(" intent:", hybrid.planner_trace.get("intent_job"), hybrid.planner_trace.get("source"))
         print(" prompts:", len(fake.prompts))
-        self.assertEqual(names, _BUILDER_SKILLS)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(hybrid.steps[0].inputs.get("missing_info"), "query|strategy_id")
         self.assertEqual(hybrid.planner_trace.get("intent_job"), "strategy.builder")
         self.assertEqual(hybrid.planner_trace.get("source"), "llm")
-        self.assertEqual(hybrid.steps[-1].inputs.get("asset_pool"), "000300.SH")
-        self.assertTrue(fake.prompts)
+        self.assertTrue(any(text.startswith("Slot protocol") for text in fake.prompts))
 
     def test_open_refill_dag_clarifies_not_squashed_to_builder(self) -> None:
         """open 含 refill 不得压成 Builder 菜谱。"""

@@ -58,7 +58,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
               const elapsed = document.querySelector('#busy-elapsed');
               if (elapsed && elapsed.textContent.includes('Planning')) return false;
               const nodes = [...document.querySelectorAll('.bubble-text')].map((n) => n.textContent || '');
-              return nodes.some((t) => t.includes('macd')) && !nodes.some((t) => t.includes('list built-in'));
+              return nodes.some((t) => t.includes('000300.SH')) && !nodes.some((t) => t.includes('list built-in'));
             }""",
             timeout=_PLAN_TIMEOUT_MS,
         )
@@ -228,7 +228,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" submit label:", label)
         self.assertEqual(label.strip(), "Send")
         self.dialogs.clear()
-        self.page.fill("#rewind-text", "show me macd strategy parameters")
+        self.page.fill("#rewind-text", "kline summary of 000300.SH")
         self.page.click("#btn-rewind-submit")
         self._wait_macd_plan()
         print(" dialogs:", self.dialogs)
@@ -268,7 +268,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" submit label:", label)
         self.assertEqual(label.strip(), "Discard and resend")
         self.dialogs.clear()
-        self.page.fill("#rewind-text", "show me macd strategy parameters")
+        self.page.fill("#rewind-text", "kline summary of 000300.SH")
         self.page.click("#btn-rewind-submit")
         self._wait_macd_plan()
         chat = self.page.locator("#chat-log").inner_text()

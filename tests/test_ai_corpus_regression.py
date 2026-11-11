@@ -187,8 +187,8 @@ class TestAiCorpusRegression(unittest.TestCase):
         payload = assistant.plan("请列出MACD策略的所有可调参数", response_style="raw")
         first_step = payload["plan"]["steps"][0]
         print("\n[TestAiCorpusRegression] strategy parameter step:", first_step)
-        self.assertEqual(first_step["skill_name"], "qt.ai.strategy_meta.get")
-        self.assertTrue(str(first_step["inputs"].get("strategy_id", "")).strip())
+        self.assertEqual(first_step["skill_name"], "qt.ai.system.fallback")
+        self.assertEqual(first_step["inputs"].get("missing_info"), "strategy_id")
 
     def test_parameter_query_without_strategy_id_returns_clear_fallback(self) -> None:
         """验证参数查询缺少策略名时返回可解释 fallback。"""

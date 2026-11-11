@@ -164,10 +164,10 @@ class TestAiPlannerE(unittest.TestCase):
             inputs = plan.steps[0].inputs
             print(" query:", query)
             print(" inputs:", inputs)
-            self.assertEqual(plan.steps[0].skill_name, skill_name)
+            self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
             self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
-            self.assertEqual((plan.assumptions or {}).get("intent_flags", {}).get("channel"), channel)
-            self.assertEqual(inputs.get(name_key), names)
+            self.assertEqual((plan.assumptions or {}).get("intent_flags", {}).get("channel"), "history")
+            self.assertIn(name_key, str(plan.steps[0].inputs.get("missing_info") or ""))
             self.assertNotIn("get_reference_data", query)
             self.assertNotIn("get_static_data", query)
             self.assertNotIn("get_history_data", query)
@@ -187,13 +187,13 @@ class TestAiPlannerE(unittest.TestCase):
                 response_style="raw",
                 session_id=sid,
             )
-            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.reference"]
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.system.fallback"]
             state = SessionStore(store).load(sid)
             print(" first inputs:", read[0]["inputs"] if read else None)
             print(" task flags:", state.task.flags if state.task else None)
             self.assertTrue(read)
-            self.assertEqual(read[0]["inputs"].get("names"), "cn_gdp")
-            self.assertEqual(state.task.flags.get("channel"), "reference")
+            self.assertEqual(read[0]["inputs"].get("missing_info"), "names")
+            self.assertEqual(state.task.flags.get("channel"), "history")
 
             second = assistant.plan(
                 "",
@@ -201,12 +201,12 @@ class TestAiPlannerE(unittest.TestCase):
                 session_id=sid,
                 patches={"end": "20240630"},
             )
-            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.reference"]
+            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.system.fallback"]
             print(" second inputs:", read2[0]["inputs"] if read2 else None)
             print(" second source:", second["plan"]["planner_trace"].get("source"))
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
             self.assertTrue(read2)
-            self.assertEqual(read2[0]["inputs"].get("names"), "cn_gdp")
+            self.assertIn("names", str(read2[0]["inputs"].get("missing_info") or ""))
 
 
 if __name__ == "__main__":

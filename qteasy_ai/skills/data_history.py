@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
-from ..slot_graph import asset_type_spec, dtype_spec, freq_spec, window_bound_spec
+from ..slot_graph import asset_type_spec, code_spec, dtype_spec, freq_spec, window_bound_spec
 from .hp_panel import english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -47,7 +47,7 @@ def build_data_history_skill(
         summary="Read local history columns into a HistoryPanel via get_history_data.",
         inputs_schema={
             "htype_names": dtype_spec(required=True),
-            "shares": {"type": "string", "required": True},
+            "shares": code_spec(required=True),
             "start": window_bound_spec("start"),
             "end": window_bound_spec("end"),
             "freq": freq_spec(),

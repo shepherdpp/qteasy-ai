@@ -156,8 +156,11 @@ class TestAiNotebookMagic(unittest.TestCase):
             payload = outcome["result"]
             names = [s["skill_name"] for s in payload["plan"]["steps"]]
             print(" skills:", names, "source:", payload["plan"]["planner_trace"].get("source"))
-            self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
+            print(" missing:", payload["plan"]["steps"][0]["inputs"].get("missing_info"))
+            self.assertEqual(names, ["qt.ai.system.fallback"])
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "start")
             self.assertEqual(payload["plan"]["planner_trace"].get("source"), "session")
+            self.assertEqual(payload["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
     def test_notebook_ask_session_zero_skill(self) -> None:
         """Ask 带 session-id 仍无 execution。"""

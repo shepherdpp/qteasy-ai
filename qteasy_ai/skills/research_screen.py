@@ -200,7 +200,7 @@ def build_research_screen_skill(
             "industry": {"type": "string", "required": True},
             "threshold": {"type": "number", "required": True},
             "metric": {"type": "string", "required": False, "enum": ["drawdown", "gain"], "enum_strict": True},
-            "lookback_days": {"type": "integer", "required": False},
+            "lookback_days": {"type": "integer", "required": False, "resolve": "int"},
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
             "max_hits": {"type": "integer", "required": False},
@@ -554,7 +554,7 @@ def build_price_predicate_skill(
         inputs_schema={
             "threshold": {"type": "number", "required": True},
             "metric": {"type": "string", "required": False, "enum": ["drawdown", "gain"], "enum_strict": True},
-            "lookback_days": {"type": "integer", "required": False},
+            "lookback_days": {"type": "integer", "required": False, "resolve": "int"},
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
             "upstream_payload": {"type": "object", "required": False},

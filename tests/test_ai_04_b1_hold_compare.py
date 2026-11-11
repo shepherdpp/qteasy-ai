@@ -391,15 +391,30 @@ class TestAi04B1HoldCompare(unittest.TestCase):
             ]
         )
         canned = Planner(self.registry, provider=fake, env_facts={}).build_plan("做一条等权组合", mode="plan")
-        blob = json.dumps([dict(step.inputs) for step in canned.steps], ensure_ascii=False)
+        blob = json.dumps(
+            {
+                "steps": [dict(step.inputs) for step in canned.steps],
+                "accepted": (canned.assumptions or {}).get("accepted_steps") or [],
+            },
+            ensure_ascii=False,
+        )
         print(" canned skills:", _skills(canned))
         print(" canned inputs:", blob)
-        self.assertEqual(canned.steps[0].inputs.get("shares"), "000001.SZ,000300.SH")
+        self.assertNotIn("000001.SZ", blob)
+        self.assertNotIn("000300.SH", blob)
         self.assertNotIn(canned.steps[0].inputs.get("asset_type"), ("E", "IDX"))
         self.assertNotIn("supported_skill", blob)
         self.assertNotIn('"page"', blob)
-        self.assertEqual(canned.steps[1].inputs.get("mode"), "equal")
-        self.assertNotIn("weighted", blob)
+        portfolio = {}
+        for step in (canned.assumptions or {}).get("accepted_steps") or []:
+            if str(step.get("skill_name") or "") == "qt.ai.hp.portfolio":
+                portfolio = step.get("inputs") or {}
+        if not portfolio:
+            for step in canned.steps:
+                if step.skill_name == "qt.ai.hp.portfolio":
+                    portfolio = dict(step.inputs or {})
+        print(" canned mode:", portfolio.get("mode"))
+        self.assertEqual(portfolio.get("mode"), "weighted")
         self.assertNotIn('"htypes"', blob)
         self.assertNotIn('"layout"', blob)
         self.assertNotIn('"rows"', blob)
