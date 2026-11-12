@@ -92,9 +92,36 @@ _NEXT_ACTION = {
 
 
 def request_process_stop() -> None:
-    """在响应发出后对本进程发 SIGINT，让 ``uvicorn.run`` 按 Ctrl+C 退出。"""
+    """在 HTTP 响应发出后对本进程发 SIGTERM，让 uvicorn 优雅退出。
 
-    threading.Timer(0.25, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+    交互式终端的 SIGINT 会先做 5 秒确认。Settings 已经确认过，
+    因此这里发 SIGTERM，避免控制台再问一次。
+
+    Parameters
+    ----------
+    无
+
+    Returns
+    -------
+    None
+    """
+
+    threading.Timer(0.25, _send_stop_signal).start()
+
+
+def _send_stop_signal() -> None:
+    """向本进程发 SIGTERM。
+
+    Parameters
+    ----------
+    无
+
+    Returns
+    -------
+    None
+    """
+
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _error(code: str, message: str, status: int) -> JSONResponse:

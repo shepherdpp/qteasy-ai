@@ -453,6 +453,161 @@ class TestAiCliNotebookEntry(unittest.TestCase):
                 handler.setLevel(level)
                 handler.setFormatter(formatter)
 
+    def test_serve_ctrl_c_confirm_choice(self) -> None:
+        """serve 的 Ctrl+C 确认：y 才算退出，n 或超时留下。"""
+
+        import io
+
+        from qteasy_ai.workbench.serve_exit import (
+            SHUTDOWN_PROMPT,
+            stdin_is_interactive,
+            wait_shutdown_choice,
+        )
+
+        print("\n[TestAiCliNotebookEntry] serve Ctrl+C 确认：y / n / 超时")
+
+        def read_choice(payload: bytes, timeout_s: float) -> tuple[str, str]:
+            read_fd, write_fd = os.pipe()
+            previous = sys.stdout
+            captured = io.StringIO()
+            try:
+                if payload:
+                    os.write(write_fd, payload)
+                    os.close(write_fd)
+                    write_fd = -1
+                sys.stdout = captured
+                with os.fdopen(read_fd, "r", encoding="utf-8") as reader:
+                    read_fd = -1
+                    choice = wait_shutdown_choice(reader, timeout_s)
+                return choice, captured.getvalue()
+            finally:
+                sys.stdout = previous
+                if read_fd >= 0:
+                    os.close(read_fd)
+                if write_fd >= 0:
+                    os.close(write_fd)
+
+        cases = (
+            (b"y\n", "yes"),
+            (b"yes\n", "yes"),
+            (b"Y\n", "yes"),
+            (b"n\n", "no"),
+            (b"\n", "no"),
+            (b"no\n", "no"),
+            (b"yn\n", "no"),
+        )
+        for payload, expected in cases:
+            choice, shown = read_choice(payload, 1.0)
+            print(" line:", repr(payload), "choice:", choice, "shown:", repr(shown))
+            self.assertEqual(choice, expected)
+            self.assertEqual(shown, SHUTDOWN_PROMPT)
+
+        read_fd, write_fd = os.pipe()
+        try:
+            with os.fdopen(read_fd, "r", encoding="utf-8") as reader:
+                read_fd = -1
+                interactive = stdin_is_interactive(reader)
+        finally:
+            if read_fd >= 0:
+                os.close(read_fd)
+            os.close(write_fd)
+        print(" pipe interactive:", interactive)
+        self.assertFalse(interactive)
+
+        choice, shown = read_choice(b"", 0.05)
+        print(" timeout choice:", choice, "shown:", repr(shown))
+        self.assertEqual(choice, "timeout")
+        self.assertEqual(shown, SHUTDOWN_PROMPT + "\n")
+
+    def test_request_process_stop_sends_sigterm(self) -> None:
+        """Settings Quit 发 SIGTERM，不进入 Ctrl+C 的 5 秒确认。"""
+
+        import signal
+        import threading
+
+        import qteasy_ai.workbench.http_app as http_app
+
+        print("\n[TestAiCliNotebookEntry] Settings Quit 发 SIGTERM")
+        recorded = {}
+
+        def fake_kill(pid: int, sig: int) -> None:
+            recorded["pid"] = pid
+            recorded["sig"] = sig
+
+        original_kill = http_app.os.kill
+        http_app.os.kill = fake_kill
+        try:
+            http_app._send_stop_signal()
+        finally:
+            http_app.os.kill = original_kill
+        print(
+            " kill pid:",
+            recorded.get("pid"),
+            "sig:",
+            recorded.get("sig"),
+            "SIGTERM:",
+            signal.SIGTERM,
+        )
+        self.assertEqual(recorded.get("pid"), os.getpid())
+        self.assertEqual(recorded.get("sig"), signal.SIGTERM)
+
+        fired = threading.Event()
+
+        def fake_send() -> None:
+            fired.set()
+
+        original_send = http_app._send_stop_signal
+        http_app._send_stop_signal = fake_send
+        try:
+            http_app.request_process_stop()
+            scheduled = fired.wait(1.0)
+        finally:
+            http_app._send_stop_signal = original_send
+        print(" timer fired:", scheduled)
+        self.assertTrue(scheduled)
+
+    def test_second_ctrl_c_force_stops_without_resume(self) -> None:
+        """等待确认时再次 Ctrl+C 立刻停，且不再恢复确认处理器。"""
+
+        import signal
+
+        from qteasy_ai.workbench.serve_exit import ConfirmExitServer
+
+        print("\n[TestAiCliNotebookEntry] 第二次 Ctrl+C 立刻停")
+        server = ConfirmExitServer.__new__(ConfirmExitServer)
+        server.should_exit = False
+        server.force_exit = False
+        server._stopping = False
+        server._confirming = True
+        server._force_stop(signal.SIGINT, None)
+        print(
+            " force should_exit:",
+            server.should_exit,
+            "force_exit:",
+            server.force_exit,
+            "stopping:",
+            server._stopping,
+        )
+        self.assertTrue(server.should_exit)
+        self.assertTrue(server.force_exit)
+        self.assertTrue(server._stopping)
+        server._restore_sigint_handler()
+        print(" confirming after restore skipped:", server._confirming)
+        self.assertTrue(server._confirming)
+
+        confirmed = ConfirmExitServer.__new__(ConfirmExitServer)
+        confirmed.should_exit = False
+        confirmed.force_exit = False
+        confirmed._request_shutdown()
+        print(
+            " yes should_exit:",
+            confirmed.should_exit,
+            "force_exit:",
+            confirmed.force_exit,
+        )
+        self.assertTrue(confirmed.should_exit)
+        self.assertFalse(confirmed.force_exit)
+
 
 if __name__ == "__main__":
     unittest.main()
