@@ -119,11 +119,16 @@ class TestAi04A0Recipes(unittest.TestCase):
         print(" skills:", names)
         print(" legacy:", _names(legacy))
         print(" depends:", [step.depends_on for step in plan.steps])
+        shares = plan.steps[0].inputs.get("shares")
         print(" describe inputs:", plan.steps[1].inputs)
+        print(" shares:", shares)
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
         self.assertEqual(names, _SUMMARY)
         self.assertEqual(_names(legacy), _SUMMARY)
-        self.assertEqual(plan.steps[0].inputs.get("shares"), "000300.SH")
+        self.assertEqual(
+            shares,
+            [{"mention": "000300.SH", "code": "000300.SH", "status": "confirmed"}],
+        )
         self.assertEqual(plan.steps[1].depends_on, ["step_1"])
         self.assertEqual(plan.steps[2].depends_on, ["step_1"])
         self.assertEqual(plan.steps[1].inputs.get("view"), "shape")

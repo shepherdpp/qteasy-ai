@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import code_spec, join_code_text
 
 _REPORT_TEXT_CAP = 200000
 
@@ -178,7 +179,7 @@ def build_backtest_run_skill(
         summary="Run a built-in or generated-strategy backtest (mode=1) and return sliced metrics.",
         inputs_schema={
             "strategy_id": {"type": "string", "required": True},
-            "asset_pool": {"type": "string", "required": False},
+            "asset_pool": code_spec(required=False, element="code", min_count=1),
             "shares": {"type": "string", "required": False},
             "invest_start": {"type": "string", "required": False},
             "invest_end": {"type": "string", "required": False},
@@ -221,7 +222,12 @@ def build_backtest_run_skill(
         payload_in = upstream_payload if isinstance(upstream_payload, dict) else {}
         path_text = str(strategy_path or payload_in.get("strategy_path") or "").strip()
         spec_raw = payload_in.get("spec") if isinstance(payload_in.get("spec"), dict) else {}
-        pool = asset_pool or shares or spec_raw.get("asset_pool") or "000300.SH"
+        pool = (
+            join_code_text(asset_pool)
+            or join_code_text(shares)
+            or spec_raw.get("asset_pool")
+            or "000300.SH"
+        )
         start_date = invest_start or start or spec_raw.get("invest_start")
         end_date = invest_end or end or spec_raw.get("invest_end")
         run_freq = freq or spec_raw.get("run_freq") or payload_in.get("run_freq") or "d"

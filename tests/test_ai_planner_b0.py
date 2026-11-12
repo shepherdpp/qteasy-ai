@@ -86,12 +86,17 @@ class TestAiPlannerB0(unittest.TestCase):
         planner = Planner(self.registry, env_facts={})
         plan = planner.build_plan("kline summary of 000300.SH", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
+        shares = plan.steps[0].inputs.get("shares")
         print(" skills:", skill_names)
+        print(" shares:", shares)
         self.assertEqual(
             skill_names,
             ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
         )
-        self.assertEqual(plan.steps[0].inputs.get("shares"), "000300.SH")
+        self.assertEqual(
+            shares,
+            [{"mention": "000300.SH", "code": "000300.SH", "status": "confirmed"}],
+        )
 
     def test_empty_env_facts_summary_has_no_table_gate(self) -> None:
         """空 env_facts 时 summary 不前置 overview。"""

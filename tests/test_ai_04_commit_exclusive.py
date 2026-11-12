@@ -19,6 +19,7 @@ from qteasy_ai.intents.recipes import _hold_compare_steps
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
+from qteasy_ai.session import ConversationState
 
 
 def _registry():
@@ -191,7 +192,21 @@ class TestAi04CommitExclusive(unittest.TestCase):
         )
         print(" plain:", _blob(plain))
         print(" modeled:", _blob(modeled))
-        self.assertNotIn("600519", _blob(plain))
+        state = ConversationState.empty("company-names")
+        state.start_task(query="茅台和五粮液放一起", job="research.hold_compare")
+        forced = Planner(_registry(), provider=None, env_facts={}).build_plan(
+            "茅台和五粮液放一起",
+            session=state,
+            skip_classify=True,
+        )
+        holdings = _snap_inputs(forced, "qt.ai.hp.portfolio").get("holdings") or []
+        print(" forced holdings:", holdings)
+        self.assertEqual([item.get("mention") for item in holdings], ["茅台", "五粮液"])
+        self.assertTrue(all(item.get("status") == "incomplete" and not item.get("code") for item in holdings))
+        self.assertNotIn("600519", _blob(forced))
+        modeled_holdings = _snap_inputs(modeled, "qt.ai.hp.portfolio").get("holdings")
+        print(" 协议没有按项交出，整格保持未完成:", modeled_holdings)
+        self.assertFalse(modeled_holdings)
         self.assertNotIn("600519", _blob(modeled))
         self.assertTrue(any("Slot protocol" in item for item in provider.prompts))
 
@@ -314,13 +329,13 @@ class TestAi04CommitExclusive(unittest.TestCase):
         self.assertIn(history.get("start"), (None, ""))
 
     def test_recipe_calls_stay_in_source(self) -> None:
-        """菜谱源码仍同时调用 commit_query 和 _market_inputs。"""
+        """持有对比菜谱不再预写代码，也不再调用提交和市场抽取。"""
 
-        print("\n[TestAi04CommitExclusive] 预写调用留在源码")
+        print("\n[TestAi04CommitExclusive] 菜谱不再预写")
         source = inspect.getsource(_hold_compare_steps)
         print(" has commit:", "commit_query" in source, "has market:", "_market_inputs" in source)
-        self.assertIn("commit_query", source)
-        self.assertIn("_market_inputs", source)
+        self.assertNotIn("commit_query", source)
+        self.assertNotIn("_market_inputs", source)
 
 
 if __name__ == "__main__":

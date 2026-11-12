@@ -289,21 +289,67 @@ def dtype_spec(*, required: bool) -> Dict[str, Any]:
     return {"type": "string", "required": required, "resolve": "dtype"}
 
 
-def code_spec(*, required: bool) -> Dict[str, Any]:
+def code_spec(*, required: bool, element: str = "", min_count: int = 0) -> Dict[str, Any]:
     """代码槽。后缀和别名在同一次填写里收束。
 
     Parameters
     ----------
     required : bool
         是否必填。
+    element : str, optional
+        元素类型。有值时计划里存项列表，而不是逗号字符串。
+    min_count : int, optional
+        至少要有这么多项已确认。
 
     Returns
     -------
     dict
-        带 ``resolve=code`` 的字符串字段。
+        带 ``resolve=code`` 的字段。
     """
 
-    return {"type": "string", "required": required, "resolve": "code"}
+    spec: Dict[str, Any] = {"type": "string", "required": required, "resolve": "code"}
+    if element:
+        spec["element"] = element
+        spec["cardinality"] = "many"
+        spec["min_count"] = int(min_count)
+    return spec
+
+
+def join_code_text(value: Any) -> str:
+    """把已确认项的 code 拼成内核要的逗号字符串。
+
+    字符串原样返回。空列表返回空串，让回测和优化仍走自己的缺省池。
+
+    Parameters
+    ----------
+    value : Any
+        计划里的项、项列表，或原来的代码字符串。
+
+    Returns
+    -------
+    str
+        逗号分隔的代码。没有已确认代码时为空串。
+    """
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        if str(value.get("status") or "confirmed") != "confirmed":
+            return ""
+        return str(value.get("code") or "")
+    if isinstance(value, (list, tuple)):
+        codes: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                if str(item.get("status") or "") != "confirmed":
+                    continue
+                code = str(item.get("code") or "")
+            else:
+                code = str(item or "").strip()
+            if code and code not in codes:
+                codes.append(code)
+        return ",".join(codes)
+    return ""
 
 
 def weights_spec() -> Dict[str, Any]:
@@ -864,10 +910,14 @@ def _fill_graph(
     confirmed = _confirmed_values(session)
     if job != "open":
         _clear_open_prewrite(steps, projected, set(confirmed))
+    closed_items: Dict[str, Any] = {}
     for slot in projected:
         if slot["filled"] or slot["name"] not in confirmed:
             continue
         raw = confirmed[slot["name"]]
+        if slot.get("element"):
+            closed_items[slot["name"]] = raw
+            continue
         if slot["name"] == "weights" and isinstance(raw, dict) and str(raw.get("mode") or "") == "equal":
             _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
             slot["filled"] = True
@@ -898,6 +948,8 @@ def _fill_graph(
             dtype_query=_utterance_without_slots(query, session),
         )
     force_names = _review_submission(planner, steps, projected, submitted, query, set(confirmed))
+    _apply_equal_phrase(steps, query)
+    _seal_elements(planner, steps, projected, closed_items)
     if _apply_lookback_default(planner, steps, query, projected):
         extras["slot_defaults"] = {"lookback_days": "library"}
     if job in _DIAGNOSIS_JOBS:
@@ -1108,6 +1160,11 @@ def _pending_after_fill(
     rows: List[Dict[str, Any]] = []
     seen = set()
     for slot in projected:
+        item_rows = _item_pending_rows(slot)
+        if item_rows is not None:
+            rows.extend(item_rows)
+            seen.add(slot["name"])
+            continue
         if slot["filled"]:
             continue
         ask = (
@@ -1186,11 +1243,13 @@ def _project(
     for step in steps:
         if step.skill_name == "qt.ai.system.fallback":
             continue
-        schema = _schema(planner, step.skill_name)
+        schema = _step_fields(step, _schema(planner, step.skill_name))
         grouped = _any_of_member_names(planner, [step])
         allowed = _DIAGNOSIS_KEYS.get(step.skill_name, set()) if diagnosis else set()
         for key, spec in schema.items():
             if not isinstance(spec, dict) or key in _SKIP:
+                continue
+            if spec.get("assemble_only") or spec.get("user_slot") is False:
                 continue
             if diagnosis and step.skill_name == "qt.ai.hp.plot" and key == "shares":
                 continue
@@ -1207,11 +1266,18 @@ def _project(
                 or spec.get("enum")
                 or spec.get("aliases")
                 or spec.get("vocabulary")
+                or spec.get("element")
+                or spec.get("min_count")
             )
             if not diagnosis_key and not contract:
                 continue
             current = (step.inputs or {}).get(key)
-            filled = current not in (None, "", [])
+            if spec.get("element") and current in (None, "", []):
+                filled = False
+            elif spec.get("element"):
+                filled = _element_complete(spec, current)
+            else:
+                filled = current not in (None, "", [])
             extra = _spec_extras(spec)
             row = by_name.get(key)
             if row is None:
@@ -1278,7 +1344,13 @@ def _heuristic(
             for key in ("start", "end"):
                 if key in wanted and market.get(key) not in (None, ""):
                     found[key] = market[key]
-    found.update(_heuristic_codes(query, [slot for slot in slots if str(slot.get("resolve") or "") == "code"]))
+    plain_codes = [
+        slot
+        for slot in slots
+        if str(slot.get("resolve") or "") == "code" and not slot.get("element")
+    ]
+    found.update(_heuristic_codes(query, plain_codes))
+    found.update(_heuristic_elements(query, slots))
     if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
         weights = commit_weight_text(query)
         if weights["status"] == "value":
@@ -1626,6 +1698,26 @@ def _schema(planner: Any, skill_name: str) -> Dict[str, Any]:
     return dict(getattr(meta, "inputs_schema", None) or {})
 
 
+def _step_fields(step: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
+    """共享 schema 被这一步的槽声明盖过。声明不进 inputs。"""
+
+    fields = {
+        key: dict(spec) if isinstance(spec, dict) else spec
+        for key, spec in (schema or {}).items()
+    }
+    decls = getattr(step, "slot_decls", None) or {}
+    if not isinstance(decls, dict):
+        return fields
+    for key, decl in decls.items():
+        name = str(key)
+        if not isinstance(decl, dict) or name not in fields:
+            continue
+        base = dict(fields.get(name) or {})
+        base.update(decl)
+        fields[name] = base
+    return fields
+
+
 def _any_of_groups(planner: Any, skill_name: str) -> List[List[str]]:
     """技能声明的「至少填一个」分组。"""
 
@@ -1681,6 +1773,14 @@ def _spec_extras(spec: Dict[str, Any]) -> Dict[str, Any]:
         extra["constraint"] = str(spec.get("constraint"))
     if spec.get("resolve"):
         extra["resolve"] = str(spec.get("resolve"))
+    if spec.get("element"):
+        extra["element"] = str(spec.get("element"))
+    if spec.get("role"):
+        extra["role"] = str(spec.get("role"))
+    if spec.get("min_count") not in (None, ""):
+        extra["min_count"] = int(spec.get("min_count") or 0)
+    if spec.get("cardinality"):
+        extra["cardinality"] = str(spec.get("cardinality"))
     aliases = spec.get("aliases") if isinstance(spec.get("aliases"), dict) else {}
     if aliases:
         extra["aliases"] = {str(key): str(value) for key, value in aliases.items()}
@@ -2800,8 +2900,11 @@ def _sync_projected(planner: Any, steps: Sequence[Any], projected: Sequence[Dict
                 found = current
                 break
         if found is None:
-            slot["filled"] = False
             slot["value"] = None
+            slot["filled"] = _element_complete(slot, None) if slot.get("element") else False
+        elif slot.get("element"):
+            slot["value"] = found
+            slot["filled"] = _element_complete(slot, found)
         else:
             slot["filled"] = True
             slot["value"] = found
@@ -2892,6 +2995,494 @@ def _normalize_code_value(value: Any, query: str) -> Optional[str]:
     return ",".join(found) if found else None
 
 
+_EDGE_PREFIXES = (
+    "帮我用",
+    "请用",
+    "请说明",
+    "并说明",
+    "帮我",
+    "并跟",
+    "基准是",
+    "下载",
+    "回测",
+    "优化",
+    "取数",
+    "说明",
+    "相对",
+    "跟",
+    "看",
+    "用",
+    "以",
+    "并",
+    "的",
+)
+_EDGE_SUFFIXES = (
+    "做一个等权持仓组合",
+    "做一条等权组合",
+    "做一个等权组合",
+    "做一条组合",
+    "等权持仓组合",
+    "等权组合",
+    "持仓组合",
+    "做一个对比",
+    "做一条加权组合",
+    "加权组合",
+    "请说明基准",
+    "说明基准",
+    "为基准",
+    "是指数",
+    "不要等权",
+    "的波动率",
+    "持仓收益率",
+    "累计收益",
+    "波动率",
+    "放一起",
+    "收益率",
+    "超额",
+    "周线",
+    "日线",
+    "月线",
+    "指数",
+    "组合",
+    "对比",
+    "基准",
+    "最大回撤",
+    "做回测",
+    "成一条线",
+    "轻重不同",
+    "回撤",
+    "年化",
+    "回测",
+    "给我看",
+)
+_TASK_MARKERS = (
+    "回测",
+    "年化",
+    "回撤",
+    "策略",
+    "均线",
+    "金叉",
+    "死叉",
+    "择时",
+    "优化",
+    "下载",
+    "波动",
+    "给我",
+    "上跑",
+    "权重",
+)
+_EDGE_WEIGHT = re.compile(
+    r"\s*(?:(?:按)?权重|加权组合)\s*\d+(?:\.\d+)?[%％]?(?:\s*[:：比]\s*\d+(?:\.\d+)?[%％]?)*$"
+)
+_EDGE_DATES = re.compile(r"\s*从\s*\d{4,8}\s*到\s*\d{4,8}$")
+_PIECE_SPLIT = re.compile(r"[、，,]|(?:和|与)")
+
+
+def _element_complete(slot: Dict[str, Any], value: Any) -> bool:
+    """元素合同：每一项都已确认，且已确认项数不少于声明。
+
+    空角色只看元素类型和项数。空着的可选槽算完成。非空字符串不算完成。
+    """
+
+    if isinstance(value, str) and value.strip():
+        return False
+    items = _as_item_list(value)
+    minimum = int(slot.get("min_count") or 0)
+    if not items:
+        return False
+    if any(str(item.get("status") or "") != "confirmed" for item in items):
+        return False
+    return len(items) >= minimum
+
+
+def _as_item_list(value: Any) -> List[Dict[str, Any]]:
+    """一项或项列表。其它形状当空。"""
+
+    if isinstance(value, dict) and any(key in value for key in ("code", "mention", "status")):
+        return [dict(value)]
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    return []
+
+
+def _one_item(value: Any) -> Optional[Dict[str, Any]]:
+    """单值槽上的那一项。字符串代码包成已确认项。"""
+
+    if isinstance(value, dict) and any(key in value for key in ("code", "mention", "status")):
+        item = dict(value)
+        item.setdefault("mention", "")
+        item.setdefault("code", str(item.get("code") or ""))
+        item.setdefault("status", "confirmed")
+        return item
+    if isinstance(value, list):
+        items = _as_item_list(value)
+        return dict(items[0]) if items else None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    code = _as_share_code(text) or text
+    return {"mention": "", "code": code, "status": "confirmed"}
+
+
+def _is_alias_piece(piece: str) -> bool:
+    """这段是不是沪深300一类别名，而不是用户写出的交易所代码。"""
+
+    compact = re.sub(r"\s+", "", str(piece or "")).lower()
+    return "沪深300" in compact or "csi300" in compact
+
+
+def _trim_piece(text: str) -> str:
+    """去掉任务虚词边角。切不开时改这里，不加回用字到做字的窗口。"""
+
+    piece = str(text or "").strip(" ，,。;；、")
+    changed = True
+    prefixes = sorted(_EDGE_PREFIXES, key=len, reverse=True)
+    suffixes = sorted(_EDGE_SUFFIXES, key=len, reverse=True)
+    while piece and changed:
+        changed = False
+        for prefix in prefixes:
+            if piece.startswith(prefix):
+                piece = piece[len(prefix):].strip(" ，,。;；、")
+                changed = True
+                break
+        leading = re.sub(r"^[A-Za-z][A-Za-z0-9_]*\s*", "", piece).strip(" ，,。;；、")
+        if leading != piece:
+            piece = leading
+            changed = True
+        shortened = re.sub(r"^(?:过去|近)\s*\d+\s*年", "", piece).strip(" ，,。;；、")
+        if shortened != piece:
+            piece = shortened
+            changed = True
+        unweighted = _EDGE_WEIGHT.sub("", piece).strip(" ，,。;；、")
+        if unweighted != piece:
+            piece = unweighted
+            changed = True
+        undated = _EDGE_DATES.sub("", piece).strip(" ，,。;；、")
+        if undated != piece:
+            piece = undated
+            changed = True
+        for suffix in suffixes:
+            if piece.endswith(suffix):
+                piece = piece[: -len(suffix)].strip(" ，,。;；、")
+                changed = True
+                break
+    return piece
+
+
+def _exact_alias(piece: str) -> bool:
+    """整段就是沪深300一类对照名，而不是夹在任务句里。"""
+
+    compact = re.sub(r"\s+", "", str(piece or "")).lower()
+    return compact in {"沪深300", "csi300"}
+
+
+def _keep_piece(piece: str) -> bool:
+    """代码、整段别名或短中文名留下。任务句、年份和夹着英文的边角丢掉。"""
+
+    if not piece:
+        return False
+    if re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ))?", piece, flags=re.IGNORECASE):
+        return True
+    if _exact_alias(piece):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?[%％]?", piece):
+        return False
+    if re.search(r"[A-Za-z]", piece) or re.search(r"\d", piece):
+        return False
+    if any(marker in piece for marker in _TASK_MARKERS):
+        return False
+    return re.fullmatch(r"[\u4e00-\u9fff]{2,8}", piece) is not None
+
+
+def _enumerate_pieces(query: str) -> List[str]:
+    """按顿号、逗号、和、与切开。没有分隔符时不把整句当成一项。"""
+
+    text = str(query or "")
+    if _PIECE_SPLIT.search(text) is None:
+        return []
+    found: List[str] = []
+    for raw in _PIECE_SPLIT.split(text):
+        piece = _trim_piece(raw)
+        extras = [piece] if _keep_piece(piece) else _token_pieces(piece, include_alias=True)
+        for item in extras:
+            if item and item not in found:
+                found.append(item)
+    return found
+
+
+def _token_pieces(query: str, *, include_alias: bool) -> List[str]:
+    """没有分隔符时只收代码。别名默认不收进持有。"""
+
+    found: List[str] = []
+    for _pos, kind, token in _symbol_tokens(query):
+        if kind == "alias":
+            if not include_alias:
+                continue
+            piece = "沪深300"
+        else:
+            piece = token
+        if piece not in found:
+            found.append(piece)
+    return found
+
+
+def _status_for_piece(piece: str, query: str) -> Tuple[str, str]:
+    """用户写出的唯一代码已确认。冲突、裸 000001 和非代码没有 code。"""
+
+    upper = str(piece or "").upper()
+    if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", upper):
+        if _suffix_conflict(upper):
+            return "", "incomplete"
+        if _user_wrote_code(upper, query):
+            return upper, "confirmed"
+        return "", "incomplete"
+    if re.fullmatch(r"\d{6}", piece):
+        code, reason = _resolve_bare(piece, query, max(str(query or "").find(piece), 0))
+        if reason or not code:
+            return "", "incomplete"
+        return code, "confirmed"
+    return "", "incomplete"
+
+
+def _items_for_element(element: str, pieces: Sequence[str], query: str) -> List[Dict[str, Any]]:
+    """按元素类型收项。对照代码只留一项，成分代码跳过纯别名。"""
+
+    if element == "comparison_code":
+        code = _parse_benchmark(query)
+        mention = ""
+        for piece in pieces:
+            if not _is_alias_piece(piece):
+                continue
+            mention = piece
+            if not code:
+                code = "000300.SH"
+            break
+        if not code:
+            return []
+        return [{
+            "mention": mention,
+            "code": code,
+            "status": "confirmed" if _user_wrote_code(code, query) else "pending",
+        }]
+    benchmark_code = _parse_benchmark(query) if element == "constituent_code" else ""
+    items: List[Dict[str, Any]] = []
+    seen_codes: List[str] = []
+    for piece in pieces:
+        if element == "constituent_code" and _is_alias_piece(piece):
+            continue
+        if element == "code" and _is_alias_piece(piece):
+            items.append({"mention": piece, "code": "000300.SH", "status": "confirmed"})
+            continue
+        code, status = _status_for_piece(piece, query)
+        if element == "constituent_code" and code and code == benchmark_code:
+            continue
+        if code and code in seen_codes:
+            continue
+        if code:
+            seen_codes.append(code)
+        items.append({"mention": piece, "code": code, "status": status})
+    return items
+
+
+def _heuristic_elements(query: str, slots: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """无模型时，多值代码槽共用这一套切分。"""
+
+    separated = _PIECE_SPLIT.search(str(query or "")) is not None
+    pieces = _enumerate_pieces(query)
+    found: Dict[str, Any] = {}
+    for slot in slots:
+        element = str(slot.get("element") or "")
+        if not element:
+            continue
+        chosen = pieces
+        if not separated:
+            chosen = _token_pieces(
+                query,
+                include_alias=element in {"code", "comparison_code"},
+            )
+        items = _items_for_element(element, chosen, query)
+        if not items:
+            continue
+        if str(slot.get("cardinality") or "") == "one" or element == "comparison_code":
+            found[str(slot.get("name") or "")] = items[0]
+        else:
+            found[str(slot.get("name") or "")] = items
+    return found
+
+
+def _tag_submitted_item(item: Any, query: str) -> Dict[str, Any]:
+    """协议交来的一项。用户没写的代码保持 pending，不另切一句造提及。"""
+
+    if isinstance(item, str):
+        mention = item.strip()
+        code = _as_share_code(mention)
+        if not code and re.fullmatch(r"\d{6}", mention):
+            resolved, reason = _resolve_bare(mention, query, max(str(query or "").find(mention), 0))
+            code = "" if reason else resolved
+    elif isinstance(item, dict):
+        mention = str(item.get("mention") or "")
+        raw_code = str(item.get("code") or "")
+        code = _as_share_code(raw_code) or raw_code
+    else:
+        return {"mention": "", "code": "", "status": "incomplete"}
+    if not code or _suffix_conflict(code):
+        return {"mention": mention, "code": "", "status": "incomplete"}
+    status = "confirmed" if _user_wrote_code(code, query) else "pending"
+    return {"mention": mention, "code": code, "status": status}
+
+
+def _items_from_submitted(value: Any, query: str, slot: Dict[str, Any]) -> Any:
+    """协议里的项列表或单值项。缺了 holdings 时不从原句再切。"""
+
+    rows: List[Any]
+    if isinstance(value, list):
+        rows = list(value)
+    elif isinstance(value, str) and ("," in value or "，" in value):
+        rows = [part.strip() for part in value.replace("，", ",").split(",") if part.strip()]
+    elif value in (None, "", []):
+        rows = []
+    else:
+        rows = [value]
+    tagged = [_tag_submitted_item(item, query) for item in rows]
+    if not tagged:
+        return None
+    if str(slot.get("cardinality") or "") == "one" or str(slot.get("element") or "") == "comparison_code":
+        return tagged[0]
+    return tagged
+
+
+def _write_element(planner: Any, steps: Sequence[Any], name: str, value: Any) -> None:
+    """把项写进声明了这个槽的步骤。已有值也覆盖。"""
+
+    for step in steps:
+        if name == "shares" and step.skill_name == "qt.ai.hp.plot":
+            continue
+        schema = _schema(planner, step.skill_name)
+        decls = getattr(step, "slot_decls", None) or {}
+        if name not in schema and name not in decls:
+            continue
+        step.inputs[name] = value
+
+
+def _read_input(steps: Sequence[Any], name: str) -> Any:
+    """步骤上这个槽的现值。"""
+
+    for step in steps:
+        if name == "shares" and step.skill_name == "qt.ai.hp.plot":
+            continue
+        current = (step.inputs or {}).get(name)
+        if current not in (None, "", []):
+            return current
+    return None
+
+
+def _merge_closed_items(previous: Any, fresh: Any, slot: Dict[str, Any]) -> Any:
+    """已确认的项盖过这一轮重新解释的同下标项。"""
+
+    one = (
+        str(slot.get("cardinality") or "") == "one"
+        or str(slot.get("element") or "") == "comparison_code"
+    )
+    if one:
+        prev = _one_item(previous)
+        if prev is not None and str(prev.get("status") or "") == "confirmed":
+            return prev
+        return _one_item(fresh) or prev
+    prev_items = _as_item_list(previous)
+    fresh_items = _as_item_list(fresh)
+    if not fresh_items:
+        return prev_items or None
+    if not prev_items:
+        return fresh_items
+    merged: List[Dict[str, Any]] = []
+    for index in range(max(len(prev_items), len(fresh_items))):
+        prev = prev_items[index] if index < len(prev_items) else None
+        new = fresh_items[index] if index < len(fresh_items) else None
+        if isinstance(prev, dict) and str(prev.get("status") or "") == "confirmed":
+            merged.append(dict(prev))
+        elif isinstance(new, dict):
+            merged.append(dict(new))
+        elif isinstance(prev, dict):
+            merged.append(dict(prev))
+    return merged or None
+
+
+def _seal_elements(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    closed: Dict[str, Any],
+) -> None:
+    """解释之后，用解释前关上的已确认项盖回去。"""
+
+    for slot in projected:
+        if not slot.get("element"):
+            continue
+        name = str(slot.get("name") or "")
+        merged = _merge_closed_items(closed.get(name), _read_input(steps, name), slot)
+        if merged in (None, "", []):
+            slot["filled"] = _element_complete(slot, None)
+            slot["value"] = None
+            continue
+        _write_element(planner, steps, name, merged)
+        slot["value"] = merged
+        slot["filled"] = _element_complete(slot, merged)
+
+
+def _affirms_equal(query: str) -> bool:
+    """句中肯定等权。否定时不算。"""
+
+    if _negates_equal(query):
+        return False
+    raw = str(query or "")
+    folded = raw.lower()
+    return any(phrase in raw or phrase in folded for phrase in _EQUAL_PHRASES)
+
+
+def _apply_equal_phrase(steps: Sequence[Any], query: str) -> None:
+    """等权只改 weights 和 mode，不再切一次持有。
+
+    协议里的小数列表在等权下丢掉。模型已经写了 weighted、且没有小数列表时不动。
+    """
+
+    if not _affirms_equal(query):
+        return
+    weights: List[float] = []
+    mode = ""
+    for step in steps:
+        if step.skill_name != _PORTFOLIO_SKILL:
+            continue
+        weights = _as_weight_list((step.inputs or {}).get("weights"))
+        mode = str((step.inputs or {}).get("mode") or "")
+    if weights:
+        _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+        _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
+        return
+    if mode == "weighted":
+        return
+    _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
+
+
+def _confirmed_benchmark_code(value: Any) -> str:
+    """从基准项取出已确认的 code。字符串只在还没包成项时用。"""
+
+    if isinstance(value, dict):
+        if str(value.get("status") or "") != "confirmed":
+            return ""
+        return str(value.get("code") or "")
+    return _as_share_code(value)
+
+
+def _holding_items(steps: Sequence[Any]) -> List[Dict[str, Any]]:
+    """组合步上的持有项。"""
+
+    for step in steps:
+        if step.skill_name != _PORTFOLIO_SKILL:
+            continue
+        return _as_item_list((step.inputs or {}).get("holdings"))
+    return []
+
+
 def _heuristic_codes(query: str, slots: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """一次启发式先选定代码格，再收束别名。"""
 
@@ -2931,12 +3522,19 @@ def _drop_card_examples(steps: Sequence[Any], query: str) -> None:
 
 
 def _held_codes(steps: Sequence[Any]) -> List[str]:
-    """持有代码。基准不计入只数。"""
+    """已确认的持有代码。基准不计入只数。"""
 
+    holdings = _holding_items(steps)
+    if holdings:
+        return [
+            str(item.get("code") or "")
+            for item in holdings
+            if str(item.get("status") or "") == "confirmed" and item.get("code")
+        ]
     benchmark = ""
     for step in steps:
         if step.skill_name == _PORTFOLIO_SKILL:
-            benchmark = _as_share_code((step.inputs or {}).get("benchmark")) or benchmark
+            benchmark = _confirmed_benchmark_code((step.inputs or {}).get("benchmark")) or benchmark
     codes: List[str] = []
     for step in steps:
         if step.skill_name != _KLINE_SKILL:
@@ -2970,10 +3568,20 @@ def _review_submission(
     force: Set[str] = set()
     by_name = {str(slot.get("name") or ""): slot for slot in projected}
     for name, slot in by_name.items():
-        if name in confirmed or name not in submitted:
+        if name not in submitted:
+            continue
+        if name in confirmed and not slot.get("element"):
             continue
         kind = str(slot.get("resolve") or "")
         value: Any
+        if slot.get("element"):
+            value = _items_from_submitted(submitted.get(name), query, slot)
+            if value in (None, "", []):
+                continue
+            _write_element(planner, steps, name, value)
+            slot["value"] = value
+            slot["filled"] = _element_complete(slot, value)
+            continue
         if kind == "code":
             value = _normalize_code_value(submitted.get(name), query)
         elif kind == "weights":
@@ -3046,8 +3654,38 @@ def _clarification_symbol(text: str) -> str:
     return ""
 
 
-def bind_clarification_text(names: Sequence[str], text: str) -> Dict[str, Any]:
-    """澄清回答只绑定正在问的那一格。
+def _item_pending_rows(slot: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """多值代码槽按未确认的项出页。没有项时交给整格追问。"""
+
+    if not slot.get("element"):
+        return None
+    if str(slot.get("cardinality") or "") == "one":
+        return None
+    items = _as_item_list(slot.get("value"))
+    if not items:
+        return None
+    if all(str(item.get("status") or "") == "confirmed" for item in items):
+        return None
+    rows: List[Dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if str(item.get("status") or "") == "confirmed":
+            continue
+        row = _pending_row(slot)
+        row["index"] = index
+        row["mention"] = str(item.get("mention") or "")
+        row["code"] = str(item.get("code") or "")
+        row["items"] = items
+        rows.append(row)
+    return rows
+
+
+def bind_clarification_text(
+    names: Sequence[str],
+    text: str,
+    items: Optional[Sequence[Any]] = None,
+    index: Optional[int] = None,
+) -> Dict[str, Any]:
+    """澄清回答只绑定正在问的那一格。多值槽只改 index 指向的那一项。
 
     Parameters
     ----------
@@ -3055,6 +3693,10 @@ def bind_clarification_text(names: Sequence[str], text: str) -> Dict[str, Any]:
         当前卡片还在问的槽名。
     text : str
         用户这一轮的原文。
+    items : sequence, optional
+        这一页带来的完整项列表。
+    index : int, optional
+        要改的那一项。
 
     Returns
     -------
@@ -3067,6 +3709,17 @@ def bind_clarification_text(names: Sequence[str], text: str) -> Dict[str, Any]:
         return {}
     pending = [str(name) for name in names if str(name or "").strip()]
     if not pending:
+        return {}
+    if index is not None and items is not None and "holdings" in pending:
+        symbol = _clarification_symbol(raw)
+        if not symbol:
+            return {}
+        updated = [dict(item) if isinstance(item, dict) else {"mention": "", "code": "", "status": "incomplete"} for item in items]
+        cursor = int(index)
+        if 0 <= cursor < len(updated):
+            updated[cursor]["code"] = symbol
+            updated[cursor]["status"] = "confirmed"
+            return {"holdings": updated}
         return {}
     if "benchmark" in pending and "shares" not in pending:
         symbol = _clarification_symbol(raw)
@@ -3136,45 +3789,50 @@ def _enforce_hold_commit(steps: List[Any], query: str, confirmed: Set[str]) -> S
 
 
 def _finish_portfolio_graph(steps: List[Any], query: str) -> None:
-    """基准并进 shares，补占位权重。已写上的超额输出保持不动，缺省才看问句。"""
+    """持有都确认后才把代码拼进取数 shares。基准项留在 inputs 里。"""
 
     portfolios = [step for step in steps if step.skill_name == _PORTFOLIO_SKILL]
     if not portfolios:
         return
+    holdings = _holding_items(steps)
+    ready = bool(holdings) and all(str(item.get("status") or "") == "confirmed" for item in holdings)
     benchmark = ""
     for step in portfolios:
-        benchmark = _as_share_code((step.inputs or {}).get("benchmark")) or benchmark
-    if benchmark:
-        for step in portfolios:
-            step.inputs["benchmark"] = benchmark
+        benchmark = _confirmed_benchmark_code((step.inputs or {}).get("benchmark")) or benchmark
     kline_codes: List[str] = []
-    for step in steps:
-        if step.skill_name != _KLINE_SKILL:
-            continue
-        codes = _split_codes((step.inputs or {}).get("shares"))
-        if benchmark and benchmark not in codes:
-            codes.append(benchmark)
-        if codes:
-            step.inputs["shares"] = ",".join(codes)
-        if not kline_codes:
-            kline_codes = list(codes)
-        asset = str((step.inputs or {}).get("asset_type") or "").strip().upper()
-        if asset in {"E", "IDX"} and _mixed_equity_index(codes):
-            step.inputs.pop("asset_type", None)
+    if ready:
+        kline_codes = [str(item.get("code") or "") for item in holdings if item.get("code")]
+        if benchmark and benchmark not in kline_codes:
+            kline_codes.append(benchmark)
+        for step in steps:
+            if step.skill_name != _KLINE_SKILL:
+                continue
+            if kline_codes:
+                step.inputs["shares"] = ",".join(kline_codes)
+            asset = str((step.inputs or {}).get("asset_type") or "").strip().upper()
+            if asset in {"E", "IDX"} and _mixed_equity_index(kline_codes):
+                step.inputs.pop("asset_type", None)
     excess_only = False
     for step in portfolios:
         normalize_portfolio_weight(step.inputs)
         weights = _as_weight_list((step.inputs or {}).get("weights"))
-        if benchmark and weights and kline_codes:
+        if (
+            ready
+            and benchmark
+            and weights
+            and kline_codes
+            and str((step.inputs or {}).get("mode") or "") != "equal"
+        ):
             weights = _pad_weights(kline_codes, benchmark, weights)
             step.inputs["weights"] = weights
-        if weights:
+        if weights and str((step.inputs or {}).get("mode") or "") != "equal":
             step.inputs["mode"] = "weighted"
         elif str((step.inputs or {}).get("mode") or "") not in {"equal", "weighted"}:
             step.inputs.pop("mode", None)
         current = str((step.inputs or {}).get("benchmark_output") or "").strip()
         if not benchmark:
-            step.inputs.pop("benchmark", None)
+            if not isinstance((step.inputs or {}).get("benchmark"), dict):
+                step.inputs.pop("benchmark", None)
             step.inputs.pop("benchmark_output", None)
             current = ""
         elif not current:

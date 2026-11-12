@@ -174,7 +174,9 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         print(" weights:", tag.steps[1].inputs.get("weights"))
         print(" output:", tag.steps[1].inputs.get("benchmark_output"))
         print(" cum skills:", _skills(cum))
-        self.assertEqual(tag.steps[1].inputs.get("benchmark"), "000300.SH")
+        benchmark = tag.steps[1].inputs.get("benchmark")
+        benchmark_code = benchmark.get("code") if isinstance(benchmark, dict) else benchmark
+        self.assertEqual(benchmark_code, "000300.SH")
         self.assertNotIn("weights", tag.steps[1].inputs)
         self.assertNotIn("000300.SH", tag.steps[1].inputs.get("weights") or [])
 
@@ -336,7 +338,11 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         self.assertIn("000300.SH", codes)
         self.assertIn("000001.SZ", codes)
         self.assertIn("000002.SZ", codes)
-        self.assertEqual(portfolio.get("benchmark"), "000300.SH")
+        benchmark = portfolio.get("benchmark")
+        benchmark_code = benchmark.get("code") if isinstance(benchmark, dict) else benchmark
+        self.assertEqual(benchmark_code, "000300.SH")
+        if isinstance(benchmark, dict):
+            self.assertEqual(benchmark.get("status"), "confirmed")
         self.assertEqual(len(weights), len(codes))
         bench_at = codes.index("000300.SH")
         print(" placeholder index:", bench_at, "value:", weights[bench_at])
@@ -516,10 +522,14 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         self.assertTrue(_near(list(ratio.steps[1].inputs.get("weights") or []), [6.0, 4.0]))
         self.assertEqual(ratio.steps[1].inputs.get("mode"), "weighted")
         self.assertEqual(_pending_names(bare), ["weights"])
-        self.assertEqual(leading.steps[1].inputs.get("benchmark"), "000300.SH")
+        leading_bench = leading.steps[1].inputs.get("benchmark")
+        leading_code = leading_bench.get("code") if isinstance(leading_bench, dict) else leading_bench
+        self.assertEqual(leading_code, "000300.SH")
         self.assertEqual(leading.steps[1].inputs.get("benchmark_output"), "tag_along")
         self.assertIn("000300.SH", str(leading.steps[0].inputs.get("shares") or ""))
-        self.assertEqual(named.steps[1].inputs.get("benchmark"), "000300.SH")
+        named_bench = named.steps[1].inputs.get("benchmark")
+        named_code = named_bench.get("code") if isinstance(named_bench, dict) else named_bench
+        self.assertEqual(named_code, "000300.SH")
         self.assertEqual(named.steps[1].inputs.get("benchmark_output"), "tag_along")
         self.assertEqual(unclear.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertEqual(_pending_names(unclear), ["benchmark"])
@@ -605,7 +615,7 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         print(" weekly pending:", _pending_names(weekly))
         print(" weekly accepted:", accepted)
         self.assertEqual(weekly.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertIn("shares", _pending_names(weekly))
+        self.assertIn("holdings", _pending_names(weekly))
         freq_steps = [
             row for row in accepted if str((row.get("inputs") or {}).get("freq") or "") == "w"
         ]

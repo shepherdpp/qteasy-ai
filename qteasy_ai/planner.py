@@ -1096,6 +1096,7 @@ class Planner:
         skill_name: str,
         inputs: Dict[str, Any],
         depends_on: Optional[List[str]] = None,
+        slot_decls: Optional[Dict[str, Any]] = None,
     ) -> ToolStep:
         """构造带 registry 元数据的 ToolStep。"""
 
@@ -1117,6 +1118,7 @@ class Planner:
             run_if="",
             on_fail="stop",
             retry_limit=0,
+            slot_decls=dict(slot_decls or {}),
         )
 
     @staticmethod
@@ -1210,9 +1212,6 @@ class Planner:
                 "strategy_id": spec.class_name or "GeneratedSmaCross",
                 "freq": spec.run_freq or market.get("freq") or "d",
             }
-            pool = spec.asset_pool or market.get("shares") or ""
-            if pool:
-                bt_inputs["asset_pool"] = pool
             start = spec.invest_start or market.get("start") or ""
             end = spec.invest_end or market.get("end") or ""
             if start:
@@ -1656,8 +1655,6 @@ class Planner:
             inputs["start"] = market["start"]
         if market.get("end"):
             inputs["end"] = market["end"]
-        if market.get("shares"):
-            inputs["symbols"] = market["shares"]
         steps = [
             self._make_step(
                 step_id="step_1",
@@ -1696,8 +1693,6 @@ class Planner:
             "opti_method": "montecarlo",
             "opti_sample_count": 32,
         }
-        if market.get("shares"):
-            inputs["asset_pool"] = market["shares"]
         if market.get("start"):
             inputs["invest_start"] = market["start"]
         if market.get("end"):
@@ -1737,8 +1732,6 @@ class Planner:
             ]
         market = self._market_inputs(query)
         inputs: Dict[str, Any] = {"strategy_id": strategy_id, "freq": market.get("freq") or "d"}
-        if market.get("shares"):
-            inputs["asset_pool"] = market["shares"]
         if market.get("start"):
             inputs["invest_start"] = market["start"]
         if market.get("end"):

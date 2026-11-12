@@ -205,10 +205,13 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         self.assertEqual(recent.steps[0].inputs.get("end"), recent_end)
 
         two = self.planner.build_plan("000001.SZ 和 000002.SZ 的波动率", mode="plan")
-        codes = str(two.steps[0].inputs.get("shares") or "")
-        print(" diagnosis shares:", codes, "job:", two.planner_trace.get("intent_job"))
+        shares = two.steps[0].inputs.get("shares")
+        codes = [item.get("code") if isinstance(item, dict) else item for item in (shares or [])]
+        print(" diagnosis shares:", shares, "job:", two.planner_trace.get("intent_job"))
         self.assertEqual(two.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(codes, "000001.SZ,000002.SZ")
+        self.assertEqual(codes, ["000001.SZ", "000002.SZ"])
+        self.assertTrue(all(isinstance(item, dict) and item.get("status") == "confirmed" for item in shares))
+        self.assertTrue(all("role" not in item for item in shares))
 
         hold = self.planner.build_plan("000001.SZ 和 000002.SZ 做一条等权组合，相对沪深300", mode="plan")
         hold_codes = str(hold.steps[0].inputs.get("shares") or "")

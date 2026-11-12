@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
-from ..slot_graph import code_spec, weights_spec
+from ..slot_graph import code_spec, join_code_text, weights_spec
 from .hp_panel import english_message, failed, panel_from_upstream
 from .preview_rows import tabular_preview_rows
 
@@ -437,6 +437,7 @@ def build_hp_portfolio_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         "mask": {"type": "object", "required": False},
         "groups": {"type": "object", "required": False},
         "benchmark": code_spec(required=False),
+        "holdings": {"type": "array", "required": False},
         "benchmark_output": {"type": "string", "required": False},
         "new_share_name": {"type": "string", "required": False},
         "normalize_weights": {"type": "boolean", "required": False},
@@ -496,8 +497,9 @@ def build_hp_portfolio_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
                 call["weights"] = np.asarray(weights, dtype=float)
             if groups:
                 call["groups"] = groups
-            if benchmark not in (None, ""):
-                call["benchmark"] = str(benchmark)
+            bench_code = join_code_text(benchmark)
+            if bench_code:
+                call["benchmark"] = bench_code
             if chosen is not None:
                 call["mask"] = np.asarray(chosen)
             return panel.portfolio(**call)

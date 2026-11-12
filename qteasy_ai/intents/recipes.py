@@ -362,8 +362,6 @@ def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) ->
     inputs: Dict[str, Any] = {}
     if channel == "history" and not tokens:
         inputs["htype_names"] = "close"
-    if channel != "reference" and market.get("shares"):
-        inputs["shares"] = market["shares"]
     if channel != "static":
         if market.get("start"):
             inputs["start"] = market["start"]
@@ -391,34 +389,47 @@ def _extract_dtype_names(query: str) -> str:
 
 
 def _hold_compare_steps(planner: "Planner", query: str) -> List["ToolStep"]:
-    """持有对比：一条组合。形状和代码、频率都来自同一次提交。"""
+    """持有对比：一条组合。步骤形状看超额和累计，标的留给填槽。"""
 
-    from ..slot_graph import commit_query
+    from ..slot_graph import mentions_cumret, mentions_excess
 
-    committed = commit_query(query)
-    market = dict(planner._market_inputs(query) or {})
-    unresolved = {str(item.get("name") or "") for item in committed["unresolved"]}
-    if "shares" in unresolved or committed["values"].get("shares"):
-        market.pop("shares", None)
-    if committed["values"].get("shares"):
-        market["shares"] = committed["values"]["shares"]
-    if "freq" in unresolved:
-        market.pop("freq", None)
-    elif committed["values"].get("freq"):
-        market["freq"] = committed["values"]["freq"]
-    excess = bool(committed["excess"])
-    cumret = bool(committed["cumret"])
+    excess = mentions_excess(query)
+    cumret = mentions_cumret(query)
     steps = [
         planner._make_step(
             step_id="step_1",
             skill_name="qt.ai.data.kline",
-            inputs=market,
+            inputs={},
+            slot_decls={
+                "shares": {"assemble_only": True},
+                "asset_type": {"user_slot": False},
+            },
         ),
         planner._make_step(
             step_id="step_2",
             skill_name="qt.ai.hp.portfolio",
             inputs={},
             depends_on=["step_1"],
+            slot_decls={
+                "holdings": {
+                    "type": "array",
+                    "required": True,
+                    "resolve": "code",
+                    "element": "constituent_code",
+                    "role": "holding",
+                    "min_count": 1,
+                    "cardinality": "many",
+                },
+                "benchmark": {
+                    "type": "object",
+                    "required": False,
+                    "resolve": "code",
+                    "element": "comparison_code",
+                    "role": "benchmark",
+                    "min_count": 0,
+                    "cardinality": "one",
+                },
+            },
         ),
     ]
     if excess and not cumret:
@@ -480,7 +491,6 @@ _RETURN_CUE = re.compile(
 _SUMMARY_CUES = ("摘要", "summary", "交易天数", "trading day", "n_rows")
 _PLOT_LATIN = ("export", "png", "candle")
 _PLOT_CJK = ("导出", "绘图", "出图", "蜡烛")
-_SHARE_TOKEN = re.compile(r"沪深\s*300|csi\s*300|\d{6}\.(?:SH|SZ|BJ)", re.IGNORECASE)
 
 
 def _diagnosis_steps(planner: "Planner", query: str, job: str) -> List["ToolStep"]:
@@ -503,10 +513,11 @@ def _diagnosis_steps(planner: "Planner", query: str, job: str) -> List["ToolStep
         保序子集：取数、摘要、统计、出图。
     """
 
-    market = dict(planner._market_inputs(query) or {})
-    codes = _diagnosis_shares(query)
-    if codes:
-        market["shares"] = codes
+    market = {
+        key: value
+        for key, value in dict(planner._market_inputs(query) or {}).items()
+        if key != "shares"
+    }
     text = str(query or "")
     lower = text.lower()
     wants_summary = any(item in lower or item in text for item in _SUMMARY_CUES) or _wants_view(text)
@@ -526,6 +537,14 @@ def _diagnosis_steps(planner: "Planner", query: str, job: str) -> List["ToolStep
             step_id="step_1",
             skill_name="qt.ai.data.kline",
             inputs=market,
+            slot_decls={
+                "shares": {
+                    "element": "code",
+                    "role": "",
+                    "min_count": 1,
+                    "cardinality": "many",
+                },
+            },
         )
     ]
     leaves: List[tuple] = []
@@ -557,22 +576,6 @@ def _wants_view(query: str) -> bool:
     if any(item in text for item in ("有哪些列", "有哪些标的")):
         return True
     return re.search(r"[前后]\s*\d+\s*行", text) is not None
-
-
-def _diagnosis_shares(query: str) -> str:
-    """同一句里的交易所代码按出现顺序收齐。沪深 300 收成 000300.SH。"""
-
-    found: List[str] = []
-    for match in _SHARE_TOKEN.finditer(str(query or "")):
-        token = match.group(0)
-        compact = re.sub(r"\s+", "", token).lower()
-        if compact in {"沪深300", "csi300"}:
-            code = "000300.SH"
-        else:
-            code = token.upper()
-        if code not in found:
-            found.append(code)
-    return ",".join(found)
 
 
 def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolStep"]:

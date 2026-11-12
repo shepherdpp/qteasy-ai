@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 import pandas as pd
 
 from ..contracts import SkillMetadata, SkillResult, SkillSideEffects, new_run_id
-from ..slot_graph import asset_type_spec, code_spec, date_field_spec, freq_spec
+from ..slot_graph import asset_type_spec, code_spec, date_field_spec, freq_spec, join_code_text
 from .hp_panel import as_history_panel, english_message, failed
 from .preview_rows import tabular_preview_rows
 
@@ -67,7 +67,7 @@ def build_data_kline_skill(
     )
 
     def handler(
-        shares: Optional[str] = None,
+        shares: Any = None,
         start: Optional[str] = None,
         end: Optional[str] = None,
         rows: Optional[int] = None,
@@ -80,8 +80,9 @@ def build_data_kline_skill(
         **kwargs,
     ) -> dict:
         freq_value = str(freq or "d")
+        symbol = join_code_text(shares).strip()
         inputs_echo = {
-            "shares": shares,
+            "shares": symbol,
             "start": start,
             "end": end,
             "rows": rows,
@@ -92,7 +93,6 @@ def build_data_kline_skill(
             "b_days_only": b_days_only,
             "trade_time_only": trade_time_only,
         }
-        symbol = str(shares or "").strip()
         if not symbol:
             return failed(
                 metadata.name,

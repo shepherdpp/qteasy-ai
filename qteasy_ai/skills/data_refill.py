@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
-from ..slot_graph import refill_bound_spec
+from ..slot_graph import code_spec, join_code_text, refill_bound_spec
 from .env_guide import _default_token_probe
 
 DEFAULT_REFILL_TABLES: List[str] = ["stock_daily", "index_daily"]
@@ -61,7 +61,7 @@ def build_data_refill_skill(
             "start": refill_bound_spec("start"),
             "end": refill_bound_spec("end"),
             "tables": {"type": "list", "required": False},
-            "symbols": {"type": "string", "required": False},
+            "symbols": code_spec(required=False, element="code", min_count=1),
         },
         outputs_schema={"metrics": "dict", "data_summary": "dict"},
         side_effects=SkillSideEffects(
@@ -84,16 +84,17 @@ def build_data_refill_skill(
         start: str = "",
         end: str = "",
         tables: Optional[Sequence[str]] = None,
-        symbols: Optional[str] = None,
+        symbols: Any = None,
         **kwargs,
     ) -> dict:
         run_id = new_run_id()
         table_names = list(tables) if tables else list(DEFAULT_REFILL_TABLES)
+        symbol_text = join_code_text(symbols) if symbols not in (None, "") else symbols
         inputs_echo = {
             "start": start,
             "end": end,
             "tables": table_names,
-            "symbols": symbols,
+            "symbols": symbol_text,
             **kwargs,
         }
         if not str(start).strip() or not str(end).strip():
@@ -130,11 +131,11 @@ def build_data_refill_skill(
                 "end_date": str(end).strip(),
                 "refill_dependent_tables": True,
             }
-            if symbols:
-                refill_kwargs["symbols"] = symbols
+            if symbol_text:
+                refill_kwargs["symbols"] = symbol_text
             refill_func(**refill_kwargs)
             assumptions = []
-            if not symbols:
+            if not symbol_text:
                 assumptions.append("all symbols for those tables (high cost)")
             result = SkillResult(
                 ok=True,

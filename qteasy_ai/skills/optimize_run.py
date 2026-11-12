@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from ..slot_graph import code_spec, join_code_text
 
 DEFAULT_OPTI_METHOD = "montecarlo"
 DEFAULT_OPTI_SAMPLE_COUNT = 32
@@ -122,7 +123,7 @@ def build_optimize_run_skill(
         summary="Optimize built-in strategy parameters (mode=2, montecarlo sample=32 by default).",
         inputs_schema={
             "strategy_id": {"type": "string", "required": True},
-            "asset_pool": {"type": "string", "required": False},
+            "asset_pool": code_spec(required=False, element="code", min_count=1),
             "shares": {"type": "string", "required": False},
             "invest_start": {"type": "string", "required": False},
             "invest_end": {"type": "string", "required": False},
@@ -166,7 +167,7 @@ def build_optimize_run_skill(
         run_id = new_run_id()
         payload_in = upstream_payload if isinstance(upstream_payload, dict) else {}
         path_text = str(strategy_path or payload_in.get("strategy_path") or "").strip()
-        pool = asset_pool or shares or "000300.SH"
+        pool = join_code_text(asset_pool) or join_code_text(shares) or "000300.SH"
         start_date = invest_start or start
         end_date = invest_end or end
         method = str(opti_method or DEFAULT_OPTI_METHOD)

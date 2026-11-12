@@ -131,6 +131,7 @@ class ToolStep:
     run_if: str = ""
     on_fail: str = "stop"
     retry_limit: int = 0
+    slot_decls: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -189,6 +190,7 @@ class ToolPlan:
                     run_if=str(item.get("run_if") or ""),
                     on_fail=str(item.get("on_fail") or "stop"),
                     retry_limit=int(item.get("retry_limit") or 0),
+                    slot_decls=dict(item.get("slot_decls") or {}),
                 )
             )
         return cls(

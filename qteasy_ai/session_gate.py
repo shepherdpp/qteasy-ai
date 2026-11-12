@@ -84,7 +84,16 @@ class SessionGate:
         if hatch is not None:
             return hatch
         if session.task_status() == "clarifying":
-            bound = bind_clarification_text(_pending_slot_names(session), text)
+            page = _current_pending_row(session)
+            if page is not None and "index" in page:
+                bound = bind_clarification_text(
+                    [str(page.get("name") or "")],
+                    text,
+                    items=page.get("items"),
+                    index=page.get("index"),
+                )
+            else:
+                bound = bind_clarification_text(_pending_slot_names(session), text)
             if bound:
                 return GateDecision(kind="fill_slot", patches=bound, rationale="answers_slot")
         if answers_pending_slot(session, text):
@@ -244,6 +253,22 @@ def extract_patches(text: str) -> Dict[str, Any]:
     if named:
         patches["name"] = named.group(1)
     return patches
+
+
+def _current_pending_row(session: ConversationState) -> Optional[Dict[str, Any]]:
+    """澄清卡当前这一页。step_index 从 1 起。"""
+
+    task = session.task
+    if task is None or not isinstance(task.pending_clarification, dict):
+        return None
+    pending = task.pending_clarification
+    rows = [item for item in (pending.get("pending") or []) if isinstance(item, dict)]
+    if not rows:
+        return None
+    index = int(pending.get("step_index") or 1)
+    if index < 1 or index > len(rows):
+        index = 1
+    return rows[index - 1]
 
 
 def _pending_slot_names(session: ConversationState) -> List[str]:
