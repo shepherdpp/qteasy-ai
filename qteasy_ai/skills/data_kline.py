@@ -49,8 +49,14 @@ def build_data_kline_skill(
         summary="Read a local OHLCV HistoryPanel via get_kline.",
         inputs_schema={
             "shares": code_spec(required=True),
-            "start": date_field_spec("start", required=False, constraint=""),
-            "end": date_field_spec("end", required=False, constraint=""),
+            "start": {
+                **date_field_spec("start", required=False, constraint=""),
+                "default_kind": "kernel_window",
+            },
+            "end": {
+                **date_field_spec("end", required=False, constraint=""),
+                "default_kind": "kernel_window",
+            },
             "rows": {"type": "integer", "required": False},
             "freq": freq_spec(),
             "adj": {"type": "string", "required": False},

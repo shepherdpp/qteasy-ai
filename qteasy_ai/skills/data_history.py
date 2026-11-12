@@ -48,8 +48,8 @@ def build_data_history_skill(
         inputs_schema={
             "htype_names": dtype_spec(required=True),
             "shares": code_spec(required=True),
-            "start": window_bound_spec("start"),
-            "end": window_bound_spec("end"),
+            "start": {**window_bound_spec("start"), "default_kind": "kernel_window"},
+            "end": {**window_bound_spec("end"), "default_kind": "kernel_window"},
             "freq": freq_spec(),
             "rows": {"type": "integer", "required": False},
             "asset_type": asset_type_spec(),

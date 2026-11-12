@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ast
+import datetime
 import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -235,6 +236,9 @@ _BAD_LOOKBACK = re.compile(
     r"(?:lookback(?:_days)?|回看(?:天数)?)\s*[:=：]?\s*(\S+)",
     re.IGNORECASE,
 )
+_WINDOW_PHRASE = re.compile(
+    r"(?:过去|近)\s*(?:\d+|[零〇一二两三四五六七八九十]+)\s*年"
+)
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _UPSTREAM_KEYS = {"upstream_payload", "upstream_payloads"}
 _WINDOW_HINT = (
@@ -447,6 +451,41 @@ def window_bound_spec(name: str = "start") -> Dict[str, Any]:
     """
 
     return date_field_spec(name, required=False, constraint=_WINDOW_HINT)
+
+
+def kernel_window() -> Dict[str, str]:
+    """内核在起止和行数都空着时使用的窗口。
+
+    结束日是今天，开始日是今天减 365 天。不把「过去三年」折成日期。
+
+    Returns
+    -------
+    dict
+        ``start`` 与 ``end``，格式 ``YYYYMMDD``。
+    """
+
+    today = datetime.date.today()
+    return {
+        "end": today.strftime("%Y%m%d"),
+        "start": (today - datetime.timedelta(days=365)).strftime("%Y%m%d"),
+    }
+
+
+def window_phrase(query: str) -> bool:
+    """问句里有没有窗口说法。只识别，不返回日期。
+
+    Parameters
+    ----------
+    query : str
+        用户原文。
+
+    Returns
+    -------
+    bool
+        出现「过去 / 近 + 年数 + 年」时为 True。
+    """
+
+    return _WINDOW_PHRASE.search(str(query or "")) is not None
 
 
 def refill_bound_spec(name: str) -> Dict[str, Any]:
@@ -960,14 +999,21 @@ def _fill_graph(
     open_slots = [slot for slot in projected if not slot["filled"]]
     submitted: Dict[str, Any] = {}
     ambiguous: List[str] = []
+    mentioned: Set[str] = set()
     provider = getattr(planner, "provider", None)
     if provider is not None and job != "open" and open_slots:
         submitted = _parse_model_slots(
             provider.chat(_fill_prompt(planner, open_slots, query)),
             [slot["name"] for slot in open_slots],
         ) or {}
+        for slot in open_slots:
+            name = str(slot.get("name") or "")
+            if slot.get("required") or name not in submitted:
+                continue
+            if not _submitted_legal(slot, submitted.get(name), query):
+                mentioned.add(name)
     elif provider is None:
-        submitted, ambiguous = _heuristic(
+        submitted, ambiguous, mentioned = _heuristic(
             planner,
             query,
             open_slots,
@@ -976,7 +1022,7 @@ def _fill_graph(
     force_names = _review_submission(planner, steps, projected, submitted, query, set(confirmed))
     _apply_equal_phrase(steps, query)
     _seal_elements(planner, steps, projected, closed_items)
-    if _apply_lookback_default(planner, steps, query, projected):
+    if _apply_lookback_default(planner, steps, projected, mentioned):
         extras["slot_defaults"] = {"lookback_days": "library"}
     if job in _DIAGNOSIS_JOBS:
         _bake_describe_view(steps, projected)
@@ -989,6 +1035,7 @@ def _fill_graph(
     if mismatch:
         return _wire_rejected(planner, steps, query, job, mismatch)
     errors = _take_slot_errors(session)
+    force_names |= _unresolved_optional_defaults(projected, mentioned)
     open_names = _open_any_of_names(planner, steps, projected)
     pending = _pending_after_fill(
         projected, steps, ambiguous, errors, query, open_names, rejected, job, force_names
@@ -1179,7 +1226,7 @@ def _pending_after_fill(
     job: str = "",
     force_names: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """必填仍空、窗口组全空、取值被拒、方向不明或回看不是整数时出题。"""
+    """必填仍空、窗口组全空、取值被拒、方向不明，或提到了却没有合法值时出题。"""
 
     opened = open_names or set()
     refused = rejected or set()
@@ -1200,7 +1247,6 @@ def _pending_after_fill(
             or slot["name"] in refused
             or slot["name"] in forced
             or _must_ask(slot, steps)
-            or slot["name"] == "lookback_days" and _bad_lookback(query)
             or _ask_benchmark(slot, steps, query, job)
             or _ask_weights(slot, query, job, steps)
         )
@@ -1214,7 +1260,7 @@ def _pending_after_fill(
             error = f"{ambiguous[0]} does not match a single data type."
         if slot["name"] == "lookback_days" and _bad_lookback(query) and not error:
             error = f"{_bad_lookback(query)!r} is not an integer."
-        rows.append(_pending_row(slot, error))
+        rows.append(_pending_row(slot, error, query))
     return rows
 
 
@@ -1231,10 +1277,32 @@ def _must_ask(slot: Dict[str, Any], steps: Sequence[Any]) -> bool:
     return False
 
 
-def _apply_lookback_default(planner: Any, steps: Sequence[Any], query: str, projected: Sequence[Dict[str, Any]]) -> bool:
-    """没说回看天数时写入 126，不追问。说了但不是整数则不写。"""
+def _apply_lookback_default(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    mentioned: Set[str],
+) -> bool:
+    """没提到回看天数时写入 126，不追问。
 
-    if _bad_lookback(query):
+    Parameters
+    ----------
+    planner : planner
+        用来把缺省写进仍空的输入。
+    steps : sequence
+        当前步骤。
+    projected : sequence of dict
+        投影槽。
+    mentioned : set of str
+        提到了但没有合法值的槽名。其中有回看时不写 126。
+
+    Returns
+    -------
+    bool
+        这一轮是否写入了 126。
+    """
+
+    if "lookback_days" in mentioned:
         return False
     for slot in projected:
         if slot["name"] == "lookback_days" and slot["filled"]:
@@ -1360,16 +1428,29 @@ def _heuristic(
     query: str,
     slots: Sequence[Dict[str, Any]],
     dtype_query: Optional[str] = None,
-) -> Tuple[Dict[str, Any], List[str]]:
-    """按槽的类型从问句收值。覆盖不全时留下仍缺的必填。"""
+) -> Tuple[Dict[str, Any], List[str], Set[str]]:
+    """按槽的类型从问句收值。覆盖不全时留下仍缺的必填。
+
+    窗口说法和非法回看都放进同一组「提到了但没有合法值」的槽名。
+    已经解析出任一端日期时，另一端不进这组。
+
+    Returns
+    -------
+    tuple
+        收到的值、对不上的数据类型词、提到了但没有合法值的槽名。
+    """
 
     wanted = {slot["name"]: slot for slot in slots}
     found: Dict[str, Any] = {}
+    legal_dates = False
     if any(str(slot.get("format") or "") == "YYYYMMDD" for slot in slots):
         market = planner._market_inputs(query) if hasattr(planner, "_market_inputs") else {}
         if isinstance(market, dict):
             for key in ("start", "end"):
-                if key in wanted and market.get(key) not in (None, ""):
+                if market.get(key) in (None, ""):
+                    continue
+                legal_dates = True
+                if key in wanted:
                     found[key] = market[key]
     plain_codes = [
         slot
@@ -1403,7 +1484,15 @@ def _heuristic(
         if adj:
             found["adj"] = adj
     found.update(_parse_diagnosis(query, set(wanted)))
-    return found, ambiguous
+    mentioned: Set[str] = set()
+    if window_phrase(query) and not legal_dates:
+        for slot in slots:
+            name = str(slot.get("name") or "")
+            if str(slot.get("format") or "") == "YYYYMMDD" and name not in found:
+                mentioned.add(name)
+    if "lookback_days" in wanted and _bad_lookback(query):
+        mentioned.add("lookback_days")
+    return found, ambiguous, mentioned
 
 
 def _parse_screen(query: str) -> Dict[str, Any]:
@@ -1539,8 +1628,23 @@ def peek_channel(tokens: Sequence[str]) -> str:
     return ""
 
 
-def _pending_row(slot: Dict[str, Any], error: str = "") -> Dict[str, Any]:
-    """系统出的一格。选项只在被追问时挂上。"""
+def _pending_row(slot: Dict[str, Any], error: str = "", query: str = "") -> Dict[str, Any]:
+    """系统出的一格。选项只在被追问时挂上。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽。
+    error : str, optional
+        上一轮没收下的原因。
+    query : str, optional
+        本轮问句。有汉字时，缺省槽的开放输入写「其它」。
+
+    Returns
+    -------
+    dict
+        澄清卡上的一行。
+    """
 
     name = str(slot.get("name") or "")
     shown = date_bound_presentation(name) if name in {"start", "end"} else {}
@@ -1568,6 +1672,13 @@ def _pending_row(slot: Dict[str, Any], error: str = "") -> Dict[str, Any]:
     if slot.get("vocabulary"):
         row["vocabulary"] = [str(item) for item in slot.get("vocabulary") or []]
     options = _options_for(name, slot)
+    if not slot.get("required") and _has_declared_default(slot):
+        shown = _default_label(slot)
+        row["default_value"] = shown
+        options = [{"id": "default", "label": str(shown)}] + [
+            item for item in options if str(item.get("id")) != "default"
+        ]
+        row["open"] = {"label": "其它" if _CJK.search(str(query or "")) else "Other"}
     if options:
         row["options"] = options
     return row
@@ -1635,7 +1746,10 @@ def _card_prompt(raws: Dict[str, Any]) -> str:
 
 
 def _parse_model_slots(raw: str, names: Sequence[str]) -> Optional[Dict[str, Any]]:
-    """模型填槽或点选解析。非法、分类罐头或占位回复返回 ``None``。"""
+    """模型填槽或点选解析。非法、分类罐头或占位回复返回 ``None``。
+
+    键在协议里且值为 null 时保留，值为 ``None``。键不在协议里则不出现。
+    """
 
     if not raw or "[fake-llm]" in raw:
         return None
@@ -1648,7 +1762,10 @@ def _parse_model_slots(raw: str, names: Sequence[str]) -> Optional[Dict[str, Any
     wanted = {str(name) for name in names}
     if ("job" in payload or "steps" in payload) and not wanted.intersection(source):
         return None
-    found = {name: source[name] for name in wanted if name in source}
+    found = {}
+    for name in wanted:
+        if name in source:
+            found[name] = source[name]
     if "weights" in wanted and "mode" in source:
         found["mode"] = source["mode"]
     if not found:
@@ -1773,17 +1890,123 @@ def _any_of_member_names(planner: Any, steps: Sequence[Any]) -> Set[str]:
 
 
 def _open_any_of_names(planner: Any, steps: Sequence[Any], projected: Sequence[Dict[str, Any]]) -> Set[str]:
-    """一组里每一个都还空着时，这些槽名要追问。"""
+    """一组里每一个都还空着时，这些槽名要追问。
+
+    带缺省的选填槽不因此入题。用户提到了却没有合法值时，另由 force 出题。
+    """
 
     filled = {str(slot.get("name") or ""): bool(slot.get("filled")) for slot in projected}
+    by_name = {str(slot.get("name") or ""): slot for slot in projected}
     opened: Set[str] = set()
     for step in steps:
         if getattr(step, "skill_name", "") == "qt.ai.system.fallback":
             continue
         for group in _any_of_groups(planner, step.skill_name):
-            if all(not filled.get(name) for name in group):
-                opened.update(group)
+            if not all(not filled.get(name) for name in group):
+                continue
+            for name in group:
+                slot = by_name.get(name) or {}
+                if not slot.get("required") and _has_declared_default(slot):
+                    continue
+                opened.add(name)
     return opened
+
+
+def _has_declared_default(slot: Dict[str, Any]) -> bool:
+    """这一格是否声明了缺省值或内核缺省。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽或 schema 字段。
+
+    Returns
+    -------
+    bool
+        有 ``default`` 或 ``default_kind`` 时为 True。
+    """
+
+    if str(slot.get("default_kind") or "").strip():
+        return True
+    return "default" in slot and slot.get("default") not in (None, "")
+
+
+def _unresolved_optional_defaults(projected: Sequence[Dict[str, Any]], mentioned: Set[str]) -> Set[str]:
+    """提到了但没有合法值，并且选填、声明了缺省的槽。
+
+    Parameters
+    ----------
+    projected : sequence of dict
+        投影槽。
+    mentioned : set of str
+        解释者交出的槽名。不读任务名或技能名。
+
+    Returns
+    -------
+    set of str
+        要并进 force 的槽名。
+    """
+
+    found: Set[str] = set()
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if name not in mentioned or slot.get("required") or not _has_declared_default(slot):
+            continue
+        found.add(name)
+    return found
+
+
+def _submitted_legal(slot: Dict[str, Any], raw: Any, query: str) -> bool:
+    """这一次提交能不能按该槽现有校验收下。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽。
+    raw : any
+        协议里的值。``None`` 是提到了但没有值。
+    query : str
+        用户原文。日期例子出现在原文里时仍可收下。
+
+    Returns
+    -------
+    bool
+        能写入时为 True。
+    """
+
+    if raw is None:
+        return False
+    if str(slot.get("format") or "") == "YYYYMMDD":
+        text = re.sub(r"\D", "", str(raw or ""))
+        example = str(slot.get("example") or date_bound_presentation(str(slot.get("name") or "")).get("example") or "")
+        if len(text) != 8 or (example and text == example and example not in str(query or "")):
+            return False
+        return True
+    if slot.get("element"):
+        return raw not in ("", [])
+    return coerce_slot_value(slot, raw) not in (None, "", [])
+
+
+def _default_label(slot: Dict[str, Any]) -> Any:
+    """正在追问时，缺省选项上显示的值。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽。
+
+    Returns
+    -------
+    any
+        内核窗口的一端，或声明的 ``default``。
+    """
+
+    if str(slot.get("default_kind") or "") == "kernel_window":
+        window = kernel_window()
+        name = str(slot.get("name") or "")
+        if name in window:
+            return window[name]
+    return slot.get("default")
 
 
 def _spec_extras(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -1815,6 +2038,10 @@ def _spec_extras(spec: Dict[str, Any]) -> Dict[str, Any]:
         extra["aliases"] = {str(key): str(value) for key, value in aliases.items()}
     if spec.get("vocabulary"):
         extra["vocabulary"] = [str(item) for item in spec.get("vocabulary") or []]
+    if "default" in spec and spec.get("default") not in (None, ""):
+        extra["default"] = spec.get("default")
+    if spec.get("default_kind"):
+        extra["default_kind"] = str(spec.get("default_kind"))
     return extra
 
 
@@ -3178,7 +3405,11 @@ def _trim_piece(text: str) -> str:
         if leading != piece:
             piece = leading
             changed = True
-        shortened = re.sub(r"^(?:过去|近)\s*\d+\s*年", "", piece).strip(" ，,。;；、")
+        shortened = re.sub(
+            r"^(?:过去|近)\s*(?:\d+|[零〇一二两三四五六七八九十]+)\s*年",
+            "",
+            piece,
+        ).strip(" ，,。;；、")
         if shortened != piece:
             piece = shortened
             changed = True
@@ -3820,6 +4051,14 @@ def apply_ordered_answers(
             text = raw
         if text in (None, ""):
             continue
+        if str(text) == "default" and row.get("default_value") not in (None, ""):
+            text = row.get("default_value")
+        elif str(row.get("format") or "") == "YYYYMMDD":
+            digits = re.sub(r"\D", "", str(text or ""))
+            example = str(row.get("example") or "")
+            if len(digits) != 8 or (example and digits == example):
+                continue
+            text = digits
         if str(row.get("resolve") or "") == "code":
             reviewed = _reviewed_share_text(str(text))
             if reviewed:

@@ -422,7 +422,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertNotIn("end", _pending_names(dry))
 
     def test_open_history_contract_normalizes_and_asks(self) -> None:
-        """历史图上的非法取值要收成契约值；缺窗口和列名时追问，边要接上。"""
+        """历史图上的非法取值要收成契约值；缺列名时追问，空窗口不再追问日期。"""
 
         print("\n[TestAi04A6] 开放历史图按契约验收")
         rough = [
@@ -444,7 +444,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" pending:", _pending_names(plan))
         print(" skill:", plan.steps[0].skill_name)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(_pending_names(plan), ["htype_names", "start", "end"])
+        self.assertEqual(_pending_names(plan), ["htype_names"])
+        self.assertNotIn("start", _pending_names(plan))
+        self.assertNotIn("end", _pending_names(plan))
         accepted = {
             row["step_id"]: row
             for row in ((plan.assumptions or {}).get("accepted_steps") or [])
@@ -675,7 +677,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertNotIn("end", _pending_names(dry))
 
     def test_date_rows_ask_one_field_with_format(self) -> None:
-        """start 与 end 各有题干、格式和例子；组约束不写进 hint。"""
+        """空历史窗口不再出日期题。下载起止仍各一题，且没有缺省选项。"""
 
         print("\n[TestAi04A6] 日期格各自发问")
         rough = [
@@ -696,9 +698,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             mode="plan",
         )
         rows = {str(item.get("name") or ""): item for item in _pending(asked)}
-        print(" history rows:", {name: {key: rows[name].get(key) for key in ("label", "hint", "format", "example", "constraint")} for name in rows})
-        self.assertEqual(list(rows), ["start", "end"])
-        self._assert_distinct_date_rows(rows, "rows alone does not select a history window.")
+        print(" history pending:", list(rows))
+        self.assertNotIn("start", rows)
+        self.assertNotIn("end", rows)
 
         refill = Planner(self.registry, env_facts={}).build_plan(
             "download A-share daily data to local datasource",
@@ -711,6 +713,10 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         )
         self.assertEqual([str(item.get("name") or "") for item in _pending(refill)], ["start", "end"])
         self._assert_distinct_date_rows(refill_rows, "Unbounded full-history download is not allowed.")
+        for name in ("start", "end"):
+            ids = [str(item.get("id") or "") for item in (refill_rows[name].get("options") or [])]
+            print(" refill option ids:", name, ids)
+            self.assertNotIn("default", ids)
 
     def test_strategy_id_answer_stays_a_slot_value(self) -> None:
         """点选的策略 id 写入该槽，不折成持仓项列表。"""
