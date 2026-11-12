@@ -160,6 +160,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             print(" shares:", None if shares is None else shares.value)
             print(" prompts after card:", len(fake.prompts), "left:", fake.replies)
             self.assertEqual(clar.get("text"), _ZH_PROMPT)
+            self.assertEqual(clar["payload"]["pending"][0].get("prompt"), _ZH_PROMPT)
             self.assertEqual((clar["payload"]["pending"][0].get("open") or {}).get("label"), "重写需求")
             self.assertNotIn("open_label", clar["payload"]["pending"][0])
             self.assertIsNone(shares)
@@ -312,6 +313,80 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 [item.get("name") for item in pending if isinstance(item, dict)],
                 ["unresolved_intent"],
             )
+            self.assertNotIn("unresolved_intent", after.task.slots)
+
+    def test_answers_follow_the_recovery_question(self) -> None:
+        """按题序交回的开放、放弃和重写仍由 Session 解释。"""
+
+        print("\n[TestAiUnresolvedRecovery] answers 按题号恢复")
+        compose = FakeLLMProvider(
+            replies=[
+                _job({"job": "clarify"}),
+                _job({"job": "clarify"}),
+                json.dumps({"steps": _STEPS}),
+                _job({"job": "data.summary"}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=compose,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-answers-open"
+            asst.plan(_ZH, response_style="raw", session_id=sid)
+            before = asst.session_store.load(sid)
+            second = asst.plan("", response_style="raw", session_id=sid, answers=["compose_open"])
+            after = asst.session_store.load(sid)
+            plan = second.get("plan") or {}
+            skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
+            print(" compose skills:", skills, "intent:", (plan.get("planner_trace") or {}).get("intent_job"))
+            self.assertEqual(after.task.id, before.task.id)
+            self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "open")
+            self.assertEqual(skills, ["qt.ai.data.kline", "qt.ai.hp.returns", "qt.ai.hp.plot"])
+
+        abandon = FakeLLMProvider(replies=[_job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=abandon,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-answers-abandon"
+            asst.plan(_ZH, response_style="raw", session_id=sid)
+            prompts = len(abandon.prompts)
+            second = asst.plan("", response_style="raw", session_id=sid, answers=["abandon"])
+            after = asst.session_store.load(sid)
+            err = second.get("error") or {}
+            print(" abandon:", err.get("code"), after.task.status if after.task else None)
+            self.assertEqual(err.get("code"), "CLARIFICATION_ABANDONED")
+            self.assertEqual(after.task.status, "done")
+            self.assertEqual(len(abandon.prompts), prompts)
+
+        rewrite = FakeLLMProvider(replies=[_job({"job": "clarify"}), _job({"job": "clarify"})])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=rewrite,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-answers-rewrite"
+            asst.plan(_ZH, response_style="raw", session_id=sid)
+            typed = "只看沪深300的日线收益"
+            second = asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                answers=[typed],
+                allow_composer_slot_fill=False,
+            )
+            after = asst.session_store.load(sid)
+            catalogs = [text for text in rewrite.prompts if text.startswith("Official and system Job ids:")]
+            print(" rewrite query:", after.task.user_query if after.task else None)
+            print(" catalogs:", len(catalogs))
+            self.assertEqual(len(catalogs), 3)
+            self.assertIn(typed, catalogs[-1])
+            self.assertEqual(after.task.user_query, typed)
             self.assertNotIn("unresolved_intent", after.task.slots)
 
     def test_open_slot_answer_resumes_the_same_graph(self) -> None:

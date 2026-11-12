@@ -587,6 +587,29 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
         self.assertIn("Filled Factor column = volume from Return column.", split_text)
         self.assertNotIn("from Factor", split_text)
 
+    def test_revision_notice_lists_each_confirmed_holding(self) -> None:
+        """已确认的持仓逐项列出，未确认的不写进修订说明。"""
+
+        print("\n[TestAiHumanCardPlanArtifact] 持仓修订逐项")
+        holdings = [
+            {"mention": "贵州茅台", "code": "600519.SH", "status": "confirmed"},
+            {"mention": "格力电器", "code": "000651.SZ", "status": "confirmed"},
+            {"mention": "工商银行", "code": "601398.SH", "status": "confirmed"},
+            {"mention": "招商银行", "code": "600036.SH", "status": "confirmed"},
+        ]
+        text = revision_notice_text(
+            2,
+            {},
+            [{"name": "holdings", "label": "holdings", "value": holdings, "origin": "accepted"}],
+        )
+        print(" notice:", text)
+        self.assertIn("Accepted 贵州茅台 = 600519.SH.", text)
+        self.assertIn("Accepted 格力电器 = 000651.SZ.", text)
+        self.assertIn("Accepted 工商银行 = 601398.SH.", text)
+        self.assertIn("Accepted 招商银行 = 600036.SH.", text)
+        self.assertNotIn("Accepted holdings", text)
+        self.assertEqual(text.count("Accepted "), 4)
+
     def test_rejected_slot_is_not_called_accepted(self) -> None:
         """各类被拒输入不写成 Accepted；整笔拒绝不发 Notice，混合则分开写。"""
 
@@ -847,6 +870,39 @@ class TestAiHumanCardClarify(unittest.TestCase):
         )
         print(" english receipt:", english)
         self.assertEqual(english, "Selected: Create an open plan")
+
+    def test_multi_question_receipt_lists_each_answer(self) -> None:
+        """多题回执逐行列出；一题仍是原来的一行。"""
+
+        print("\n[TestAiHumanCardClarify] 多题回执")
+        many = clarify_receipt_line(
+            "Please provide holdings.",
+            {
+                "answers": [
+                    {"prompt": "贵州茅台", "answer": "600519.SH", "answer_label": "600519.SH"},
+                    {"prompt": "格力电器", "answer": "000651.SZ", "answer_label": "000651.SZ"},
+                    {"prompt": "工商银行", "answer": "601398.SH", "answer_label": "601398.SH"},
+                    {"prompt": "招商银行", "answer": "600036.SH", "answer_label": "600036.SH"},
+                ]
+            },
+        )
+        print(" many:", many)
+        self.assertEqual(
+            many,
+            "贵州茅台: 600519.SH\n格力电器: 000651.SZ\n工商银行: 601398.SH\n招商银行: 600036.SH",
+        )
+        one = clarify_receipt_line(
+            "Need start.",
+            {"answers": [{"prompt": "Start", "answer": "20240101", "answer_label": ""}]},
+        )
+        print(" one:", one)
+        self.assertEqual(one, "Answered: 20240101")
+        labeled = clarify_receipt_line(
+            "是否创建开放计划？",
+            {"answers": [{"prompt": "开放计划", "answer": "compose_open", "answer_label": "给出开放计划"}]},
+        )
+        print(" labeled one:", labeled)
+        self.assertEqual(labeled, "用户已选 给出开放计划")
 
     def test_choice_rows_split_presets_and_open(self) -> None:
         """恢复卡是两条预设加一条开放；日期格不是开放选项。"""

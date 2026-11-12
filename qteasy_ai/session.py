@@ -842,17 +842,21 @@ class ConversationState:
         *,
         status: str = "answered",
         answer_label: str = "",
+        answers: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
         """就地关闭最近一张未答开卡（优先 clarify，其次 plan_ready）。
 
         Parameters
         ----------
         answer : str
-            选项 id 或用户原文，写入 ``payload.answer``。
+            选项 id 或用户原文，写入 ``payload.answer``。多题时改看 ``answers``。
         status : str, optional
             ``answered`` 或 ``skipped``。
         answer_label : str, optional
             用户看见的标签。有则写入 ``payload.answer_label``。
+        answers : list of dict, optional
+            与题同一顺序。每项含 ``prompt`` / ``answer`` / ``answer_label``。
+            只有一题时同时写入原来的 ``answer`` / ``answer_label``。
 
         Returns
         -------
@@ -862,6 +866,7 @@ class ConversationState:
 
         text = str(answer or "").strip()
         label = str(answer_label or "").strip()
+        packed = [item for item in (answers or []) if isinstance(item, dict)]
         mark = str(status or "answered").strip() or "answered"
         for kind in ("clarify", "plan_ready"):
             for row in reversed(self.messages):
@@ -870,10 +875,27 @@ class ConversationState:
                 payload = dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {}
                 if str(payload.get("status") or "") in {"answered", "skipped"}:
                     continue
-                if text:
-                    payload["answer"] = text
-                if label:
-                    payload["answer_label"] = label
+                if packed:
+                    payload["answers"] = [
+                        {
+                            "prompt": str(item.get("prompt") or ""),
+                            "answer": str(item.get("answer") or ""),
+                            "answer_label": str(item.get("answer_label") or ""),
+                        }
+                        for item in packed
+                    ]
+                    if len(packed) == 1:
+                        one_text = str(packed[0].get("answer") or "").strip()
+                        one_label = str(packed[0].get("answer_label") or "").strip()
+                        if one_text:
+                            payload["answer"] = one_text
+                        if one_label:
+                            payload["answer_label"] = one_label
+                else:
+                    if text:
+                        payload["answer"] = text
+                    if label:
+                        payload["answer_label"] = label
                 payload["status"] = mark
                 row["payload"] = payload
                 return True

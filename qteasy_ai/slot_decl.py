@@ -312,9 +312,11 @@ def _kind_error(decl: Dict[str, Any], text: str) -> str:
 def _pending(decl: Dict[str, Any], error: str) -> Dict[str, Any]:
     """一张待问槽。``error`` 为空表示仅仅缺值。"""
 
+    label = str(decl.get("label") or decl.get("name") or "")
     return {
         "name": str(decl.get("name") or ""),
-        "label": str(decl.get("label") or decl.get("name") or ""),
+        "label": label,
+        "prompt": label,
         "hint": str(decl.get("hint") or ""),
         "error": str(error or ""),
     }

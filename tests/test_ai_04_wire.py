@@ -275,6 +275,8 @@ class TestAi04Wire(unittest.TestCase):
             print(" allowed:", len([item for item in fake.prompts if item.startswith("Allowed skills:")]), "left:", fake.replies)
             self.assertEqual(option_ids, ["drop_consumer", "use_panel", "rewrite"])
             self.assertEqual(row.get("name"), "wire_choice")
+            self.assertEqual(row.get("prompt"), "怎么继续")
+            self.assertEqual(row.get("hint"), "")
             self.assertIn("汇总表", str(blob.get("confirm_prompt")))
             self.assertIn("不画图", row["options"][0]["label"])
             self.assertEqual(row["options"][1]["label"], "改画前面的行情")
@@ -386,6 +388,85 @@ class TestAi04Wire(unittest.TestCase):
             self.assertTrue(catalogs)
             self.assertEqual(skills, ["qt.ai.strategy_meta.list"])
             self.assertNotIn("qt.ai.hp.plot", skills)
+
+    def test_answers_switch_the_wire_path(self) -> None:
+        """按题序交回的接线选项仍换走法。"""
+
+        print("\n[TestAi04Wire] answers 换接线")
+        steps = [
+            {"skill_name": "qt.ai.data.history", "inputs": {"shares": "000300.SH", "htype_names": "close"}},
+            {"skill_name": "qt.ai.hp.agg", "inputs": {"stat": "mean"}, "depends_on": ["step_1"]},
+            {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_2"]},
+        ]
+        query = "取 000300.SH 日线，做汇总，再出一页图"
+
+        def _open():
+            return FakeLLMProvider(
+                replies=[
+                    _job("open"),
+                    _job("open"),
+                    json.dumps({"steps": steps}, ensure_ascii=False),
+                    _job("strategy.meta"),
+                ]
+            )
+
+        drop_fake = _open()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=drop_fake,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "wire-answers-drop"
+            asst.plan(query, response_style="raw", session_id=sid)
+            dropped = asst.plan("", response_style="raw", session_id=sid, answers=["drop_consumer"])
+            dropped_plan = dropped.get("plan") or {}
+            dropped_rows = (dropped_plan.get("assumptions") or {}).get("accepted_steps") or []
+            if not dropped_rows:
+                dropped_rows = [
+                    step
+                    for step in (dropped_plan.get("steps") or [])
+                    if step.get("skill_name") != "qt.ai.system.fallback"
+                ]
+            names = [str(row.get("skill_name") or "") for row in dropped_rows]
+            print(" drop answers:", names)
+            self.assertIn("qt.ai.hp.agg", names)
+            self.assertNotIn("qt.ai.hp.plot", names)
+
+        plot_fake = _open()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=plot_fake,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "wire-answers-plot"
+            asst.plan(query, response_style="raw", session_id=sid)
+            plotted = asst.plan("", response_style="raw", session_id=sid, answers=["use_panel"])
+            rows = ((plotted.get("plan") or {}).get("assumptions") or {}).get("accepted_steps") or []
+            print(" panel answers:", rows)
+            plot = next(row for row in rows if row.get("skill_name") == "qt.ai.hp.plot")
+            self.assertEqual(plot.get("depends_on"), ["step_1"])
+            self.assertNotIn("qt.ai.hp.agg", [row.get("skill_name") for row in rows])
+
+        rewrite_fake = _open()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                provider=rewrite_fake,
+                registry=self.registry,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "wire-answers-rewrite"
+            asst.plan(query, response_style="raw", session_id=sid)
+            before = len(rewrite_fake.prompts)
+            typed = "列出内置策略"
+            second = asst.plan("", response_style="raw", session_id=sid, answers=[typed])
+            plan = second.get("plan") or {}
+            skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
+            catalogs = [text for text in rewrite_fake.prompts[before:] if typed in text]
+            print(" rewrite answers:", skills, "catalogs:", len(catalogs))
+            self.assertTrue(catalogs)
+            self.assertEqual(skills, ["qt.ai.strategy_meta.list"])
 
     def test_one_switch_cannot_feed_two_types(self) -> None:
         """同一步不能既交表又交面板。出选择卡，不再组图。"""

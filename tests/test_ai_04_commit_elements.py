@@ -20,7 +20,12 @@ from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
 from qteasy_ai.skills.data_kline import build_data_kline_skill
 from qteasy_ai.skills.data_refill import build_data_refill_skill
-from qteasy_ai.slot_graph import bind_clarification_text
+from qteasy_ai.slot_graph import (
+    _item_pending_rows,
+    apply_ordered_answers,
+    apply_polish_text,
+    bind_clarification_text,
+)
 
 _QUERY = "帮我用贵州茅台、格力电器、工商银行和招商银行做一个等权持仓组合，看过去3年的持仓收益率，并跟沪深300指数做一个对比。"
 _PROTOCOL = {
@@ -247,6 +252,155 @@ class TestAi04CommitElements(unittest.TestCase):
         print(" refill echo:", echoed.get("inputs_echo", {}).get("symbols"))
         self.assertEqual(echoed.get("inputs_echo", {}).get("symbols"), "000001.SZ,000002.SZ")
         self.assertEqual([item.get("code") for item in items], ["000001.SZ", "000002.SZ"])
+
+    def test_ordered_answers_keep_each_holding(self) -> None:
+        """四题同名 holdings 按题序写回，认不出的那一项保持 pending。"""
+
+        print("\n[TestAi04CommitElements] 四题答案按序折进 holdings")
+        slot = {
+            "name": "holdings",
+            "label": "holdings",
+            "hint": "Please provide holdings.",
+            "type": "array",
+            "element": "code",
+            "cardinality": "many",
+            "resolve": "code",
+            "value": [
+                {"mention": "贵州茅台", "code": "600519.SH", "status": "pending"},
+                {"mention": "格力电器", "code": "000651.SZ", "status": "pending"},
+                {"mention": "工商银行", "code": "601398.SH", "status": "pending"},
+                {"mention": "招商银行", "code": "600036.SH", "status": "pending"},
+            ],
+        }
+        rows = _item_pending_rows(slot)
+        prompts = [str(item.get("prompt") or "") for item in rows or []]
+        print(" prompts:", prompts)
+        print(" hints:", [item.get("hint") for item in rows or []])
+        self.assertEqual(
+            prompts,
+            [
+                "请确认贵州茅台（600519.SH）。",
+                "请确认格力电器（000651.SZ）。",
+                "请确认工商银行（601398.SH）。",
+                "请确认招商银行（600036.SH）。",
+            ],
+        )
+        self.assertEqual(len(set(prompts)), 4)
+        self.assertTrue(all(item.get("hint") == "" for item in rows or []))
+        self.assertEqual(rows[0].get("options"), [{"id": "600519.SH", "label": "600519.SH"}])
+        self.assertEqual(rows[0].get("open"), {"label": "其它"})
+        self.assertEqual((rows[3].get("options") or [{}])[0].get("id"), "600036.SH")
+        unnamed = _item_pending_rows(
+            {
+                "name": "holdings",
+                "type": "array",
+                "element": "code",
+                "cardinality": "many",
+                "value": [{"mention": "贵州茅台", "code": "", "status": "pending"}],
+            }
+        )
+        code_only = _item_pending_rows(
+            {
+                "name": "holdings",
+                "type": "array",
+                "element": "code",
+                "cardinality": "many",
+                "value": [{"mention": "600036.SH", "code": "600036.SH", "status": "pending"}],
+            }
+        )
+        print(" no code:", unnamed[0].get("prompt"), unnamed[0].get("options"), unnamed[0].get("open"))
+        print(" code only:", code_only[0].get("prompt"), code_only[0].get("open"))
+        self.assertEqual(unnamed[0].get("prompt"), "请确认贵州茅台。")
+        self.assertNotIn("options", unnamed[0])
+        self.assertEqual(unnamed[0].get("open"), {"label": "其它"})
+        self.assertEqual(code_only[0].get("prompt"), "Confirm 600036.SH.")
+        self.assertEqual(code_only[0]["options"][0]["id"], "600036.SH")
+        self.assertEqual(code_only[0].get("open"), {"label": "Other"})
+        polished = json.dumps(
+            {
+                "confirm_prompt": "还有字段没补齐。请确认下面的持仓。",
+                "pending": [
+                    {
+                        "name": "holdings",
+                        "hint": "This slot is for 招商银行.",
+                        "prompt": "不要改题干",
+                        "options": [{"id": item["options"][0]["id"], "label": "建议代码"}],
+                    }
+                    for item in rows
+                ],
+            },
+            ensure_ascii=False,
+        )
+        kept = apply_polish_text(
+            {"confirm_prompt": "Some fields are still missing.", "pending": rows},
+            polished,
+            "贵州茅台",
+        )
+        print(" polished hint:", kept["pending"][0].get("hint"))
+        print(" polished prompt:", kept["pending"][0].get("prompt"))
+        self.assertEqual(kept["pending"][0].get("hint"), "")
+        self.assertEqual(kept["pending"][0].get("prompt"), rows[0]["prompt"])
+        self.assertEqual(kept["pending"][0]["options"][0]["id"], "600519.SH")
+        folded = apply_ordered_answers(
+            rows,
+            ["600519.SH", "000651.SZ", "601398.SH", "600036.SH"],
+        )
+        holdings = list((folded or {}).get("holdings") or [])
+        print(" folded:", [(item.get("code"), item.get("status")) for item in holdings])
+        self.assertEqual([item.get("status") for item in holdings], ["confirmed"] * 4)
+        self.assertEqual(
+            [item.get("code") for item in holdings],
+            ["600519.SH", "000651.SZ", "601398.SH", "600036.SH"],
+        )
+        mixed = apply_ordered_answers(
+            rows,
+            ["600519.SH", "不是代码", "601398.SH", "600036.SH"],
+        )
+        again = list((mixed or {}).get("holdings") or [])
+        print(" mixed:", [(item.get("mention"), item.get("code"), item.get("status")) for item in again])
+        self.assertEqual(
+            [item.get("status") for item in again],
+            ["confirmed", "pending", "confirmed", "confirmed"],
+        )
+        self.assertEqual(again[1].get("code"), "000651.SZ")
+        named = apply_ordered_answers(
+            rows,
+            ["贵州茅台", "000651.SZ", "601398.SH", "600036.SH"],
+        )
+        named_rows = list((named or {}).get("holdings") or [])
+        print(" company:", [(item.get("mention"), item.get("code"), item.get("status")) for item in named_rows])
+        self.assertEqual(named_rows[0].get("status"), "pending")
+        self.assertEqual(named_rows[0].get("code"), "600519.SH")
+        self.assertEqual(named_rows[1].get("status"), "confirmed")
+        bare = apply_ordered_answers(
+            rows,
+            ["000001", "000651.SZ", "601398.SH", "600036.SH"],
+        )
+        bare_rows = list((bare or {}).get("holdings") or [])
+        print(" bare:", [(item.get("code"), item.get("status")) for item in bare_rows])
+        self.assertEqual(bare_rows[0].get("status"), "pending")
+        self.assertEqual(bare_rows[0].get("code"), "600519.SH")
+        company_slot = apply_ordered_answers(
+            [{"name": "shares", "resolve": "code", "prompt": "Symbols"}],
+            ["贵州茅台"],
+        )
+        passed_slot = apply_ordered_answers(
+            [{"name": "shares", "resolve": "code", "prompt": "Symbols"}],
+            ["600519.SH"],
+        )
+        print(" shares company:", company_slot, "passed:", passed_slot)
+        self.assertEqual(company_slot, {})
+        self.assertEqual(passed_slot, {"shares": "600519.SH"})
+        distinct = apply_ordered_answers(
+            [
+                {"name": "start", "prompt": "Start"},
+                {"name": "end", "prompt": "End"},
+            ],
+            ["20200101", "20231231"],
+        )
+        print(" distinct:", distinct)
+        self.assertEqual(distinct, {"start": "20200101", "end": "20231231"})
+        self.assertIsNone(apply_ordered_answers(rows, ["600519.SH"]))
 
 
 if __name__ == "__main__":

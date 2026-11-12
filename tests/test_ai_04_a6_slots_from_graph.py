@@ -10,10 +10,12 @@
 # ======================================
 
 import json
+import tempfile
 import unittest
 
-from qteasy_ai.app import build_default_registry
+from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.human_card import clarification_needs_answer, project_human_cards
+from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.plan_markdown import tool_plan_to_markdown
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
@@ -518,6 +520,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         options = [str(item.get("id") or "") for item in (_pending(meta)[0].get("options") or [])]
         print(" strategy options:", options)
         self.assertEqual(_pending_names(meta), ["strategy_id"])
+        self.assertEqual(_pending(meta)[0].get("prompt"), "Strategy")
         self.assertEqual(options, strategy_id_options())
         self.assertEqual(options, sorted(options))
         self.assertNotEqual(options, ["macd", "dma", "bband", "rsi", "kdj"])
@@ -535,6 +538,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             _pending_names(factor),
             ["shares", "start", "end", "factor_htype", "return_htype"],
         )
+        factor_rows = _pending(factor)
+        print(" factor prompts:", [(row.get("name"), row.get("prompt")) for row in factor_rows])
+        self.assertTrue(all(str(row.get("prompt") or "") == str(row.get("label") or "") for row in factor_rows))
 
         builder = Planner(self.registry, env_facts={}).build_plan("写一个双均线金叉策略", mode="plan")
         print(" builder pending:", _pending_names(builder), builder.steps[0].inputs.get("reason"))
@@ -705,6 +711,31 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         )
         self.assertEqual([str(item.get("name") or "") for item in _pending(refill)], ["start", "end"])
         self._assert_distinct_date_rows(refill_rows, "Unbounded full-history download is not allowed.")
+
+    def test_strategy_id_answer_stays_a_slot_value(self) -> None:
+        """点选的策略 id 写入该槽，不折成持仓项列表。"""
+
+        print("\n[TestAi04A6] 策略 id 按题序写入")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asst = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            sid = "s-strategy-answer"
+            first = asst.plan("列出策略参数", response_style="raw", session_id=sid)
+            pending = ((first.get("plan") or {}).get("assumptions") or {}).get("clarification") or {}
+            row = (pending.get("pending") or [{}])[0]
+            print(" prompt:", row.get("prompt"), "name:", row.get("name"))
+            self.assertEqual(row.get("name"), "strategy_id")
+            self.assertEqual(row.get("prompt"), "Strategy")
+            second = asst.plan("", response_style="raw", session_id=sid, answers=["macd"])
+            after = asst.session_store.load(sid)
+            slot = (after.task.slots or {}).get("strategy_id") if after.task else None
+            value = None if slot is None else slot.value
+            print(" strategy value:", value)
+            print(" second job:", ((second.get("plan") or {}).get("planner_trace") or {}).get("intent_job"))
+            self.assertEqual(value, "macd")
+            self.assertNotIsInstance(value, list)
 
     def _assert_distinct_date_rows(self, rows, constraint_text: str) -> None:
         """两格题干、hint、例子不同，格式相同，组约束只在 constraint。"""

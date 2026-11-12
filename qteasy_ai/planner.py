@@ -47,6 +47,7 @@ from .slot_graph import (
     looks_like_hold_compare,
     polish_clarification,
     prior_turn_reply,
+    question_label,
     split_prior_question,
     strategy_id_options,
 )
@@ -795,8 +796,18 @@ class Planner:
 
         strategy_ids = tuple(strategy_id_options())
         pending: List[Dict[str, Any]] = []
+        seen: set = set()
         for name in missing:
-            row: Dict[str, Any] = {"name": name, "hint": f"Please provide {name}."}
+            if name in seen:
+                continue
+            seen.add(name)
+            label = question_label(name)
+            row: Dict[str, Any] = {
+                "name": name,
+                "label": label,
+                "prompt": label,
+                "hint": f"Please provide {name}.",
+            }
             if name == "strategy_id":
                 row["options"] = [{"id": sid, "label": sid} for sid in strategy_ids]
             pending.append(row)
@@ -821,7 +832,15 @@ class Planner:
         pending = details.get("slot_pending") if isinstance(details, dict) else None
         if not isinstance(pending, list) or not pending:
             return blob
-        blob["pending"] = list(pending)
+        rows: List[Dict[str, Any]] = []
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            if not str(row.get("prompt") or "").strip():
+                row["prompt"] = str(row.get("label") or row.get("name") or "")
+            rows.append(row)
+        blob["pending"] = rows
         hint = str((steps[0].inputs or {}).get("hint") or "").strip()
         if hint:
             blob["confirm_prompt"] = hint

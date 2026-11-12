@@ -663,6 +663,8 @@ class WorkbenchHttp:
             for key, value in raw_patches.items()
             if str(key).strip() and value not in (None, "")
         }
+        raw_answers = body.get("answers")
+        answers = list(raw_answers) if isinstance(raw_answers, list) and raw_answers else None
         skip = bool(body.get("skip"))
         session_id = str(body.get("session_id") or "").strip()
         if skip:
@@ -677,12 +679,12 @@ class WorkbenchHttp:
                 skip=True,
             )
             return self._dto_response(payload, query=query, session_id=session_id)
-        if not query and not patches:
+        if not query and not patches and answers is None:
             return _error("QUERY_REQUIRED", "Provide a query.", 400)
-        if patches and not session_id:
+        if (patches or answers is not None) and not session_id:
             return _error("SESSION_ID_REQUIRED", "Provide a session_id with patches.", 400)
-        # Web Composer：clarifying 只认控件 patches/skip；打字=换题。
-        allow_fill = bool(patches)
+        # Web Composer：clarifying 只认控件 patches/answers/skip；打字=换题。
+        allow_fill = bool(patches) or answers is not None
         payload = await self._in_kernel(
             session_id,
             self.assistant.plan,
@@ -690,6 +692,7 @@ class WorkbenchHttp:
             response_style="raw",
             session_id=session_id or None,
             patches=patches or None,
+            answers=answers,
             allow_composer_slot_fill=allow_fill,
         )
         return self._dto_response(payload, query=query, session_id=session_id)

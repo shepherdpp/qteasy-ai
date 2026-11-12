@@ -17,7 +17,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
-from .slot_graph import clarification_skips_polish, committed_fact_lines
+from .slot_graph import clarification_skips_polish, committed_fact_lines, is_bound_item_list
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
 HUMAN_CARD_KINDS = frozenset(
@@ -194,9 +194,27 @@ def revision_notice_text(
         label = str(item.get("label") or item.get("name") or "").strip()
         value = item.get("value")
         origin = str(item.get("origin") or "accepted")
+        source = str(item.get("from_label") or item.get("from") or "").strip()
+        if is_bound_item_list(value):
+            verb = "Filled" if origin == "filled" else "Rejected" if origin == "rejected" else "Accepted"
+            wrote = False
+            for held in value:
+                if str(held.get("status") or "") != "confirmed":
+                    continue
+                mention = str(held.get("mention") or held.get("code") or "").strip()
+                code = str(held.get("code") or "").strip()
+                if not mention or not code:
+                    continue
+                wrote = True
+                if origin == "filled" and source:
+                    lines.append(f"Filled {mention} = {code} from {source}.")
+                else:
+                    lines.append(f"{verb} {mention} = {code}.")
+            if wrote and origin != "rejected":
+                progressed = True
+            continue
         if origin == "filled":
             progressed = True
-            source = str(item.get("from_label") or item.get("from") or "").strip()
             if source:
                 lines.append(f"Filled {label} = {value} from {source}.")
             else:
@@ -531,7 +549,7 @@ def polish_human_cards(
 
     改 ``clarify`` / ``plan_ready`` / ``error`` / ``result`` 的 ``text``。
     ``clarify`` 另可改 ``pending[i].options[].label``；禁止改 ``id`` / ``pending[].name`` /
-    数值；失败整卡回滚为英文。其余 kind 的 ``payload`` 不改。
+    ``pending[].prompt`` / 题序 / 数值；失败整卡回滚为英文。其余 kind 的 ``payload`` 不改。
     result 只读 ``payload.next_mode``：``open`` 时允许改写最后一句 Next，``job`` 只翻译。
 
     Parameters
@@ -721,6 +739,10 @@ def _polish_clarify_fields(
         cloned = dict(row)
         cloned["label"] = label
         cloned["hint"] = hint
+        if row.get("index") is not None:
+            cloned["hint"] = str(row.get("hint") or "")
+        if "prompt" in row:
+            cloned["prompt"] = row.get("prompt")
         new_pending.append(cloned)
     out_payload = dict(payload)
     out_payload["pending"] = new_pending
@@ -887,6 +909,8 @@ def _polish_clarify_card(
             continue
         if src_item.get("name") != dst_item.get("name"):
             return item
+        if str(src_item.get("prompt") or "") != str(dst_item.get("prompt") or ""):
+            return item
         src_opts = src_item.get("options") if isinstance(src_item.get("options"), list) else []
         dst_opts = dst_item.get("options") if isinstance(dst_item.get("options"), list) else []
         if len(src_opts) != len(dst_opts):
@@ -961,6 +985,38 @@ def _card_rewrite_ok(source: str, rewritten: str, *, kind: str) -> bool:
     return True
 
 
+def question_answer_rows(pending: Any, answers: Sequence[Any]) -> List[Dict[str, str]]:
+    """按题序做成回执行。标签只在这一题的选项里找。
+
+    Parameters
+    ----------
+    pending : dict
+        澄清卡。``pending`` 里是每一题。
+    answers : sequence
+        与题同一顺序的答案。
+
+    Returns
+    -------
+    list of dict
+        ``prompt`` / ``answer`` / ``answer_label``。
+    """
+
+    blob = pending if isinstance(pending, dict) else {}
+    rows = blob.get("pending") if isinstance(blob.get("pending"), list) else []
+    out: List[Dict[str, str]] = []
+    for index, raw in enumerate(answers or []):
+        row = rows[index] if index < len(rows) and isinstance(rows[index], dict) else {}
+        text = str("" if raw is None else raw).strip()
+        label = text
+        for opt in row.get("options") or []:
+            if isinstance(opt, dict) and str(opt.get("id") or "") == text:
+                label = str(opt.get("label") or text)
+                break
+        prompt = str(row.get("prompt") or row.get("label") or "").strip()
+        out.append({"prompt": prompt, "answer": text, "answer_label": label})
+    return out
+
+
 def option_answer_label(pending: Any, answer: str) -> str:
     """选项 id 换成用户看见的标签。对不上时退回原文。
 
@@ -1026,15 +1082,30 @@ def choice_rows(pending_item: Any) -> List[Dict[str, str]]:
     return rows
 
 
+def _one_clarify_receipt(text: str, label: str, answer: str) -> str:
+    """一题的回执。有标签时用「用户已选」或 ``Selected``。"""
+
+    shown = str(label or "").strip()
+    raw = str(answer or "").strip()
+    if shown:
+        sample = f"{shown}\n{text or ''}"
+        if _CJK_RE.search(sample):
+            return f"用户已选 {shown}"
+        return f"Selected: {shown}"
+    if raw:
+        return f"Answered: {raw}"
+    return ""
+
+
 def clarify_receipt_line(text: str, payload: Any) -> str:
-    """已答澄清的一行回执。有标签时用「用户已选」或 ``Selected``。
+    """已答澄清的回执。一题仍是一行；多题按题干逐行列出。
 
     Parameters
     ----------
     text : str
         澄清卡正文，用来判断中英文。
     payload : dict
-        ``answer`` / ``answer_label``。
+        ``answers`` 或单个 ``answer`` / ``answer_label``。
 
     Returns
     -------
@@ -1043,16 +1114,23 @@ def clarify_receipt_line(text: str, payload: Any) -> str:
     """
 
     blob = payload if isinstance(payload, dict) else {}
-    label = str(blob.get("answer_label") or "").strip()
-    answer = str(blob.get("answer") or "").strip()
-    if label:
-        sample = f"{label}\n{text or ''}"
-        if _CJK_RE.search(sample):
-            return f"用户已选 {label}"
-        return f"Selected: {label}"
-    if answer:
-        return f"Answered: {answer}"
-    return ""
+    rows = blob.get("answers") if isinstance(blob.get("answers"), list) else []
+    usable = [
+        item
+        for item in rows
+        if isinstance(item, dict) and str(item.get("answer_label") or item.get("answer") or "").strip()
+    ]
+    if len(usable) > 1:
+        lines: List[str] = []
+        for item in usable:
+            shown = str(item.get("answer_label") or item.get("answer") or "").strip()
+            prompt = str(item.get("prompt") or "").strip()
+            lines.append(f"{prompt}: {shown}" if prompt else shown)
+        return "\n".join(lines)
+    if len(usable) == 1:
+        one = usable[0]
+        return _one_clarify_receipt(text, str(one.get("answer_label") or ""), str(one.get("answer") or ""))
+    return _one_clarify_receipt(text, str(blob.get("answer_label") or ""), str(blob.get("answer") or ""))
 
 
 def clarification_needs_answer(blob: Any) -> bool:

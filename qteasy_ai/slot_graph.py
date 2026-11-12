@@ -129,6 +129,15 @@ _LABELS = {
     "benchmark_output": "Benchmark output",
     "adj": "Adjustment",
 }
+
+
+def question_label(name: str) -> str:
+    """澄清题干用的槽标签。没有登记时退回槽名。"""
+
+    key = str(name or "")
+    return str(_LABELS.get(key) or key)
+
+
 _DATE_HINT = (
     "Download/refill requires an explicit start and end date. "
     "Unbounded full-history download is not allowed."
@@ -621,58 +630,71 @@ def parse_card_answers(
     submitted: Dict[str, Any],
     provider: Any = None,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-    """一次解析澄清卡上的全部格子。
+    """按题序逐题解析澄清答案。
 
-    点选 id 被模型改成另一个值时，这一格不收下。没有模型或整批非法时，
-    点选 id 按启发式直接收下。
+    模型一次只看见这一题的原文。点选 id 被改成另一个值时，只拒这一题。
+    没有模型或这一题非法时，点选 id 按启发式直接收下。带下标的持仓项
+    不进这里。
 
     Parameters
     ----------
     pending : sequence of dict
         系统出的题。含 ``name`` / ``type`` / ``options``。
     submitted : dict
-        槽名到用户原文或选项 id。
+        槽名到用户原文或选项 id。同名只收第一题。
     provider : provider, optional
-        有则一次调用解析全部格子。
+        有则每题各调用一次。
 
     Returns
     -------
     tuple
-        ``(accepted, errors)``。errors 的值是这一格不收下的原因。
+        ``(accepted, errors)``。errors 的值是这一题不收下的原因。
     """
 
     specs = [item for item in pending or [] if isinstance(item, dict) and item.get("name")]
-    by_name = {str(item["name"]): item for item in specs}
-    raws = {name: submitted[name] for name in by_name if name in (submitted or {})}
-    model: Dict[str, Any] = {}
-    if provider is not None and raws:
-        parsed = _parse_model_slots(provider.chat(_card_prompt(raws)), list(raws))
-        model = parsed or {}
-        illegal = parsed is None
-    else:
-        illegal = True
     accepted: Dict[str, Any] = {}
     errors: Dict[str, str] = {}
-    for name, raw in raws.items():
-        spec = by_name[name]
-        option_ids = _option_ids(spec)
+    seen: set = set()
+    for spec in specs:
+        name = str(spec.get("name") or "")
+        if not name or name in seen or name not in (submitted or {}):
+            continue
+        seen.add(name)
+        raw = submitted[name]
         raw_text = str(raw).strip()
-        if not illegal and name in model and raw_text in option_ids and str(model[name]).strip() != raw_text:
-            errors[name] = f"{raw_text!r} was changed to {model[name]!r}. The selected option was not kept."
+        model_value = None
+        illegal = True
+        if provider is not None and raw not in (None, ""):
+            parsed = _parse_model_slots(provider.chat(_card_prompt({name: raw})), [name])
+            illegal = parsed is None
+            if parsed and name in parsed:
+                model_value = parsed[name]
+        option_ids = _option_ids(spec)
+        if (
+            not illegal
+            and model_value is not None
+            and raw_text in option_ids
+            and str(model_value).strip() != raw_text
+        ):
+            errors[name] = (
+                f"{raw_text!r} was changed to {model_value!r}. The selected option was not kept."
+            )
             continue
         if name == "weights":
-            parsed = commit_weight_text(raw_text)
-            if parsed["status"] == "value" and parsed["values"].get("mode") == "equal":
+            parsed_weight = commit_weight_text(raw_text)
+            if parsed_weight["status"] == "value" and parsed_weight["values"].get("mode") == "equal":
                 accepted[name] = {"mode": "equal"}
                 continue
-            if parsed["status"] == "value":
-                accepted[name] = list(parsed["values"].get("weights") or [])
+            if parsed_weight["status"] == "value":
+                accepted[name] = list(parsed_weight["values"].get("weights") or [])
                 continue
-            if parsed["status"] == "unresolved":
-                errors[name] = str(parsed.get("reason") or f"{raw_text!r} cannot be accepted for this field.")
+            if parsed_weight["status"] == "unresolved":
+                errors[name] = str(
+                    parsed_weight.get("reason") or f"{raw_text!r} cannot be accepted for this field."
+                )
                 continue
-        if not illegal and name in model:
-            value = coerce_slot_value(spec, model[name])
+        if not illegal and model_value is not None:
+            value = coerce_slot_value(spec, model_value)
             if value is None:
                 value = coerce_slot_value(spec, raw)
         else:
@@ -747,6 +769,10 @@ def apply_polish_text(blob: Dict[str, Any], raw: str, original: str) -> Dict[str
             row["hint"] = str(new.get("hint") or "")
         if "error" in new:
             row["error"] = str(new.get("error") or "")
+        if "prompt" in old:
+            row["prompt"] = old.get("prompt")
+        if old.get("index") is not None:
+            row["hint"] = str(old.get("hint") or "")
         if old_opts:
             row["options"] = relabeled
         merged.append(row)
@@ -1068,6 +1094,7 @@ def _recovery_clarification(query: str) -> Dict[str, Any]:
             {
                 "name": "unresolved_intent",
                 "label": label,
+                "prompt": prompt,
                 "hint": "",
                 "error": "",
                 "type": "string",
@@ -1517,9 +1544,11 @@ def _pending_row(slot: Dict[str, Any], error: str = "") -> Dict[str, Any]:
 
     name = str(slot.get("name") or "")
     shown = date_bound_presentation(name) if name in {"start", "end"} else {}
+    label = str(slot.get("label") or shown.get("label") or _LABELS.get(name, name))
     row: Dict[str, Any] = {
         "name": name,
-        "label": str(slot.get("label") or shown.get("label") or _LABELS.get(name, name)),
+        "label": label,
+        "prompt": label,
         "hint": str(slot.get("hint") or shown.get("hint") or _HINTS.get(name) or f"Please provide {name}."),
         "error": str(error or ""),
         "type": str(slot.get("type") or "string"),
@@ -3654,8 +3683,26 @@ def _clarification_symbol(text: str) -> str:
     return ""
 
 
+def _holding_confirm_prompt(mention: str, code: str) -> str:
+    """一项持仓的确认题干。名字只用 mention 和 code。"""
+
+    left = str(mention or "").strip()
+    right = str(code or "").strip()
+    chinese = bool(_CJK.search(left + right))
+    if left and right and left != right:
+        shown = f"{left}（{right}）" if chinese else f"{left} ({right})"
+    else:
+        shown = left or right
+    if chinese:
+        return f"请确认{shown}。" if shown else "请确认这项持仓。"
+    return f"Confirm {shown}." if shown else "Confirm this holding."
+
+
 def _item_pending_rows(slot: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-    """多值代码槽按未确认的项出页。没有项时交给整格追问。"""
+    """多值代码槽按未确认的项出页。没有项时交给整格追问。
+
+    建议代码是一个选项。开放输入是最后一行。题干是确认句。
+    """
 
     if not slot.get("element"):
         return None
@@ -3671,12 +3718,117 @@ def _item_pending_rows(slot: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         if str(item.get("status") or "") == "confirmed":
             continue
         row = _pending_row(slot)
+        mention = str(item.get("mention") or "")
+        code = str(item.get("code") or "")
         row["index"] = index
-        row["mention"] = str(item.get("mention") or "")
-        row["code"] = str(item.get("code") or "")
+        row["mention"] = mention
+        row["code"] = code
         row["items"] = items
+        row["prompt"] = _holding_confirm_prompt(mention, code)
+        row["hint"] = ""
+        row["open"] = {"label": "其它" if _CJK.search(mention + code) else "Other"}
+        if code:
+            row["options"] = [{"id": code, "label": code}]
+        else:
+            row.pop("options", None)
         rows.append(row)
     return rows
+
+
+def is_bound_item_list(value: Any) -> bool:
+    """已经按项写好的列表。不要再按槽名解析成一段文本。"""
+
+    if not isinstance(value, list) or not value:
+        return False
+    return all(
+        isinstance(item, dict) and any(key in item for key in ("code", "mention", "status"))
+        for item in value
+    )
+
+
+def _reviewed_share_text(text: str) -> str:
+    """整格代码槽过 ``commit_shares``。只有 ``value`` 才返回代码串。"""
+
+    parsed = commit_shares(str(text or ""))
+    if str(parsed.get("status") or "") != "value":
+        return ""
+    return str(parsed.get("value") or "")
+
+
+def _one_reviewed_code(text: str) -> str:
+    """持仓一题：复核后恰好一只代码才可以确认。"""
+
+    value = _reviewed_share_text(text)
+    codes = [part for part in value.split(",") if part]
+    if len(codes) != 1:
+        return ""
+    return codes[0]
+
+
+def apply_ordered_answers(
+    rows: Sequence[Any],
+    answers: Sequence[Any],
+) -> Optional[Dict[str, Any]]:
+    """按题序把答案折成槽补丁。
+
+    带 ``index`` 和 ``items`` 的同名槽合成一份项列表。持仓项和
+    ``resolve=code`` 的整格都先过 ``commit_shares``，只有
+    ``status == value`` 才写入并标已确认。公司名和对不上的代码保持原状。
+    没有下标的其它题一题一个槽。题数对不上时返回 ``None``。
+
+    Parameters
+    ----------
+    rows : sequence
+        卡片上的题，顺序与 Session 交出的 ``pending`` 相同。
+    answers : sequence
+        与题同一顺序的答案。
+
+    Returns
+    -------
+    dict or None
+        槽名到值。项列表已经写好，调用方不要再按槽名解析这些键。
+    """
+
+    pending_rows = [item for item in (rows or []) if isinstance(item, dict)]
+    values = list(answers or [])
+    if len(pending_rows) != len(values):
+        return None
+    patches: Dict[str, Any] = {}
+    lists: Dict[str, List[Dict[str, Any]]] = {}
+    for row, raw in zip(pending_rows, values):
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        if row.get("index") is not None and isinstance(row.get("items"), list):
+            if name not in lists:
+                lists[name] = [
+                    dict(item) if isinstance(item, dict) else {"mention": "", "code": "", "status": "incomplete"}
+                    for item in (row.get("items") or [])
+                ]
+            code = _one_reviewed_code(str(raw or ""))
+            try:
+                cursor = int(row.get("index"))
+            except (TypeError, ValueError):
+                cursor = -1
+            if code and 0 <= cursor < len(lists[name]):
+                lists[name][cursor]["code"] = code
+                lists[name][cursor]["status"] = "confirmed"
+            continue
+        if isinstance(raw, str):
+            text: Any = raw.strip()
+        else:
+            text = raw
+        if text in (None, ""):
+            continue
+        if str(row.get("resolve") or "") == "code":
+            reviewed = _reviewed_share_text(str(text))
+            if reviewed:
+                patches[name] = reviewed
+            continue
+        patches[name] = text
+    for name, items in lists.items():
+        patches[name] = items
+    return patches
 
 
 def bind_clarification_text(

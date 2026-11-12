@@ -210,8 +210,18 @@ function clarifySettled(msg) {
 
 function clarifyReceiptLine(msg) {
   const payload = (msg && msg.payload) || {};
-  const label = String(payload.answer_label || "").trim();
-  const answer = String(payload.answer || "").trim();
+  const rows = Array.isArray(payload.answers) ? payload.answers : [];
+  const usable = rows.filter((row) => row && String(row.answer_label || row.answer || "").trim());
+  if (usable.length > 1) {
+    return usable.map((row) => {
+      const shown = String(row.answer_label || row.answer || "").trim();
+      const prompt = String(row.prompt || "").trim();
+      return prompt ? `${prompt}: ${shown}` : shown;
+    }).join("\n");
+  }
+  const one = usable.length === 1 ? usable[0] : null;
+  const label = String((one && one.answer_label) || payload.answer_label || "").trim();
+  const answer = String((one && one.answer) || payload.answer || "").trim();
   if (label) {
     const chinese = /[\u4e00-\u9fff]/.test(`${label}\n${msg.text || ""}`);
     return chinese ? `用户已选 ${label}` : `Selected: ${label}`;
@@ -231,8 +241,6 @@ function shouldShowLiveClarify() {
   if (clarifyCardHidden) return false;
   const last = liveClarifyMessage();
   if (last && clarifySettled(last)) return false;
-  const missing = (state.sidebar && state.sidebar.missing) || [];
-  if (missing.length) return true;
   if (!last || !clarifyNeedsAnswer(last)) return false;
   return !clarifySettled(last);
 }
@@ -1654,6 +1662,30 @@ async function sendControlPatches(patches) {
   }
 }
 
+async function sendControlAnswers(answers) {
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
+  setBusy(true);
+  startBusyTranscriptPoll(owner);
+  try {
+    const dto = await api("/v1/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: owner, answers }),
+      owner,
+    });
+    stopBusyTranscriptPoll();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
+    return dto;
+  } finally {
+    stopBusyTranscriptPoll();
+    settleOwnerReply(owner);
+  }
+}
+
 async function sendControlSkip() {
   if (refuseIfSendLocked()) return;
   const owner = sessionId;
@@ -1859,9 +1891,8 @@ function onChatClick(ev) {
   }
   if (t.id === "btn-clarify-next") {
     const pending = clarifyPendingItems(liveClarifyMessage() || latestClarify());
-    const cur = pending[clarifyWizard.step - 1];
-    const name = cur && (cur.name || cur);
-    if (name && clarifyDraftValue(String(name)) && clarifyWizard.step < pending.length) {
+    const index = clarifyWizard.step - 1;
+    if (clarifyDraftValue(index) && clarifyWizard.step < pending.length) {
       clarifyWizard.step += 1;
       clarifyWizard.ending = false;
       renderChat();
@@ -1876,10 +1907,10 @@ function onChatClick(ev) {
   }
   const optionEl = t.closest("[data-clarify-option]");
   if (optionEl) {
-    const slot = String(optionEl.getAttribute("data-clarify-slot") || "").trim();
+    const index = String(optionEl.getAttribute("data-clarify-index") ?? "").trim();
     const oid = String(optionEl.getAttribute("data-clarify-option") || "").trim();
-    if (slot && oid) {
-      clarifyWizard.drafts[slot] = { kind: "chip", value: oid };
+    if (index !== "" && oid) {
+      clarifyWizard.drafts[index] = { kind: "chip", value: oid };
       clarifyWizard.ending = false;
       renderChat();
     }
@@ -1948,9 +1979,12 @@ function clarifyPendingItems(clar) {
 
 function clarifySignature(clar) {
   const pending = clarifyPendingItems(clar);
-  const names = pending.map((item) => String((item && item.name) || item || "")).join(",");
+  const prompts = pending.map((item, index) => {
+    if (item && typeof item === "object") return String(item.prompt || item.label || index);
+    return String(item || index);
+  }).join("\n");
   const text = clar ? String(clar.text || "") : "";
-  return `${names}|${text}`;
+  return `${pending.length}|${prompts}|${text}`;
 }
 
 function ensureClarifyWizard(clar) {
@@ -1964,45 +1998,47 @@ function ensureClarifyWizard(clar) {
   if (clarifyWizard.step > n) clarifyWizard.step = n;
 }
 
-function optionLabelFor(clar, patches) {
-  const pending = clarifyPendingItems(clar);
-  const names = Object.keys(patches || {});
-  for (let i = 0; i < names.length; i += 1) {
-    const chosen = String(patches[names[i]] == null ? "" : patches[names[i]]).trim();
-    if (!chosen) continue;
-    const row = pending.find((item) => item && String((item && item.name) || item || "") === names[i]);
-    const options = (row && row.options) || [];
-    const hit = options.find((opt) => opt && String(opt.id || "") === chosen);
-    return hit ? String(hit.label || chosen) : chosen;
-  }
-  return "";
+function optionLabelFor(row, value) {
+  const chosen = String(value == null ? "" : value).trim();
+  if (!chosen) return "";
+  const options = (row && row.options) || [];
+  const hit = options.find((opt) => opt && String(opt.id || "") === chosen);
+  return hit ? String(hit.label || chosen) : chosen;
 }
 
-function sealLocalClarify(answer, label, status) {
+function sealLocalClarify(answer, label, status, answers) {
   const clar = liveClarifyMessage();
   if (!clar || clarifySettled(clar)) return;
   const payload = Object.assign({}, clar.payload || {});
-  const text = String(answer || "").trim();
-  const shown = String(label || "").trim();
-  if (text) payload.answer = text;
-  if (shown) payload.answer_label = shown;
+  const rows = Array.isArray(answers) ? answers : [];
+  if (rows.length) {
+    payload.answers = rows;
+    if (rows.length === 1) {
+      const text = String(rows[0].answer || "").trim();
+      const shown = String(rows[0].answer_label || "").trim();
+      if (text) payload.answer = text;
+      if (shown) payload.answer_label = shown;
+    }
+  } else {
+    const text = String(answer || "").trim();
+    const shown = String(label || "").trim();
+    if (text) payload.answer = text;
+    if (shown) payload.answer_label = shown;
+  }
   payload.status = status || "answered";
   clar.payload = payload;
   persistTranscript();
 }
 
-function clarifyDraftValue(slotName) {
-  const draft = clarifyWizard.drafts[slotName];
+function clarifyDraftValue(index) {
+  const draft = clarifyWizard.drafts[String(index)];
   if (!draft) return "";
   return String(draft.value || "").trim();
 }
 
 function clarifyAllDraftsReady(pending) {
   if (!pending.length) return false;
-  return pending.every((item) => {
-    const name = String((item && item.name) || item || "").trim();
-    return Boolean(name && clarifyDraftValue(name));
-  });
+  return pending.every((item, index) => Boolean(clarifyDraftValue(index)));
 }
 
 function submitClarification() {
@@ -2011,18 +2047,18 @@ function submitClarification() {
   ensureClarifyWizard(clar);
   const pending = clarifyPendingItems(clar);
   if (!clarifyAllDraftsReady(pending)) return;
-  const patches = {};
-  pending.forEach((item) => {
-    const name = String((item && item.name) || item || "").trim();
-    const value = clarifyDraftValue(name);
-    if (name && value) patches[name] = value;
+  const answers = pending.map((item, index) => clarifyDraftValue(index));
+  if (answers.some((value) => !value)) return;
+  const receipt = pending.map((item, index) => {
+    const row = item && typeof item === "object" ? item : {};
+    const value = answers[index];
+    const prompt = String(row.prompt || row.label || "");
+    return { prompt, answer: value, answer_label: optionLabelFor(row, value) };
   });
-  if (!Object.keys(patches).length) return;
-  const answer = Object.keys(patches).map((name) => String(patches[name] || "").trim()).find(Boolean) || "";
   clarifyCardHidden = true;
-  sealLocalClarify(answer, optionLabelFor(clar, patches), "answered");
+  sealLocalClarify("", "", "answered", receipt);
   clarifyCardHidden = false;
-  const done = sendControlPatches(patches);
+  const done = sendControlAnswers(answers);
   renderChat();
   Promise.resolve(done).finally(() => {
     clarifyCardHidden = false;
@@ -2037,9 +2073,8 @@ function syncClarifyWizardControls() {
   const pending = clarifyPendingItems(clar);
   const n = pending.length || 1;
   const step = clarifyWizard.step;
-  const cur = pending[step - 1];
-  const slotName = cur ? String(cur.name || cur || "") : "";
-  const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
+  const index = step - 1;
+  const hasDraft = Boolean(clarifyDraftValue(index));
   const allReady = clarifyAllDraftsReady(pending);
   const prev = $("btn-clarify-prev");
   const next = $("btn-clarify-next");
@@ -3345,7 +3380,9 @@ function renderProcessGroup(html, foldable, turnKey) {
 
 function clarifyReceiptHtml(msg) {
   const line = clarifyReceiptLine(msg);
-  const answered = line ? `<div class="answered">${escapeHtml(line)}</div>` : "";
+  const answered = line
+    ? line.split("\n").filter(Boolean).map((row) => `<div class="answered">${escapeHtml(row)}</div>`).join("")
+    : "";
   return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
 }
 
@@ -3590,9 +3627,10 @@ function clarifyLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
-function renderClarifyStepOptions(row, slotName, lock) {
+function renderClarifyStepOptions(row, index, lock) {
   const raw = (row && row.options) || [];
-  const draft = clarifyWizard.drafts[slotName];
+  const key = String(index);
+  const draft = clarifyWizard.drafts[key];
   const chipSelected = draft && draft.kind === "chip" ? String(draft.value || "") : "";
   const openSelected = draft && draft.kind === "open";
   const openValue = openSelected ? String(draft.value || "") : "";
@@ -3607,19 +3645,19 @@ function renderClarifyStepOptions(row, slotName, lock) {
   const rows = items
     .map((item, index) => {
       const active = chipSelected && chipSelected === item.id ? " selected" : "";
-      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-slot="${escapeHtml(slotName)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
+      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-index="${escapeHtml(key)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
     })
     .join("");
   const openSpec = row && row.open && typeof row.open === "object" ? row.open : null;
   const openLabel = openSpec ? String(openSpec.label || "").trim() : "";
   const openLetter = clarifyLetter(items.length);
   const openActive = openSelected ? " selected" : "";
-  const openRow = openSpec && slotName
-    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="${escapeAttr(openLabel)}" ${lock} /></div>`
+  const openRow = openSpec && key !== ""
+    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(key)}" value="${escapeHtml(openValue)}" placeholder="${escapeAttr(openLabel)}" ${lock} /></div>`
     : "";
   const fieldPlaceholder = exampleFromRow(row) || "请输入 / Please input...";
-  const fieldRow = !items.length && !openSpec && slotName
-    ? `<input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="${escapeHtml(fieldPlaceholder)}" ${lock} />`
+  const fieldRow = !items.length && !openSpec && key !== ""
+    ? `<input data-clarify-open="${escapeHtml(key)}" value="${escapeHtml(openValue)}" placeholder="${escapeHtml(fieldPlaceholder)}" ${lock} />`
     : "";
   return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}${fieldRow}</div>`;
 }
@@ -3630,16 +3668,12 @@ function exampleFromRow(row) {
 }
 
 function renderClarification() {
-  const missing = (state.sidebar && state.sidebar.missing) || [];
   const live = liveClarifyMessage();
-  const clar = live || (missing.length ? latestClarify() : null);
+  const clar = live;
   if (!shouldShowLiveClarify()) return "";
-  if (!clar && !missing.length) return "";
+  if (!clar) return "";
   ensureClarifyWizard(clar);
-  let pendingItems = clarifyPendingItems(clar);
-  if (!pendingItems.length && missing.length) {
-    pendingItems = missing.map((name) => ({ name: String(name) }));
-  }
+  const pendingItems = clarifyPendingItems(clar);
   if (!pendingItems.length) {
     const cardText = clar ? String(clar.text || "") : "";
     const lock = busy ? "disabled" : "";
@@ -3665,8 +3699,8 @@ function renderClarification() {
   const step = Math.min(Math.max(clarifyWizard.step, 1), n);
   clarifyWizard.step = step;
   const row = pendingItems[step - 1] || null;
-  const slotName = row ? String(row.name || row || "") : "";
-  const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
+  const index = step - 1;
+  const hasDraft = Boolean(clarifyDraftValue(index));
   const allReady = clarifyAllDraftsReady(pendingItems);
   const lock = busy ? "disabled" : "";
   const prevDisabled = busy || n <= 1 || step <= 1 ? "disabled" : "";
@@ -3677,14 +3711,14 @@ function renderClarification() {
   const format = row && typeof row === "object" ? String(row.format || "") : "";
   const example = row && typeof row === "object" ? String(row.example || "") : "";
   const constraint = row && typeof row === "object" ? String(row.constraint || "") : "";
-  const label = row && typeof row === "object" ? String(row.label || slotLabel(slotName)) : slotLabel(slotName);
+  const promptText = row && typeof row === "object" ? String(row.prompt || "") : "";
   const hintHtml = hint ? `<span class="slot-hint ix-card-meta" data-testid="clarify-hint">${escapeHtml(hint)}</span>` : "";
   const formatHtml = format ? `<span class="slot-format ix-card-meta" data-testid="clarify-format">${escapeHtml(format)}</span>` : "";
   const exampleHtml = example ? `<span class="slot-example ix-card-meta" data-testid="clarify-example">${escapeHtml(example)}</span>` : "";
   const constraintHtml = constraint ? `<p class="clarify-constraint" data-testid="clarify-constraint">${escapeHtml(constraint)}</p>` : "";
-  const questionHtml = label ? `<p class="clarify-question" data-testid="clarify-question">${escapeHtml(label)}</p>` : "";
+  const questionHtml = promptText ? `<p class="clarify-question" data-testid="clarify-question">${escapeHtml(promptText)}</p>` : "";
   const errorHtml = error ? `<span class="slot-error ix-card-meta">${escapeHtml(error)}</span>` : "";
-  const optionRows = renderClarifyStepOptions(row, slotName, lock);
+  const optionRows = renderClarifyStepOptions(row, index, lock);
   const pager = `<div class="ix-card-pager" data-testid="clarify-nav">
       <button type="button" class="ghost" id="btn-clarify-prev" ${prevDisabled}>&lt;</button>
       <span class="clarify-step" data-testid="clarify-step">${step} of ${n}</span>
@@ -3703,8 +3737,8 @@ function renderClarification() {
     </div>`;
   }
   const cardText = clar ? String(clar.text || "") : "";
-  const ownQuestion = Boolean(hint || format || constraint);
-  const showCardText = !ownQuestion || cardText.includes("Last chance");
+  const sameLine = Boolean(promptText.trim()) && cardText.trim() === promptText.trim();
+  const showCardText = Boolean(cardText) && (cardText.includes("Last chance") || !sameLine);
   const prompt = showCardText && cardText
     ? `<p>${escapeHtml(cardText)}</p>`
     : clar

@@ -123,14 +123,16 @@ def choice_card(planner: Any, steps: Sequence[Any], query: str) -> Dict[str, Any
         }
     )
     body = _body(kept, dropped, chinese)
+    stem = "怎么继续" if chinese else "How to continue"
     return {
         "restatement": f"You asked: {query}",
         "confirm_prompt": body,
         "pending": [
             {
                 "name": "wire_choice",
-                "label": "怎么继续" if chinese else "How to continue",
-                "hint": body,
+                "label": stem,
+                "prompt": stem,
+                "hint": "",
                 "error": "",
                 "type": "string",
                 "options": options,

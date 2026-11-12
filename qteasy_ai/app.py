@@ -41,6 +41,7 @@ from .human_card import (
     option_answer_label,
     polish_human_cards,
     project_human_cards,
+    question_answer_rows,
 )
 from .identity import (
     parse_identity_utterance,
@@ -605,6 +606,7 @@ class QteasyAssistant:
         session_id: str | None = None,
         agent_auto: Optional[bool] = None,
         patches: Optional[Dict[str, Any]] = None,
+        answers: Optional[List[Any]] = None,
         skip: bool = False,
         allow_composer_slot_fill: bool = True,
     ) -> Dict[str, Any] | AssistantOutput:
@@ -615,11 +617,13 @@ class QteasyAssistant:
         - plan / preview：生成可审阅 ToolPlan steps，不执行。
 
         非空 ``patches`` 为同一 Job 改槽回执：``query`` 可空，不跑跟进句分类。
+        ``answers`` 是澄清卡按题序交回的列表，先折成槽补丁再走上面的回执。
         ``skip=True`` 为控件跳过澄清，不写 ``user_text``。
         ``allow_composer_slot_fill=False``（Web）：clarifying 下 Composer 非空只换题，不填槽。
         """
 
         structured = _normalize_patches(patches)
+        clarify_answers = None
         if skip:
             sid = str(session_id or "").strip()
             session = self.session_store.load(sid) if sid else None
@@ -640,8 +644,25 @@ class QteasyAssistant:
                 response_style=response_style,
                 include_user_text=False,
             )
-        action = self._unresolved_action(session_id, structured)
-        wire_choice = self._wire_choice_value(session_id, structured)
+        if answers is not None:
+            folded = self._fold_clarify_answers(session_id, answers)
+            if folded is None:
+                sid = str(session_id or "").strip()
+                session = self.session_store.load(sid) if sid else None
+                return self._closed_error_result(
+                    query=query,
+                    requested_mode="plan",
+                    response_style=response_style,
+                    session=session,
+                    code="CLARIFICATION_ANSWERS",
+                    message="Clarification answers do not match the open questions.",
+                    next_action="Answer each question, then submit again.",
+                    include_user_text=False,
+                )
+            structured = _normalize_patches(folded)
+            clarify_answers = list(answers)
+        action = self._unresolved_action(session_id, structured, answers=clarify_answers)
+        wire_choice = self._wire_choice_value(session_id, structured, answers=clarify_answers)
         if wire_choice in {"drop_consumer", "use_panel"}:
             plan, session = self._assemble_wire_resume(
                 session_id,
@@ -740,6 +761,7 @@ class QteasyAssistant:
                 agent_auto=agent_auto,
                 patches=structured or None,
                 allow_composer_slot_fill=allow_composer_slot_fill,
+                clarify_answers=clarify_answers,
             )
         failed = self._clarification_failed_result(
             plan,
@@ -1521,9 +1543,16 @@ class QteasyAssistant:
                     if isinstance(item, dict) and item.get("type")
                 ]
             if pending:
-                from .slot_graph import parse_card_answers
+                from .slot_graph import is_bound_item_list, parse_card_answers
 
-                accepted, errors = parse_card_answers(pending, submitted, provider=self.planner.provider)
+                prebound = {
+                    str(key): value
+                    for key, value in submitted.items()
+                    if is_bound_item_list(value)
+                }
+                rest = {str(key): value for key, value in submitted.items() if str(key) not in prebound}
+                accepted, errors = parse_card_answers(pending, rest, provider=self.planner.provider)
+                accepted.update(prebound)
                 if errors:
                     flags = dict(task.flags or {})
                     flags["_slot_errors"] = errors
@@ -1551,23 +1580,70 @@ class QteasyAssistant:
         source_name = sources[0] if len(sources) == 1 else ""
         return out, _revision_changes(out, submitted, labels, source_name)
 
-    def _wire_choice_value(self, session_id: str | None, patches: Dict[str, Any]) -> str:
-        """当前卡在问 ``wire_choice`` 时返回提交值，否则空串。"""
+    def _card_submitted_value(
+        self,
+        session_id: str | None,
+        name: str,
+        patches: Dict[str, Any],
+        answers: Optional[List[Any]] = None,
+    ) -> str:
+        """按题号读这一题的原文。没有 ``answers`` 时读旧的槽名补丁。"""
 
-        if "wire_choice" not in (patches or {}):
-            return ""
         sid = str(session_id or "").strip()
         if not sid:
             return ""
         session = self.session_store.load(sid)
         task = session.task if session is not None else None
         pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
-        rows = pending.get("pending") if isinstance(pending.get("pending"), list) else []
-        if not any(isinstance(item, dict) and str(item.get("name") or "") == "wire_choice" for item in rows):
+        rows = [item for item in (pending.get("pending") or []) if isinstance(item, dict)]
+        if not any(str(item.get("name") or "") == name for item in rows):
             return ""
-        return str(patches.get("wire_choice") or "").strip()
+        if answers is not None:
+            for index, item in enumerate(rows):
+                if str(item.get("name") or "") != name:
+                    continue
+                if index >= len(answers):
+                    return ""
+                raw = answers[index]
+                return str(raw if raw is not None else "").strip()
+            return ""
+        if name not in (patches or {}):
+            return ""
+        return str((patches or {}).get(name) or "").strip()
 
-    def _seal_clarify(self, state: ConversationState, answer: str, label: str) -> None:
+    def _wire_choice_value(
+        self,
+        session_id: str | None,
+        patches: Dict[str, Any],
+        answers: Optional[List[Any]] = None,
+    ) -> str:
+        """当前卡在问 ``wire_choice`` 时返回这一题的原文，否则空串。"""
+
+        return self._card_submitted_value(session_id, "wire_choice", patches, answers)
+
+    def _fold_clarify_answers(
+        self,
+        session_id: str | None,
+        answers: List[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """把澄清卡的有序答案折成槽补丁。题数对不上时返回 ``None``。"""
+
+        sid = str(session_id or "").strip()
+        session = self.session_store.load(sid) if sid else None
+        task = session.task if session is not None else None
+        pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
+        rows = [item for item in (pending.get("pending") or []) if isinstance(item, dict)]
+        from .slot_graph import apply_ordered_answers
+
+        return apply_ordered_answers(rows, answers)
+
+    def _seal_clarify(
+        self,
+        state: ConversationState,
+        answer: str,
+        label: str,
+        answers: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """关闭澄清并立刻落盘，再进入可能很慢的规划。"""
 
         if state.task is None:
@@ -1575,7 +1651,12 @@ class QteasyAssistant:
         if not (state.task.pending_clarification or state.task.missing):
             return
         shown = str(label or answer or "").strip()
-        state.close_open_card(str(answer or ""), status="answered", answer_label=shown)
+        state.close_open_card(
+            str(answer or ""),
+            status="answered",
+            answer_label=shown,
+            answers=answers,
+        )
         state.task.set_pending(None)
         state.task.set_missing([])
         self.session_store.save(state)
@@ -1690,21 +1771,15 @@ class QteasyAssistant:
         self.session_store.save(state)
         return plan, state
 
-    def _unresolved_action(self, session_id: str | None, patches: Dict[str, Any]) -> str:
-        """当前卡在问 ``unresolved_intent`` 时返回提交值，否则空串。"""
+    def _unresolved_action(
+        self,
+        session_id: str | None,
+        patches: Dict[str, Any],
+        answers: Optional[List[Any]] = None,
+    ) -> str:
+        """当前卡在问 ``unresolved_intent`` 时返回这一题的原文，否则空串。"""
 
-        if "unresolved_intent" not in (patches or {}):
-            return ""
-        sid = str(session_id or "").strip()
-        if not sid:
-            return ""
-        session = self.session_store.load(sid)
-        task = session.task if session is not None else None
-        pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
-        rows = pending.get("pending") if isinstance(pending.get("pending"), list) else []
-        if not any(isinstance(item, dict) and str(item.get("name") or "") == "unresolved_intent" for item in rows):
-            return ""
-        return str(patches.get("unresolved_intent") or "").strip()
+        return self._card_submitted_value(session_id, "unresolved_intent", patches, answers)
 
     def _assemble_plan(
         self,
@@ -1716,6 +1791,7 @@ class QteasyAssistant:
         allow_composer_slot_fill: bool = True,
         forced_job: str = "",
         replace_query: str = "",
+        clarify_answers: Optional[List[Any]] = None,
     ) -> Tuple[Any, Optional[ConversationState]]:
         """Composer 先记 user_text，再按 Task 转移表路由。"""
 
@@ -1741,7 +1817,7 @@ class QteasyAssistant:
                 replace_query=replace_query,
             )
         structured = _normalize_patches(patches)
-        inbound = "control" if structured else "composer"
+        inbound = "control" if structured or clarify_answers is not None else "composer"
         asked = str(query or "").strip()
         skip_classify = False
         topic_skipped = False
@@ -1768,7 +1844,15 @@ class QteasyAssistant:
             )
             snapshot = pending.get("accepted_steps")
             if state.task is not None and (pending or state.task.missing):
-                self._seal_clarify(state, answer, option_answer_label(pending, answer))
+                if clarify_answers is not None:
+                    self._seal_clarify(
+                        state,
+                        "",
+                        "",
+                        answers=question_answer_rows(pending, clarify_answers),
+                    )
+                else:
+                    self._seal_clarify(state, answer, option_answer_label(pending, answer))
                 user_answered = True
             if (
                 str(pending.get("resume_job") or "") == "open"
