@@ -151,6 +151,7 @@ def _install_hold(assistant: Any, probe: HoldProbe) -> None:
         agent_auto: Optional[bool] = None,
         patches: Optional[Dict[str, Any]] = None,
         allow_composer_slot_fill: bool = True,
+        **kwargs: Any,
     ) -> Tuple[Any, Optional[Any]]:
         asked = str(query or "").strip()
         if asked == HOLD_QUERY and not patches:
@@ -166,6 +167,7 @@ def _install_hold(assistant: Any, probe: HoldProbe) -> None:
             agent_auto=agent_auto,
             patches=patches,
             allow_composer_slot_fill=allow_composer_slot_fill,
+            **kwargs,
         )
 
     assistant._assemble_plan = assemble
