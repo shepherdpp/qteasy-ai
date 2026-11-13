@@ -13,19 +13,22 @@ import json
 import re
 import tempfile
 import unittest
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
-from qteasy_ai.slot_graph import _pending_after_fill
+from qteasy_ai import slot_graph
+from qteasy_ai.slot_graph import _pending_after_fill, apply_ordered_answers
 
 _GOLD = "600519 和 000858 做一条等权组合"
 _WINDOW_DIGIT = "600519 和 000858 做一条等权组合，看过去3年的持仓收益率，并跟沪深300做一个对比"
 _WINDOW_CN = "600519 和 000858 做一条等权组合，看过去三年的持仓收益率，并跟沪深300做一个对比"
 _HISTORY = "get_history_data close for 000300.SH"
 _HISTORY_WINDOW = "get_history_data close for 000300.SH，过去三年"
+_SPAN = "600519 和 000858 做一条等权组合，看过去一段时间的持仓收益率，并跟沪深300做一个对比"
 _SCREEN = "筛股 银行业 跌幅超过 10%"
 _SCREEN_BAD = "筛股 回看 abc 跌 10% 银行业"
 _DATE = re.compile(r"(?<!\d)20\d{6}(?!\d)")
@@ -417,6 +420,217 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
         self.assertEqual(hold, opened)
         self.assertEqual([item.get("name") for item in hold], ["start", "end"])
         self.assertTrue(all(_option(item, "default").get("id") == "default" for item in hold))
+
+
+def _raw_inputs(plan: Dict[str, Any], skill: str) -> Dict[str, Any]:
+    """raw 计划里某个技能的 inputs。"""
+
+    groups = [plan.get("steps") or []]
+    groups.append((plan.get("assumptions") or {}).get("accepted_steps") or [])
+    for steps in groups:
+        for step in steps:
+            if isinstance(step, dict) and step.get("skill_name") == skill:
+                inputs = step.get("inputs") or {}
+                return inputs if isinstance(inputs, dict) else {}
+    return {}
+
+
+def _raw_pending(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """raw 计划澄清卡上的题。"""
+
+    blob = (plan.get("assumptions") or {}).get("clarification") or {}
+    return [item for item in (blob.get("pending") or []) if isinstance(item, dict)]
+
+
+def _func_body(name: str) -> str:
+    """从 slot_graph 源码里切出一个顶层函数。"""
+
+    src = Path(slot_graph.__file__).read_text(encoding="utf-8")
+    start = src.index(f"\ndef {name}(")
+    nxt = src.find("\ndef ", start + 1)
+    return src[start:] if nxt < 0 else src[start:nxt]
+
+
+class TestAi04DateCardAnswers(unittest.TestCase):
+    """日期卡只绑定原文，解释者读这一题，再过同一份校验。"""
+
+    def _open_dates(self, assistant: QteasyAssistant, sid: str) -> List[Dict[str, Any]]:
+        """代码已确定的窗口句，第一张卡应是开始日和结束日。"""
+
+        first = assistant.plan(_SPAN, response_style="raw", session_id=sid)
+        rows = _raw_pending(_raw_plan(first))
+        print(" first pending:", [(item.get("name"), item.get("example")) for item in rows])
+        self.assertEqual([item.get("name") for item in rows], ["start", "end"])
+        return rows
+
+    def test_example_date_is_kept_when_the_user_typed_it(self) -> None:
+        """用户输入的例子日期要留下，同一轮不能再用任务原句清掉。"""
+
+        print("\n[TestAi04DateCard] 例子日期照收")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            rows = self._open_dates(assistant, "s-example")
+            answers = ["20250101", "20261010"]
+            folded = apply_ordered_answers(rows, answers)
+            print(" answers:", answers)
+            print(" folded:", folded)
+            self.assertEqual((folded or {}).get("start"), "20250101")
+            self.assertEqual((folded or {}).get("end"), "20261010")
+            second = assistant.plan("", response_style="raw", session_id="s-example", answers=answers)
+            plan = _raw_plan(second)
+            kline = _raw_inputs(plan, "qt.ai.data.kline")
+            portfolio = _raw_inputs(plan, "qt.ai.hp.portfolio")
+            holdings = [item.get("code") for item in (portfolio.get("holdings") or [])]
+            print(" confirmable:", "qt.ai.system.fallback" not in [step.get("skill_name") for step in plan.get("steps") or []])
+            print(" written:", kline.get("start"), kline.get("end"))
+            print(" holdings:", holdings, "benchmark:", (portfolio.get("benchmark") or {}).get("code"))
+            self.assertNotIn("qt.ai.system.fallback", [step.get("skill_name") for step in plan.get("steps") or []])
+            self.assertEqual(kline.get("start"), "20250101")
+            self.assertEqual(kline.get("end"), "20261010")
+            self.assertEqual(holdings, ["600519.SH", "000858.SZ"])
+            self.assertEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
+
+    def test_unparsed_chinese_date_returns_to_the_same_question(self) -> None:
+        """无模型解释不出中文日期时，只问这一题并带 error。"""
+
+        print("\n[TestAi04DateCard] 中文日期回到同一题")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            rows = self._open_dates(assistant, "s-cn")
+            answers = ["2025年4月5日", "2026-11-10"]
+            folded = apply_ordered_answers(rows, answers)
+            print(" answers:", answers)
+            print(" folded:", folded)
+            self.assertEqual((folded or {}).get("start"), "2025年4月5日")
+            self.assertNotIn("202545", str(folded))
+            second = assistant.plan("", response_style="raw", session_id="s-cn", answers=answers)
+            plan = _raw_plan(second)
+            kline = _raw_inputs(plan, "qt.ai.data.kline")
+            pending = _raw_pending(plan)
+            print(" written:", kline.get("start"), kline.get("end"))
+            print(" next:", [(item.get("name"), item.get("error")) for item in pending])
+            self.assertEqual(kline.get("end"), "20261110")
+            self.assertNotEqual(kline.get("start"), "20250101")
+            self.assertIn(kline.get("start"), (None, ""))
+            self.assertEqual([item.get("name") for item in pending], ["start"])
+            self.assertIn("2025年4月5日", str(pending[0].get("error") or ""))
+            loaded = assistant.session_store.load("s-cn")
+            start_slot = (loaded.task.slots or {}).get("start") if loaded is not None and loaded.task is not None else None
+            print(" start slot:", None if start_slot is None else (start_slot.value, start_slot.confirmed))
+            self.assertTrue(start_slot is None or not start_slot.confirmed)
+            self.assertNotEqual(getattr(start_slot, "value", None), "202545")
+
+    def test_impossible_calendar_day_returns_with_error(self) -> None:
+        """8 位但不是日历日的开始日不收下。"""
+
+        print("\n[TestAi04DateCard] 非法日历")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            self._open_dates(assistant, "s-bad")
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-bad",
+                answers=["20251340", "20261010"],
+            )
+            plan = _raw_plan(second)
+            kline = _raw_inputs(plan, "qt.ai.data.kline")
+            pending = _raw_pending(plan)
+            print(" written:", kline.get("start"), kline.get("end"))
+            print(" next:", [(item.get("name"), item.get("error")) for item in pending])
+            self.assertIn(kline.get("start"), (None, ""))
+            self.assertEqual(kline.get("end"), "20261010")
+            self.assertEqual([item.get("name") for item in pending], ["start"])
+            self.assertIn("20251340", str(pending[0].get("error") or ""))
+
+    def test_model_reads_the_card_text(self) -> None:
+        """交卷后的第一则填槽协议只含这一题原文。"""
+
+        print("\n[TestAi04DateCard] 有模型读卡片原文")
+        provider = FakeLLMProvider(
+            replies=[json.dumps({"start": "20250405", "end": "20261110"})]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            self._open_dates(assistant, "s-model")
+            assistant.apply_provider(provider)
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-model",
+                answers=["2025年4月5日", "2026-11-10"],
+            )
+            plan = _raw_plan(second)
+            kline = _raw_inputs(plan, "qt.ai.data.kline")
+            portfolio = _raw_inputs(plan, "qt.ai.hp.portfolio")
+            prompt = provider.prompts[0] if provider.prompts else ""
+            print(" prompts:", len(provider.prompts))
+            print(" prompt:", prompt)
+            print(" written:", kline.get("start"), kline.get("end"))
+            print(" holdings:", [item.get("code") for item in (portfolio.get("holdings") or [])])
+            self.assertIn("2025年4月5日", prompt)
+            self.assertNotIn("过去一段时间", prompt)
+            self.assertNotIn("Parse these clarification answers", prompt)
+            self.assertEqual(kline.get("start"), "20250405")
+            self.assertEqual(kline.get("end"), "20261110")
+            self.assertNotIn("qt.ai.system.fallback", [step.get("skill_name") for step in plan.get("steps") or []])
+            self.assertEqual(
+                [item.get("code") for item in (portfolio.get("holdings") or [])],
+                ["600519.SH", "000858.SZ"],
+            )
+
+    def test_model_omits_one_date_and_asks_only_that_one(self) -> None:
+        """协议没交的是这张卡上的日期槽，下一张卡只问它并带 error。"""
+
+        print("\n[TestAi04DateCard] 协议只交结束日")
+        provider = FakeLLMProvider(replies=[json.dumps({"end": "20261110"})])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            self._open_dates(assistant, "s-one")
+            assistant.apply_provider(provider)
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-one",
+                answers=["2025年4月5日", "2026-11-10"],
+            )
+            plan = _raw_plan(second)
+            pending = _raw_pending(plan)
+            print(" next:", [(item.get("name"), item.get("error")) for item in pending])
+            print(" skills:", [step.get("skill_name") for step in plan.get("steps") or []])
+            self.assertEqual([item.get("name") for item in pending], ["start"])
+            self.assertIn("2025年4月5日", str(pending[0].get("error") or ""))
+            self.assertIn("qt.ai.system.fallback", [step.get("skill_name") for step in plan.get("steps") or []])
+
+    def test_sentence_review_and_card_share_one_date_checker(self) -> None:
+        """原句复核和卡片交卷调用同一份日期校验，折叠里不再剥数字。"""
+
+        print("\n[TestAi04DateCard] 唯一一份日期校验")
+        legal = _func_body("_submitted_legal")
+        review = _func_body("_review_submission")
+        folded = _func_body("apply_ordered_answers")
+        print(" legal calls:", "accept_yyyymmdd(" in legal)
+        print(" review calls:", "accept_yyyymmdd(" in review)
+        print(" fold strips:", 're.sub(r"\\D"' in folded)
+        self.assertIn("def accept_yyyymmdd(", Path(slot_graph.__file__).read_text(encoding="utf-8"))
+        self.assertIn("accept_yyyymmdd(", legal)
+        self.assertIn("accept_yyyymmdd(", review)
+        self.assertNotIn('re.sub(r"\\D"', folded)
 
 
 if __name__ == "__main__":

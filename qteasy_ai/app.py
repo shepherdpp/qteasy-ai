@@ -190,6 +190,76 @@ def _normalize_patches(patches: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def _take_date_card_text(pending: Any, patches: Dict[str, Any]) -> Dict[str, str]:
+    """按当前卡的 ``format`` 抽出日期原文，并从补丁里拿掉这些键。
+
+    Parameters
+    ----------
+    pending : dict
+        当前澄清卡。
+    patches : dict
+        折叠后的槽补丁。日期键会被弹出。
+
+    Returns
+    -------
+    dict
+        这张卡上日期槽名到这一题原文。
+    """
+
+    rows = pending.get("pending") if isinstance(pending, dict) else None
+    names = {
+        str(row.get("name") or "")
+        for row in rows or []
+        if isinstance(row, dict) and str(row.get("format") or "") == "YYYYMMDD"
+    }
+    found: Dict[str, str] = {}
+    for name in list(patches):
+        if name in names:
+            found[name] = str(patches.pop(name))
+    return found
+
+
+def _accepted_card_dates(plan: Any, card_text: Dict[str, str]) -> Dict[str, str]:
+    """还在下一张卡上的日期不写。写下的是步骤里已经校验过的八位。
+
+    Parameters
+    ----------
+    plan : ToolPlan
+        本轮计划。
+    card_text : dict
+        这张卡上的日期原文。
+
+    Returns
+    -------
+    dict
+        可以确认的槽名到 ``YYYYMMDD``。
+    """
+
+    card = (getattr(plan, "assumptions", None) or {}).get("clarification")
+    rows = card.get("pending") if isinstance(card, dict) else None
+    still = {
+        str(row.get("name") or "")
+        for row in rows or []
+        if isinstance(row, dict)
+    }
+    assumptions = getattr(plan, "assumptions", None) or {}
+    snapshot = assumptions.get("accepted_steps")
+    steps = list(getattr(plan, "steps", None) or [])
+    if isinstance(snapshot, list):
+        steps.extend(snapshot)
+    found: Dict[str, str] = {}
+    for name in card_text:
+        if name in still:
+            continue
+        for step in steps:
+            inputs = step.get("inputs") if isinstance(step, dict) else getattr(step, "inputs", None)
+            value = str((inputs or {}).get(name) or "")
+            if re.fullmatch(r"\d{8}", value):
+                found[name] = value
+                break
+    return found
+
+
 def _revision_changes(
     written: Dict[str, Any],
     submitted: Dict[str, Any],
@@ -1826,22 +1896,24 @@ class QteasyAssistant:
         resume_steps = None
         slot_revision: Optional[Dict[str, Any]] = None
         slot_changes: List[Dict[str, Any]] = []
+        card_text: Dict[str, str] = {}
 
         if inbound == "composer" and asked:
             state.append_user_text(asked)
             self.session_store.save(state)
 
         if inbound == "control":
-            structured, slot_changes = self._coerce_declared_slot_patches(state, structured)
-            merge_facts(state, structured, source="user", confirmed=True)
-            answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
-            skip_classify = bool(state.task and state.task.job)
-            keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
             pending = (
                 state.task.pending_clarification
                 if state.task is not None and isinstance(state.task.pending_clarification, dict)
                 else {}
             )
+            card_text = _take_date_card_text(pending, structured)
+            structured, slot_changes = self._coerce_declared_slot_patches(state, structured)
+            merge_facts(state, structured, source="user", confirmed=True)
+            answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
+            skip_classify = bool(state.task and state.task.job)
+            keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
             snapshot = pending.get("accepted_steps")
             if state.task is not None and (pending or state.task.missing):
                 if clarify_answers is not None:
@@ -1936,7 +2008,11 @@ class QteasyAssistant:
             skip_classify=skip_classify,
             profile=profile,
             resume_steps=resume_steps,
+            card_text=card_text or None,
         )
+        accepted_dates = _accepted_card_dates(plan, card_text)
+        if accepted_dates:
+            merge_facts(state, accepted_dates, source="user", confirmed=True)
         if keep_plan_id and inbound == "control":
             plan.plan_id = keep_plan_id
         if topic_skipped:

@@ -236,9 +236,8 @@ _BAD_LOOKBACK = re.compile(
     r"(?:lookback(?:_days)?|回看(?:天数)?)\s*[:=：]?\s*(\S+)",
     re.IGNORECASE,
 )
-_WINDOW_PHRASE = re.compile(
-    r"(?:过去|近)\s*(?:\d+|[零〇一二两三四五六七八九十]+)\s*年"
-)
+_WINDOW_SPAN = r"(?:(?:\d+|[零〇一二两三四五六七八九十]+)\s*年|一段时间)"
+_WINDOW_PHRASE = re.compile(rf"(?:过去|近)\s*{_WINDOW_SPAN}")
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _UPSTREAM_KEYS = {"upstream_payload", "upstream_payloads"}
 _WINDOW_HINT = (
@@ -482,7 +481,7 @@ def window_phrase(query: str) -> bool:
     Returns
     -------
     bool
-        出现「过去 / 近 + 年数 + 年」时为 True。
+        出现「过去 / 近 + 年数 + 年」或「过去 / 近一段时间」时为 True。不折成日期。
     """
 
     return _WINDOW_PHRASE.search(str(query or "")) is not None
@@ -635,7 +634,14 @@ def date_pending_rows() -> List[Dict[str, Any]]:
     ]
 
 
-def apply_slot_layer(planner: Any, steps: List[Any], query: str, job: str, session: Any) -> Tuple[List[Any], Dict[str, Any]]:
+def apply_slot_layer(
+    planner: Any,
+    steps: List[Any],
+    query: str,
+    job: str,
+    session: Any,
+    card_text: Optional[Dict[str, str]] = None,
+) -> Tuple[List[Any], Dict[str, Any]]:
     """投影并填当前图。因子 IC 保持原步骤。
 
     Parameters
@@ -661,7 +667,7 @@ def apply_slot_layer(planner: Any, steps: List[Any], query: str, job: str, sessi
         return steps, {}
     if _is_fallback(steps):
         return _rewrite_fallback(planner, steps, query)
-    return _fill_graph(planner, steps, query, session, job)
+    return _fill_graph(planner, steps, query, session, job, card_text)
 
 
 def parse_card_answers(
@@ -962,8 +968,12 @@ def _fill_graph(
     query: str,
     session: Any,
     job: str = "",
+    card_text: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Any], Dict[str, Any]]:
-    """填图上还空着的用户槽。缺必填就换成澄清卡。"""
+    """填图上还空着的用户槽。缺必填就换成澄清卡。
+
+    ``card_text`` 是这张卡上尚未确认的槽，槽名对原文。解释者按槽名读原文。
+    """
 
     if _resolve_depends(steps):
         return _unresolved_depends(planner, query)
@@ -997,21 +1007,52 @@ def _fill_graph(
             continue
         _write_empty(planner, steps, name, raw)
     open_slots = [slot for slot in projected if not slot["filled"]]
+    answered = {
+        str(name): str(text)
+        for name, text in (card_text or {}).items()
+        if str(name or "") and text not in (None, "")
+    }
     submitted: Dict[str, Any] = {}
     ambiguous: List[str] = []
     mentioned: Set[str] = set()
     provider = getattr(planner, "provider", None)
     if provider is not None and job != "open" and open_slots:
-        submitted = _parse_model_slots(
-            provider.chat(_fill_prompt(planner, open_slots, query)),
-            [slot["name"] for slot in open_slots],
-        ) or {}
-        for slot in open_slots:
-            name = str(slot.get("name") or "")
-            if slot.get("required") or name not in submitted:
-                continue
-            if not _submitted_legal(slot, submitted.get(name), query):
-                mentioned.add(name)
+        sentence_slots = [
+            slot for slot in open_slots if str(slot.get("name") or "") not in answered
+        ]
+        model_slots = [
+            slot
+            for slot in open_slots
+            if not answered or str(slot.get("name") or "") in answered
+        ]
+        if answered and sentence_slots:
+            submitted, ambiguous, mentioned = _heuristic(
+                planner,
+                query,
+                sentence_slots,
+                dtype_query=_utterance_without_slots(query, session),
+            )
+            submitted = {
+                name: value for name, value in submitted.items() if name not in answered
+            }
+        if model_slots:
+            model_submitted = _parse_model_slots(
+                provider.chat(_fill_prompt(planner, model_slots, query, answered)),
+                [slot["name"] for slot in model_slots],
+            ) or {}
+            for slot in model_slots:
+                name = str(slot.get("name") or "")
+                if name not in model_submitted:
+                    if name in answered:
+                        mentioned.add(name)
+                    continue
+                source = answered[name] if name in answered else query
+                if (name in answered or not slot.get("required")) and not _submitted_legal(
+                    slot, model_submitted.get(name), source
+                ):
+                    mentioned.add(name)
+                    continue
+                submitted[name] = model_submitted[name]
     elif provider is None:
         submitted, ambiguous, mentioned = _heuristic(
             planner,
@@ -1019,7 +1060,13 @@ def _fill_graph(
             open_slots,
             dtype_query=_utterance_without_slots(query, session),
         )
-    force_names = _review_submission(planner, steps, projected, submitted, query, set(confirmed))
+        open_names = {str(slot.get("name") or "") for slot in open_slots}
+        for name, text in answered.items():
+            if name in open_names:
+                submitted[name] = text
+    force_names = _review_submission(
+        planner, steps, projected, submitted, query, set(confirmed), answered
+    )
     _apply_equal_phrase(steps, query)
     _seal_elements(planner, steps, projected, closed_items)
     if _apply_lookback_default(planner, steps, projected, mentioned):
@@ -1035,6 +1082,12 @@ def _fill_graph(
     if mismatch:
         return _wire_rejected(planner, steps, query, job, mismatch)
     errors = _take_slot_errors(session)
+    for name, text in answered.items():
+        slot = next((item for item in projected if str(item.get("name") or "") == name), None)
+        if slot is None or slot.get("filled"):
+            continue
+        mentioned.add(name)
+        errors.setdefault(name, f"{text!r} is not a YYYYMMDD date.")
     force_names |= _unresolved_optional_defaults(projected, mentioned)
     open_names = _open_any_of_names(planner, steps, projected)
     pending = _pending_after_fill(
@@ -1706,8 +1759,16 @@ def _option_ids(spec: Dict[str, Any]) -> List[str]:
     return [str(item.get("id")) for item in (spec.get("options") or []) if isinstance(item, dict) and item.get("id") is not None]
 
 
-def _fill_prompt(planner: Any, slots: Sequence[Dict[str, Any]], query: str) -> str:
-    """一次协议列出还开着的投影槽和 schema 合同。例子不是提交值。"""
+def _fill_prompt(
+    planner: Any,
+    slots: Sequence[Dict[str, Any]],
+    query: str,
+    card_text: Optional[Dict[str, str]] = None,
+) -> str:
+    """一次协议列出还开着的投影槽和 schema 合同。例子不是提交值。
+
+    ``card_text`` 里的槽只放该槽原文，任务原句不同时当作这些槽的提交来源。
+    """
 
     lines = [_FILL_PREFIX]
     for slot in slots:
@@ -1729,8 +1790,17 @@ def _fill_prompt(planner: Any, slots: Sequence[Dict[str, Any]], query: str) -> s
         lines.append(" ".join(bits))
     if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
         lines.append("mode is submitted with weights. It is not a separate slot.")
-    lines.append("User text:")
-    lines.append(str(query or ""))
+    answered = card_text or {}
+    named = [slot for slot in slots if str(slot.get("name") or "") in answered]
+    others = [slot for slot in slots if str(slot.get("name") or "") not in answered]
+    if others or not named:
+        lines.append("User text:")
+        lines.append(str(query or ""))
+    if named:
+        lines.append("Slot text:")
+        for slot in named:
+            name = str(slot.get("name") or "")
+            lines.append(f"{name}: {answered.get(name) or ''}")
     lines.append("Reply with a JSON object. Keys must be the slot names above.")
     return "\n".join(lines)
 
@@ -1956,6 +2026,37 @@ def _unresolved_optional_defaults(projected: Sequence[Dict[str, Any]], mentioned
     return found
 
 
+def accept_yyyymmdd(value: Any, example: str, source: str) -> Optional[str]:
+    """日期槽的唯一校验。收下则返回 ``YYYYMMDD``。
+
+    Parameters
+    ----------
+    value : any
+        解释者交出的值，或这一题的原文。
+    example : str
+        卡片上的例子。空串表示没有例子。
+    source : str
+        对照例子用的原文。例子只有不在这段原文里才拒绝。
+
+    Returns
+    -------
+    str or None
+        合法的八位日期，否则 ``None``。
+    """
+
+    digits = re.sub(r"\D", "", "" if value is None else str(value))
+    if len(digits) != 8:
+        return None
+    try:
+        datetime.datetime.strptime(digits, "%Y%m%d")
+    except ValueError:
+        return None
+    shown = str(example or "")
+    if shown and digits == shown and shown not in str(source or ""):
+        return None
+    return digits
+
+
 def _submitted_legal(slot: Dict[str, Any], raw: Any, query: str) -> bool:
     """这一次提交能不能按该槽现有校验收下。
 
@@ -1977,11 +2078,8 @@ def _submitted_legal(slot: Dict[str, Any], raw: Any, query: str) -> bool:
     if raw is None:
         return False
     if str(slot.get("format") or "") == "YYYYMMDD":
-        text = re.sub(r"\D", "", str(raw or ""))
         example = str(slot.get("example") or date_bound_presentation(str(slot.get("name") or "")).get("example") or "")
-        if len(text) != 8 or (example and text == example and example not in str(query or "")):
-            return False
-        return True
+        return accept_yyyymmdd(raw, example, query) is not None
     if slot.get("element"):
         return raw not in ("", [])
     return coerce_slot_value(slot, raw) not in (None, "", [])
@@ -3406,7 +3504,7 @@ def _trim_piece(text: str) -> str:
             piece = leading
             changed = True
         shortened = re.sub(
-            r"^(?:过去|近)\s*(?:\d+|[零〇一二两三四五六七八九十]+)\s*年",
+            rf"^(?:过去|近)\s*{_WINDOW_SPAN}",
             "",
             piece,
         ).strip(" ，,。;；、")
@@ -3767,17 +3865,28 @@ def _heuristic_codes(query: str, slots: Sequence[Dict[str, Any]]) -> Dict[str, A
     return found
 
 
-def _drop_card_examples(steps: Sequence[Any], query: str) -> None:
-    """卡片例子不是提交值，除非原文里就有这个数字。"""
+def _drop_card_examples(
+    steps: Sequence[Any],
+    query: str,
+    card_text: Optional[Dict[str, str]] = None,
+) -> None:
+    """卡片例子不是提交值，除非对照原文里就有这个数字。
 
+    这张卡上的日期槽用该槽原文做对照，其它日期槽仍用任务原句。
+    """
+
+    answered = card_text or {}
     for step in steps:
         inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else None
         if inputs is None:
             continue
         for name in ("start", "end"):
             current = str(inputs.get(name) or "")
+            if not current:
+                continue
             example = str(date_bound_presentation(name).get("example") or "")
-            if current and current == example and example not in str(query or ""):
+            source = answered[name] if name in answered else query
+            if accept_yyyymmdd(current, example, source) is None:
                 inputs.pop(name, None)
 
 
@@ -3822,8 +3931,13 @@ def _review_submission(
     submitted: Dict[str, Any],
     query: str,
     confirmed: Set[str],
+    card_text: Optional[Dict[str, str]] = None,
 ) -> Set[str]:
-    """检验这一次提交。通过的写入空位，没通过的保持未完成。"""
+    """检验这一次提交。通过的写入空位，没通过的保持未完成。
+
+    ``card_text`` 是这张卡上尚未确认的槽，槽名对原文。日期校验用这段原文做
+    ``source``，不用任务原句再查一次。
+    """
 
     force: Set[str] = set()
     by_name = {str(slot.get("name") or ""): slot for slot in projected}
@@ -3847,12 +3961,9 @@ def _review_submission(
         elif kind == "weights":
             value = _as_weight_list(submitted.get(name))
         elif str(slot.get("format") or "") == "YYYYMMDD":
-            text = re.sub(r"\D", "", str(submitted.get(name) or ""))
             example = str(slot.get("example") or date_bound_presentation(name).get("example") or "")
-            if len(text) != 8 or (example and text == example and example not in str(query or "")):
-                value = None
-            else:
-                value = text
+            source = card_text.get(name, query) if card_text and name in card_text else query
+            value = accept_yyyymmdd(submitted.get(name), example, source)
         elif kind == "dtype" or slot.get("enum") or slot.get("aliases"):
             value = coerce_slot_value(slot, submitted.get(name))
         else:
@@ -3884,7 +3995,7 @@ def _review_submission(
         if weights and held and len(weights) != len(held):
             _clear_weight_mode(steps)
             force.add("weights")
-    _drop_card_examples(steps, query)
+    _drop_card_examples(steps, query, card_text)
     for slot in projected:
         name = str(slot.get("name") or "")
         if name not in {"start", "end"}:
@@ -4053,12 +4164,6 @@ def apply_ordered_answers(
             continue
         if str(text) == "default" and row.get("default_value") not in (None, ""):
             text = row.get("default_value")
-        elif str(row.get("format") or "") == "YYYYMMDD":
-            digits = re.sub(r"\D", "", str(text or ""))
-            example = str(row.get("example") or "")
-            if len(digits) != 8 or (example and digits == example):
-                continue
-            text = digits
         if str(row.get("resolve") or "") == "code":
             reviewed = _reviewed_share_text(str(text))
             if reviewed:

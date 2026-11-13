@@ -390,9 +390,9 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertNotIn("unresolved_intent", after.task.slots)
 
     def test_open_slot_answer_resumes_the_same_graph(self) -> None:
-        """开放图缺窗口时，控件提交日期恢复原图，不再分类。"""
+        """开放图缺列名时，控件提交列名恢复原图，不再分类。空窗口不出日期卡。"""
 
-        print("\n[TestAiUnresolvedRecovery] 开放图补日期后恢复原图")
+        print("\n[TestAiUnresolvedRecovery] 开放图补列名后恢复原图")
         query = "取 000300.SH 的 close，算收益，再出一页图"
         rough = [
             {
@@ -400,7 +400,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 "inputs": {
                     "freq": "d",
                     "shares": "000300.SH",
-                    "htype_names": "close",
+                    "htype_names": "['日线']",
                     "asset_type": "IDX",
                 },
             },
@@ -443,7 +443,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"start": "20250101"},
+                patches={"htype_names": "close"},
             )
             after = asst.session_store.load(sid)
             plan = second.get("plan") or {}
@@ -466,7 +466,9 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertIn(decoy, fake.replies)
             self.assertEqual(plan.get("execution_mode"), "dry_run")
             self.assertEqual(skills, ["qt.ai.data.history", "qt.ai.hp.returns", "qt.ai.hp.plot"])
-            self.assertEqual((history.get("inputs") or {}).get("start"), "20250101")
+            self.assertEqual((history.get("inputs") or {}).get("htype_names"), "close")
+            self.assertNotIn("start", (history.get("inputs") or {}))
+            self.assertNotIn("end", (history.get("inputs") or {}))
             self.assertEqual(depends, [[], ["step_1"], ["step_2"]])
             self.assertNotIn("unresolved_intent", names)
             self.assertFalse(str(after.task.job or ""))

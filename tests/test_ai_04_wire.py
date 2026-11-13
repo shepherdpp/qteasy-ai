@@ -47,6 +47,24 @@ def _names(plan):
     return [str(item.get("name") or "") for item in _pending(plan)]
 
 
+def _raw_rows(plan):
+    """助手 raw 计划上的步骤。澄清快照优先，否则用可见步骤。"""
+
+    assumptions = (plan or {}).get("assumptions") or {}
+    rows = assumptions.get("accepted_steps") or []
+    if rows:
+        return rows
+    clar = assumptions.get("clarification") or {}
+    rows = clar.get("accepted_steps") or []
+    if rows:
+        return rows
+    return [
+        step
+        for step in ((plan or {}).get("steps") or [])
+        if step.get("skill_name") != "qt.ai.system.fallback"
+    ]
+
+
 def _accepted(plan):
     """澄清卡上的步骤快照。没有快照时用计划步骤。"""
 
@@ -76,7 +94,7 @@ class TestAi04Wire(unittest.TestCase):
         self.registry = build_default_registry()
 
     def test_returns_into_plot_sets_as_panel(self) -> None:
-        """取数、收益、绘图：收益步写成面板，日期卡快照里仍在。"""
+        """取数、收益、绘图：收益步写成面板。空窗口不再出日期卡。"""
 
         print("\n[TestAi04Wire] 收益接到绘图时补 as_panel")
         steps = [
@@ -107,7 +125,8 @@ class TestAi04Wire(unittest.TestCase):
         self.assertTrue(returns["inputs"].get("as_panel"))
         self.assertEqual(len(open_prompts), 1)
         self.assertNotIn("wire_choice", _names(plan))
-        self.assertIn("start", _names(plan))
+        self.assertNotIn("start", _names(plan))
+        self.assertNotIn("end", _names(plan))
 
     def test_returns_alone_keeps_library_default(self) -> None:
         """收益没有后继时不写 as_panel。"""
@@ -319,7 +338,7 @@ class TestAi04Wire(unittest.TestCase):
             asst.plan(query, response_style="raw", session_id=sid)
             plotted = asst.plan("", response_style="raw", session_id=sid, patches={"wire_choice": "use_panel"})
             plotted_plan = plotted.get("plan") or {}
-            rows = (plotted_plan.get("assumptions") or {}).get("accepted_steps") or []
+            rows = _raw_rows(plotted_plan)
             print(" use_panel rows:", rows)
             print(" prompts after plot:", len([item for item in fake_plot.prompts if item.startswith("Allowed skills:")]))
             plot = next(row for row in rows if row.get("skill_name") == "qt.ai.hp.plot")
@@ -443,7 +462,7 @@ class TestAi04Wire(unittest.TestCase):
             sid = "wire-answers-plot"
             asst.plan(query, response_style="raw", session_id=sid)
             plotted = asst.plan("", response_style="raw", session_id=sid, answers=["use_panel"])
-            rows = ((plotted.get("plan") or {}).get("assumptions") or {}).get("accepted_steps") or []
+            rows = _raw_rows(plotted.get("plan") or {})
             print(" panel answers:", rows)
             plot = next(row for row in rows if row.get("skill_name") == "qt.ai.hp.plot")
             self.assertEqual(plot.get("depends_on"), ["step_1"])

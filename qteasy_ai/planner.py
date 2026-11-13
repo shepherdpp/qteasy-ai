@@ -174,6 +174,7 @@ class Planner:
         profile: Optional[Dict[str, Any]] = None,
         forced_job: str = "",
         resume_steps: Optional[List[Dict[str, Any]]] = None,
+        card_text: Optional[Dict[str, str]] = None,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -191,6 +192,8 @@ class Planner:
             用户 profile，用于选填默认值。
         forced_job : str, optional
             ``open`` 时跳过分类，仍组合法边短图。
+        card_text : dict, optional
+            这张卡上尚未确认的槽，槽名对原文。只交给填槽，不换掉构图用的任务原句。
 
         Returns
         -------
@@ -206,6 +209,7 @@ class Planner:
             profile=profile,
             forced_job=forced_job,
             resume_steps=resume_steps,
+            card_text=card_text,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -220,6 +224,7 @@ class Planner:
         profile: Optional[Dict[str, Any]] = None,
         forced_job: str = "",
         resume_steps: Optional[List[Dict[str, Any]]] = None,
+        card_text: Optional[Dict[str, str]] = None,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -357,6 +362,7 @@ class Planner:
             candidate_source=candidate_source,
             job=decision.job,
             session=session,
+            card_text=card_text,
         )
         assumptions = {
             "planner": "hybrid_intent_h_prime",
@@ -1003,10 +1009,11 @@ class Planner:
         candidate_source: str = "rule",
         job: str = "",
         session: Any = None,
+        card_text: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[ToolStep], Dict[str, Any]]:
         """投影填槽之后，再走日期/freq、必填槽与 env_facts 门禁。"""
 
-        gated, extras = apply_slot_layer(self, steps, query, job, session)
+        gated, extras = apply_slot_layer(self, steps, query, job, session, card_text)
         gated = self._enforce_date_or_freq_clarify(gated, query=query)
         gated = self._enforce_refill_date_range(gated, query=query)
         gated = self._enforce_required_slots(gated, query=query)
