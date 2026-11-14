@@ -37,9 +37,9 @@ from .runtime import SkillRuntime
 from .slot_decl import (
     clarification_prompt,
     finalize_clarification_for_emit,
-    interpret_declared_slots,
 )
 from .slot_graph import (
+    FACTOR_IC_SLOT_DECLS,
     apply_slot_layer,
     commit_open_graph,
     contract_digest_lines,
@@ -175,6 +175,7 @@ class Planner:
         forced_job: str = "",
         resume_steps: Optional[List[Dict[str, Any]]] = None,
         card_text: Optional[Dict[str, str]] = None,
+        card_items: Optional[Dict[str, Any]] = None,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -194,6 +195,8 @@ class Planner:
             ``open`` 时跳过分类，仍组合法边短图。
         card_text : dict, optional
             这张卡上尚未确认的槽，槽名对原文。只交给填槽，不换掉构图用的任务原句。
+        card_items : dict, optional
+            这张卡上的持仓项列表。解释前不标成已确认。
 
         Returns
         -------
@@ -210,6 +213,7 @@ class Planner:
             forced_job=forced_job,
             resume_steps=resume_steps,
             card_text=card_text,
+            card_items=card_items,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -225,6 +229,7 @@ class Planner:
         forced_job: str = "",
         resume_steps: Optional[List[Dict[str, Any]]] = None,
         card_text: Optional[Dict[str, str]] = None,
+        card_items: Optional[Dict[str, Any]] = None,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -256,7 +261,8 @@ class Planner:
 
         query = user_query.strip()
         q_lower = query.lower()
-        self._market_overrides = self._confirmed_market_overrides(session)
+        self._card_text = dict(card_text or {})
+        self._market_overrides = self._prior_commit_values(session)
         self._diagnosis_statistic = ""
         self.intent_engine.provider = self.provider
         task = getattr(session, "task", None) if session is not None else None
@@ -285,7 +291,6 @@ class Planner:
                 )
                 for idx, row in enumerate(resumed, start=1)
             ]
-            query = self._session_query_text(user_query, session) if session is not None else query
             q_lower = query.lower()
         elif forced == "open":
             skip = False
@@ -363,6 +368,7 @@ class Planner:
             job=decision.job,
             session=session,
             card_text=card_text,
+            card_items=card_items,
         )
         assumptions = {
             "planner": "hybrid_intent_h_prime",
@@ -386,22 +392,11 @@ class Planner:
                 assumptions["opti_sample_count"] = step.inputs.get("opti_sample_count", 32)
             if step.skill_name == "qt.ai.research.screen_stocks":
                 assumptions["screen_end"] = "latest trading day in local datasource"
-        steps = self._overlay_session_slots(steps, session)
-        steps, default_notes = self._apply_optional_defaults(steps, decision.job, profile or {}, session)
+        steps = self._overlay_session_slots(steps, session, card_text=card_text)
         slot_defaults = dict(assumptions.get("slot_defaults") or {})
-        slot_defaults.update(default_notes or {})
         if slot_defaults:
             assumptions["slot_defaults"] = slot_defaults
         input_sources: Dict[str, str] = {}
-        for key, note in (default_notes or {}).items():
-            if note != "profile":
-                continue
-            if key == "start":
-                input_sources["invest_start"] = "profile"
-            elif key == "end":
-                input_sources["invest_end"] = "profile"
-            else:
-                input_sources[str(key)] = "profile"
         for step in steps:
             if step.skill_name != "qt.ai.optimize.run_builtin":
                 continue
@@ -483,14 +478,15 @@ class Planner:
     def _attach_open_resume(assumptions: Dict[str, Any]) -> None:
         """开放图澄清卡带上步骤快照，供控件提交时恢复。"""
 
-        if str(assumptions.get("intent_job") or "") != "open":
-            return
         snapshot = assumptions.get("accepted_steps")
         clar = assumptions.get("clarification")
         if not isinstance(clar, dict) or not isinstance(snapshot, list) or not snapshot:
             return
-        clar["accepted_steps"] = list(snapshot)
-        clar["resume_job"] = "open"
+        if str(assumptions.get("intent_job") or "") == "open":
+            clar["accepted_steps"] = list(snapshot)
+            clar["resume_job"] = "open"
+            return
+        clar["prior_graph"] = list(snapshot)
 
     def _prior_commit_values(self, session: Any) -> Dict[str, Any]:
         """上一轮已经确认的槽。新任务换掉旧槽时读装配层留下的快照。"""
@@ -508,33 +504,6 @@ class Planner:
             if value not in (None, ""):
                 values[str(name)] = value
         return values
-
-    @staticmethod
-    def _session_query_text(user_query: str, session: Any) -> str:
-        """把已确认槽拼进查询，供抽槽复用。"""
-
-        task = getattr(session, "task", None)
-        parts = [str(getattr(task, "user_query", "") or "") if task is not None else "", str(user_query or "")]
-        slots = getattr(task, "slots", {}) or {} if task is not None else {}
-        for key, slot in slots.items():
-            value = getattr(slot, "value", None)
-            if value not in (None, ""):
-                parts.append(f"{key} {value}")
-        return " ".join(item for item in parts if item).strip()
-
-    def _job_slots(self, job: str) -> List[Dict[str, Any]]:
-        """当前 Job 在 Catalog 里登记的人读槽。"""
-
-        catalog = getattr(self.intent_engine, "catalog", None)
-        getter = getattr(catalog, "job_slots", None)
-        if not callable(getter):
-            return []
-        return list(getter(job) or [])
-
-    def _job_slot_names(self, job: str) -> List[str]:
-        """人读槽名。回填键用这份名单，不另写列名元组。"""
-
-        return [str(item.get("name") or "") for item in self._job_slots(job) if item.get("name")]
 
     def _statistic_followup(self, session: Any, user_query: str, skip: bool) -> str:
         """跟进时把「收益 / 波动」收成统计步技能名。整句重问仍按问句里的词。"""
@@ -566,31 +535,69 @@ class Planner:
             return saved
         return ""
 
-    def _confirmed_market_overrides(self, session: Any) -> Dict[str, Any]:
-        """已确认槽。有 ``slots`` 的 Job 只回填这些键；否则仍是标的、日期和频率。"""
-
-        task = getattr(session, "task", None) if session is not None else None
-        slots = getattr(task, "slots", {}) or {} if task is not None else {}
-        job = str(getattr(task, "job", "") or "") if task is not None else ""
-        declared = self._job_slot_names(job)
-        keys = declared if declared else ["shares", "start", "end", "freq"]
-        overrides: Dict[str, Any] = {}
-        for key in keys:
-            slot = slots.get(key)
-            if slot is None or not getattr(slot, "confirmed", False):
-                continue
-            value = getattr(slot, "value", None)
-            if value not in (None, ""):
-                overrides[key] = value
-        return overrides
-
     def _market_inputs(self, query: str) -> Dict[str, Any]:
         """抽标的与日期；已确认槽盖过问句中先出现的旧代码。"""
 
         return self._extract_market_inputs(query, overrides=getattr(self, "_market_overrides", None))
 
-    def _overlay_session_slots(self, steps: List[ToolStep], session: Any) -> List[ToolStep]:
-        """用 session 槽覆盖步骤输入；补齐后可把 refill 澄清换成真步骤。"""
+    def _keep_prior_inputs(
+        self,
+        steps: List[ToolStep],
+        session: Any,
+        card_text: Optional[Dict[str, str]],
+        card_items: Optional[Dict[str, Any]],
+    ) -> bool:
+        """有模型又有卡片时，沿用上一张图里已经写下的输入。
+
+        这张卡上的槽不抄。上一张图存在时，本轮不再用任务原句补没问的槽。
+        没有上一张图时返回 False，调用方仍可读这一次原句。
+
+        Returns
+        -------
+        bool
+            找到上一张图时为 True。
+        """
+
+        snapshot = getattr(session, "_prior_graph", None) if session is not None else None
+        if not isinstance(snapshot, list):
+            task = getattr(session, "task", None) if session is not None else None
+            blob = getattr(task, "pending_clarification", None) if task is not None else None
+            if isinstance(blob, dict):
+                found = blob.get("prior_graph")
+                if not isinstance(found, list):
+                    found = blob.get("accepted_steps")
+                snapshot = found
+        if not isinstance(snapshot, list) or not snapshot:
+            return False
+        if session is not None and hasattr(session, "_prior_graph"):
+            delattr(session, "_prior_graph")
+        covered = set(card_text or {}) | set(card_items or {})
+        pools: Dict[str, List[Dict[str, Any]]] = {}
+        for row in snapshot:
+            if not isinstance(row, dict):
+                continue
+            pools.setdefault(str(row.get("skill_name") or ""), []).append(
+                dict(row.get("inputs") or {}) if isinstance(row.get("inputs"), dict) else {}
+            )
+        for step in steps:
+            rows = pools.get(step.skill_name) or []
+            if not rows:
+                continue
+            previous = rows.pop(0)
+            for key, value in previous.items():
+                if key in covered or value in (None, "", []):
+                    continue
+                if step.inputs.get(key) in (None, "", []):
+                    step.inputs[key] = value
+        return True
+
+    def _overlay_session_slots(
+        self,
+        steps: List[ToolStep],
+        session: Any,
+        card_text: Optional[Dict[str, str]] = None,
+    ) -> List[ToolStep]:
+        """已通过校验的值按槽名抄到同名输入。不在这里改键。"""
 
         if session is None:
             return steps
@@ -608,46 +615,27 @@ class Planner:
             value = getattr(slot, "value", None)
             return None if value in (None, "") else value
 
+        confirmed_map = self._prior_commit_values(session)
         for step in steps:
             name = step.skill_name
-            if name == "qt.ai.data.refill_basic_equity_and_index":
-                if _val("start"):
-                    step.inputs["start"] = _val("start")
-                if _val("end"):
-                    step.inputs["end"] = _val("end")
-                if _val("shares"):
-                    step.inputs["symbols"] = _val("shares")
-            if name == "qt.ai.backtest.run_builtin":
-                if _val("shares"):
-                    step.inputs["asset_pool"] = _val("shares")
-                if _val("start"):
-                    step.inputs["invest_start"] = _val("start")
-                if _val("end"):
-                    step.inputs["invest_end"] = _val("end")
-                if _val("freq"):
-                    step.inputs["freq"] = _val("freq")
-                if _val("strategy_id"):
-                    step.inputs["strategy_id"] = _val("strategy_id")
-            if name == "qt.ai.optimize.run_builtin":
-                if _val("shares"):
-                    step.inputs["asset_pool"] = _val("shares")
-                if _val("strategy_id"):
-                    step.inputs["strategy_id"] = _val("strategy_id")
-            if name in {
-                "qt.ai.data.read",
-                "qt.ai.data.history",
-                "qt.ai.data.reference",
-                "qt.ai.data.static",
-            }:
-                if name != "qt.ai.data.reference" and _confirmed("shares"):
-                    step.inputs["shares"] = _confirmed("shares")
-                if name != "qt.ai.data.static":
-                    if _confirmed("start"):
-                        step.inputs["start"] = _confirmed("start")
-                    if _confirmed("end"):
-                        step.inputs["end"] = _confirmed("end")
-                    if _confirmed("freq"):
-                        step.inputs["freq"] = _confirmed("freq")
+            schema: Dict[str, Any] = {}
+            try:
+                schema = dict(self.registry.get_metadata(name).inputs_schema or {})
+            except Exception:
+                schema = {}
+            for key, value in confirmed_map.items():
+                if key not in schema:
+                    continue
+                if key == "weights" and isinstance(value, dict) and str(value.get("mode") or "") == "equal":
+                    step.inputs.pop("weights", None)
+                    step.inputs["mode"] = "equal"
+                    continue
+                if key == "weights" and isinstance(value, list) and value:
+                    step.inputs["weights"] = list(value)
+                    if not str(step.inputs.get("mode") or "").strip():
+                        step.inputs["mode"] = "weighted"
+                    continue
+                step.inputs[key] = value
             if name == "qt.ai.strategy.spec_from_nl":
                 if _val("slow") is not None:
                     step.inputs["slow"] = _val("slow")
@@ -670,80 +658,9 @@ class Planner:
                     if count:
                         step.inputs["query"] = rewritten
             if name == "qt.ai.strategy_meta.get":
-                if _val("strategy_id"):
-                    step.inputs["strategy_id"] = _val("strategy_id")
-        if self._is_clarify_fallback(steps):
-            job = str(getattr(getattr(session, "task", None), "job", "") or "")
-            if job == "data.refill" and _val("start") and _val("end"):
-                rebuilt = self._infer_refill_steps(
-                    query=self._session_query_text("", session),
-                    q_lower="",
-                    skip_query_guard=True,
-                )
-                if rebuilt:
-                    return rebuilt
-            if job == "backtest.builtin" and _val("strategy_id"):
-                rebuilt = self._infer_backtest_steps(
-                    query=self._session_query_text("", session),
-                    q_lower=self._session_query_text("", session).lower(),
-                    skip_query_guard=True,
-                )
-                if rebuilt:
-                    return rebuilt
-            if _val("strategy_id") and job in {"strategy.meta", "clarify", ""}:
-                sid = str(_val("strategy_id"))
-                return [
-                    self._make_step(
-                        step_id="step_1",
-                        skill_name="qt.ai.strategy_meta.get",
-                        inputs={"strategy_id": sid},
-                    )
-                ]
+                if _confirmed("strategy_id"):
+                    step.inputs["strategy_id"] = _confirmed("strategy_id")
         return steps
-
-    def _apply_optional_defaults(
-        self,
-        steps: List[ToolStep],
-        job: str,
-        profile: Dict[str, Any],
-        session: Any,
-    ) -> Tuple[List[ToolStep], Dict[str, str]]:
-        """选填槽才吃 profile.defaults，必填不得悄悄齐。"""
-
-        defaults = profile.get("defaults") if isinstance(profile.get("defaults"), dict) else {}
-        optional = {
-            "backtest.builtin": ("shares", "start", "end", "freq"),
-            "optimize.builtin": ("shares", "start", "end", "freq"),
-            "data.summary": ("shares", "start", "end", "freq"),
-            "data.export": ("shares", "start", "end", "freq"),
-        }.get(job, ())
-        notes: Dict[str, str] = {}
-        task = getattr(session, "task", None) if session is not None else None
-        slots = getattr(task, "slots", {}) or {} if task is not None else {}
-        for key in optional:
-            if key in slots and getattr(slots[key], "value", None) not in (None, ""):
-                continue
-            if defaults.get(key) in (None, ""):
-                continue
-            value = defaults[key]
-            if session is not None:
-                session.set_slot(key, value, source="default", confirmed=False)
-            notes[key] = "profile"
-            for step in steps:
-                if key == "shares":
-                    if step.skill_name == "qt.ai.backtest.run_builtin":
-                        step.inputs.setdefault("asset_pool", value)
-                    elif step.skill_name == "qt.ai.optimize.run_builtin":
-                        step.inputs.setdefault("asset_pool", value)
-                    elif "shares" in (step.inputs or {}) or step.skill_name.startswith("qt.ai.data"):
-                        step.inputs.setdefault("shares", value)
-                if key == "start" and step.skill_name == "qt.ai.backtest.run_builtin":
-                    step.inputs.setdefault("invest_start", value)
-                if key == "end" and step.skill_name == "qt.ai.backtest.run_builtin":
-                    step.inputs.setdefault("invest_end", value)
-                if key == "freq" and step.skill_name == "qt.ai.backtest.run_builtin":
-                    step.inputs.setdefault("freq", value)
-        return steps, notes
 
     @staticmethod
     def _is_clarify_fallback(steps: List[ToolStep]) -> bool:
@@ -1010,10 +927,11 @@ class Planner:
         job: str = "",
         session: Any = None,
         card_text: Optional[Dict[str, str]] = None,
+        card_items: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[ToolStep], Dict[str, Any]]:
         """投影填槽之后，再走日期/freq、必填槽与 env_facts 门禁。"""
 
-        gated, extras = apply_slot_layer(self, steps, query, job, session, card_text)
+        gated, extras = apply_slot_layer(self, steps, query, job, session, card_text, card_items)
         gated = self._enforce_date_or_freq_clarify(gated, query=query)
         gated = self._enforce_refill_date_range(gated, query=query)
         gated = self._enforce_required_slots(gated, query=query)
@@ -1435,105 +1353,24 @@ class Planner:
         return any(item in q_lower for item in keywords)
 
     def _factor_ic_steps(self, query: str) -> List[ToolStep]:
-        """因子 IC 步骤：问、拒、拆只读 Job slots，否则带上抽到的输入。"""
+        """因子 IC 只交回空输入的一步。值由同一个解释者按槽合同填写。"""
 
-        inputs = self._extract_factor_ic_inputs(query)
-        verdict = interpret_declared_slots(
-            self._job_slots("research.factor_ic"),
-            inputs,
-            is_history_column=self._is_history_panel_htype,
-        )
-        pending = [item for item in (verdict.get("pending") or []) if isinstance(item, dict)]
-        if pending:
-            names = [str(item.get("name") or "") for item in pending if item.get("name")]
-            return [
-                self._make_step(
-                    step_id="step_1",
-                    skill_name="qt.ai.system.fallback",
-                    inputs=self._fallback_step_inputs(
-                        query=query,
-                        action="clarify_required",
-                        reason="factor_ic_slots",
-                        hint=clarification_prompt(pending),
-                        missing_info="|".join(names),
-                        next_step="Fill the fields on the card.",
-                        details={"slot_pending": pending},
-                    ),
-                )
-            ]
-        cleaned = dict(inputs)
-        cleaned.update(dict(verdict.get("values") or {}))
         return [
             self._make_step(
                 step_id="step_1",
                 skill_name="qt.ai.research.factor_ic_summary",
-                inputs=cleaned,
+                inputs={},
+                slot_decls=FACTOR_IC_SLOT_DECLS,
             )
         ]
 
-    def _extract_factor_ic_inputs(self, query: str) -> Dict[str, Any]:
-        """抽取因子 IC 的多代码、日期与 vs 两侧列名。
-
-        不改全局「第一只代码」抽槽。问句里已有至少两个交易所代码时，以问句为准。
-        """
-
-        market = self._extract_market_inputs(
-            query,
-            overrides=getattr(self, "_market_overrides", None),
-        )
-        result: Dict[str, Any] = {}
-        seen: List[str] = []
-        for match in re.findall(r"(\d{6}\.(?:SH|SZ|BJ))", query, flags=re.IGNORECASE):
-            code = str(match).upper()
-            if code not in seen:
-                seen.append(code)
-        if len(seen) >= 2:
-            result["shares"] = ",".join(seen)
-        elif market.get("shares"):
-            result["shares"] = market["shares"]
-        for key in ("start", "end", "freq"):
-            if market.get(key):
-                result[key] = market[key]
-        versus = re.search(
-            r"\b([A-Za-z][A-Za-z0-9_|%]*)\s+vs\s+([A-Za-z][A-Za-z0-9_|%]*)\b",
-            query,
-        )
-        if versus:
-            result["factor_htype"] = versus.group(1)
-            result["return_htype"] = versus.group(2)
-        overrides = getattr(self, "_market_overrides", None) or {}
-        if len(seen) < 2 and overrides.get("shares") not in (None, ""):
-            result["shares"] = str(overrides.get("shares")).strip()
-        for key in self._job_slot_names("research.factor_ic"):
-            if key == "shares" or result.get(key) not in (None, ""):
-                continue
-            value = overrides.get(key)
-            if value not in (None, ""):
-                result[key] = str(value).strip()
-        return result
-
     @staticmethod
     def _is_history_panel_htype(name: str) -> bool:
-        """列名是否为可进 HistoryPanel 的 history 数据类型。"""
+        """列名判断只留在 slot_graph。这里转交那一份。"""
 
-        try:
-            import qteasy as qt
+        from .slot_graph import is_history_column
 
-            frame = qt.find_history_data(name, as_data_frame=True, fuzzy=False)
-        except Exception:
-            return False
-        if frame is None or not hasattr(frame, "iterrows") or bool(getattr(frame, "empty", True)):
-            return False
-        wanted = str(name).lower()
-        for _, row in frame.iterrows():
-            if str(row.get("name") or "").lower() != wanted:
-                continue
-            if str(row.get("kind") or "") != "history":
-                continue
-            flags = {part.strip() for part in str(row.get("usable_in") or "").split(",") if part.strip()}
-            if "history_panel" in flags:
-                return True
-        return False
+        return is_history_column(name)
 
     @staticmethod
     def _is_factor_ic_query(q_lower: str) -> bool:
@@ -1676,11 +1513,16 @@ class Planner:
         if not skip_query_guard and not self._is_download_query(q_lower):
             return None
         market = self._market_inputs(query)
+        confirmed = getattr(self, "_market_overrides", None) or {}
         inputs: Dict[str, Any] = {"tables": ["stock_daily", "index_daily"]}
-        if market.get("start"):
-            inputs["start"] = market["start"]
-        if market.get("end"):
-            inputs["end"] = market["end"]
+        start = confirmed.get("start") or market.get("start")
+        end = confirmed.get("end") or market.get("end")
+        if start:
+            inputs["start"] = start
+        if end:
+            inputs["end"] = end
+        if confirmed.get("shares") not in (None, ""):
+            inputs["symbols"] = confirmed.get("shares")
         steps = [
             self._make_step(
                 step_id="step_1",
@@ -1714,15 +1556,20 @@ class Planner:
                 )
             ]
         market = self._market_inputs(query)
+        confirmed = getattr(self, "_market_overrides", None) or {}
         inputs: Dict[str, Any] = {
             "strategy_id": strategy_id,
             "opti_method": "montecarlo",
             "opti_sample_count": 32,
         }
-        if market.get("start"):
-            inputs["invest_start"] = market["start"]
-        if market.get("end"):
-            inputs["invest_end"] = market["end"]
+        start = confirmed.get("start") or market.get("start")
+        end = confirmed.get("end") or market.get("end")
+        if start:
+            inputs["invest_start"] = start
+        if end:
+            inputs["invest_end"] = end
+        if confirmed.get("shares") not in (None, ""):
+            inputs["asset_pool"] = confirmed.get("shares")
         return [
             self._make_step(
                 step_id="step_1",
@@ -1757,11 +1604,16 @@ class Planner:
                 )
             ]
         market = self._market_inputs(query)
-        inputs: Dict[str, Any] = {"strategy_id": strategy_id, "freq": market.get("freq") or "d"}
-        if market.get("start"):
-            inputs["invest_start"] = market["start"]
-        if market.get("end"):
-            inputs["invest_end"] = market["end"]
+        confirmed = getattr(self, "_market_overrides", None) or {}
+        inputs: Dict[str, Any] = {"strategy_id": strategy_id, "freq": confirmed.get("freq") or market.get("freq") or "d"}
+        start = confirmed.get("start") or market.get("start")
+        end = confirmed.get("end") or market.get("end")
+        if start:
+            inputs["invest_start"] = start
+        if end:
+            inputs["invest_end"] = end
+        if confirmed.get("shares") not in (None, ""):
+            inputs["asset_pool"] = confirmed.get("shares")
         backtest = self._make_step(
             step_id="step_1",
             skill_name="qt.ai.backtest.run_builtin",
@@ -1912,9 +1764,9 @@ class Planner:
                     "query": query,
                     "fallback_action": "clarify_required",
                     "reason": "invalid_date_format",
-                    "hint": "Date format should be YYYYMMDD or YYYY-MM-DD.",
+                    "hint": "Date format should be eight digits or a dashed calendar date.",
                     "missing_info": "valid_date_format",
-                    "next_step": "Use YYYYMMDD or YYYY-MM-DD format.",
+                    "next_step": "Use an eight-digit date or a dashed calendar date.",
                 }
 
         if "freq=" in q_lower and not re.search(r"\b(1min|5min|15min|30min|60min|d|w|m)\b", query, flags=re.IGNORECASE):
@@ -1984,6 +1836,9 @@ class Planner:
             lower_item = item.lower()
             if lower_item not in ignored and len(lower_item) >= 3:
                 return alias_map.get(lower_item, item)
+        card_id = str((getattr(self, "_card_text", None) or {}).get("strategy_id") or "").strip()
+        if card_id and card_id != str(query or "").strip():
+            return self._extract_strategy_id(card_id)
         return None
 
     def _get_strategy_alias_map(self) -> Dict[str, str]:
@@ -2017,8 +1872,8 @@ class Planner:
 
         当前支持抽取：
         - 标的：`000001.SH/000001.SZ/000001.BJ`，或 6 位数字（默认补 `.SH`）；
-        - 日期：`YYYYMMDD` / `YYYY-MM-DD` / `YYYY/MM/DD`，以及今年、近一年、某一年；
-        - 频率：`1min/5min/15min/30min/60min/d/w/m`，以及日线、周线、月线。
+        - 日期：八位数字、带分隔符的同一天，以及今年、某一年；
+        - 频率：`1min/5min/15min/30min/60min/d/w/m`。中文频率由填槽层读取。
 
         返回值仅包含命中的字段，未命中的字段由技能内部使用默认值。
         ``overrides`` 里已确认的 shares/start/end/freq 盖过问句中先出现的旧值。
@@ -2053,10 +1908,6 @@ class Planner:
             if "今年" in query:
                 result["start"] = f"{today.year:04d}0101"
                 result["end"] = f"{today.year:04d}1231"
-            elif "近一年" in query:
-                start = today - datetime.timedelta(days=365)
-                result["start"] = start.strftime("%Y%m%d")
-                result["end"] = today.strftime("%Y%m%d")
             else:
                 # 「到 2023 年」只给结束日。单独的「2023年」才是从元旦到年末。
                 end_bound = re.search(
@@ -2101,12 +1952,6 @@ class Planner:
         freq_match = re.search(r"\b(1min|5min|15min|30min|60min|d|w|m)\b", query, flags=re.IGNORECASE)
         if freq_match:
             result["freq"] = freq_match.group(1)
-        elif "月线" in query:
-            result["freq"] = "m"
-        elif "周线" in query:
-            result["freq"] = "w"
-        elif "日线" in query:
-            result["freq"] = "d"
         for key in ("shares", "start", "end", "freq"):
             if not overrides:
                 break

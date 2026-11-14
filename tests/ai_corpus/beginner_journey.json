@@ -132,7 +132,7 @@
       "expected_job": "research.factor_ic",
       "expected_skills": ["qt.ai.system.fallback"],
       "expected_fallback_action": "clarify_required",
-      "expected_missing_info": "shares|start|end|factor_htype|return_htype",
+      "expected_missing_info": "factor_htype|return_htype|shares|start|end",
       "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
       "run_policy": "clarify",
       "notes": "gold R1；裸句缺代码、日期与列名时 clarify，槽齐后才出 factor_ic_summary"

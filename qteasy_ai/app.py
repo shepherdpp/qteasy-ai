@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .ask_engine import AskEngine, AskResponse, build_ask_history_index
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
@@ -53,7 +53,6 @@ from .memory_store import MemoryStore, merge_env_facts
 from .output import AssistantOutput
 from .plan_markdown import tool_plan_to_markdown
 from .planner import Planner
-from .slot_decl import interpret_declared_slots
 from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
@@ -190,49 +189,66 @@ def _normalize_patches(patches: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def _take_date_card_text(pending: Any, patches: Dict[str, Any]) -> Dict[str, str]:
-    """按当前卡的 ``format`` 抽出日期原文，并从补丁里拿掉这些键。
+def _take_card_payload(
+    pending: Any,
+    patches: Dict[str, Any],
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """取出这张卡上每一个非空折叠值。字符串进原文，项列表单独交解释者。
 
     Parameters
     ----------
     pending : dict
         当前澄清卡。
     patches : dict
-        折叠后的槽补丁。日期键会被弹出。
+        折叠后的槽补丁。被取出的键会从补丁里弹出。
 
     Returns
     -------
-    dict
-        这张卡上日期槽名到这一题原文。
+    tuple
+        ``(card_text, card_items)``。
     """
 
-    rows = pending.get("pending") if isinstance(pending, dict) else None
-    names = {
-        str(row.get("name") or "")
-        for row in rows or []
-        if isinstance(row, dict) and str(row.get("format") or "") == "YYYYMMDD"
-    }
+    from .slot_graph import is_bound_item_list
+
     found: Dict[str, str] = {}
+    items: Dict[str, Any] = {}
     for name in list(patches):
-        if name in names:
-            found[name] = str(patches.pop(name))
-    return found
+        value = patches.get(name)
+        if value in (None, ""):
+            continue
+        if is_bound_item_list(value):
+            items[name] = patches.pop(name)
+            continue
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+            items[name] = patches.pop(name)
+            continue
+        found[name] = str(patches.pop(name))
+    return found, items
 
 
-def _accepted_card_dates(plan: Any, card_text: Dict[str, str]) -> Dict[str, str]:
-    """还在下一张卡上的日期不写。写下的是步骤里已经校验过的八位。
+def _accepted_card_slots(
+    plan: Any,
+    card_text: Dict[str, str],
+    card_items: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """只确认这张卡上通过校验、且下一张卡不再问的槽。
+
+    同一次构图从任务原句写上的其他值不在这里确认。持仓项以项上的
+    ``status`` 为准：还有未确认项时不把整格标成已确认。
 
     Parameters
     ----------
     plan : ToolPlan
         本轮计划。
     card_text : dict
-        这张卡上的日期原文。
+        这张卡上的字符串原文。
+    card_items : dict, optional
+        这张卡上的项列表。
 
     Returns
     -------
     dict
-        可以确认的槽名到 ``YYYYMMDD``。
+        可以确认的槽名到已经校验过的值。
     """
 
     card = (getattr(plan, "assumptions", None) or {}).get("clarification")
@@ -247,59 +263,59 @@ def _accepted_card_dates(plan: Any, card_text: Dict[str, str]) -> Dict[str, str]
     steps = list(getattr(plan, "steps", None) or [])
     if isinstance(snapshot, list):
         steps.extend(snapshot)
-    found: Dict[str, str] = {}
+    found: Dict[str, Any] = {}
     for name in card_text:
         if name in still:
             continue
         for step in steps:
             inputs = step.get("inputs") if isinstance(step, dict) else getattr(step, "inputs", None)
-            value = str((inputs or {}).get(name) or "")
-            if re.fullmatch(r"\d{8}", value):
+            value = (inputs or {}).get(name)
+            if value not in (None, "", []):
+                found[name] = value
+                break
+    for name in card_items or {}:
+        if name in still:
+            continue
+        for step in steps:
+            inputs = step.get("inputs") if isinstance(step, dict) else getattr(step, "inputs", None)
+            value = (inputs or {}).get(name)
+            if isinstance(value, list) and value and all(
+                isinstance(item, dict) and str(item.get("status") or "") == "confirmed" for item in value
+            ):
+                found[name] = value
+                break
+            if isinstance(value, dict) and str(value.get("status") or "") == "confirmed":
                 found[name] = value
                 break
     return found
 
 
-def _revision_changes(
-    written: Dict[str, Any],
-    submitted: Dict[str, Any],
-    labels: Dict[str, str],
-    source_name: str,
+def _submission_changes(
+    pending: Dict[str, Any],
+    card_text: Dict[str, str],
+    card_items: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """标出每个写入键是用户提交还是系统填入。
+    """这张卡上每一格先记成 accepted，随后再按下一张卡的 error 改判。"""
 
-    Parameters
-    ----------
-    written : dict
-        最终写入的槽值。
-    submitted : dict
-        用户这次提交的键。
-    labels : dict
-        槽名到 Job slots 的 label。未声明时用槽名。
-    source_name : str
-        系统填入键的来源槽名。空则不带来源。
-
-    Returns
-    -------
-    list of dict
-        ``origin`` 为 ``accepted`` 或 ``filled``。
-    """
-
-    source = str(source_name or "").strip()
-    source_label = str(labels.get(source) or source)
-    rows: List[Dict[str, Any]] = []
-    for key, value in written.items():
-        name = str(key)
-        label = str(labels.get(name) or name)
-        if name in submitted:
-            rows.append({"name": name, "label": label, "value": value, "origin": "accepted"})
+    rows = [item for item in ((pending or {}).get("pending") or []) if isinstance(item, dict)]
+    labels = {
+        str(item.get("name") or ""): str(item.get("label") or item.get("name") or "")
+        for item in rows
+    }
+    changes: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for name, value in list((card_text or {}).items()) + list((card_items or {}).items()):
+        key = str(name or "")
+        if not key or key in seen or value in (None, ""):
             continue
-        item: Dict[str, Any] = {"name": name, "label": label, "value": value, "origin": "filled"}
-        if source:
-            item["from"] = source
-            item["from_label"] = source_label
-        rows.append(item)
-    return rows
+        seen.add(key)
+        changes.append({
+            "name": key,
+            "label": labels.get(key) or key,
+            "value": value,
+            "origin": "accepted",
+        })
+    return changes
 
 
 def _mark_rejected_slot_changes(
@@ -1588,68 +1604,6 @@ class QteasyAssistant:
             return False
         return str((getattr(step, "inputs", None) or {}).get("fallback_action") or "") == "clarify_required"
 
-    def _coerce_declared_slot_patches(
-        self,
-        state: ConversationState,
-        patches: Dict[str, Any],
-    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-        """写入前整理补丁，并标出用户接受的槽与系统填入的槽。"""
-
-        submitted = dict(patches or {})
-        task = state.task if state is not None else None
-        job = str(getattr(task, "job", "") or "") if task is not None else ""
-        declarations = self.planner.intent_engine.catalog.job_slots(job)
-        labels = {
-            str(item.get("name") or ""): str(item.get("label") or item.get("name") or "")
-            for item in declarations
-            if item.get("name")
-        }
-        if not declarations:
-            pending = []
-            if task is not None and isinstance(getattr(task, "pending_clarification", None), dict):
-                pending = [
-                    item
-                    for item in (task.pending_clarification.get("pending") or [])
-                    if isinstance(item, dict) and item.get("type")
-                ]
-            if pending:
-                from .slot_graph import is_bound_item_list, parse_card_answers
-
-                prebound = {
-                    str(key): value
-                    for key, value in submitted.items()
-                    if is_bound_item_list(value)
-                }
-                rest = {str(key): value for key, value in submitted.items() if str(key) not in prebound}
-                accepted, errors = parse_card_answers(pending, rest, provider=self.planner.provider)
-                accepted.update(prebound)
-                if errors:
-                    flags = dict(task.flags or {})
-                    flags["_slot_errors"] = errors
-                    task.flags = flags
-                labels = {str(item.get("name") or ""): str(item.get("label") or item.get("name") or "") for item in pending}
-                return accepted, _revision_changes(accepted, submitted, labels, "")
-            return submitted, _revision_changes(submitted, submitted, labels, "")
-        current: Dict[str, Any] = {}
-        for key, slot in (getattr(task, "slots", {}) or {}).items():
-            value = getattr(slot, "value", None)
-            if value not in (None, ""):
-                current[str(key)] = value
-        merged = dict(current)
-        merged.update(submitted)
-        verdict = interpret_declared_slots(
-            declarations,
-            merged,
-            is_history_column=Planner._is_history_panel_htype,
-        )
-        out = dict(submitted)
-        coerced = dict(verdict.get("patches") or {})
-        for key, value in coerced.items():
-            out[str(key)] = value
-        sources = [str(key) for key in coerced if str(key) in submitted]
-        source_name = sources[0] if len(sources) == 1 else ""
-        return out, _revision_changes(out, submitted, labels, source_name)
-
     def _card_submitted_value(
         self,
         session_id: str | None,
@@ -1727,8 +1681,14 @@ class QteasyAssistant:
             answer_label=shown,
             answers=answers,
         )
+        blob = state.task.pending_clarification if isinstance(state.task.pending_clarification, dict) else {}
+        snapshot = blob.get("prior_graph") if isinstance(blob.get("prior_graph"), list) else None
+        if snapshot is None and isinstance(blob.get("accepted_steps"), list):
+            snapshot = blob.get("accepted_steps")
         state.task.set_pending(None)
         state.task.set_missing([])
+        if snapshot:
+            state._prior_graph = snapshot
         self.session_store.save(state)
 
     def _commit_stage(self, state: ConversationState, stage_id: str, text: str) -> None:
@@ -1897,6 +1857,7 @@ class QteasyAssistant:
         slot_revision: Optional[Dict[str, Any]] = None
         slot_changes: List[Dict[str, Any]] = []
         card_text: Dict[str, str] = {}
+        card_items: Dict[str, Any] = {}
 
         if inbound == "composer" and asked:
             state.append_user_text(asked)
@@ -1908,9 +1869,8 @@ class QteasyAssistant:
                 if state.task is not None and isinstance(state.task.pending_clarification, dict)
                 else {}
             )
-            card_text = _take_date_card_text(pending, structured)
-            structured, slot_changes = self._coerce_declared_slot_patches(state, structured)
-            merge_facts(state, structured, source="user", confirmed=True)
+            card_text, card_items = _take_card_payload(pending, structured)
+            slot_revision = dict(card_text)
             answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
             skip_classify = bool(state.task and state.task.job)
             keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
@@ -1933,7 +1893,6 @@ class QteasyAssistant:
             ):
                 resume_steps = [row for row in snapshot if isinstance(row, dict)]
                 asked = str(state.task.user_query or asked).strip()
-            slot_revision = dict(structured)
             if state.task is not None:
                 state.task.revision = int(state.task.revision or 0) + 1
                 if state.task.status in {"done", "cancelled", ""}:
@@ -1953,12 +1912,21 @@ class QteasyAssistant:
                 self.session_store.save(state)
                 return self._block_running_plan(asked), state
             if gate.kind == "fill_slot":
-                merge_facts(state, gate.patches, source="user", confirmed=True)
+                from .slot_graph import apply_ordered_answers
+
                 pending_card = (
                     state.task.pending_clarification
                     if state.task is not None and isinstance(state.task.pending_clarification, dict)
                     else {}
                 )
+                rows = [item for item in (pending_card.get("pending") or []) if isinstance(item, dict)]
+                answers = [""] * len(rows)
+                if rows:
+                    step_index = int(pending_card.get("step_index") or 1)
+                    cursor = min(max(step_index, 1), len(rows)) - 1
+                    answers[cursor] = asked
+                folded = apply_ordered_answers(rows, answers) if rows else {}
+                card_text, card_items = _take_card_payload(pending_card, dict(folded or {}))
                 self._seal_clarify(state, asked, option_answer_label(pending_card, asked))
                 user_answered = True
                 skip_classify = bool(state.task and state.task.job)
@@ -2009,16 +1977,25 @@ class QteasyAssistant:
             profile=profile,
             resume_steps=resume_steps,
             card_text=card_text or None,
+            card_items=card_items or None,
         )
-        accepted_dates = _accepted_card_dates(plan, card_text)
+        accepted_dates = _accepted_card_slots(plan, card_text, card_items)
         if accepted_dates:
             merge_facts(state, accepted_dates, source="user", confirmed=True)
+            assumptions = dict(plan.assumptions or {})
+            assumptions["session_missing"] = [
+                name
+                for name in (assumptions.get("session_missing") or [])
+                if name not in accepted_dates
+            ]
+            plan.assumptions = assumptions
         if keep_plan_id and inbound == "control":
             plan.plan_id = keep_plan_id
         if topic_skipped:
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["topic_skipped"] = True
         if slot_revision:
+            slot_changes = _submission_changes(pending, card_text, card_items)
             slot_changes = _mark_rejected_slot_changes(slot_changes, getattr(plan, "assumptions", None))
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["slot_revision"] = dict(slot_revision)

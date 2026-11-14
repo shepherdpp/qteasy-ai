@@ -26,7 +26,7 @@ from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
-from qteasy_ai.slot_graph import parse_card_answers
+from qteasy_ai.slot_graph import commit_weight_text
 from qteasy_ai.skills.data_kline import build_data_kline_skill
 from qteasy_ai.skills.hp_plot import build_hp_plot_skill
 from qteasy_ai.skills.hp_study import (
@@ -621,17 +621,18 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         ]
         self.assertEqual([row.get("skill_name") for row in freq_steps], ["qt.ai.data.kline"])
 
-        pending = [{"name": "weights", "type": "array"}]
-        one, one_errors = parse_card_answers(pending, {"weights": "1:1"})
-        even, even_errors = parse_card_answers(pending, {"weights": "等权"})
-        six, six_errors = parse_card_answers(pending, {"weights": "6:4"})
-        print(" card 1:1:", one, one_errors)
-        print(" card equal:", even, even_errors)
-        print(" card 6:4:", six, six_errors)
-        self.assertEqual(one.get("weights"), [1.0, 1.0])
-        self.assertEqual(even.get("weights"), {"mode": "equal"})
-        self.assertEqual(six.get("weights"), [6.0, 4.0])
-        self.assertFalse(one_errors or even_errors or six_errors)
+        one = commit_weight_text("1:1")
+        even = commit_weight_text("等权")
+        six = commit_weight_text("6:4")
+        print(" card 1:1:", one)
+        print(" card equal:", even)
+        print(" card 6:4:", six)
+        self.assertEqual((one.get("values") or {}).get("weights"), [1.0, 1.0])
+        self.assertEqual((even.get("values") or {}).get("mode"), "equal")
+        self.assertEqual((six.get("values") or {}).get("weights"), [6.0, 4.0])
+        self.assertEqual(one.get("status"), "value")
+        self.assertEqual(even.get("status"), "value")
+        self.assertEqual(six.get("status"), "value")
 
         def _follow(label: str, value: object) -> None:
             state = ConversationState.empty(f"b1-weight-{label}")
@@ -649,9 +650,9 @@ class TestAi04B1HoldCompare(unittest.TestCase):
                 self.assertEqual(plan.steps[1].inputs.get("mode"), "weighted")
                 self.assertNotIsInstance(plan.steps[1].inputs.get("weights"), str)
 
-        _follow("1:1", one["weights"])
-        _follow("等权", even["weights"])
-        _follow("6:4", six["weights"])
+        _follow("1:1", one["values"]["weights"])
+        _follow("等权", even["values"])
+        _follow("6:4", six["values"]["weights"])
 
     def test_executor_runs_planned_inputs(self) -> None:
         """假取数按计划跑到出图。补过占位的权重和并列基准都进原子。"""

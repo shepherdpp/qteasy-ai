@@ -71,15 +71,15 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "data.refill")
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
             self.assertEqual(names, ["qt.ai.system.fallback"])
-            self.assertEqual(second["plan"]["steps"][0]["inputs"].get("missing_info"), "start")
+            self.assertEqual(second["plan"]["steps"][0]["inputs"].get("missing_info"), "end")
 
             store = SessionStore(assistant.memory_store)
             filled = store.load("s-refill")
             print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
             print(" filled status:", filled.task.status)
-            self.assertNotIn("start", filled.task.slots)
-            self.assertEqual(filled.task.slots["end"].value, "20241231")
-            self.assertTrue(filled.task.slots["end"].confirmed)
+            self.assertEqual(filled.task.slots["start"].value, "20240101")
+            self.assertTrue(filled.task.slots["start"].confirmed)
+            self.assertNotIn("end", filled.task.slots)
             self.assertEqual(filled.task.status, "clarifying")
 
             confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
@@ -87,8 +87,8 @@ class TestAiPlannerF(unittest.TestCase):
             print(" confirm skills:", cnames)
             print(" confirm trace:", confirm["plan"].get("planner_trace"))
             print(" confirm source:", confirm["plan"]["planner_trace"].get("source"))
-            self.assertNotEqual(confirm["plan"]["planner_trace"].get("source"), "session")
-            self.assertNotEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
+            self.assertEqual(confirm["plan"]["planner_trace"].get("source"), "session")
+            self.assertEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
     def test_clarify_submit_round_streak_warn_and_fail(self) -> None:
         """提交轮次 streak：首卡 0；第 3 次 last chance；第 4 次失败收口。"""
@@ -163,7 +163,7 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(missing, ["end"])
 
     def test_builder_followup_changes_slow_with_session(self) -> None:
-        """ready 后 Composer「改慢线」是新 Task，不是 session 修订。"""
+        """第一句仍在澄清时，跟进句留在原任务，不另起一条已改慢线的计划。"""
 
         print("\n[TestAiPlannerF] builder change slow")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -180,13 +180,13 @@ class TestAiPlannerF(unittest.TestCase):
             print(" second source:", second["plan"]["planner_trace"].get("source"))
             print(" second skills:", [s["skill_name"] for s in second["plan"]["steps"]])
             print(" second plan_id:", second_id)
-            self.assertNotEqual(second["plan"]["planner_trace"].get("source"), "session")
-            self.assertNotEqual(second_id, first_id)
+            self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
+            self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "strategy.builder")
             store = SessionStore(assistant.memory_store)
             state = store.load("s-d")
             print(" task job:", state.task.job if state.task else None)
             print(" slow slot:", state.task.slots.get("slow").to_dict() if state.task and "slow" in state.task.slots else None)
-            self.assertNotEqual(state.task.job, "strategy.builder")
+            self.assertEqual(state.task.job, "strategy.builder")
 
     def test_no_session_followup_stays_single_turn(self) -> None:
         """无 session_id 保持今日单句（D G7）。"""
@@ -226,9 +226,8 @@ class TestAiPlannerF(unittest.TestCase):
             store = SessionStore(assistant.memory_store)
             state = store.load("s-def")
             print(" slots:", {k: v.to_dict() for k, v in state.task.slots.items()})
-            self.assertEqual(state.task.slots["shares"].value, "000300.SH")
-            self.assertEqual(state.task.slots["shares"].source, "default")
-            self.assertFalse(state.task.slots["shares"].confirmed)
+            self.assertNotIn("shares", state.task.slots)
+            self.assertNotIn("000300.SH", str(plan["steps"]))
 
     def test_no_defaults_does_not_invent_shares(self) -> None:
         """无 defaults 且句中无标的 → 不发明 shares。"""
@@ -270,7 +269,7 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
 
     def test_confirmed_slot_overrides_old_symbol_on_data_read(self) -> None:
-        """已确认 shares 盖过问句里更早的旧代码；data.read 步骤输入跟着新槽。"""
+        """已确认 shares 盖过问句里更早的旧代码。这张卡没交的列名不从原句补。"""
 
         print("\n[TestAiPlannerF] confirmed slot overrides data.read shares")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -292,20 +291,32 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id=sid,
                 patches={"shares": "000001.SZ", "freq": "w", "start": "20240201"},
             )
-            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
+            accepted = [
+                step
+                for step in ((second["plan"].get("assumptions") or {}).get("accepted_steps") or [])
+                if step.get("skill_name") == "qt.ai.data.history"
+            ]
+            pending = [
+                str(item.get("name") or "")
+                for item in (((second["plan"].get("assumptions") or {}).get("clarification") or {}).get("pending") or [])
+                if isinstance(item, dict)
+            ]
             store = SessionStore(assistant.memory_store)
             state = store.load(sid)
             slot = state.task.slots["shares"].to_dict()
+            inputs = accepted[0].get("inputs") if accepted else {}
             print(" slot:", slot)
-            print(" second inputs:", read2[0]["inputs"] if read2 else None)
-            self.assertTrue(read2)
+            print(" accepted:", inputs)
+            print(" pending:", pending)
+            self.assertTrue(accepted)
             self.assertTrue(slot["confirmed"])
             self.assertEqual(slot["value"], "000001.SZ")
-            self.assertEqual(read2[0]["inputs"].get("shares"), "000001.SZ")
-            self.assertEqual(read2[0]["inputs"].get("freq"), "w")
-            self.assertEqual(read2[0]["inputs"].get("start"), "20240201")
-            self.assertEqual(read2[0]["inputs"].get("htype_names"), "close")
-            self.assertNotIn("000300.SH", str(read2[0]["inputs"].get("shares")))
+            self.assertEqual(inputs.get("shares"), "000001.SZ")
+            self.assertEqual(inputs.get("freq"), "w")
+            self.assertEqual(inputs.get("start"), "20240201")
+            self.assertNotIn("htype_names", inputs)
+            self.assertIn("htype_names", pending)
+            self.assertNotIn("000300.SH", str(inputs.get("shares")))
 
     def test_unconfirmed_profile_shares_do_not_override_explicit_code(self) -> None:
         """未确认的 profile 默认不盖过问句里的显式代码。"""

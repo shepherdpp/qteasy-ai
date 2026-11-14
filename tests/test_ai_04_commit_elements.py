@@ -24,7 +24,6 @@ from qteasy_ai.slot_graph import (
     _item_pending_rows,
     apply_ordered_answers,
     apply_polish_text,
-    bind_clarification_text,
 )
 
 _QUERY = "帮我用贵州茅台、格力电器、工商银行和招商银行做一个等权持仓组合，看过去3年的持仓收益率，并跟沪深300指数做一个对比。"
@@ -183,16 +182,13 @@ class TestAi04CommitElements(unittest.TestCase):
         page = next(item for item in pending if item.get("index") == 0)
         print(" first holdings:", holdings)
         print(" page:", page.get("mention"), page.get("index"))
-        bound = bind_clarification_text(
-            ["holdings"],
-            "600519.SH",
-            items=page.get("items"),
-            index=page.get("index"),
-        )
-        print(" bound:", bound["holdings"])
+        bound_items = [dict(item) for item in (page.get("items") or holdings)]
+        bound_items[int(page.get("index") or 0)]["status"] = "confirmed"
+        bound_items[int(page.get("index") or 0)]["code"] = "600519.SH"
+        print(" bound:", bound_items)
         state = ConversationState.empty("seal-items")
         state.start_task(query=_QUERY, job="research.hold_compare")
-        state.set_slot("holdings", bound["holdings"], source="user", confirmed=True)
+        state.set_slot("holdings", bound_items, source="user", confirmed=True)
         state.set_slot("benchmark", portfolio.get("benchmark"), source="user", confirmed=True)
         second = planner.build_plan(_QUERY, session=state, skip_classify=True)
         again = list(_snap(second, "qt.ai.hp.portfolio").get("holdings") or [])
@@ -347,7 +343,11 @@ class TestAi04CommitElements(unittest.TestCase):
         )
         holdings = list((folded or {}).get("holdings") or [])
         print(" folded:", [(item.get("code"), item.get("status")) for item in holdings])
-        self.assertEqual([item.get("status") for item in holdings], ["confirmed"] * 4)
+        self.assertEqual([item.get("status") for item in holdings], ["pending"] * 4)
+        self.assertEqual(
+            [item.get("answer") for item in holdings],
+            ["600519.SH", "000651.SZ", "601398.SH", "600036.SH"],
+        )
         self.assertEqual(
             [item.get("code") for item in holdings],
             ["600519.SH", "000651.SZ", "601398.SH", "600036.SH"],
@@ -358,10 +358,8 @@ class TestAi04CommitElements(unittest.TestCase):
         )
         again = list((mixed or {}).get("holdings") or [])
         print(" mixed:", [(item.get("mention"), item.get("code"), item.get("status")) for item in again])
-        self.assertEqual(
-            [item.get("status") for item in again],
-            ["confirmed", "pending", "confirmed", "confirmed"],
-        )
+        self.assertEqual([item.get("status") for item in again], ["pending"] * 4)
+        self.assertEqual(again[1].get("answer"), "不是代码")
         self.assertEqual(again[1].get("code"), "000651.SZ")
         named = apply_ordered_answers(
             rows,
@@ -370,8 +368,9 @@ class TestAi04CommitElements(unittest.TestCase):
         named_rows = list((named or {}).get("holdings") or [])
         print(" company:", [(item.get("mention"), item.get("code"), item.get("status")) for item in named_rows])
         self.assertEqual(named_rows[0].get("status"), "pending")
+        self.assertEqual(named_rows[0].get("answer"), "贵州茅台")
         self.assertEqual(named_rows[0].get("code"), "600519.SH")
-        self.assertEqual(named_rows[1].get("status"), "confirmed")
+        self.assertEqual(named_rows[1].get("answer"), "000651.SZ")
         bare = apply_ordered_answers(
             rows,
             ["000001", "000651.SZ", "601398.SH", "600036.SH"],
@@ -389,7 +388,7 @@ class TestAi04CommitElements(unittest.TestCase):
             ["600519.SH"],
         )
         print(" shares company:", company_slot, "passed:", passed_slot)
-        self.assertEqual(company_slot, {})
+        self.assertEqual(company_slot, {"shares": "贵州茅台"})
         self.assertEqual(passed_slot, {"shares": "600519.SH"})
         distinct = apply_ordered_answers(
             [

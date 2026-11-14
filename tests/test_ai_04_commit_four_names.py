@@ -106,7 +106,7 @@ class TestAi04CommitFourNames(unittest.TestCase):
     """四只公司名不能靠只剩沪深300 的可确认计划过关。"""
 
     def test_four_company_names_are_not_confirmed(self) -> None:
-        """协议按项交出四只代码时，用户没写过的代码保持未确认。"""
+        """协议按项交出的代码保持未确认；权重列表留在不可执行的快照上。"""
 
         print("\n[TestAi04CommitFourNames] 四只公司名按项提交")
         plan, _provider = _plan(
@@ -143,8 +143,8 @@ class TestAi04CommitFourNames(unittest.TestCase):
         self.assertIsInstance(benchmark, dict)
         self.assertEqual(benchmark.get("code"), "000300.SH")
         self.assertEqual(benchmark.get("status"), "confirmed")
-        self.assertNotEqual(list(portfolio.get("weights") or []), [0.25, 0.25, 0.25, 0.25])
-        self.assertEqual(portfolio.get("mode"), "equal")
+        self.assertEqual(list(portfolio.get("weights") or []), [0.25, 0.25, 0.25, 0.25])
+        self.assertEqual(portfolio.get("mode"), "weighted")
         self.assertNotEqual(shares, "000300.SH")
         self.assertNotIn("asset_type", kline)
 

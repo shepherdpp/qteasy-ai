@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .planner import Planner
-from .slot_graph import bind_clarification_text
 from .provider import BaseLLMProvider
 from .session import ConversationState, is_live_backgrounded
 
@@ -83,25 +82,8 @@ class SessionGate:
         hatch = _hatch_decision(session, text)
         if hatch is not None:
             return hatch
-        if session.task_status() == "clarifying":
-            page = _current_pending_row(session)
-            if page is not None and "index" in page:
-                bound = bind_clarification_text(
-                    [str(page.get("name") or "")],
-                    text,
-                    items=page.get("items"),
-                    index=page.get("index"),
-                )
-            else:
-                bound = bind_clarification_text(_pending_slot_names(session), text)
-            if bound:
-                return GateDecision(kind="fill_slot", patches=bound, rationale="answers_slot")
-        if answers_pending_slot(session, text):
-            patches = extract_patches(text)
-            missing = list(session.task.missing) if session.task is not None else []
-            if "strategy_id" in missing and _STRATEGY_TOKEN_RE.match(text) and "strategy_id" not in patches:
-                patches["strategy_id"] = text
-            return GateDecision(kind="fill_slot", patches=patches, rationale="answers_slot")
+        if session.task_status() == "clarifying" and text:
+            return GateDecision(kind="fill_slot", patches={}, rationale="answers_slot")
         status = session.task_status()
         if status == "running" and bool(getattr(session.task, "high_side_effect", False)):
             if is_live_backgrounded(session.session_id):

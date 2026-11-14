@@ -158,7 +158,7 @@ class TestAiNotebookMagic(unittest.TestCase):
             print(" skills:", names, "source:", payload["plan"]["planner_trace"].get("source"))
             print(" missing:", payload["plan"]["steps"][0]["inputs"].get("missing_info"))
             self.assertEqual(names, ["qt.ai.system.fallback"])
-            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "start")
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "end")
             self.assertEqual(payload["plan"]["planner_trace"].get("source"), "session")
             self.assertEqual(payload["plan"]["planner_trace"].get("intent_job"), "data.refill")
 

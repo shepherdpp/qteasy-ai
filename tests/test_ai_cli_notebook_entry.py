@@ -299,7 +299,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
             print(" second skills:", names, "source:", p2["plan"]["planner_trace"].get("source"))
             print(" second missing:", p2["plan"]["steps"][0]["inputs"].get("missing_info"))
             self.assertEqual(names, ["qt.ai.system.fallback"])
-            self.assertEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "start")
+            self.assertEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "end")
             self.assertEqual(p2["plan"]["planner_trace"].get("source"), "session")
             self.assertEqual(p2["plan"]["planner_trace"].get("intent_job"), "data.refill")
 

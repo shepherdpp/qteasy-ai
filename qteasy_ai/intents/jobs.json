@@ -13,39 +13,27 @@
         {
           "name": "shares",
           "label": "Symbols",
-          "hint": "At least two exchange codes, such as 000001.SZ and 000002.SZ.",
-          "cardinality": "many",
-          "value_kind": "symbol_list",
-          "min_count": 2
+          "hint": "At least two exchange codes, such as 000001.SZ and 000002.SZ."
         },
         {
           "name": "start",
           "label": "Start date",
-          "hint": "YYYYMMDD, such as 20240101.",
-          "cardinality": "one",
-          "value_kind": "date"
+          "hint": "A calendar date, such as 20240101."
         },
         {
           "name": "end",
           "label": "End date",
-          "hint": "YYYYMMDD, such as 20240331.",
-          "cardinality": "one",
-          "value_kind": "date"
+          "hint": "A calendar date, such as 20240331."
         },
         {
           "name": "factor_htype",
           "label": "Factor column",
-          "hint": "One local history column, such as close.",
-          "cardinality": "one",
-          "value_kind": "history_panel_column"
+          "hint": "One local history column, such as close."
         },
         {
           "name": "return_htype",
           "label": "Return column",
-          "hint": "One different local history column, such as volume. This skill does not compute or shift return columns.",
-          "cardinality": "one",
-          "value_kind": "history_panel_column",
-          "distinct_from": "factor_htype"
+          "hint": "One different local history column, such as volume. This skill does not compute or shift return columns."
         }
       ]
     },

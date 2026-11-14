@@ -20,11 +20,10 @@ from qteasy_ai.plan_markdown import tool_plan_to_markdown
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
-from qteasy_ai.slot_decl import interpret_declared_slots
 from qteasy_ai.slot_graph import (
+    accept_slot_value,
     apply_polish_text,
     dtype_tokens,
-    parse_card_answers,
     strategy_id_options,
     table_option_ids,
 )
@@ -181,36 +180,32 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertEqual(none_plan.steps[0].inputs.get("industry"), "银行业")
 
     def test_clicked_option_conflict_keeps_other_slots(self) -> None:
-        """点选 id 被改成另一个值时，这一格不写下，其余格留下。"""
+        """点选 id 被改成另一个值时，这一格不写下。这张卡没问的槽不从原句补。"""
 
         print("\n[TestAi04A6] 点选冲突只拒本格")
-        pending = [
-            {
-                "name": "metric",
-                "type": "string",
-                "enum": ["drawdown", "gain"],
-                "enum_strict": True,
-                "options": [
-                    {"id": "drawdown", "label": "Drawdown"},
-                    {"id": "gain", "label": "Gain"},
-                ],
-            },
-            {"name": "industry", "type": "string"},
+        session = ConversationState.empty("a6-option")
+        session.start_task(query="筛股 20d 10% 银行业", job="research.screen")
+        fake = FakeLLMProvider(replies=[json.dumps({"metric": "gain"}, ensure_ascii=False)])
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            "筛股 20d 10% 银行业",
+            mode="plan",
+            session=session,
+            skip_classify=True,
+            card_text={"metric": "drawdown"},
+        )
+        print(" pending:", _pending(plan))
+        metric = next(item for item in _pending(plan) if item.get("name") == "metric")
+        print(" metric error:", metric.get("error"))
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        industries = [
+            (row.get("inputs") or {}).get("industry")
+            for row in accepted
+            if isinstance(row, dict)
         ]
-        fake = FakeLLMProvider(
-            replies=[json.dumps({"metric": "gain", "industry": "银行业"}, ensure_ascii=False)]
-        )
-        accepted, errors = parse_card_answers(
-            pending,
-            {"metric": "drawdown", "industry": "银行业"},
-            provider=fake,
-        )
-        print(" accepted:", accepted)
-        print(" errors:", errors)
-        self.assertEqual(accepted.get("industry"), "银行业")
-        self.assertNotIn("metric", accepted)
-        self.assertIn("changed", errors.get("metric", ""))
-        self.assertIn("drawdown", errors.get("metric", ""))
+        print(" accepted industries:", industries)
+        self.assertIn("changed", str(metric.get("error") or ""))
+        self.assertIn("drawdown", str(metric.get("error") or ""))
+        self.assertNotIn("银行业", industries)
 
     def test_screen_heuristic_and_followup(self) -> None:
         """无模型筛股：20 日、0.1、银行业、方向；裸百分数只问 metric。"""
@@ -277,13 +272,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertTrue(lookback)
         self.assertTrue(str(lookback[0].get("error") or ""))
         self.assertNotIn("abc", [step.inputs.get("lookback_days") for step in bad.steps])
-        rejected, reject_errors = parse_card_answers(
-            [{"name": "lookback_days", "type": "integer"}],
-            {"lookback_days": "abc"},
+        rejected = accept_slot_value(
+            {"name": "lookback_days", "type": "integer"},
+            "abc",
+            "abc",
         )
-        print(" card reject:", rejected, reject_errors)
-        self.assertNotIn("lookback_days", rejected)
-        self.assertIn("lookback_days", reject_errors)
+        print(" card reject:", rejected)
+        self.assertIsNone(rejected)
 
     def test_dtype_tokens_do_not_split_industry(self) -> None:
         """industry 里的 name 子串不是第二个词；对不上的 name 要被点名。"""
@@ -538,7 +533,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" factor pending:", _pending_names(factor))
         self.assertEqual(
             _pending_names(factor),
-            ["shares", "start", "end", "factor_htype", "return_htype"],
+            ["factor_htype", "return_htype", "shares", "start", "end"],
         )
         factor_rows = _pending(factor)
         print(" factor prompts:", [(row.get("name"), row.get("prompt")) for row in factor_rows])
@@ -550,28 +545,27 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertEqual(_pending_names(builder), ["fast", "slow"])
         self.assertIn("fast", str(builder.steps[0].inputs.get("missing_info") or ""))
 
-        integer_bad = interpret_declared_slots(
-            [{"name": "lookback_days", "value_kind": "integer", "cardinality": "one", "label": "Lookback"}],
-            {"lookback_days": "abc"},
-            is_history_column=lambda _name: False,
+        integer_bad = accept_slot_value(
+            {"name": "lookback_days", "type": "integer"},
+            "abc",
+            "abc",
         )
-        integer_ok = interpret_declared_slots(
-            [{"name": "lookback_days", "value_kind": "integer", "cardinality": "one", "label": "Lookback"}],
-            {"lookback_days": "20"},
-            is_history_column=lambda _name: False,
+        integer_ok = accept_slot_value(
+            {"name": "lookback_days", "type": "integer"},
+            "20",
+            "20",
         )
-        unknown = interpret_declared_slots(
-            [{"name": "mystery", "value_kind": "mystery", "cardinality": "one", "label": "Mystery"}],
-            {"mystery": "abc"},
-            is_history_column=lambda _name: False,
+        unknown = accept_slot_value(
+            {"name": "mystery", "type": "string"},
+            "abc",
+            "abc",
         )
-        print(" integer bad:", integer_bad["pending"])
-        print(" integer ok:", integer_ok["values"])
-        print(" unknown:", unknown["pending"])
-        self.assertTrue(integer_bad["pending"])
-        self.assertEqual(integer_ok["values"].get("lookback_days"), "20")
-        self.assertTrue(unknown["pending"])
-        self.assertIn("cannot be accepted", str(unknown["pending"][0].get("error") or ""))
+        print(" integer bad:", integer_bad)
+        print(" integer ok:", integer_ok)
+        print(" unknown:", unknown)
+        self.assertIsNone(integer_bad)
+        self.assertEqual(integer_ok, 20)
+        self.assertEqual(unknown, "abc")
 
         freq = self.registry.get_metadata("qt.ai.data.kline").inputs_schema["freq"]
         metric = self.registry.get_metadata("qt.ai.research.price_predicate").inputs_schema["metric"]

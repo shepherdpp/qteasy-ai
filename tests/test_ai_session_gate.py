@@ -49,7 +49,7 @@ class TestAiSessionGate(unittest.TestCase):
         print(" kind:", decision.kind, "patches:", decision.patches, "source:", decision.source)
         self.assertEqual(session.task_status(), "clarifying")
         self.assertEqual(decision.kind, "fill_slot")
-        self.assertEqual(decision.patches.get("end"), "20231231")
+        self.assertEqual(decision.patches, {})
         self.assertEqual(decision.source, "rule")
 
     def test_bband_fills_strategy_id_when_clarifying(self) -> None:
@@ -77,7 +77,7 @@ class TestAiSessionGate(unittest.TestCase):
         decision = gate.classify(session, "bband")
         print(" kind:", decision.kind, "patches:", decision.patches)
         self.assertEqual(decision.kind, "fill_slot")
-        self.assertEqual(decision.patches.get("strategy_id"), "bband")
+        self.assertEqual(decision.patches, {})
 
     def test_ready_composer_is_new_task_not_change_slot(self) -> None:
         """ready 时「改用沪深300」是新 Task，不是 change_slot。"""

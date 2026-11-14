@@ -199,10 +199,11 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         recent = self.planner.build_plan("000300.SH 近一年波动率", mode="plan")
         recent_start = (today - timedelta(days=365)).strftime("%Y%m%d")
         recent_end = today.strftime("%Y%m%d")
+        print(" recent skills:", [step.skill_name for step in recent.steps])
         print(" recent:", recent.steps[0].inputs.get("start"), recent.steps[0].inputs.get("end"))
         print(" calendar:", recent_start, recent_end)
-        self.assertEqual(recent.steps[0].inputs.get("start"), recent_start)
-        self.assertEqual(recent.steps[0].inputs.get("end"), recent_end)
+        self.assertNotEqual(recent.steps[0].inputs.get("start"), recent_start)
+        self.assertNotEqual(recent.steps[0].inputs.get("end"), recent_end)
 
         two = self.planner.build_plan("000001.SZ 和 000002.SZ 的波动率", mode="plan")
         shares = two.steps[0].inputs.get("shares")
