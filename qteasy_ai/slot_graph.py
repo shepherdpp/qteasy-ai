@@ -1087,10 +1087,6 @@ def _fill_graph(
     confirmed = _confirmed_values(session)
     if job != "open":
         _clear_open_prewrite(steps, projected, confirmed)
-    if card_text or card_items:
-        keep_prior = getattr(planner, "_keep_prior_inputs", None)
-        if callable(keep_prior) and keep_prior(steps, session, card_text, card_items):
-            projected = _project(planner, steps, rejected, job)
     closed_items: Dict[str, Any] = {}
     held_back: Dict[str, Any] = {}
     for slot in projected:
@@ -1265,6 +1261,7 @@ def _fill_graph(
             extras["statistic_options"] = choice
         return steps, extras
     extras.pop("slot_defaults", None)
+    extras["accepted_inputs"] = _accepted_inputs(steps, submitted, pending)
     extras["accepted_steps"] = _accepted_snapshot(steps)
     names = [str(item["name"]) for item in pending]
     label = str(pending[0].get("label") or "")
@@ -3998,6 +3995,43 @@ def _write_element(planner: Any, steps: Sequence[Any], name: str, value: Any) ->
         if name not in schema and name not in decls:
             continue
         step.inputs[name] = value
+
+
+def _accepted_inputs(
+    steps: Sequence[Any],
+    submitted: Dict[str, Any],
+    pending: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """本轮收下、且下一张卡不再问的值。
+
+    名字只来自这一轮的提交。步骤上已经清掉的不收。组图常量不在提交里，不收。
+
+    Parameters
+    ----------
+    steps : sequence
+        还没换成澄清步的步骤。
+    submitted : dict
+        这一轮提交的槽。
+    pending : sequence of dict
+        下一张卡还要问的题。
+
+    Returns
+    -------
+    dict
+        槽名到步骤上的现值。
+    """
+
+    asking = {str(item.get("name") or "") for item in pending if isinstance(item, dict)}
+    found: Dict[str, Any] = {}
+    for name in submitted:
+        key = str(name or "")
+        if not key or key in asking:
+            continue
+        value = _read_input(steps, key)
+        if value in (None, "", []):
+            continue
+        found[key] = value
+    return found
 
 
 def _read_input(steps: Sequence[Any], name: str) -> Any:

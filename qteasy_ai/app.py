@@ -1681,14 +1681,8 @@ class QteasyAssistant:
             answer_label=shown,
             answers=answers,
         )
-        blob = state.task.pending_clarification if isinstance(state.task.pending_clarification, dict) else {}
-        snapshot = blob.get("prior_graph") if isinstance(blob.get("prior_graph"), list) else None
-        if snapshot is None and isinstance(blob.get("accepted_steps"), list):
-            snapshot = blob.get("accepted_steps")
         state.task.set_pending(None)
         state.task.set_missing([])
-        if snapshot:
-            state._prior_graph = snapshot
         self.session_store.save(state)
 
     def _commit_stage(self, state: ConversationState, stage_id: str, text: str) -> None:
@@ -1989,6 +1983,10 @@ class QteasyAssistant:
                 if name not in accepted_dates
             ]
             plan.assumptions = assumptions
+        if not card_text and not card_items:
+            accepted_inputs = (getattr(plan, "assumptions", None) or {}).get("accepted_inputs")
+            if isinstance(accepted_inputs, dict) and accepted_inputs:
+                merge_facts(state, accepted_inputs, source="user", confirmed=True)
         if keep_plan_id and inbound == "control":
             plan.plan_id = keep_plan_id
         if topic_skipped:

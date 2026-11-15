@@ -82,9 +82,9 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
     """原句、卡片和澄清跟进共用一个解释者和一份校验。"""
 
     def test_date_card_confirms_only_the_card(self) -> None:
-        """日期卡通过后，只确认这张卡上的日期，不确认原句里的持仓。"""
+        """没有卡片的那一轮确认持仓和基准。日期卡再确认日期。组图常量不进会话。"""
 
-        print("\n[TestAi04OneInterpreter] 日期卡只确认本卡")
+        print("\n[TestAi04OneInterpreter] 原句确认持仓，日期卡确认日期")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = QteasyAssistant(
                 registry=build_default_registry(),
@@ -101,16 +101,30 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
             print(" folded:", folded)
             second = _plan(assistant.plan("", response_style="raw", session_id=sid, answers=answers))
             kline = _inputs(second, "qt.ai.data.kline")
+            portfolio = _inputs(second, "qt.ai.hp.portfolio")
             confirmed = _confirmed(assistant, sid)
             print(" kline:", kline.get("start"), kline.get("end"))
+            print(" portfolio:", portfolio.get("holdings"), portfolio.get("benchmark"), portfolio.get("mode"))
             print(" confirmed:", confirmed)
             print(" confirmable:", "qt.ai.system.fallback" not in [step.get("skill_name") for step in second.get("steps") or []])
             self.assertEqual(kline.get("start"), "20250101")
             self.assertEqual(kline.get("end"), "20261010")
+            self.assertEqual(
+                [item.get("code") for item in (portfolio.get("holdings") or [])],
+                ["600519.SH", "000858.SZ"],
+            )
+            self.assertEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
+            self.assertEqual(portfolio.get("mode"), "equal")
             self.assertEqual(confirmed.get("start"), "20250101")
             self.assertEqual(confirmed.get("end"), "20261010")
-            self.assertNotIn("holdings", confirmed)
-            self.assertNotIn("benchmark", confirmed)
+            self.assertEqual(
+                [item.get("code") for item in (confirmed.get("holdings") or [])],
+                ["600519.SH", "000858.SZ"],
+            )
+            self.assertEqual((confirmed.get("benchmark") or {}).get("code"), "000300.SH")
+            self.assertEqual(confirmed.get("mode"), "equal")
+            self.assertNotIn("shares", confirmed)
+            self.assertNotIn("method", confirmed)
 
     def test_factor_sentence_and_short_code_list(self) -> None:
         """金句五格写进同一步。只数不够的代码文本不因为非空就写下。"""

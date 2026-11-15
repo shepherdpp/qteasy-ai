@@ -485,8 +485,6 @@ class Planner:
         if str(assumptions.get("intent_job") or "") == "open":
             clar["accepted_steps"] = list(snapshot)
             clar["resume_job"] = "open"
-            return
-        clar["prior_graph"] = list(snapshot)
 
     def _prior_commit_values(self, session: Any) -> Dict[str, Any]:
         """上一轮已经确认的槽。新任务换掉旧槽时读装配层留下的快照。"""
@@ -539,57 +537,6 @@ class Planner:
         """抽标的与日期；已确认槽盖过问句中先出现的旧代码。"""
 
         return self._extract_market_inputs(query, overrides=getattr(self, "_market_overrides", None))
-
-    def _keep_prior_inputs(
-        self,
-        steps: List[ToolStep],
-        session: Any,
-        card_text: Optional[Dict[str, str]],
-        card_items: Optional[Dict[str, Any]],
-    ) -> bool:
-        """有模型又有卡片时，沿用上一张图里已经写下的输入。
-
-        这张卡上的槽不抄。上一张图存在时，本轮不再用任务原句补没问的槽。
-        没有上一张图时返回 False，调用方仍可读这一次原句。
-
-        Returns
-        -------
-        bool
-            找到上一张图时为 True。
-        """
-
-        snapshot = getattr(session, "_prior_graph", None) if session is not None else None
-        if not isinstance(snapshot, list):
-            task = getattr(session, "task", None) if session is not None else None
-            blob = getattr(task, "pending_clarification", None) if task is not None else None
-            if isinstance(blob, dict):
-                found = blob.get("prior_graph")
-                if not isinstance(found, list):
-                    found = blob.get("accepted_steps")
-                snapshot = found
-        if not isinstance(snapshot, list) or not snapshot:
-            return False
-        if session is not None and hasattr(session, "_prior_graph"):
-            delattr(session, "_prior_graph")
-        covered = set(card_text or {}) | set(card_items or {})
-        pools: Dict[str, List[Dict[str, Any]]] = {}
-        for row in snapshot:
-            if not isinstance(row, dict):
-                continue
-            pools.setdefault(str(row.get("skill_name") or ""), []).append(
-                dict(row.get("inputs") or {}) if isinstance(row.get("inputs"), dict) else {}
-            )
-        for step in steps:
-            rows = pools.get(step.skill_name) or []
-            if not rows:
-                continue
-            previous = rows.pop(0)
-            for key, value in previous.items():
-                if key in covered or value in (None, "", []):
-                    continue
-                if step.inputs.get(key) in (None, "", []):
-                    step.inputs[key] = value
-        return True
 
     def _overlay_session_slots(
         self,
