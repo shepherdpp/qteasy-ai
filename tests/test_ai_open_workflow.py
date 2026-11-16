@@ -136,14 +136,15 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertEqual(inputs.get("return_htype"), "volume")
 
     def _factor_ic_replan(self, slots: dict) -> ToolPlan:
-        """用已确认槽、跳过分类，重出因子 IC 计划。"""
+        """用已确认槽、跳过分类，重出因子 IC 计划。原句带上两只代码，重检才能留下。"""
 
+        query = "factor IC summary for 000001.SZ,000002.SZ"
         session = ConversationState.empty("factor-ic-reclarify")
-        session.start_task(query="factor IC summary for selection pool", job="research.factor_ic")
+        session.start_task(query=query, job="research.factor_ic")
         for name, value in slots.items():
             session.set_slot(name, value, source="user", confirmed=True)
         return Planner(self.registry, env_facts={}).build_plan(
-            "factor IC summary for selection pool",
+            query,
             mode="plan",
             session=session,
             skip_classify=True,

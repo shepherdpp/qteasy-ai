@@ -110,7 +110,10 @@ class TestAi04Wire(unittest.TestCase):
             {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["step_1"]},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_2"]},
         ]
-        fake = FakeLLMProvider(replies=[json.dumps({"steps": steps}), "not-a-second-graph"])
+        protocol = {"shares": "000300.SH", "freq": "d"}
+        fake = FakeLLMProvider(
+            replies=[json.dumps({"steps": steps}), json.dumps(protocol, ensure_ascii=False)]
+        )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "取 000300.SH 日线，算收益，再出一页图",
             mode="plan",
@@ -146,7 +149,15 @@ class TestAi04Wire(unittest.TestCase):
             },
             {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["step_1"]},
         ]
-        fake = FakeLLMProvider(replies=[json.dumps({"steps": steps})])
+        protocol = {
+            "shares": "000300.SH",
+            "htype_names": "close",
+            "start": "20240101",
+            "end": "20240630",
+        }
+        fake = FakeLLMProvider(
+            replies=[json.dumps({"steps": steps}), json.dumps(protocol, ensure_ascii=False)]
+        )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "取 000300.SH 从 20240101 到 20240630 的收盘并算收益",
             mode="plan",
@@ -585,7 +596,15 @@ class TestAi04Wire(unittest.TestCase):
             },
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_2"]},
         ]
-        fake = FakeLLMProvider(replies=[json.dumps({"steps": steps})])
+        protocol = {
+            "shares": "000300.SH",
+            "htype_names": "close",
+            "start": "20240101",
+            "end": "20240630",
+        }
+        fake = FakeLLMProvider(
+            replies=[json.dumps({"steps": steps}), json.dumps(protocol, ensure_ascii=False)]
+        )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "取 000300.SH 从 20240101 到 20240630 的收盘，算收益，再出一页图",
             mode="plan",

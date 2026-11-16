@@ -9,12 +9,14 @@
 # ======================================
 
 import json
+import tempfile
 import unittest
 from typing import Any, Dict, List
 
-from qteasy_ai.app import build_default_registry
+from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.intents import IntentDecision
 from qteasy_ai.intents.recipes import compose_recipe
+from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
@@ -27,6 +29,15 @@ from qteasy_ai.slot_graph import (
 )
 
 _QUERY = "帮我用贵州茅台、格力电器、工商银行和招商银行做一个等权持仓组合，看过去3年的持仓收益率，并跟沪深300指数做一个对比。"
+_HOLD_WINDOW = "600519 和 000858 做一条等权组合，看过去一段时间的持仓收益率，并跟沪深300做一个对比。"
+_BARE_HOLDINGS = [
+    {"code": "600519", "status": "confirmed"},
+    {"code": "000858", "status": "confirmed"},
+]
+_COMPANY_HOLDINGS = [
+    {"code": "贵州茅台", "status": "confirmed"},
+    {"code": "五粮液", "status": "confirmed"},
+]
 _PROTOCOL = {
     "holdings": [
         {"mention": "贵州茅台", "code": "600519.SH"},
@@ -165,7 +176,7 @@ class TestAi04CommitElements(unittest.TestCase):
         self.assertNotIn("asset_type", kline)
 
     def test_confirmed_item_survives_the_next_fill(self) -> None:
-        """已确认的项在下一轮解释前关上，其余项保持协议里的代码。"""
+        """已确认但原文里没有的后缀代码，下一轮保持未完成。"""
 
         print("\n[TestAi04CommitElements] 已确认项先关上")
         planner = _planner(
@@ -193,7 +204,7 @@ class TestAi04CommitElements(unittest.TestCase):
         second = planner.build_plan(_QUERY, session=state, skip_classify=True)
         again = list(_snap(second, "qt.ai.hp.portfolio").get("holdings") or [])
         print(" second holdings:", again)
-        self.assertEqual(again[0].get("status"), "confirmed")
+        self.assertEqual(again[0].get("status"), "pending")
         self.assertEqual(again[0].get("code"), "600519.SH")
         self.assertEqual([item.get("code") for item in again[1:]], ["000651.SZ", "601398.SH", "600036.SH"])
         self.assertTrue(all(item.get("status") == "pending" for item in again[1:]))
@@ -204,13 +215,11 @@ class TestAi04CommitElements(unittest.TestCase):
         state.set_slot("holdings", sealed, source="user", confirmed=True)
         third = planner.build_plan(_QUERY, session=state, skip_classify=True)
         done = _snap(third, "qt.ai.hp.portfolio")
-        shares = _snap(third, "qt.ai.data.kline").get("shares")
+        shares = str(_snap(third, "qt.ai.data.kline").get("shares") or "")
         print(" third holdings:", done.get("holdings"))
         print(" shares:", shares, "mode:", done.get("mode"), "benchmark:", done.get("benchmark"))
-        self.assertEqual(
-            shares,
-            "600519.SH,000651.SZ,601398.SH,600036.SH,000300.SH",
-        )
+        self.assertTrue(all(item.get("status") == "pending" for item in (done.get("holdings") or [])))
+        self.assertNotIn("600519.SH", shares)
         self.assertEqual(done.get("mode"), "equal")
         self.assertIsInstance(done.get("benchmark"), dict)
         self.assertEqual(done.get("benchmark").get("code"), "000300.SH")
@@ -400,6 +409,157 @@ class TestAi04CommitElements(unittest.TestCase):
         print(" distinct:", distinct)
         self.assertEqual(distinct, {"start": "20200101", "end": "20231231"})
         self.assertIsNone(apply_ordered_answers(rows, ["600519.SH"]))
+
+
+def _raw_plan(result: Any) -> Dict[str, Any]:
+    """助手 raw 结果里的计划。"""
+
+    if not isinstance(result, dict):
+        return {}
+    plan = result.get("plan") or result
+    return plan if isinstance(plan, dict) else {}
+
+
+def _pending_rows(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """澄清卡上的题。"""
+
+    blob = (plan.get("assumptions") or {}).get("clarification") or {}
+    return [item for item in (blob.get("pending") or []) if isinstance(item, dict)]
+
+
+def _step_inputs(plan: Dict[str, Any], skill: str) -> Dict[str, Any]:
+    """可见步骤或快照里该技能的输入。"""
+
+    assumptions = plan.get("assumptions") or {}
+    for step in list(plan.get("steps") or []) + list(assumptions.get("accepted_steps") or []):
+        if isinstance(step, dict) and step.get("skill_name") == skill:
+            return dict(step.get("inputs") or {})
+    return {}
+
+
+def _confirmed_slots(assistant: QteasyAssistant, sid: str) -> Dict[str, Any]:
+    """会话里已确认的槽。"""
+
+    loaded = assistant.session_store.load(sid)
+    task = loaded.task if loaded is not None else None
+    found: Dict[str, Any] = {}
+    for name, slot in (getattr(task, "slots", {}) or {}).items():
+        if getattr(slot, "confirmed", False):
+            found[str(name)] = slot.value
+    return found
+
+
+def _share_tokens(shares: Any) -> List[str]:
+    """取数列表按逗号拆开。"""
+
+    return [part.strip() for part in str(shares or "").split(",") if part.strip()]
+
+
+class TestAi04HoldCompareCodeRule(unittest.TestCase):
+    """持有对比的裸代码必须收成带后缀的代码。"""
+
+    def _answer_dates(self, provider: Any, sid: str) -> Dict[str, Any]:
+        """原句先出日期卡，再按卡回答两端日期。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                registry=build_default_registry(),
+                provider=provider,
+                memory_store=MemoryStore(base_dir=temp_dir),
+            )
+            first = _raw_plan(assistant.plan(_HOLD_WINDOW, response_style="raw", session_id=sid))
+            rows = _pending_rows(first)
+            accepted = (first.get("assumptions") or {}).get("accepted_inputs") or {}
+            print(" date prompts:", [(item.get("name"), item.get("prompt")) for item in rows])
+            print(" first accepted:", accepted)
+            self.assertEqual([item.get("name") for item in rows], ["start", "end"])
+            for item in rows:
+                self.assertTrue(str(item.get("prompt") or "").strip())
+            second = _raw_plan(
+                assistant.plan(
+                    "",
+                    response_style="raw",
+                    session_id=sid,
+                    answers=["20250101", "20261010"],
+                )
+            )
+            portfolio = _step_inputs(second, "qt.ai.hp.portfolio")
+            kline = _step_inputs(second, "qt.ai.data.kline")
+            holdings = list(portfolio.get("holdings") or [])
+            shares = _share_tokens(kline.get("shares"))
+            confirmed = _confirmed_slots(assistant, sid)
+            skills = [step.get("skill_name") for step in (second.get("steps") or [])]
+            confirmable = "qt.ai.system.fallback" not in skills
+            print(" codes:", [(item.get("code"), item.get("status")) for item in holdings])
+            print(" shares:", shares)
+            print(" accepted_inputs:", (second.get("assumptions") or {}).get("accepted_inputs"))
+            print(" confirmed:", confirmed)
+            print(" confirmable:", confirmable)
+            self.assertEqual([item.get("code") for item in holdings], ["600519.SH", "000858.SZ"])
+            self.assertTrue(all(item.get("status") == "confirmed" for item in holdings))
+            self.assertIn("600519.SH", shares)
+            self.assertIn("000858.SZ", shares)
+            self.assertNotIn("600519", shares)
+            self.assertNotIn("000858", shares)
+            self.assertEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
+            self.assertNotIn("000300.SH", [item.get("code") for item in holdings])
+            self.assertEqual(len(holdings), 2)
+            session_holdings = list(confirmed.get("holdings") or [])
+            print(" session codes:", [(item.get("code"), item.get("status")) for item in session_holdings])
+            self.assertEqual([item.get("code") for item in session_holdings], ["600519.SH", "000858.SZ"])
+            self.assertTrue(confirmable)
+            return second
+
+    def test_no_model_window_confirms_suffixed_codes(self) -> None:
+        """无模型：先答日期，持有和取数都是带后缀的代码。"""
+
+        print("\n[TestAi04HoldCompareCodeRule] 无模型日期后确认代码")
+        self._answer_dates(None, "hold-none")
+
+    def test_model_bare_dicts_confirm_suffixed_codes(self) -> None:
+        """有模型：confirmed 裸代码字典先出日期卡，答完后仍是带后缀的代码。"""
+
+        print("\n[TestAi04HoldCompareCodeRule] 有模型裸代码字典")
+        protocol = {
+            "holdings": _BARE_HOLDINGS,
+            "benchmark": {"code": "000300", "status": "confirmed"},
+            "mode": "equal",
+            "start": None,
+            "end": None,
+        }
+        job = json.dumps({"job": "research.hold_compare"})
+        provider = FakeLLMProvider(
+            replies=[
+                job,
+                job,
+                json.dumps(protocol),
+            ]
+        )
+        self._answer_dates(provider, "hold-model")
+
+    def test_company_names_stay_unconfirmed(self) -> None:
+        """公司名标成 confirmed 也收不成代码，计划不可确认。"""
+
+        print("\n[TestAi04HoldCompareCodeRule] 公司名不能确认")
+        protocol = {
+            "holdings": _COMPANY_HOLDINGS,
+            "mode": "equal",
+        }
+        plan = _planner(
+            [
+                json.dumps({"job": "research.hold_compare"}),
+                json.dumps(protocol),
+            ]
+        ).build_plan("贵州茅台和五粮液做一条等权组合", mode="plan")
+        holdings = _snap(plan, "qt.ai.hp.portfolio").get("holdings") or []
+        shares = str(_snap(plan, "qt.ai.data.kline").get("shares") or "")
+        confirmable = "qt.ai.system.fallback" not in [step.skill_name for step in plan.steps]
+        print(" codes:", [(item.get("code"), item.get("status")) for item in holdings])
+        print(" shares:", shares, "confirmable:", confirmable)
+        self.assertFalse(confirmable)
+        self.assertFalse(any(item.get("status") == "confirmed" and item.get("code") for item in holdings))
+        self.assertNotIn("贵州茅台", shares)
+        self.assertNotIn("五粮液", shares)
 
 
 if __name__ == "__main__":

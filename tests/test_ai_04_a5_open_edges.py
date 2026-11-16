@@ -91,16 +91,17 @@ _OFF_EDGE = [
 ]
 
 
-def _open_plan(registry, steps):
-    """用两段罐头回复走出系统 open。"""
+def _open_plan(registry, steps, query: str = _QUERY, fill: str = ""):
+    """用分类和组图走出系统 open。需要收下代码时再补一条填槽协议。"""
 
-    fake = FakeLLMProvider(
-        replies=[
-            json.dumps({"job": "open"}),
-            json.dumps({"steps": steps}),
-        ]
-    )
-    plan = Planner(registry, provider=fake, env_facts={}).build_plan(_QUERY, mode="plan")
+    replies = [
+        json.dumps({"job": "open"}),
+        json.dumps({"steps": steps}),
+    ]
+    if fill:
+        replies.append(fill)
+    fake = FakeLLMProvider(replies=replies)
+    plan = Planner(registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
     return plan, fake
 
 
@@ -153,7 +154,12 @@ class TestAi04A5OpenEdges(unittest.TestCase):
                 "depends_on": ["step_2"],
             },
         ]
-        plan, fake = _open_plan(self.registry, steps)
+        plan, fake = _open_plan(
+            self.registry,
+            steps,
+            query="xyzzy unmatched formula 12345 000300.SH",
+            fill=json.dumps({"shares": "000300.SH"}),
+        )
         names = [step.skill_name for step in plan.steps]
         depends = [list(step.depends_on) for step in plan.steps]
         print(" intent_job:", plan.planner_trace.get("intent_job"))

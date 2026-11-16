@@ -952,19 +952,16 @@ def _accept_code_text(slot: Dict[str, Any], value: Any, source: str) -> Optional
 
 
 def _accept_element_value(slot: Dict[str, Any], value: Any, source: str) -> Any:
-    """项列表。带 ``answer`` 的项在这里确认，不收成一段代码文本。"""
+    """项列表。每一项都重新过代码规则，已确认不能跳过。"""
 
     items = _as_item_list(value)
     if items and any(isinstance(item, dict) and str(item.get("answer") or "").strip() for item in items):
         updated: List[Dict[str, Any]] = []
         for item in items:
             row = dict(item)
-            if str(row.get("status") or "") == "confirmed" and not str(row.get("answer") or "").strip():
-                updated.append(row)
-                continue
             answer = str(row.get("answer") or "").strip()
             if not answer:
-                updated.append(row)
+                updated.append(_tag_submitted_item(row, source))
                 continue
             code = _one_reviewed_code(answer)
             if code:
@@ -973,14 +970,11 @@ def _accept_element_value(slot: Dict[str, Any], value: Any, source: str) -> Any:
                 row.pop("error", None)
             else:
                 row["error"] = f"{answer!r} is not one exchange code."
+                row["status"] = "incomplete"
             updated.append(row)
         if str(slot.get("cardinality") or "") == "one" or str(slot.get("element") or "") == "comparison_code":
             return updated[0]
         return updated
-    if items and all(str(item.get("status") or "") == "confirmed" for item in items):
-        if str(slot.get("cardinality") or "") == "one" or str(slot.get("element") or "") == "comparison_code":
-            return items[0]
-        return items
     return _items_from_submitted(value, source, slot)
 
 
@@ -1074,7 +1068,7 @@ def _fill_graph(
     """填图上还空着的用户槽。缺必填就换成澄清卡。
 
     ``card_text`` 是这张卡上的字符串原文。``card_items`` 是带 ``answer`` 的项列表。
-    没有卡片原文时，开放图仍不从任务原句填空槽。有卡片原文的槽照常读。
+    解释者只在报告有空缺时跑，而且只读这些空缺。没有卡片时不把没提到的日期送进协议。
     """
 
     if _resolve_depends(steps):
@@ -1085,8 +1079,7 @@ def _fill_graph(
     extras: Dict[str, Any] = {}
     projected = _project(planner, steps, rejected, job)
     confirmed = _confirmed_values(session)
-    if job != "open":
-        _clear_open_prewrite(steps, projected, confirmed)
+    _clear_open_prewrite(steps, projected, confirmed)
     closed_items: Dict[str, Any] = {}
     held_back: Dict[str, Any] = {}
     for slot in projected:
@@ -1126,16 +1119,36 @@ def _fill_graph(
     covered = set(answered) | item_names
     submitted: Dict[str, Any] = {}
     ambiguous: List[str] = []
-    mentioned: Set[str] = set()
+    # 这张卡上的槽是这一轮点到的。空着才算空缺。窗口本身不预标，留给协议的 null 和省略区分。
+    mentioned: Set[str] = set(covered)
     blocked: Dict[str, str] = {}
+    first_report = _inspect_slots(steps, projected, query, mentioned, answered)
+    gap_names = {str(name) for name in (first_report.get("gaps") or ())}
+    ask_dates = window_phrase(query)
+    if not ask_dates and hasattr(planner, "_market_inputs"):
+        market = planner._market_inputs(query)
+        ask_dates = isinstance(market, dict) and any(
+            market.get(key) not in (None, "") for key in ("start", "end")
+        )
+    read_slots: List[Dict[str, Any]] = []
+    if gap_names:
+        for slot in open_slots:
+            name = str(slot.get("name") or "")
+            if (
+                str(slot.get("format") or "") == "YYYYMMDD"
+                and name not in gap_names
+                and name not in covered
+                and not ask_dates
+            ):
+                continue
+            read_slots.append(slot)
     provider = getattr(planner, "provider", None)
-    skip_sentence = job == "open" and not covered
-    if provider is not None and open_slots and not skip_sentence:
-        # 有卡片时只读这一题。没有卡片时只信协议，不从任务原句补槽。
+    if provider is not None and read_slots:
+        # 有卡片时只读这张卡上的空缺。没有卡片时不把没提到的日期送进协议。
         model_slots = [
             slot
-            for slot in open_slots
-            if str(slot.get("name") or "") in answered or (job != "open" and not answered)
+            for slot in read_slots
+            if str(slot.get("name") or "") in answered or not answered
         ]
         if model_slots:
             model_submitted = _parse_model_slots(
@@ -1177,11 +1190,11 @@ def _fill_graph(
                 and _affirms_equal(query)
             ):
                 submitted["mode"] = "equal"
-    elif provider is None and not skip_sentence:
+    elif provider is None and read_slots:
         targets = [
-            slot for slot in open_slots if str(slot.get("name") or "") not in covered
+            slot for slot in read_slots if str(slot.get("name") or "") not in covered
         ]
-        if not covered and job != "open" and targets:
+        if not covered and targets:
             submitted, ambiguous, mentioned = _heuristic(
                 planner,
                 query,
@@ -1214,11 +1227,19 @@ def _fill_graph(
             parsed = commit_weight_text(query)
             if parsed["status"] == "value" and parsed["values"].get("mode"):
                 submitted["mode"] = str(parsed["values"]["mode"])
-    force_names = _review_submission(
-        planner, steps, projected, submitted, query, set(confirmed), answered
-    )
+    _place_submitted(planner, steps, projected, submitted)
+    force_names = _review_submission(steps, projected, submitted, query, answered)
     same_column = reject_same_history_column(projected, set(submitted), steps, planner)
     _seal_elements(planner, steps, projected, closed_items)
+    second_report = _inspect_slots(steps, projected, query, mentioned, answered)
+    _apply_inspected(planner, steps, projected, second_report)
+    if not covered or "weights" in covered:
+        for step in steps:
+            if step.skill_name != _PORTFOLIO_SKILL:
+                continue
+            weight_reason = normalize_portfolio_weight(step.inputs if isinstance(step.inputs, dict) else {})
+            if weight_reason:
+                return _blocked_plan(planner, query, weight_reason)
     blocked_weights = _reject_weight_count(steps)
     if blocked_weights:
         force_names |= blocked_weights
@@ -1238,6 +1259,7 @@ def _fill_graph(
     errors = _take_slot_errors(session)
     errors.update(blocked)
     errors.update(same_column)
+    errors.update(_inspect_errors(first_report, second_report))
     for name, raw in held_back.items():
         slot = next((item for item in projected if str(item.get("name") or "") == name), None)
         if slot is None or slot.get("filled"):
@@ -1255,6 +1277,18 @@ def _fill_graph(
     pending = _pending_after_fill(
         projected, steps, ambiguous, errors, query, open_names, rejected, job, force_names
     )
+    code_missing = any(
+        str(slot.get("resolve") or "") == "code" and slot.get("required") and not slot.get("filled")
+        for slot in projected
+    )
+    # 接线卡上用户已经选定不画图。这一轮不再用原句里的出图词把快照判掉。
+    if (
+        not getattr(planner, "_wire_resume", False)
+        and not code_missing
+        and wants_chart(query)
+        and not any(step.skill_name == "qt.ai.hp.plot" for step in steps)
+    ):
+        return _blocked_plan(planner, query, "A chart was requested but the plan has no plot step.")
     if not pending:
         choice = _statistic_options(steps)
         if choice:
@@ -1286,6 +1320,26 @@ def _fill_graph(
         )
     ]
     return replaced, extras
+
+
+def _blocked_plan(planner: Any, query: str, reason: str) -> Tuple[List[Any], Dict[str, Any]]:
+    """参数没收下，或要图却没有绘图步。计划不可确认。"""
+
+    replaced = [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.system.fallback",
+            inputs=planner._fallback_step_inputs(
+                query=query,
+                action="clarify_required",
+                reason=reason,
+                hint=reason,
+                missing_info="none",
+                next_step="The open plan did not pass the parameter commit.",
+            ),
+        )
+    ]
+    return replaced, {}
 
 
 def _wire_rejected(
@@ -1458,7 +1512,8 @@ def _pending_after_fill(
             rows.extend(item_rows)
             seen.add(slot["name"])
             continue
-        if slot["filled"]:
+        error = str(errors.get(slot["name"]) or "")
+        if slot["filled"] and not error:
             continue
         ask = (
             slot["required"]
@@ -1475,7 +1530,6 @@ def _pending_after_fill(
         if slot["name"] in seen:
             continue
         seen.add(slot["name"])
-        error = str(errors.get(slot["name"]) or "")
         if slot["name"] in {"names", "htype_names"} and ambiguous and not error:
             error = f"{ambiguous[0]} does not match a single data type."
         if slot["name"] == "lookback_days" and _bad_lookback(query) and not error:
@@ -2782,7 +2836,7 @@ _HOLD_MENTIONS = (
     "一条组合",
     "一样重要",
 )
-_CHART_MENTIONS = ("出图", "一条线", "看图", "画一张", "图表")
+_CHART_MENTIONS = ("出图", "一条线", "看图", "画一张", "图表", "一页图")
 _PRIOR_QUESTION = re.compile(r"(是一回事吗|跟上次|跟你这次)")
 
 
@@ -2859,14 +2913,14 @@ def commit_shares(query: str) -> Dict[str, Any]:
         if kind == "bare":
             code, reason = _resolve_bare(token, text, pos)
         else:
-            code = token
-            if _suffix_conflict(code):
+            code = _as_share_code(token)
+            if code and _suffix_conflict(code):
                 return {
                     "status": "unresolved",
                     "value": "",
                     "reason": f"{code} suffix does not match its prefix.",
                 }
-            reason = ""
+            reason = "" if code else "A named symbol was not resolved."
         if reason or not code:
             return {
                 "status": "unresolved",
@@ -3106,33 +3160,6 @@ def prior_turn_reply(meta: str, slots: Optional[Dict[str, Any]]) -> str:
     freq = values.get("freq") or "d"
     mode = values.get("mode") or "equal"
     return f"上一轮提交的是 shares={shares}, freq={freq}, mode={mode}。"
-
-
-def commit_open_graph(steps: Sequence[Any], query: str) -> str:
-    """开放图走同一次组合提交。要图却没有绘图步时返回原因。
-
-    Parameters
-    ----------
-    steps : sequence
-        已通过接线检查的步骤。
-    query : str
-        用户原句。
-
-    Returns
-    -------
-    str
-        空串表示可以确认。否则是未完成原因。
-    """
-
-    for step in steps:
-        if getattr(step, "skill_name", "") != _PORTFOLIO_SKILL:
-            continue
-        reason = normalize_portfolio_weight(step.inputs)
-        if reason:
-            return reason
-    if wants_chart(query) and not any(getattr(step, "skill_name", "") == "qt.ai.hp.plot" for step in steps):
-        return "A chart was requested but the plan has no plot step."
-    return ""
 
 
 def committed_fact_lines(steps: Sequence[Any]) -> List[str]:
@@ -3392,6 +3419,36 @@ def _as_share_code(value: Any) -> str:
     return ""
 
 
+def _reviewed_code(piece: str, query: str) -> str:
+    """已经带后缀走 ``_as_share_code``。只有六位数字才走 ``_resolve_bare``。
+
+    Parameters
+    ----------
+    piece : str
+        一项里的代码原文。
+    query : str
+        对照用的用户原文。只交给 ``_resolve_bare``。
+
+    Returns
+    -------
+    str
+        收得下的交易所代码。收不下则空串，不留六位原文。
+    """
+
+    text = str(piece or "").strip()
+    code = _as_share_code(text)
+    if code:
+        if _suffix_conflict(code):
+            return ""
+        return code
+    if re.fullmatch(r"\d{6}", text):
+        resolved, reason = _resolve_bare(text, query, max(str(query or "").find(text), 0))
+        if reason or not resolved:
+            return ""
+        return resolved
+    return ""
+
+
 def _split_codes(value: Any) -> List[str]:
     """逗号分隔的代码，按原顺序去重。"""
 
@@ -3612,12 +3669,8 @@ def _normalize_code_value(value: Any, query: str) -> Optional[str]:
     parts = [part.strip() for part in text.split(",") if part.strip()]
     found: List[str] = []
     for part in parts:
-        code = _as_share_code(part)
-        if not code and re.fullmatch(r"\d{6}", part):
-            code, reason = _resolve_bare(part, query, text.find(part))
-            if reason or not code:
-                return None
-        if not code or _suffix_conflict(code) or not _user_wrote_code(code, query):
+        code = _reviewed_code(part, query)
+        if not code or not _user_wrote_code(code, query):
             return None
         if code not in found:
             found.append(code)
@@ -3824,6 +3877,8 @@ def _keep_piece(piece: str) -> bool:
         return False
     if any(marker in piece for marker in _TASK_MARKERS):
         return False
+    if any(phrase in piece for phrase in _CHART_MENTIONS):
+        return False
     return re.fullmatch(r"[\u4e00-\u9fff]{2,8}", piece) is not None
 
 
@@ -3862,17 +3917,8 @@ def _token_pieces(query: str, *, include_alias: bool) -> List[str]:
 def _status_for_piece(piece: str, query: str) -> Tuple[str, str]:
     """用户写出的唯一代码已确认。冲突、裸 000001 和非代码没有 code。"""
 
-    upper = str(piece or "").upper()
-    if re.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)", upper):
-        if _suffix_conflict(upper):
-            return "", "incomplete"
-        if _user_wrote_code(upper, query):
-            return upper, "confirmed"
-        return "", "incomplete"
-    if re.fullmatch(r"\d{6}", piece):
-        code, reason = _resolve_bare(piece, query, max(str(query or "").find(piece), 0))
-        if reason or not code:
-            return "", "incomplete"
+    code = _reviewed_code(piece, query)
+    if code and _user_wrote_code(code, query):
         return code, "confirmed"
     return "", "incomplete"
 
@@ -3948,18 +3994,16 @@ def _tag_submitted_item(item: Any, query: str) -> Dict[str, Any]:
 
     if isinstance(item, str):
         mention = item.strip()
-        code = _as_share_code(mention)
-        if not code and re.fullmatch(r"\d{6}", mention):
-            resolved, reason = _resolve_bare(mention, query, max(str(query or "").find(mention), 0))
-            code = "" if reason else resolved
+        raw_code = mention
     elif isinstance(item, dict):
         mention = str(item.get("mention") or "")
         raw_code = str(item.get("code") or "")
-        code = _as_share_code(raw_code) or raw_code
     else:
         return {"mention": "", "code": "", "status": "incomplete"}
-    if not code or _suffix_conflict(code):
-        return {"mention": mention, "code": "", "status": "incomplete"}
+    code = _reviewed_code(raw_code or mention, query)
+    if not code:
+        shown = mention or raw_code
+        return {"mention": shown, "code": "", "status": "incomplete"}
     status = "confirmed" if _user_wrote_code(code, query) else "pending"
     return {"mention": mention, "code": code, "status": status}
 
@@ -4131,9 +4175,6 @@ def apply_weight_text(steps: Sequence[Any], text: str) -> None:
         _set_on_skill(steps, _PORTFOLIO_SKILL, "weights", list(parsed["values"]["weights"]))
         _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "weighted")
         return
-    for step in steps:
-        if step.skill_name == _PORTFOLIO_SKILL:
-            normalize_portfolio_weight(step.inputs)
 
 
 def _confirmed_benchmark_code(value: Any) -> str:
@@ -4253,47 +4294,176 @@ def _clear_weight_mode(steps: Sequence[Any]) -> None:
         step.inputs.pop("mode", None)
 
 
-def _review_submission(
+def _inspect_slots(
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    query: str,
+    mentioned: Set[str],
+    card_text: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """只读质检。每一格只调用 ``accept_slot_value``，拒因只用 ``_reject_reason``。
+
+    不读任务名，也不改步骤。空着且这一轮没提到的选填槽不写拒因，也不算空缺。
+    ``confirmed`` 只作为收下后的结果，不能用来跳过。
+
+    Parameters
+    ----------
+    steps : sequence
+        当前步骤。只读现值。
+    projected : sequence of dict
+        投影槽。
+    query : str
+        这一轮用户原文。卡片上的槽改用卡片原文。
+    mentioned : set of str
+        这一轮点到的槽。
+    card_text : dict, optional
+        卡片槽名到原文。
+
+    Returns
+    -------
+    dict
+        ``accepted`` 是收下的值，``errors`` 是拒因，``gaps`` 是空缺槽名。
+    """
+
+    accepted: Dict[str, Any] = {}
+    errors: Dict[str, str] = {}
+    gaps: Set[str] = set()
+    answered = card_text or {}
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if not name:
+            continue
+        current = _read_input(steps, name)
+        source = answered.get(name, query) if name in answered else query
+        if current in (None, "", []):
+            if slot.get("required") or name in mentioned:
+                gaps.add(name)
+            continue
+        value = accept_slot_value(slot, current, source)
+        if value in (None, "", []):
+            errors[name] = _reject_reason(slot, current)
+            gaps.add(name)
+            continue
+        accepted[name] = value
+        if slot.get("element") and not _element_complete(slot, value):
+            if slot.get("required") or name in mentioned:
+                gaps.add(name)
+    return {"accepted": accepted, "errors": errors, "gaps": gaps}
+
+
+def _inspect_errors(first: Dict[str, Any], second: Dict[str, Any]) -> Dict[str, str]:
+    """第二次收下的格清掉第一次因空着写下的拒因。"""
+
+    accepted = set((second.get("accepted") or {}))
+    gaps = set(second.get("gaps") or ())
+    found = {str(key): str(value) for key, value in (second.get("errors") or {}).items() if value}
+    for name, reason in (first.get("errors") or {}).items():
+        key = str(name)
+        if key in accepted and key not in gaps:
+            continue
+        found.setdefault(key, str(reason))
+    for name in list(found):
+        if name in accepted and name not in gaps:
+            found.pop(name, None)
+    return found
+
+
+def _place_submitted(
     planner: Any,
     steps: Sequence[Any],
     projected: Sequence[Dict[str, Any]],
     submitted: Dict[str, Any],
+) -> None:
+    """把这一轮候选写上步骤，供质检读取。这里不调用 ``accept_slot_value``。"""
+
+    by_name = {str(slot.get("name") or ""): slot for slot in projected}
+    for name, raw in submitted.items():
+        key = str(name or "")
+        if not key or key == "mode" or raw in (None, "", []):
+            continue
+        slot = by_name.get(key)
+        if slot is None:
+            continue
+        _write_element(planner, steps, key, raw)
+        slot["value"] = raw
+
+
+def _clear_slot(planner: Any, steps: Sequence[Any], name: str) -> None:
+    """从声明了这个槽的步骤上删掉现值。"""
+
+    for step in steps:
+        if name == "shares" and step.skill_name == "qt.ai.hp.plot":
+            continue
+        schema = _schema(planner, step.skill_name)
+        decls = getattr(step, "slot_decls", None) or {}
+        if name not in schema and name not in decls:
+            continue
+        if isinstance(step.inputs, dict):
+            step.inputs.pop(name, None)
+
+
+def _apply_inspected(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    report: Dict[str, Any],
+) -> None:
+    """把质检收下的值写回步骤。拒因格清掉，避免六位原文留在步骤上。"""
+
+    accepted = dict(report.get("accepted") or {})
+    errors = set(report.get("errors") or {})
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if name in accepted:
+            value = accepted[name]
+            if str(slot.get("resolve") or "") == "weights" and isinstance(value, dict):
+                if str(value.get("mode") or "") == "equal":
+                    _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+                    _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
+                slot["filled"] = True
+                slot["value"] = value
+                continue
+            _write_element(planner, steps, name, value)
+            slot["value"] = value
+            slot["filled"] = (
+                _element_complete(slot, value) if slot.get("element") else True
+            )
+            continue
+        if name in errors:
+            _clear_slot(planner, steps, name)
+            slot["filled"] = False
+            slot["value"] = None
+
+
+def _review_submission(
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    submitted: Dict[str, Any],
     query: str,
-    confirmed: Set[str],
     card_text: Optional[Dict[str, str]] = None,
 ) -> Set[str]:
-    """检验这一次提交。通过的写入空位，没通过的保持未完成。
+    """整理 mode，并丢掉卡片上的非法日期例子。槽值只由质检收下。
 
-    ``card_text`` 是这张卡上尚未确认的槽，槽名对原文。日期校验用这段原文做
-    ``source``，不用任务原句再查一次。
+    Parameters
+    ----------
+    steps : sequence
+        当前步骤。
+    projected : sequence of dict
+        投影槽。
+    submitted : dict
+        这一轮候选。只读其中的 mode。
+    query : str
+        任务原句。用来识别否定等权。
+    card_text : dict, optional
+        卡片槽名到原文。
+
+    Returns
+    -------
+    set of str
+        仍要追问的槽名。
     """
 
     force: Set[str] = set()
-    by_name = {str(slot.get("name") or ""): slot for slot in projected}
-    for name, slot in by_name.items():
-        if name not in submitted:
-            continue
-        if name in confirmed and not slot.get("element"):
-            continue
-        source = card_text.get(name, query) if card_text and name in card_text else query
-        value = accept_slot_value(slot, submitted.get(name), source)
-        if value in (None, "", []):
-            continue
-        if slot.get("element"):
-            _write_element(planner, steps, name, value)
-            slot["value"] = value
-            slot["filled"] = _element_complete(slot, value)
-            continue
-        if str(slot.get("resolve") or "") == "weights" and isinstance(value, dict):
-            if str(value.get("mode") or "") == "equal":
-                _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
-                _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
-                slot["filled"] = True
-                slot["value"] = value
-            continue
-        if _write_empty(planner, steps, name, value):
-            slot["filled"] = True
-            slot["value"] = value
     mode = str(submitted.get("mode") or "")
     if mode in {"equal", "weighted"}:
         if _negates_equal(query) and mode == "equal":

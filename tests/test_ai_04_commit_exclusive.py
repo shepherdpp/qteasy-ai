@@ -272,9 +272,10 @@ class TestAi04CommitExclusive(unittest.TestCase):
         )
         modeled_inputs = _snap_inputs(modeled, "qt.ai.data.history") or _inputs(modeled, "qt.ai.data.history")
         print(" modeled:", modeled_inputs, _blob(modeled))
-        self.assertEqual(str(modeled_inputs.get("start") or ""), "20240315")
+        self.assertEqual(str(modeled_inputs.get("start") or ""), "")
         self.assertNotIn("20251231", _blob(modeled))
         self.assertNotIn("20250101", _blob(modeled))
+        self.assertNotIn("20240315", _blob(modeled))
 
     def test_omitted_htype_is_not_filled_by_heuristic(self) -> None:
         """有模型时协议没写 htype，启发式不能从 close 再补上。"""
@@ -290,7 +291,10 @@ class TestAi04CommitExclusive(unittest.TestCase):
         history = _snap_inputs(plan, "qt.ai.data.history")
         print(" prompts:", [item[:80] for item in provider.prompts])
         print(" history:", history, "blob:", _blob(plan))
-        self.assertTrue(any("htype_names" in item and "start" in item for item in provider.prompts))
+        fill_prompts = [item for item in provider.prompts if item.startswith("Slot protocol.")]
+        self.assertTrue(fill_prompts)
+        self.assertTrue(all("htype_names" in item for item in fill_prompts))
+        self.assertTrue(all("slot: start" not in item for item in fill_prompts))
         self.assertIn(history.get("htype_names"), (None, ""))
 
     def test_illegal_protocol_does_not_call_heuristic(self) -> None:

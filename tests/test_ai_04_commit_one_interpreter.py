@@ -199,16 +199,18 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
         ready.set_slot("end", "20240331", source="user", confirmed=True)
         ready.set_slot("shares", "000001.SZ,000002.SZ", source="user", confirmed=True)
         plan = planner.build_plan("下载数据", mode="plan", session=ready, skip_classify=True)
-        refill = next(step for step in plan.steps if step.skill_name == "qt.ai.data.refill_basic_equity_and_index")
-        symbols = refill.inputs.get("symbols")
-        if isinstance(symbols, list):
-            symbols = ",".join(str(item.get("code") or "") for item in symbols if isinstance(item, dict))
-        print(" confirmed inputs:", refill.inputs)
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        refill = next(step for step in accepted if step.get("skill_name") == "qt.ai.data.refill_basic_equity_and_index")
+        symbols = refill.get("inputs", {}).get("symbols")
+        print(" confirmed inputs:", refill.get("inputs"))
         print(" symbols:", symbols)
-        print(" confirmable:", plan.steps[0].skill_name != "qt.ai.system.fallback")
-        self.assertEqual(refill.inputs.get("start"), "20240101")
-        self.assertEqual(refill.inputs.get("end"), "20240331")
-        self.assertEqual(symbols, "000001.SZ,000002.SZ")
+        print(" pending:", [item.get("name") for item in (((plan.assumptions or {}).get("clarification") or {}).get("pending") or [])])
+        self.assertEqual(refill.get("inputs", {}).get("start"), "20240101")
+        self.assertEqual(refill.get("inputs", {}).get("end"), "20240331")
+        self.assertEqual(
+            [(item.get("code"), item.get("status")) for item in symbols],
+            [("000001.SZ", "pending"), ("000002.SZ", "pending")],
+        )
 
         held = ConversationState.empty("one-unconfirmed")
         held.start_task(query="下载数据", job="data.refill")

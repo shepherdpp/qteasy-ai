@@ -400,9 +400,15 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["step_1"]},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_2"]},
         ]
-        opened = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": steps})])
+        opened = FakeLLMProvider(
+            replies=[
+                _job("open"),
+                json.dumps({"steps": steps}),
+                json.dumps({"shares": "000300.SH"}),
+            ]
+        )
         dry = Planner(self.registry, provider=opened, env_facts={}).build_plan(
-            "取日线、算收益、出一页图",
+            "取 000300.SH 日线、算收益、出一页图",
             mode="plan",
         )
         print(" open skills:", [step.skill_name for step in dry.steps], dry.execution_mode)
@@ -434,7 +440,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.plot", "inputs": {"shares": "000300.SH"}},
         ]
         asked = "取 000300.SH 日线，算收益，再出一页图"
-        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": rough}, ensure_ascii=False)])
+        fake = FakeLLMProvider(
+            replies=[
+                _job("open"),
+                json.dumps({"steps": rough}, ensure_ascii=False),
+                json.dumps({"shares": "000300.SH", "freq": "d", "asset_type": "IDX"}),
+            ]
+        )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(asked, mode="plan")
         print(" pending:", _pending_names(plan))
         print(" skill:", plan.steps[0].skill_name)
@@ -477,7 +489,21 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.returns", "inputs": {"method": "pct_change"}},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"shares": "000300.SH"}},
         ]
-        opened = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": ready}, ensure_ascii=False)])
+        opened = FakeLLMProvider(
+            replies=[
+                _job("open"),
+                json.dumps({"steps": ready}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "shares": "000300.SH",
+                        "freq": "d",
+                        "asset_type": "IDX",
+                        "htype_names": "close",
+                        "start": "20240101",
+                    }
+                ),
+            ]
+        )
         dry = Planner(self.registry, provider=opened, env_facts={}).build_plan(
             "取 000300.SH 从 20240101 起的日线，算收益，再出一页图",
             mode="plan",
@@ -584,7 +610,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
             {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["qt.ai.data.kline"]},
         ]
-        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": linked})])
+        fake = FakeLLMProvider(
+            replies=[
+                _job("open"),
+                json.dumps({"steps": linked}),
+                json.dumps({"shares": "000300.SH"}),
+            ]
+        )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "取 000300.SH 日线再算收益",
             mode="plan",
@@ -659,7 +691,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
             {"skill_name": "qt.ai.hp.returns", "inputs": {}},
         ]
-        bound = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": empty})])
+        bound = FakeLLMProvider(
+            replies=[
+                _job("open"),
+                json.dumps({"steps": empty}),
+                json.dumps({"shares": "000300.SH"}),
+            ]
+        )
         dry = Planner(self.registry, provider=bound, env_facts={}).build_plan(
             "取 000300.SH 日线再算收益",
             mode="plan",

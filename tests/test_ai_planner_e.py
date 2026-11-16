@@ -53,10 +53,11 @@ class TestAiPlannerE(unittest.TestCase):
                         ]
                     }
                 ),
+                json.dumps({"shares": "000300.SH"}),
             ]
         )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345", mode="plan"
+            "xyzzy unmatched formula 12345 000300.SH", mode="plan"
         )
         names = [s.skill_name for s in plan.steps]
         print(" skills:", names, "intent:", plan.planner_trace.get("intent_job"))
@@ -82,6 +83,7 @@ class TestAiPlannerE(unittest.TestCase):
                         ]
                     }
                 ),
+                json.dumps({"strategy_id": "macd"}),
             ]
         )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(

@@ -196,6 +196,7 @@ class TestAiProcessReceipt(unittest.TestCase):
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _STEPS}),
+                json.dumps({"shares": "000300.SH"}),
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:

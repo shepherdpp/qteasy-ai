@@ -313,7 +313,7 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         self.assertTrue(all(item is None for item in empty_values))
 
     def test_late_benchmark_joins_shares(self) -> None:
-        """说了超额却没有基准代码才追问。回答后再并进 shares，并补占位权重。"""
+        """说了超额却没有基准代码才追问。原文里没有的后缀代码回答后仍未完成。"""
 
         print("\n[TestAi04B1] 后补基准并进 shares")
         asked = "000001.SZ 和 000002.SZ 按权重 6:4 做一条组合，看超额"
@@ -326,29 +326,16 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         state.start_task(query=asked, job="research.hold_compare")
         state.set_slot("benchmark", "000300.SH", source="user", confirmed=True)
         followed = self.planner.build_plan("000300.SH", session=state, skip_classify=True)
-        kline = followed.steps[0].inputs
-        portfolio = followed.steps[1].inputs
-        codes = str(kline.get("shares") or "").split(",")
-        weights = list(portfolio.get("weights") or [])
-        print(" skills:", _skills(followed))
-        print(" shares:", codes)
-        print(" benchmark:", portfolio.get("benchmark"))
-        print(" weights:", weights)
-        self.assertEqual(followed.planner_trace.get("intent_job"), "research.hold_compare")
-        self.assertIn("000300.SH", codes)
-        self.assertIn("000001.SZ", codes)
-        self.assertIn("000002.SZ", codes)
+        accepted = (followed.assumptions or {}).get("accepted_steps") or []
+        portfolio = next(step.get("inputs") or {} for step in accepted if step.get("skill_name") == "qt.ai.hp.portfolio")
         benchmark = portfolio.get("benchmark")
-        benchmark_code = benchmark.get("code") if isinstance(benchmark, dict) else benchmark
-        self.assertEqual(benchmark_code, "000300.SH")
-        if isinstance(benchmark, dict):
-            self.assertEqual(benchmark.get("status"), "confirmed")
-        self.assertEqual(len(weights), len(codes))
-        bench_at = codes.index("000300.SH")
-        print(" placeholder index:", bench_at, "value:", weights[bench_at])
-        self.assertTrue(math.isclose(float(weights[bench_at]), 0.0, rel_tol=0.0, abs_tol=1e-8))
-        self.assertNotIn("000300.SH", weights)
-        self.assertTrue(_near([weights[0], weights[1]], [6.0, 4.0]))
+        print(" skills:", _skills(followed))
+        print(" benchmark:", benchmark)
+        print(" pending:", _pending_names(followed))
+        self.assertEqual(followed.planner_trace.get("intent_job"), "research.hold_compare")
+        self.assertEqual(benchmark.get("code") if isinstance(benchmark, dict) else benchmark, "000300.SH")
+        self.assertEqual(benchmark.get("status") if isinstance(benchmark, dict) else "", "pending")
+        self.assertEqual(_pending_names(followed), ["benchmark"])
 
     def test_optional_slots_model_and_other_jobs(self) -> None:
         """权重和基准不追问。6:4 只在组合步写成 weighted。别的 Job 不出现折叠槽。"""
@@ -575,7 +562,13 @@ class TestAi04B1HoldCompare(unittest.TestCase):
                 "depends_on": ["step_2"],
             },
         ]
-        fake = FakeLLMProvider(replies=[json.dumps({"steps": opened}, ensure_ascii=False)])
+        protocol = {"shares": "000001.SZ,000002.SZ"}
+        fake = FakeLLMProvider(
+            replies=[
+                json.dumps({"steps": opened}, ensure_ascii=False),
+                json.dumps(protocol, ensure_ascii=False),
+            ]
+        )
         open_plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "000001.SZ 和 000002.SZ 看超额",
             mode="plan",

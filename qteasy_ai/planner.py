@@ -41,7 +41,6 @@ from .slot_decl import (
 from .slot_graph import (
     FACTOR_IC_SLOT_DECLS,
     apply_slot_layer,
-    commit_open_graph,
     contract_digest_lines,
     date_pending_rows,
     looks_like_hold_compare,
@@ -801,23 +800,6 @@ class Planner:
             )
             steps.append(step)
         mismatch = align_steps(self, steps)
-        if not mismatch:
-            blocked = commit_open_graph(steps, query)
-            if blocked:
-                return [
-                    self._make_step(
-                        step_id="step_1",
-                        skill_name="qt.ai.system.fallback",
-                        inputs=self._fallback_step_inputs(
-                            query=query,
-                            action="clarify_required",
-                            reason=blocked,
-                            hint=blocked,
-                            missing_info="none",
-                            next_step="The open plan did not pass the parameter commit.",
-                        ),
-                    )
-                ], ""
         if mismatch:
             card = choice_card(self, steps, query)
             return [

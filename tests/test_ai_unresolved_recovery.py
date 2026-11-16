@@ -93,7 +93,13 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         """分类已经确定 open 时直接出图，不出现恢复卡。"""
 
         print("\n[TestAiUnresolvedRecovery] 确定 open 不出恢复卡")
-        fake = FakeLLMProvider(replies=[_job({"job": "open"}), json.dumps({"steps": _STEPS})])
+        fake = FakeLLMProvider(
+            replies=[
+                _job({"job": "open"}),
+                json.dumps({"steps": _STEPS}),
+                json.dumps({"shares": "000300.SH"}),
+            ]
+        )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(_ZH, mode="plan")
         print(" skills:", [step.skill_name for step in plan.steps], plan.planner_trace.get("intent_job"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "open")
@@ -142,6 +148,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _STEPS}),
+                json.dumps({"shares": "000300.SH"}),
                 decoy,
             ]
         )
@@ -324,6 +331,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _STEPS}),
+                json.dumps({"shares": "000300.SH"}),
                 _job({"job": "data.summary"}),
             ]
         )
@@ -413,6 +421,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 _job({"job": "open"}),
                 _job({"job": "open"}),
                 json.dumps({"steps": rough}),
+                json.dumps({"shares": "000300.SH", "freq": "d", "asset_type": "IDX"}),
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:

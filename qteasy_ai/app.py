@@ -1781,6 +1781,7 @@ class QteasyAssistant:
             self._seal_clarify(state, choice, option_answer_label(pending, choice))
         held = self.planner.provider
         self.planner.provider = None
+        self.planner._wire_resume = True
         try:
             plan = self.planner.build_plan(
                 asked,
@@ -1791,6 +1792,7 @@ class QteasyAssistant:
             )
         finally:
             self.planner.provider = held
+            self.planner._wire_resume = False
         self._sync_session_from_plan(state, plan, query=asked, skip_classify=True)
         self.session_store.save(state)
         return plan, state
