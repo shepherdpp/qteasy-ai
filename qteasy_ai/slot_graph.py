@@ -1107,7 +1107,7 @@ def _fill_graph(
     extras: Dict[str, Any] = {}
     projected = _project(planner, steps, rejected, job)
     confirmed = _confirmed_values(session)
-    _clear_open_prewrite(steps, projected, confirmed)
+    cleared_prewrite = _clear_open_prewrite(steps, projected, confirmed)
     closed_items: Dict[str, Any] = {}
     held_back: Dict[str, Any] = {}
     for slot in projected:
@@ -1171,6 +1171,16 @@ def _fill_graph(
     mentioned.update(alias_mentioned)
     mentioned.update(_element_mentioned(projected, query))
     mentioned.update(_screen_mentioned(projected, query))
+    mentioned.update(_diagnosis_mentioned(projected, query))
+    mentioned.update(_weight_mentioned(projected, query))
+    weight_names = {
+        str(slot.get("name") or "")
+        for slot in projected
+        if str(slot.get("resolve") or "") == "weights"
+    }
+    # 清掉的权重预写还要交给解释者。其它预写清掉即可，不扩大协议。
+    mentioned.update(name for name in cleared_prewrite if name in weight_names)
+    illegal_mentioned = {"lookback_days"} if _bad_lookback(query) else set()
     blocked: Dict[str, str] = {}
     first_report = _inspect_slots(steps, projected, query, mentioned, answered)
     gap_names = {str(name) for name in (first_report.get("gaps") or ())}
@@ -1200,7 +1210,9 @@ def _fill_graph(
                             submitted[name] = kept
                         else:
                             mentioned.add(name)
-                    elif name in alias_mentioned and name not in window_mentioned:
+                    elif name not in illegal_mentioned:
+                        # 协议缺键就当没点到。null 仍留在提交里，不走这里。
+                        # 写坏的回看留下，避免缺省把非法原文盖掉。
                         mentioned.discard(name)
                     continue
                 source = answered[name] if name in answered else query
@@ -1265,6 +1277,9 @@ def _fill_graph(
             parsed = commit_weight_text(query)
             if parsed["status"] == "value" and parsed["values"].get("mode"):
                 submitted["mode"] = str(parsed["values"]["mode"])
+                parsed_weights = parsed["values"].get("weights")
+                if parsed_weights not in (None, "", []):
+                    submitted["weights"] = list(parsed_weights)
     _place_submitted(planner, steps, projected, submitted)
     force_names = _review_submission(steps, projected, submitted, query, answered)
     same_column = reject_same_history_column(projected, set(submitted), steps, planner)
@@ -3796,16 +3811,24 @@ def _clear_open_prewrite(
     steps: Sequence[Any],
     projected: Sequence[Dict[str, Any]],
     confirmed: Dict[str, Any],
-) -> None:
-    """清掉未确认投影槽上的预写。已确认的值，以及组图按这个值写下的同值，留下。"""
+) -> Set[str]:
+    """清掉未确认投影槽上的预写。已确认的值，以及组图按这个值写下的同值，留下。
+
+    Returns
+    -------
+    set of str
+        被清掉的槽名。解释者还要读这些槽，预写本身不留下。
+    """
 
     names = set(confirmed)
     backed = [value for value in confirmed.values() if value not in (None, "", [])]
+    cleared: Set[str] = set()
     for slot in projected:
         name = str(slot.get("name") or "")
         if name in names:
             continue
         kept = False
+        popped = False
         for step in steps:
             inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else None
             if inputs is None or name not in inputs:
@@ -3823,10 +3846,14 @@ def _clear_open_prewrite(
                 kept = True
                 continue
             inputs.pop(name, None)
+            popped = True
         if kept:
             continue
         slot["filled"] = False
         slot["value"] = None
+        if popped:
+            cleared.add(name)
+    return cleared
 
 
 def _expected_stock_suffix(digits: str) -> str:
@@ -4231,6 +4258,54 @@ def _element_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[s
     return names
 
 
+def _diagnosis_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[str]:
+    """体检解析已经取出的键。不写步骤。
+
+    窗口、收益期数和对数这类说法若等不到解释者，步骤上就没有对应的值。
+
+    Parameters
+    ----------
+    projected : sequence of dict
+        这一步要调用的投影槽。
+    query : str
+        这一轮用户原文。
+
+    Returns
+    -------
+    set of str
+        要并进「这一轮点到」的槽名。
+    """
+
+    names = {str(slot.get("name") or "") for slot in projected}
+    found: Set[str] = set()
+    for key, value in _parse_diagnosis(query, names).items():
+        if key in names and value not in (None, "", []):
+            found.add(key)
+    return found
+
+
+def _weight_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[str]:
+    """问句里有权重说法时点到权重槽。不写步骤。
+
+    Parameters
+    ----------
+    projected : sequence of dict
+        这一步要调用的投影槽。
+    query : str
+        这一轮用户原文。
+
+    Returns
+    -------
+    set of str
+        有权重槽且问句在说权重时，含 ``weights``。
+    """
+
+    names = {str(slot.get("name") or "") for slot in projected}
+    if "weights" in names and (_weight_cue(query) or _affirms_equal(query)):
+        return {"weights"}
+    return set()
+
+
 def _screen_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[str]:
     """筛股解析已经取出的键，以及写了但收不成整数的回看。不写步骤。
 
@@ -4616,6 +4691,9 @@ def _inspect_slots(
             continue
         if name in fresh_names:
             source = answered.get(name, query) if name in answered else query
+        elif slot.get("element") and not answered:
+            # 没有卡片时，已确认不能跳过「原文里有没有这只代码」。
+            source = query
         else:
             source = str(current)
         value = accept_slot_value(slot, current, source)

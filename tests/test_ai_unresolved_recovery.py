@@ -398,7 +398,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertNotIn("unresolved_intent", after.task.slots)
 
     def test_open_slot_answer_resumes_the_same_graph(self) -> None:
-        """开放图缺列名时，控件提交列名恢复原图，不再分类。空窗口不出日期卡。"""
+        """开放图缺列名时，控件提交列名恢复原图，不再分类。空窗口不出日期卡，两端写入内核窗口。"""
 
         print("\n[TestAiUnresolvedRecovery] 开放图补列名后恢复原图")
         query = "取 000300.SH 的 close，算收益，再出一页图"
@@ -476,8 +476,13 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual(plan.get("execution_mode"), "dry_run")
             self.assertEqual(skills, ["qt.ai.data.history", "qt.ai.hp.returns", "qt.ai.hp.plot"])
             self.assertEqual((history.get("inputs") or {}).get("htype_names"), "close")
-            self.assertNotIn("start", (history.get("inputs") or {}))
-            self.assertNotIn("end", (history.get("inputs") or {}))
+            from qteasy_ai.slot_graph import kernel_window
+            window = kernel_window()
+            print(" kernel:", window)
+            self.assertEqual((history.get("inputs") or {}).get("start"), window["start"])
+            self.assertEqual((history.get("inputs") or {}).get("end"), window["end"])
+            self.assertNotIn("start", names)
+            self.assertNotIn("end", names)
             self.assertEqual(depends, [[], ["step_1"], ["step_2"]])
             self.assertNotIn("unresolved_intent", names)
             self.assertFalse(str(after.task.job or ""))
