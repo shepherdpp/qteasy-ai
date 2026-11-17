@@ -12,6 +12,9 @@ import unittest
 
 from qteasy_ai.app import build_default_registry
 from qteasy_ai.human_card import _slim_plan_ready_lines, _slim_result_lines
+from qteasy_ai.plan_markdown import tool_plan_to_markdown
+
+_CODES = "600519.SH,000858.SZ,000300.SH"
 
 
 def _plan(steps: list) -> dict:
@@ -45,6 +48,126 @@ class TestAi04CommitCard(unittest.TestCase):
 
     def setUp(self) -> None:
         self.registry = build_default_registry()
+
+    def test_projection_reads_committed_role(self) -> None:
+        """三张卡只投影已提交输入和该步记录。角色只在事实行。"""
+
+        print("\n[TestAi04CommitCard] 旁挂、无基准、失败、未确认字典")
+        confirmed = {"code": "000300.SH", "status": "confirmed"}
+        beside_steps = _portfolio_steps(
+            _CODES,
+            {"mode": "equal", "benchmark": confirmed, "benchmark_output": "tag_along"},
+        )
+        ready, markdown, result, slots = self._three_cards(
+            beside_steps,
+            _success("qt.ai.hp.portfolio", {"n_shares": 3}),
+        )
+        for text in (ready, markdown, result):
+            self.assertIn(_CODES, text)
+            self.assertIn("equal", text)
+            self.assertNotIn("committed inputs", text)
+            self.assertNotIn("status", text)
+        self.assertIn("benchmark=000300.SH beside the portfolio", ready)
+        self.assertIn("benchmark=000300.SH beside the portfolio", result)
+        self.assertIn("benchmark=000300.SH beside the portfolio", markdown.split("## Slots", 1)[0])
+        self.assertIn(_CODES, slots)
+        self.assertIn("equal", slots)
+        self.assertIn("000300.SH", slots)
+        self.assertNotIn("tag_along", slots)
+        self.assertNotIn("benchmark_output", slots)
+        self.assertIn("A benchmark is kept beside it", result)
+        self.assertIn("A benchmark is kept beside it", markdown)
+
+        plain_steps = _portfolio_steps(_CODES, {"mode": "equal"})
+        ready, markdown, result, _slots = self._three_cards(
+            plain_steps,
+            _success("qt.ai.hp.portfolio", {"n_shares": 3}),
+        )
+        for text in (ready, markdown, result):
+            self.assertIn("no benchmark", text)
+            self.assertNotIn("beside", text.lower())
+            self.assertNotIn("基准留在旁边", text)
+            self.assertNotIn("committed inputs", text)
+        self.assertIn("A new panel with one portfolio row", markdown)
+        self.assertNotIn("kept beside", markdown)
+
+        failed = {
+            "status": "partial_failed",
+            "steps": [
+                {
+                    "skill_name": "qt.ai.hp.portfolio",
+                    "result": {
+                        "ok": False,
+                        "error": {"message": "symbol 000001 was not found"},
+                    },
+                }
+            ],
+        }
+        ready, markdown, result, _slots = self._three_cards(beside_steps, failed)
+        print(" failed result:", result)
+        self.assertIn("symbol 000001 was not found", result)
+        self.assertIn("**Run did not finish.**", result)
+        self.assertNotIn("**Run succeeded.**", result)
+        self.assertNotIn("Check the name", result)
+        self.assertIn("benchmark=000300.SH beside the portfolio", ready)
+        self.assertIn(_CODES, markdown)
+        self.assertIn("equal", markdown)
+
+        for benchmark in ({"code": "000300.SH"}, {"code": "000300.SH", "status": "pending"}):
+            quiet_steps = _portfolio_steps(
+                "600519.SH,000858.SZ",
+                {"mode": "equal", "benchmark": benchmark, "benchmark_output": "tag_along"},
+            )
+            ready, markdown, result, slots = self._three_cards(
+                quiet_steps,
+                _success("qt.ai.hp.portfolio", {"n_shares": 2}),
+            )
+            print(" unconfirmed:", benchmark, ready)
+            for text in (ready, result):
+                self.assertIn("no benchmark", text)
+                self.assertNotIn("000300.SH", text)
+            self.assertNotIn("000300.SH", slots)
+
+        string_steps = _portfolio_steps(
+            "600519.SH,000858.SZ",
+            {"mode": "equal", "benchmark": "000300.SH", "benchmark_output": "tag_along"},
+        )
+        ready, _markdown, result, slots = self._three_cards(
+            string_steps,
+            _success("qt.ai.hp.portfolio", {"n_shares": 2}),
+        )
+        self.assertIn("benchmark=000300.SH beside the portfolio", ready)
+        self.assertIn("benchmark=000300.SH beside the portfolio", result)
+        self.assertIn("000300.SH", slots)
+
+    def _three_cards(self, steps: list, execution: dict) -> tuple:
+        """计划卡、计划 Markdown、结果卡，以及 Markdown 的槽位段。"""
+
+        plan = _plan(steps)
+        ready = "\n".join(
+            _slim_plan_ready_lines(
+                plan=plan,
+                card_steps=_rows(steps),
+                plan_id="plan_commit_card",
+                run_id="run_commit_card",
+                plan_md_file="",
+                confirmable=True,
+            )
+        )
+        markdown = tool_plan_to_markdown(plan, registry=self.registry)
+        lines, _mode = _slim_result_lines(
+            plan=plan,
+            execution=execution,
+            registry=self.registry,
+        )
+        result = "\n".join(lines)
+        slots = markdown.split("## Slots", 1)[1] if "## Slots" in markdown else ""
+        print(" ready:", ready)
+        print(" markdown:", markdown)
+        print(" result:", result)
+        print(" benchmark code:", "000300.SH")
+        print(" slots:", slots)
+        return ready, markdown, result, slots
 
     def test_equal_cards_omit_benchmark_sentence(self) -> None:
         """等权、没有基准时写出代码和 equal，不说基准留在旁边。"""
@@ -87,7 +210,7 @@ class TestAi04CommitCard(unittest.TestCase):
             self.assertNotIn("基准留在旁边", text)
 
     def test_excess_and_weekly_use_committed_inputs(self) -> None:
-        """超额不说基准留在旁边。周线结果写出 w。个数对不上时也不说旁边。"""
+        """超额不说基准留在旁边。周线结果写出 w。个数对不上时旁挂事实行仍在。"""
 
         print("\n[TestAi04CommitCard] 超额、周线和个数不一致")
         excess_steps = [
@@ -133,18 +256,10 @@ class TestAi04CommitCard(unittest.TestCase):
         print(" weekly:", weekly_text)
         self.assertIn("freq=w", weekly_text)
 
-        mismatch_steps = [
-            {
-                "step_id": "step_1",
-                "skill_name": "qt.ai.data.kline",
-                "inputs": {"shares": "600519.SH,000858.SZ", "freq": "d"},
-            },
-            {
-                "step_id": "step_2",
-                "skill_name": "qt.ai.hp.portfolio",
-                "inputs": {"mode": "equal", "benchmark": "000300.SH", "benchmark_output": "tag_along"},
-            },
-        ]
+        mismatch_steps = _portfolio_steps(
+            _CODES,
+            {"mode": "equal", "benchmark": "000300.SH", "benchmark_output": "tag_along"},
+        )
         mismatch, _mode = _slim_result_lines(
             plan=_plan(mismatch_steps),
             execution=_success("qt.ai.hp.portfolio", {"n_shares": 1}),
@@ -152,8 +267,26 @@ class TestAi04CommitCard(unittest.TestCase):
         )
         mismatch_text = "\n".join(mismatch)
         print(" mismatch:", mismatch_text)
-        self.assertNotIn("beside", mismatch_text.lower())
-        self.assertIn("600519.SH,000858.SZ", mismatch_text)
+        self.assertIn("benchmark=000300.SH beside the portfolio", mismatch_text)
+        self.assertNotIn("committed inputs", mismatch_text)
+        self.assertIn(_CODES, mismatch_text)
+
+
+def _portfolio_steps(shares: str, portfolio: dict) -> list:
+    """取数步加一条组合步。"""
+
+    return [
+        {
+            "step_id": "step_1",
+            "skill_name": "qt.ai.data.kline",
+            "inputs": {"shares": shares, "freq": "d"},
+        },
+        {
+            "step_id": "step_2",
+            "skill_name": "qt.ai.hp.portfolio",
+            "inputs": dict(portfolio),
+        },
+    ]
 
 
 def _success(skill_name: str, metrics: dict) -> dict:

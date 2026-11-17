@@ -319,7 +319,7 @@ class TestAiWorkbenchHuman(unittest.TestCase):
         print(" human:", text)
         self.assertIn("[MODE: RUN]  executed", text)
         self.assertIn("**Run did not finish.**", text)
-        self.assertIn("Check the name, then edit the blue message and send it again.", text)
+        self.assertNotIn("Check the name, then edit the blue message and send it again.", text)
         self.assertIn("Failed to get strategy details: unknown id.", text)
         self.assertNotIn("Result: FAILED", text)
 

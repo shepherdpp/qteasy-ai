@@ -1338,7 +1338,7 @@ class TestAiHumanCardPolish(unittest.TestCase):
         self.assertNotIn("rows", chart_text)
 
     def test_failed_result_quotes_error_message(self) -> None:
-        """失败 result 打印错误原文和一句解读，不编新数字。"""
+        """失败 result 打印错误原文，不编换代码的建议。"""
 
         print("\n[TestAiHumanCardPolish] failed result quote")
         message = "Failed to get strategy details: unknown id."
@@ -1367,7 +1367,7 @@ class TestAiHumanCardPolish(unittest.TestCase):
         print(" result:\n", result["text"])
         self.assertIn("**Run did not finish.**", result["text"])
         self.assertIn(f"Error: {message}", result["text"])
-        self.assertIn("Check the name, then edit the blue message and send it again.", result["text"])
+        self.assertNotIn("Check the name, then edit the blue message and send it again.", result["text"])
         self.assertNotIn("run this plan", result["text"])
         self.assertNotIn("Next:", result["text"])
         self.assertNotIn("next_mode", result["payload"])

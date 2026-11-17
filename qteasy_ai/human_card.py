@@ -17,7 +17,13 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
-from .slot_graph import clarification_skips_polish, committed_fact_lines, is_bound_item_list
+from .slot_graph import (
+    clarification_skips_polish,
+    committed_benchmark_role,
+    committed_fact_lines,
+    drop_role_conflicts,
+    is_bound_item_list,
+)
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
 HUMAN_CARD_KINDS = frozenset(
@@ -1639,42 +1645,16 @@ def _result_next(plan: Dict[str, Any], status: str) -> Tuple[Optional[str], Opti
     return _OPEN_RESULT_NEXT, "open"
 
 
-def _static_portfolio_conflicts(sentence: str, facts: Sequence[str]) -> bool:
-    """已有提交投影时，丢掉和输入相反的「基准留在旁边」。"""
+def _committed_role(plan: Dict[str, Any]) -> str:
+    """组合步已提交输入的角色。没有组合步时是 ``none``。"""
 
-    if not facts:
-        return False
-    text = str(sentence or "")
-    lowered = text.lower()
-    if "beside" in lowered or "基准留在旁边" in text:
-        return True
-    return False
-
-
-def _committed_count_differs(plan: Dict[str, Any], execution: Dict[str, Any]) -> bool:
-    """结果里的标的个数和已提交代码名单不一致。"""
-
-    codes: List[str] = []
     for row in _plan_step_rows(plan):
-        if row.get("skill_name") != "qt.ai.data.kline":
+        if str(row.get("skill_name") or "") != "qt.ai.hp.portfolio":
             continue
-        codes = [item.strip() for item in str((row.get("inputs") or {}).get("shares") or "").split(",") if item.strip()]
-    if not codes:
-        return False
-    for raw in execution.get("steps") or []:
-        if not isinstance(raw, dict):
-            continue
-        result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
-        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
-        count = metrics.get("n_shares")
-        if count is None:
-            continue
-        try:
-            if int(count) != len(codes):
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
+        inputs = row.get("inputs") if isinstance(row.get("inputs"), dict) else {}
+        _code, role = committed_benchmark_role(inputs)
+        return role
+    return "none"
 
 
 def _slim_result_lines(
@@ -1687,17 +1667,14 @@ def _slim_result_lines(
 
     status = str(execution.get("status") or "").strip() or "unknown"
     facts = committed_fact_lines(_plan_step_rows(plan))
-    if _committed_count_differs(plan, execution):
-        facts = [item.replace("beside the portfolio", "committed inputs") for item in facts]
-    sentences = [
-        sentence
-        for sentence in (
-            _result_step_sentence(item, registry)
-            for item in (execution.get("steps") or [])
-            if isinstance(item, dict)
-        )
-        if sentence and not _static_portfolio_conflicts(sentence, facts)
-    ]
+    role = _committed_role(plan)
+    sentences: List[str] = []
+    for item in execution.get("steps") or []:
+        if not isinstance(item, dict):
+            continue
+        sentence = drop_role_conflicts(_result_step_sentence(item, registry), role)
+        if sentence:
+            sentences.append(sentence)
     lines: List[str] = []
     if status == "success":
         if sentences or facts:
@@ -1716,15 +1693,15 @@ def _slim_result_lines(
             lines.append("")
         err = _execution_error_message(execution)
         if err:
-            lines.extend([f"Error: {err[0]}", "", err[1], ""])
+            lines.extend([f"Error: {err}", ""])
     sentence, next_mode = _result_next(plan, status)
     if sentence:
         lines.append(sentence)
     return lines, next_mode
 
 
-def _execution_error_message(execution: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-    """失败步的原文和一句固定解读。没有 message 时不编错误。"""
+def _execution_error_message(execution: Dict[str, Any]) -> str:
+    """失败步记录里的 ``error.message``。没有原文时为空串。"""
 
     for raw in execution.get("steps") or []:
         if not isinstance(raw, dict):
@@ -1732,24 +1709,9 @@ def _execution_error_message(execution: Dict[str, Any]) -> Optional[Tuple[str, s
         result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
         err = result.get("error") if isinstance(result.get("error"), dict) else None
         message = str((err or {}).get("message") or "").strip()
-        if not message:
-            continue
-        return message, _failure_hint(err or {})
-    return None
-
-
-def _failure_hint(err: Dict[str, Any]) -> str:
-    """按错误码或原文关键词选一句英文解读。"""
-
-    code = str(err.get("code") or "")
-    message = str(err.get("message") or "").lower()
-    if code.endswith("NOT_FOUND") or "not found" in message or "unknown" in message:
-        return "Check the name, then edit the blue message and send it again."
-    if "token" in message:
-        return "Set the Tushare token, then edit the blue message and send it again."
-    if code == "ALLOW_GATE_BLOCKED" or "allow_" in message:
-        return "Confirm the plan manually, or enable the matching allow flag, then edit the blue message and send it again."
-    return "Edit the blue message (pencil) and send it again."
+        if message:
+            return message
+    return ""
 
 
 def _result_step_sentence(step: Dict[str, Any], registry: Any) -> str:

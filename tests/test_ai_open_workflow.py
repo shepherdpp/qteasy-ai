@@ -9,6 +9,7 @@
 # ======================================
 
 import unittest
+from typing import Optional
 
 from qteasy_ai.app import build_default_registry
 from qteasy_ai.intents import load_default_catalog
@@ -135,10 +136,21 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertEqual(inputs.get("factor_htype"), "close")
         self.assertEqual(inputs.get("return_htype"), "volume")
 
-    def _factor_ic_replan(self, slots: dict) -> ToolPlan:
-        """用已确认槽、跳过分类，重出因子 IC 计划。原句带上两只代码，重检才能留下。"""
+    def _factor_ic_shares(self, plan: ToolPlan) -> Optional[str]:
+        """已确认的代码在 IC 步上；被挡住时留在已收下的快照里。"""
 
-        query = "factor IC summary for 000001.SZ,000002.SZ"
+        for step in plan.steps:
+            if step.skill_name == "qt.ai.research.factor_ic_summary":
+                return (step.inputs or {}).get("shares")
+        for row in (plan.assumptions or {}).get("accepted_steps") or []:
+            if row.get("skill_name") == "qt.ai.research.factor_ic_summary":
+                return (row.get("inputs") or {}).get("shares")
+        return None
+
+    def _factor_ic_replan(self, slots: dict) -> ToolPlan:
+        """用已确认槽、跳过分类，重出因子 IC 计划。原句不含代码，已确认的输入只复查形式。"""
+
+        query = "factor IC summary for selection pool"
         session = ConversationState.empty("factor-ic-reclarify")
         session.start_task(query=query, job="research.factor_ic")
         for name, value in slots.items():
@@ -172,9 +184,12 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" missing_info:", inputs.get("missing_info"))
         print(" pending:", pending)
         print(" confirm_prompt:", prompt)
+        print(" shares:", self._factor_ic_shares(plan))
         self.assertEqual(names, ["qt.ai.system.fallback"])
         self.assertEqual(inputs.get("missing_info"), "factor_htype")
         self.assertEqual(pending, ["factor_htype"])
+        self.assertNotIn("shares", pending)
+        self.assertEqual(self._factor_ic_shares(plan), "000001.SZ,000002.SZ")
         factor = next(item for item in (clar.get("pending") or []) if item.get("name") == "factor_htype")
         print(" factor error:", factor.get("error"))
         print(" factor hint:", factor.get("hint"))
@@ -228,7 +243,10 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" pending:", pending)
         print(" error:", factor.get("error"))
         print(" missing_info:", plan.steps[0].inputs.get("missing_info") if plan.steps else None)
+        print(" shares:", self._factor_ic_shares(plan))
         self.assertEqual(pending, ["factor_htype"])
+        self.assertNotIn("shares", pending)
+        self.assertEqual(self._factor_ic_shares(plan), "000001.SZ,000002.SZ")
         self.assertIn("close, volume", str(factor.get("error") or ""))
         self.assertNotIn("return_htype", pending)
         self.assertEqual(plan.steps[0].inputs.get("missing_info"), "factor_htype")
@@ -280,7 +298,9 @@ class TestAiOpenWorkflow(unittest.TestCase):
         clar = (plan.assumptions or {}).get("clarification") or {}
         pending = [str(item.get("name") or "") for item in (clar.get("pending") or []) if isinstance(item, dict)]
         print(" pending:", pending)
+        print(" shares:", self._factor_ic_shares(plan))
         self.assertEqual(pending, ["return_htype"])
+        self.assertEqual(self._factor_ic_shares(plan), "000001.SZ,000002.SZ")
         self.assertIn("close, volume", str(clar["pending"][0].get("error") or ""))
 
     def test_factor_ic_extra_partner_does_not_split(self) -> None:

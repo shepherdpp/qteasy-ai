@@ -20,7 +20,7 @@ import ast
 import datetime
 import json
 import re
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .slot_decl import clarification_prompt
 from .wire import align_steps, choice_card
@@ -520,6 +520,34 @@ def window_phrase(query: str) -> bool:
     """
 
     return _WINDOW_PHRASE.search(str(query or "")) is not None
+
+
+def _alias_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[str]:
+    """问句命中槽上已有别名时，记下该槽。
+
+    Parameters
+    ----------
+    projected : sequence of dict
+        投影槽。只读每槽已经声明的 ``aliases``。
+    query : str
+        这一轮问句。组图预写不在这段里。
+
+    Returns
+    -------
+    set of str
+        被别名点到的槽名。
+    """
+
+    text = str(query or "")
+    found: Set[str] = set()
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        aliases = slot.get("aliases")
+        if not name or not isinstance(aliases, dict):
+            continue
+        if any(str(alias) and str(alias) in text for alias in aliases):
+            found.add(name)
+    return found
 
 
 def refill_bound_spec(name: str) -> Dict[str, Any]:
@@ -1119,32 +1147,37 @@ def _fill_graph(
     covered = set(answered) | item_names
     submitted: Dict[str, Any] = {}
     ambiguous: List[str] = []
-    # 这张卡上的槽是这一轮点到的。空着才算空缺。窗口本身不预标，留给协议的 null 和省略区分。
+    # 卡片、窗口说法、市场日期的一端、别名，都先放进 mentioned，才能进第一次协议。
+    # 协议省略之后：窗口说法的日期留下，只被别名点到的槽从 mentioned 拿掉。
     mentioned: Set[str] = set(covered)
+    window_mentioned: Set[str] = set()
+    if window_phrase(query):
+        for slot in projected:
+            name = str(slot.get("name") or "")
+            if (
+                name
+                and str(slot.get("format") or "") == "YYYYMMDD"
+                and not slot.get("filled")
+            ):
+                window_mentioned.add(name)
+    mentioned.update(window_mentioned)
+    if hasattr(planner, "_market_inputs"):
+        market = planner._market_inputs(query)
+        if isinstance(market, dict):
+            for key in ("start", "end"):
+                if market.get(key) not in (None, ""):
+                    mentioned.add(key)
+    alias_mentioned = _alias_mentioned(projected, query)
+    mentioned.update(alias_mentioned)
     blocked: Dict[str, str] = {}
     first_report = _inspect_slots(steps, projected, query, mentioned, answered)
     gap_names = {str(name) for name in (first_report.get("gaps") or ())}
-    ask_dates = window_phrase(query)
-    if not ask_dates and hasattr(planner, "_market_inputs"):
-        market = planner._market_inputs(query)
-        ask_dates = isinstance(market, dict) and any(
-            market.get(key) not in (None, "") for key in ("start", "end")
-        )
-    read_slots: List[Dict[str, Any]] = []
-    if gap_names:
-        for slot in open_slots:
-            name = str(slot.get("name") or "")
-            if (
-                str(slot.get("format") or "") == "YYYYMMDD"
-                and name not in gap_names
-                and name not in covered
-                and not ask_dates
-            ):
-                continue
-            read_slots.append(slot)
+    read_slots = [
+        slot for slot in open_slots if str(slot.get("name") or "") in gap_names
+    ]
     provider = getattr(planner, "provider", None)
-    if provider is not None and read_slots:
-        # 有卡片时只读这张卡上的空缺。没有卡片时不把没提到的日期送进协议。
+    if gap_names and provider is not None and read_slots:
+        # 有卡片时只读这张卡盖住的空缺。没有卡片时，空缺名单里的槽都进协议。
         model_slots = [
             slot
             for slot in read_slots
@@ -1165,6 +1198,8 @@ def _fill_graph(
                             submitted[name] = kept
                         else:
                             mentioned.add(name)
+                    elif name in alias_mentioned and name not in window_mentioned:
+                        mentioned.discard(name)
                     continue
                 source = answered[name] if name in answered else query
                 model_value = model_submitted.get(name)
@@ -1190,17 +1225,18 @@ def _fill_graph(
                 and _affirms_equal(query)
             ):
                 submitted["mode"] = "equal"
-    elif provider is None and read_slots:
+    elif gap_names and provider is None and read_slots:
         targets = [
             slot for slot in read_slots if str(slot.get("name") or "") not in covered
         ]
         if not covered and targets:
-            submitted, ambiguous, mentioned = _heuristic(
+            submitted, ambiguous, heuristic_mentioned = _heuristic(
                 planner,
                 query,
                 targets,
                 dtype_query=_utterance_without_slots(query, session),
             )
+            mentioned |= heuristic_mentioned
         by_name = {str(slot.get("name") or ""): slot for slot in open_slots}
         for name, text in answered.items():
             slot = by_name.get(name)
@@ -1231,7 +1267,9 @@ def _fill_graph(
     force_names = _review_submission(steps, projected, submitted, query, answered)
     same_column = reject_same_history_column(projected, set(submitted), steps, planner)
     _seal_elements(planner, steps, projected, closed_items)
-    second_report = _inspect_slots(steps, projected, query, mentioned, answered)
+    second_report = _inspect_slots(
+        steps, projected, query, mentioned, answered, fresh=set(submitted)
+    )
     _apply_inspected(planner, steps, projected, second_report)
     if not covered or "weights" in covered:
         for step in steps:
@@ -3162,6 +3200,110 @@ def prior_turn_reply(meta: str, slots: Optional[Dict[str, Any]]) -> str:
     return f"上一轮提交的是 shares={shares}, freq={freq}, mode={mode}。"
 
 
+def committed_benchmark_role(inputs: Mapping[str, Any]) -> Tuple[str, str]:
+    """已提交基准的代码和角色。
+
+    字符串非空即已提交。字典只有 ``status`` 为 ``confirmed`` 才取 ``code``。
+    有代码且 ``benchmark_output`` 为 ``excess_only`` 时角色是 ``excess``，
+    有代码时是 ``beside``，没有代码时是 ``none``。
+
+    Parameters
+    ----------
+    inputs : mapping
+        组合步已提交输入。
+
+    Returns
+    -------
+    tuple of str
+        ``(code, role)``。``role`` 只为 ``beside``、``excess`` 或 ``none``。
+    """
+
+    raw = inputs.get("benchmark") if isinstance(inputs, Mapping) else None
+    code = ""
+    if isinstance(raw, str):
+        code = raw.strip()
+    elif isinstance(raw, Mapping) and str(raw.get("status") or "") == "confirmed":
+        code = str(raw.get("code") or "").strip()
+    output = str(inputs.get("benchmark_output") or "").strip() if isinstance(inputs, Mapping) else ""
+    if code and output == "excess_only":
+        return code, "excess"
+    if code:
+        return code, "beside"
+    return "", "none"
+
+
+def format_committed_slot(name: str, value: Any) -> str:
+    """把已提交槽收成槽位上的一行。空串表示不写。
+
+    Parameters
+    ----------
+    name : str
+        ``holdings``、``benchmark``、``weights`` 或 ``mode``。
+    value : any
+        该槽的已提交值。
+
+    Returns
+    -------
+    str
+        代码、权重、``equal`` / ``weighted`` 或基准代码。不写角色，也不写空值。
+    """
+
+    if name == "holdings":
+        rows = value if isinstance(value, list) else []
+        codes = [
+            str(item.get("code") or "").strip()
+            for item in rows
+            if isinstance(item, Mapping)
+            and str(item.get("status") or "") == "confirmed"
+            and str(item.get("code") or "").strip()
+        ]
+        return ",".join(codes)
+    if name == "benchmark":
+        code, _role = committed_benchmark_role({"benchmark": value})
+        return code
+    if name == "weights" and isinstance(value, (list, tuple)):
+        if value and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value):
+            return str(list(value))
+        return ""
+    if name == "mode":
+        text = str(value or "").strip()
+        if text in {"equal", "weighted"}:
+            return text
+    return ""
+
+
+def drop_role_conflicts(text: str, role: str) -> str:
+    """角色不是旁挂时，丢掉含旁挂说法的句子。
+
+    Parameters
+    ----------
+    text : str
+        技能说明或预期产物。按句号拆开。
+    role : str
+        ``beside``、``excess`` 或 ``none``。
+
+    Returns
+    -------
+    str
+        留下的句子用 ``. `` 接回。全部丢掉时为空串。
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    kept: List[str] = []
+    for part in re.split(r"\.\s+|。", raw):
+        sentence = part.strip().rstrip(".").strip()
+        if not sentence:
+            continue
+        if role != "beside" and ("beside" in sentence.lower() or "基准留在旁边" in sentence):
+            continue
+        kept.append(sentence)
+    if not kept:
+        return ""
+    return ". ".join(kept) + "."
+
+
 def committed_fact_lines(steps: Sequence[Any]) -> List[str]:
     """从已写入的 inputs 投影代码、频率、复权、权重和基准角色。"""
 
@@ -3187,16 +3329,15 @@ def committed_fact_lines(steps: Sequence[Any]) -> List[str]:
         if skill == _PORTFOLIO_SKILL:
             mode = str(inputs.get("mode") or "equal")
             weights = inputs.get("weights")
-            benchmark = str(inputs.get("benchmark") or "").strip()
-            output = str(inputs.get("benchmark_output") or "").strip()
+            code, role = committed_benchmark_role(inputs)
             if mode == "weighted" and isinstance(weights, (list, tuple)):
                 bits = f"Portfolio mode=weighted weights={list(weights)}"
             else:
                 bits = "Portfolio mode=equal"
-            if benchmark and output == "excess_only":
-                bits += f", benchmark={benchmark} as excess"
-            elif benchmark:
-                bits += f", benchmark={benchmark} beside the portfolio"
+            if role == "excess":
+                bits += f", benchmark={code} as excess"
+            elif role == "beside":
+                bits += f", benchmark={code} beside the portfolio"
             else:
                 bits += ", no benchmark"
             lines.append(bits + ".")
@@ -4300,11 +4441,13 @@ def _inspect_slots(
     query: str,
     mentioned: Set[str],
     card_text: Optional[Dict[str, str]] = None,
+    fresh: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """只读质检。每一格只调用 ``accept_slot_value``，拒因只用 ``_reject_reason``。
 
     不读任务名，也不改步骤。空着且这一轮没提到的选填槽不写拒因，也不算空缺。
-    ``confirmed`` 只作为收下后的结果，不能用来跳过。
+    ``confirmed`` 只作为收下后的结果，不能用来跳过。已有值只对照这份值复查形式。
+    这一轮新交的候选仍对照卡片原文或问句。
 
     Parameters
     ----------
@@ -4313,11 +4456,13 @@ def _inspect_slots(
     projected : sequence of dict
         投影槽。
     query : str
-        这一轮用户原文。卡片上的槽改用卡片原文。
+        这一轮用户原文。卡片上的新候选改用卡片原文。
     mentioned : set of str
         这一轮点到的槽。
     card_text : dict, optional
         卡片槽名到原文。
+    fresh : set of str, optional
+        这一轮新交的槽名。不在这里的现值只复查形式。
 
     Returns
     -------
@@ -4329,16 +4474,20 @@ def _inspect_slots(
     errors: Dict[str, str] = {}
     gaps: Set[str] = set()
     answered = card_text or {}
+    fresh_names = set(fresh or ())
     for slot in projected:
         name = str(slot.get("name") or "")
         if not name:
             continue
         current = _read_input(steps, name)
-        source = answered.get(name, query) if name in answered else query
         if current in (None, "", []):
             if slot.get("required") or name in mentioned:
                 gaps.add(name)
             continue
+        if name in fresh_names:
+            source = answered.get(name, query) if name in answered else query
+        else:
+            source = str(current)
         value = accept_slot_value(slot, current, source)
         if value in (None, "", []):
             errors[name] = _reject_reason(slot, current)

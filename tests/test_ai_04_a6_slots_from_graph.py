@@ -444,10 +444,19 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             replies=[
                 _job("open"),
                 json.dumps({"steps": rough}, ensure_ascii=False),
-                json.dumps({"shares": "000300.SH", "freq": "d", "asset_type": "IDX"}),
+                json.dumps({"shares": "000300.SH", "freq": "d"}),
             ]
         )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(asked, mode="plan")
+        protocol = next(text for text in fake.prompts if str(text).startswith("Slot protocol"))
+        protocol_slots = [
+            line.split()[1] for line in protocol.splitlines() if line.startswith("slot:")
+        ]
+        print(" protocol slots:", protocol_slots)
+        self.assertIn("shares", protocol_slots)
+        self.assertIn("freq", protocol_slots)
+        self.assertIn("htype_names", protocol_slots)
+        self.assertNotIn("asset_type", protocol_slots)
         print(" pending:", _pending_names(plan))
         print(" skill:", plan.steps[0].skill_name)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
@@ -462,7 +471,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" history:", history)
         print(" depends:", accepted.get("step_2", {}).get("depends_on"), accepted.get("step_3", {}).get("depends_on"))
         self.assertEqual(history.get("freq"), "d")
-        self.assertEqual(history.get("asset_type"), "IDX")
+        self.assertNotIn("asset_type", history)
         self.assertNotIn("htype_names", history)
         self.assertNotIn("日线", json.dumps(history, ensure_ascii=False))
         self.assertNotIn("指数", json.dumps(history, ensure_ascii=False))
@@ -497,7 +506,6 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
                     {
                         "shares": "000300.SH",
                         "freq": "d",
-                        "asset_type": "IDX",
                         "htype_names": "close",
                         "start": "20240101",
                     }
@@ -517,12 +525,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             ["qt.ai.data.history", "qt.ai.hp.returns", "qt.ai.hp.plot"],
         )
         self.assertEqual(dry.steps[0].inputs.get("freq"), "d")
-        self.assertEqual(dry.steps[0].inputs.get("asset_type"), "IDX")
+        self.assertNotIn("asset_type", dry.steps[0].inputs)
         self.assertEqual(dry.steps[0].inputs.get("htype_names"), "close")
         self.assertEqual(dry.steps[0].inputs.get("start"), "20240101")
         self.assertEqual(list(dry.steps[1].depends_on), ["step_1"])
         self.assertEqual(list(dry.steps[2].depends_on), ["step_2"])
         self.assertNotIn("start", _pending_names(dry))
+        self.assertNotIn("end", _pending_names(dry))
 
     def test_refill_strategy_options_factor_ic_and_fast_slow(self) -> None:
         """下载问 start/end；策略选项按字母序；因子 IC 与 fast/slow 不动。"""

@@ -28,8 +28,13 @@ SLOT_WHITELIST = frozenset(
         "slow",
         "asset_pool",
         "channel",
+        "holdings",
+        "weights",
+        "mode",
+        "benchmark",
     }
 )
+_COMMITTED_SLOT_NAMES = frozenset({"holdings", "weights", "mode", "benchmark"})
 ASSUMPTION_BLACKLIST = frozenset(
     {
         "gold_lock",
@@ -314,6 +319,16 @@ def _unpack_plan(plan: Union[ToolPlan, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _slot_text(name: str, value: Any) -> str:
+    """白名单槽的展示文本。代码、权重和基准不把字典原样写出去。"""
+
+    if name in _COMMITTED_SLOT_NAMES:
+        from .slot_graph import format_committed_slot
+
+        return format_committed_slot(name, value).strip()
+    return str(value).strip()
+
+
 def _slot_title(name: str) -> str:
     """槽位显示名。"""
 
@@ -337,7 +352,7 @@ def _collect_slots(
             continue
         if name not in allowed:
             continue
-        text = str(value).strip()
+        text = _slot_text(name, value)
         if text:
             collected[name] = text
     for step in steps:
@@ -348,7 +363,7 @@ def _collect_slots(
             name = str(key or "").strip()
             if name in ASSUMPTION_BLACKLIST or name not in allowed:
                 continue
-            text = str(value).strip()
+            text = _slot_text(name, value)
             if text:
                 collected[name] = text
     return [(key, collected[key]) for key in sorted(collected)]
@@ -570,6 +585,8 @@ def _mode_r_body(
 ) -> str:
     """无 Provider 时的确定性人读正文。"""
 
+    from .slot_graph import committed_benchmark_role, committed_fact_lines, drop_role_conflicts
+
     source_map = dict(sources or {})
     meta = dict(slot_meta or {})
     declared = set(meta)
@@ -601,7 +618,9 @@ def _mode_r_body(
             lines.append("   - Calls: this step")
         reads = _reads_writes_line(skill, step.get("side_effects"), registry)
         lines.append(f"   - Reads / writes: {reads}")
-        expect = _expected_output(skill, registry)
+        inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+        _code, role = committed_benchmark_role(inputs)
+        expect = drop_role_conflicts(_expected_output(skill, registry), role)
         lines.append(f"   - Expected output: {expect}")
         if skill:
             inventory.append(f"- {title} (`{skill}`): {expect}")
@@ -615,6 +634,10 @@ def _mode_r_body(
             lines.extend(_optimize_lines(step, source_map))
         lines.append("")
     lines.extend(["## Flow", "", "```mermaid", _build_mermaid(steps).rstrip(), "```", ""])
+    facts = committed_fact_lines(steps)
+    if facts:
+        lines.extend(facts)
+        lines.append("")
     if slots:
         lines.extend(["## Slots", ""])
         for key, value in slots:
