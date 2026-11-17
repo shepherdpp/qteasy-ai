@@ -258,9 +258,14 @@ class TestAi04CommitExclusive(unittest.TestCase):
         print("\n[TestAi04CommitExclusive] 历史日期")
         plain, _provider = _plan("读取历史 close 000300.SH 20240315")
         history = _inputs(plain, "qt.ai.data.history")
-        print(" plain history:", history)
+        from qteasy_ai.slot_graph import kernel_window
+        window = kernel_window()
+        defaults = (plain.assumptions or {}).get("slot_defaults") or {}
+        print(" plain history:", history, "kernel:", window, "defaults:", defaults)
         self.assertEqual(history.get("start"), "20240315")
-        self.assertIn(history.get("end"), (None, ""))
+        self.assertEqual(history.get("end"), window["end"])
+        self.assertEqual(defaults.get("end"), "default")
+        self.assertNotIn("start", defaults)
         self.assertNotIn("20250101", _blob(plain))
         self.assertNotIn("20251231", _blob(plain))
         modeled, _provider = _plan(
@@ -271,8 +276,12 @@ class TestAi04CommitExclusive(unittest.TestCase):
             ],
         )
         modeled_inputs = _snap_inputs(modeled, "qt.ai.data.history") or _inputs(modeled, "qt.ai.data.history")
-        print(" modeled:", modeled_inputs, _blob(modeled))
-        self.assertEqual(str(modeled_inputs.get("start") or ""), "")
+        modeled_defaults = (modeled.assumptions or {}).get("slot_defaults") or {}
+        print(" modeled:", modeled_inputs, "defaults:", modeled_defaults, _blob(modeled))
+        self.assertEqual(modeled_inputs.get("start"), window["start"])
+        self.assertEqual(modeled_inputs.get("end"), window["end"])
+        self.assertEqual(modeled_defaults.get("start"), "default")
+        self.assertEqual(modeled_defaults.get("end"), "default")
         self.assertNotIn("20251231", _blob(modeled))
         self.assertNotIn("20250101", _blob(modeled))
         self.assertNotIn("20240315", _blob(modeled))
@@ -325,12 +334,17 @@ class TestAi04CommitExclusive(unittest.TestCase):
         patches = new_task_patches("读取历史 close 000300.SH 到 2023 年")
         plan, _provider = _plan("读取历史 close 000300.SH 到 2023 年")
         history = _inputs(plan, "qt.ai.data.history")
+        from qteasy_ai.slot_graph import kernel_window
+        window = kernel_window()
+        defaults = (plan.assumptions or {}).get("slot_defaults") or {}
         print(" patches:", patches)
-        print(" history:", history)
+        print(" history:", history, "kernel:", window, "defaults:", defaults)
         self.assertNotIn("start", patches)
         self.assertNotIn("end", patches)
         self.assertEqual(history.get("end"), "20231231")
-        self.assertIn(history.get("start"), (None, ""))
+        self.assertEqual(history.get("start"), window["start"])
+        self.assertEqual(defaults.get("start"), "default")
+        self.assertNotIn("end", defaults)
 
     def test_recipe_calls_stay_in_source(self) -> None:
         """持有对比菜谱不再预写代码，也不再调用提交和市场抽取。"""

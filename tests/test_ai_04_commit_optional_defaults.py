@@ -128,18 +128,23 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
     """提到了的选填槽不能带着缺省跳过。"""
 
     def test_equal_weight_without_window_keeps_kernel_dates(self) -> None:
-        """等权金句没提窗口：可确认，日期不进待答，也不写进计划。"""
+        """等权金句没提窗口：可确认，不出日期卡，两端写入内核窗口且来源是缺省。"""
 
         print("\n[TestAi04OptionalDefaults] 等权金句无窗口")
         plan = _planner().build_plan(_GOLD, mode="plan")
         kline = _snap(plan, "qt.ai.data.kline")
+        window = slot_graph.kernel_window()
+        defaults = (plan.assumptions or {}).get("slot_defaults") or {}
         print(" confirmable:", _confirmable(plan), "pending:", _names(plan))
-        print(" kline start:", kline.get("start"), "end:", kline.get("end"))
+        print(" kline start:", kline.get("start"), "end:", kline.get("end"), "kernel:", window)
+        print(" defaults:", defaults)
         self.assertTrue(_confirmable(plan))
         self.assertNotIn("start", _names(plan))
         self.assertNotIn("end", _names(plan))
-        self.assertIn(kline.get("start"), (None, ""))
-        self.assertIn(kline.get("end"), (None, ""))
+        self.assertEqual(kline.get("start"), window["start"])
+        self.assertEqual(kline.get("end"), window["end"])
+        self.assertEqual(defaults.get("start"), "default")
+        self.assertEqual(defaults.get("end"), "default")
 
     def test_window_phrase_asks_both_ends(self) -> None:
         """过去3年和过去三年都只出日期题，不把说法折成日期。"""
@@ -344,13 +349,16 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
         history = _snap(quiet, "qt.ai.data.history")
         print(" quiet job:", quiet.planner_trace.get("intent_job"), "pending:", _names(quiet))
         print(" quiet dates:", history.get("start"), history.get("end"), "confirmable:", _confirmable(quiet))
+        print(" kernel:", start, end, "defaults:", (quiet.assumptions or {}).get("slot_defaults"))
         self.assertEqual(quiet.planner_trace.get("intent_job"), "data.read")
         self.assertEqual(quiet.steps[0].skill_name, "qt.ai.data.history")
         self.assertTrue(_confirmable(quiet))
         self.assertNotIn("start", _names(quiet))
         self.assertNotIn("end", _names(quiet))
-        self.assertIn(history.get("start"), (None, ""))
-        self.assertIn(history.get("end"), (None, ""))
+        self.assertEqual(history.get("start"), start)
+        self.assertEqual(history.get("end"), end)
+        self.assertEqual(((quiet.assumptions or {}).get("slot_defaults") or {}).get("start"), "default")
+        self.assertEqual(((quiet.assumptions or {}).get("slot_defaults") or {}).get("end"), "default")
 
         asked = _planner().build_plan(_HISTORY_WINDOW, mode="plan")
         rows = {str(item.get("name") or ""): item for item in _pending(asked)}

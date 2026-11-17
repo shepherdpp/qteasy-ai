@@ -1169,6 +1169,8 @@ def _fill_graph(
                     mentioned.add(key)
     alias_mentioned = _alias_mentioned(projected, query)
     mentioned.update(alias_mentioned)
+    mentioned.update(_element_mentioned(projected, query))
+    mentioned.update(_screen_mentioned(projected, query))
     blocked: Dict[str, str] = {}
     first_report = _inspect_slots(steps, projected, query, mentioned, answered)
     gap_names = {str(name) for name in (first_report.get("gaps") or ())}
@@ -1282,8 +1284,12 @@ def _fill_graph(
     if blocked_weights:
         force_names |= blocked_weights
         _sync_projected(planner, steps, projected)
-    if _apply_lookback_default(planner, steps, projected, mentioned):
-        extras["slot_defaults"] = {"lookback_days": "library"}
+    materialized = _materialize_declared_defaults(
+        planner, steps, projected, set(second_report.get("gaps") or ())
+    )
+    default_gaps = set(materialized.get("gaps") or ())
+    if materialized.get("defaults"):
+        extras["slot_defaults"] = dict(materialized["defaults"])
     if job in _DIAGNOSIS_JOBS:
         _bake_describe_view(steps, projected)
         _remember_diagnosis_defaults(session, projected)
@@ -1310,6 +1316,7 @@ def _fill_graph(
             continue
         mentioned.add(name)
         errors.setdefault(name, _reject_reason(slot, text))
+    force_names |= default_gaps
     force_names |= _unresolved_optional_defaults(projected, mentioned)
     open_names = _open_any_of_names(planner, steps, projected)
     pending = _pending_after_fill(
@@ -1589,50 +1596,120 @@ def _must_ask(slot: Dict[str, Any], steps: Sequence[Any]) -> bool:
     return False
 
 
-def _apply_lookback_default(
+def _literal_slot_default(slot: Dict[str, Any]) -> Any:
+    """槽上声明的字面缺省。不读技能名。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽。
+
+    Returns
+    -------
+    any
+        ``default`` 字段。没有则为 ``None``。
+    """
+
+    return slot.get("default")
+
+
+def _kernel_window_slot_default(slot: Dict[str, Any]) -> Any:
+    """按槽名从内核窗口取一端。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽。名字要对上 ``kernel_window`` 的键。
+
+    Returns
+    -------
+    str or None
+        对上的那一端。对不上则为 ``None``。
+    """
+
+    return kernel_window().get(str(slot.get("name") or ""))
+
+
+def _slot_default_value(slot: Dict[str, Any]) -> Any:
+    """这一格声明的那一种缺省。有 ``default_kind`` 时不用字面 ``default``。
+
+    Parameters
+    ----------
+    slot : dict
+        投影槽。
+
+    Returns
+    -------
+    any
+        可以写入的缺省。没有对应函数时为 ``None``。
+    """
+
+    kind = str(slot.get("default_kind") or "").strip()
+    if kind == "kernel_window":
+        return _kernel_window_slot_default(slot)
+    if kind:
+        return None
+    if "default" in slot and slot.get("default") not in (None, ""):
+        return _literal_slot_default(slot)
+    return None
+
+
+def _materialize_declared_defaults(
     planner: Any,
     steps: Sequence[Any],
     projected: Sequence[Dict[str, Any]],
-    mentioned: Set[str],
-) -> bool:
-    """没提到回看天数时写入 126，不追问。
+    gaps: Set[str],
+) -> Dict[str, Any]:
+    """报告没把这一格算进空缺、步骤仍空、且槽上有缺省声明时写入，再质检刚写上的值。
+
+    不读任务名或技能名。写上的名字不进入用户提交。质检拒绝或没有对应函数时回到空缺。
 
     Parameters
     ----------
     planner : planner
-        用来把缺省写进仍空的输入。
+        用来把值写进仍空的输入。
     steps : sequence
         当前步骤。
     projected : sequence of dict
         投影槽。
-    mentioned : set of str
-        提到了但没有合法值的槽名。其中有回看时不写 126。
+    gaps : set of str
+        这一次报告里的空缺。这些槽不写。
 
     Returns
     -------
-    bool
-        这一轮是否写入了 126。
+    dict
+        ``defaults`` 是留下的槽名到来源 ``default``。``gaps`` 是没写上或被拒的槽名。
     """
 
-    if "lookback_days" in mentioned:
-        return False
+    blocked = {str(name) for name in gaps}
+    written: List[str] = []
+    rejected: Set[str] = set()
     for slot in projected:
-        if slot["name"] == "lookback_days" and slot["filled"]:
-            return False
-    wrote = False
-    for step in steps:
-        if step.skill_name != "qt.ai.research.price_predicate":
+        name = str(slot.get("name") or "")
+        if not name or name in blocked or not _has_declared_default(slot):
             continue
-        if (step.inputs or {}).get("lookback_days") not in (None, ""):
+        if _read_input(steps, name) not in (None, "", []):
             continue
-        step.inputs["lookback_days"] = 126
-        wrote = True
-    if wrote:
-        for slot in projected:
-            if slot["name"] == "lookback_days":
-                slot["filled"] = True
-                slot["value"] = 126
-    return wrote
+        value = _slot_default_value(slot)
+        if value in (None, "", []):
+            rejected.add(name)
+            continue
+        if not _write_empty(planner, steps, name, value):
+            rejected.add(name)
+            continue
+        written.append(name)
+    if written:
+        subset = [slot for slot in projected if str(slot.get("name") or "") in set(written)]
+        report = _inspect_slots(steps, subset, "", set(), None, fresh=set())
+        _apply_inspected(planner, steps, subset, report)
+        report_gaps = {str(name) for name in (report.get("gaps") or ())}
+        report_errors = {str(name) for name in (report.get("errors") or {})}
+        for name in written:
+            if name in report_gaps or name in report_errors or _read_input(steps, name) in (None, "", []):
+                rejected.add(name)
+                continue
+    kept = [name for name in written if name not in rejected]
+    return {"defaults": {name: "default" for name in kept}, "gaps": rejected}
 
 
 def _project(
@@ -4127,6 +4204,59 @@ def _heuristic_elements(query: str, slots: Sequence[Dict[str, Any]]) -> Dict[str
             found[str(slot.get("name") or "")] = items[0]
         else:
             found[str(slot.get("name") or "")] = items
+    return found
+
+
+def _element_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[str]:
+    """元素切分已经取出至少一项的槽名。不写步骤，也不看槽名。
+
+    Parameters
+    ----------
+    projected : sequence of dict
+        这一步要调用的投影槽。
+    query : str
+        这一轮用户原文。
+
+    Returns
+    -------
+    set of str
+        切得出项的槽名。切不出的不在这里。
+    """
+
+    names: Set[str] = set()
+    for name, value in _heuristic_elements(query, projected).items():
+        if value in (None, "", []):
+            continue
+        names.add(str(name))
+    return names
+
+
+def _screen_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[str]:
+    """筛股解析已经取出的键，以及写了但收不成整数的回看。不写步骤。
+
+    回看若等缺省出口才看见，非法原文会被声明缺省盖掉。方向、阈值和行业
+    已经能从同一句取出时先点到，避免只留下一张方向卡把缺省来源弹掉。
+
+    Parameters
+    ----------
+    projected : sequence of dict
+        这一步要调用的投影槽。
+    query : str
+        这一轮用户原文。
+
+    Returns
+    -------
+    set of str
+        要并进「这一轮点到」的槽名。
+    """
+
+    names = {str(slot.get("name") or "") for slot in projected}
+    found: Set[str] = set()
+    for key, value in _parse_screen(query).items():
+        if key in names and value not in (None, "", []):
+            found.add(key)
+    if "lookback_days" in names and _bad_lookback(query):
+        found.add("lookback_days")
     return found
 
 
