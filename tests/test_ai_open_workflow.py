@@ -414,8 +414,10 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print("\n[TestAiOpenWorkflow] system open job")
         import json
 
+        query = "xyzzy unmatched formula 12345"
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {
@@ -426,9 +428,7 @@ class TestAiOpenWorkflow(unittest.TestCase):
                 ),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345", mode="plan"
-        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [step.skill_name for step in plan.steps]
         print(" intent:", plan.planner_trace.get("intent_job"), "skills:", names)
         print(" design_loop:", (plan.assumptions or {}).get("design_loop"))

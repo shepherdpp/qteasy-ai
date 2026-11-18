@@ -199,17 +199,7 @@ class IntentEngine:
     def _llm_classify(self, query: str, allowed: Set[str]) -> IntentDecision:
         """Mode-D：只信 LLM 协议；唯一合法且确定才接受。"""
 
-        from .slot_graph import split_prior_question
-
-        head, tail = split_prior_question(query)
-        if tail and not head:
-            return IntentDecision(
-                job="clarify",
-                source="rule",
-                rationale="prior_question",
-                llm_called=False,
-            )
-        parsed = self._ask_llm_job(head or query, allowed)
+        parsed = self._ask_llm_job(query, allowed)
         if parsed.kind == "accept":
             return IntentDecision(
                 job=parsed.job,
@@ -221,8 +211,7 @@ class IntentEngine:
         if parsed.kind == "uncertain":
             from .slot_graph import looks_like_hold_compare
 
-            text = head or query
-            if looks_like_hold_compare(text):
+            if looks_like_hold_compare(query):
                 return IntentDecision(
                     job="research.hold_compare",
                     flags=self._flags_for("research.hold_compare", query, query.lower()),

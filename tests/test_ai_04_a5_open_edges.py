@@ -95,6 +95,7 @@ def _open_plan(registry, steps, query: str = _QUERY, fill: str = ""):
     """用分类和组图走出系统 open。需要收下代码时再补一条填槽协议。"""
 
     replies = [
+        json.dumps({"task": query, "question": ""}, ensure_ascii=False),
         json.dumps({"job": "open"}),
         json.dumps({"steps": steps}),
     ]

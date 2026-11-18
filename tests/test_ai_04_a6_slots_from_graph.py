@@ -35,6 +35,12 @@ def _job(job: str) -> str:
     return json.dumps({"job": job}, ensure_ascii=False)
 
 
+def _clause(text: str) -> str:
+    """整句是办事，没有附带提问。"""
+
+    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
+
+
 def _pending(plan):
     """澄清卡上的 pending。"""
 
@@ -71,6 +77,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         }
         fake = FakeLLMProvider(
             replies=[
+                _clause(screen),
                 _job("research.screen"),
                 json.dumps(
                     {
@@ -96,7 +103,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" fill prompts:", len(fill_prompts))
         print(" slot lines:", slot_lines)
         print(" skills:", [step.skill_name for step in plan.steps])
-        self.assertTrue(fake.prompts[0].startswith("Official and system Job ids:"))
+        catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+        self.assertEqual(fake.prompts[0], screen)
+        self.assertEqual(len(catalogs), 1)
         self.assertEqual(len(fill_prompts), 1)
         self.assertIn("industry", slot_lines)
         self.assertIn("threshold", slot_lines)
@@ -141,6 +150,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         }
         chinese = FakeLLMProvider(
             replies=[
+                _clause(bare),
                 _job("research.screen"),
                 json.dumps({"industry": "银行业", "lookback_days": 20, "threshold": 0.1}, ensure_ascii=False),
                 json.dumps(good_polish, ensure_ascii=False),
@@ -303,6 +313,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
 
         fake = FakeLLMProvider(
             replies=[
+                _clause("please fetch industry and name for 000001.SZ"),
                 _job("data.read"),
                 json.dumps({"names": "industry,stock_name"}, ensure_ascii=False),
             ]
@@ -365,7 +376,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.volatility", "inputs": {}},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}},
         ]
-        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": too_many})])
+        fake = FakeLLMProvider(
+            replies=[
+                _clause("取日线、算收益、出一页图"),
+                _job("open"),
+                json.dumps({"steps": too_many}),
+            ]
+        )
         rejected = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "取日线、算收益、出一页图",
             mode="plan",
@@ -402,6 +419,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         ]
         opened = FakeLLMProvider(
             replies=[
+                _clause("取 000300.SH 日线、算收益、出一页图"),
                 _job("open"),
                 json.dumps({"steps": steps}),
                 json.dumps({"shares": "000300.SH"}),
@@ -442,6 +460,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         asked = "取 000300.SH 日线，算收益，再出一页图"
         fake = FakeLLMProvider(
             replies=[
+                _clause(asked),
                 _job("open"),
                 json.dumps({"steps": rough}, ensure_ascii=False),
                 json.dumps({"shares": "000300.SH", "freq": "d"}),
@@ -500,6 +519,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         ]
         opened = FakeLLMProvider(
             replies=[
+                _clause("取 000300.SH 从 20240101 起的日线，算收益，再出一页图"),
                 _job("open"),
                 json.dumps({"steps": ready}, ensure_ascii=False),
                 json.dumps(
@@ -621,6 +641,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         ]
         fake = FakeLLMProvider(
             replies=[
+                _clause("取 000300.SH 日线再算收益"),
                 _job("open"),
                 json.dumps({"steps": linked}),
                 json.dumps({"shares": "000300.SH"}),
@@ -667,7 +688,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.returns", "inputs": {}},
         ]
         for label, steps in (("ambiguous", ambiguous), ("unknown", unknown), ("forward", forward)):
-            opened = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": steps})])
+            opened = FakeLLMProvider(
+                replies=[
+                    _clause("取 000300.SH 日线再算收益"),
+                    _job("open"),
+                    json.dumps({"steps": steps}),
+                ]
+            )
             rejected = Planner(self.registry, provider=opened, env_facts={}).build_plan(
                 "取 000300.SH 日线再算收益",
                 mode="plan",
@@ -702,6 +729,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         ]
         bound = FakeLLMProvider(
             replies=[
+                _clause("取 000300.SH 日线再算收益"),
                 _job("open"),
                 json.dumps({"steps": empty}),
                 json.dumps({"shares": "000300.SH"}),
@@ -733,7 +761,13 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             },
             {"skill_name": "qt.ai.hp.returns", "inputs": {}},
         ]
-        fake = FakeLLMProvider(replies=[_job("open"), json.dumps({"steps": rough})])
+        fake = FakeLLMProvider(
+            replies=[
+                _clause("取 000300.SH 的 close，算收益"),
+                _job("open"),
+                json.dumps({"steps": rough}),
+            ]
+        )
         asked = Planner(self.registry, provider=fake, env_facts={}).build_plan(
             "取 000300.SH 的 close，算收益",
             mode="plan",

@@ -68,8 +68,9 @@ class TestAiCliNotebookEntry(unittest.TestCase):
     def test_cli_plan_command_human_default(self) -> None:
         """CLI 默认 human：对话区文本，不是 JSON。"""
 
-        cmd = [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies"]
-        completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            completed = self._cli(["plan", "list built-in strategies"], self._provider_home_env(temp_dir))
+        self.assertEqual(completed.returncode, 0)
         print("\n[TestAiCliNotebookEntry] cli human stdout:", completed.stdout[:400])
         self.assertIn("[MODE: PLAN]", completed.stdout)
         self.assertIn("Plan ready.", completed.stdout)
@@ -216,16 +217,20 @@ class TestAiCliNotebookEntry(unittest.TestCase):
     def test_cli_preview_and_plan_preview_alias(self) -> None:
         """验证 preview 与 plan --preview 走出 strategy_meta.list。"""
 
-        for cmd in (
-            [sys.executable, "-m", "qteasy_ai.cli", "preview", "list built-in strategies", "--raw"],
-            [sys.executable, "-m", "qteasy_ai.cli", "plan", "list built-in strategies", "--preview", "--raw"],
-        ):
-            completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            payload = json.loads(completed.stdout)
-            print("\n[TestAiCliNotebookEntry] preview cmd:", cmd[-2:], "status:", payload["execution"]["status"])
-            print(" skills:", [s["skill_name"] for s in payload["plan"]["steps"]])
-            self.assertEqual(payload["execution"]["status"], "dry_run")
-            self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.strategy_meta.list")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = self._provider_home_env(temp_dir)
+            commands = (
+                ["preview", "list built-in strategies", "--raw"],
+                ["plan", "list built-in strategies", "--preview", "--raw"],
+            )
+            for args in commands:
+                completed = self._cli(args, env)
+                self.assertEqual(completed.returncode, 0)
+                payload = json.loads(completed.stdout)
+                print("\n[TestAiCliNotebookEntry] preview cmd:", args[-2:], "status:", payload["execution"]["status"])
+                print(" skills:", [s["skill_name"] for s in payload["plan"]["steps"]])
+                self.assertEqual(payload["execution"]["status"], "dry_run")
+                self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.strategy_meta.list")
 
     def test_run_plan_id_skips_hybrid(self) -> None:
         """run_plan 从 runs 加载已审阅 plan，不再调用 build_plan。"""

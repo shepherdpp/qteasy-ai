@@ -112,6 +112,7 @@ class TestAi04bDefaultInputs(unittest.TestCase):
                 registry=build_default_registry(),
                 provider=FakeLLMProvider(
                     replies=[
+                        json.dumps({"task": _OPEN, "question": ""}, ensure_ascii=False),
                         job,
                         job,
                         json.dumps(compose, ensure_ascii=False),

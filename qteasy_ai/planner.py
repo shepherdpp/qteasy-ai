@@ -40,15 +40,15 @@ from .slot_decl import (
 )
 from .slot_graph import (
     FACTOR_IC_SLOT_DECLS,
+    ClauseSplit,
     apply_slot_layer,
     contract_digest_lines,
     date_pending_rows,
     overlay_kept_inputs,
     polish_clarification,
-    prior_turn_reply,
     question_label,
     revision_target,
-    split_prior_question,
+    split_task_and_question,
     strategy_id_options,
 )
 from .wire import align_steps, choice_card
@@ -178,6 +178,7 @@ class Planner:
         card_items: Optional[Dict[str, Any]] = None,
         revision_query: str = "",
         kept_steps: Optional[List[Dict[str, Any]]] = None,
+        clause_split: Optional[ClauseSplit] = None,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -199,6 +200,8 @@ class Planner:
             这张卡上尚未确认的槽，槽名对原文。只交给填槽，不换掉构图用的任务原句。
         card_items : dict, optional
             这张卡上的持仓项列表。解释前不标成已确认。
+        clause_split : ClauseSplit, optional
+            调用方已经拆过的办事和提问。传入后不再向模型要一次。
 
         Returns
         -------
@@ -218,6 +221,7 @@ class Planner:
             card_items=card_items,
             revision_query=revision_query,
             kept_steps=kept_steps,
+            clause_split=clause_split,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -236,6 +240,7 @@ class Planner:
         card_items: Optional[Dict[str, Any]] = None,
         revision_query: str = "",
         kept_steps: Optional[List[Dict[str, Any]]] = None,
+        clause_split: Optional[ClauseSplit] = None,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -299,14 +304,61 @@ class Planner:
                 if row.get("skill_name")
             ]
 
+        clause = clause_split
+        use_clause = (
+            card_text is None
+            and not resumed
+            and forced != "open"
+            and (bool(revision) or not skip)
+        )
+        if not use_clause:
+            clause = None
+        elif clause is None:
+            clause = split_task_and_question(
+                revision or query,
+                self.provider,
+                identity_dir=getattr(self, "identity_dir", None),
+            )
+        pending_question = ""
+        hold_kept = False
+        split_source = (revision or user_query).strip()
+        if (
+            clause is not None
+            and clause.status == "marked"
+            and clause.task
+            and origin_text == split_source
+        ):
+            origin_text = clause.task
+
         if revision and task is not None and str(getattr(task, "job", "") or ""):
             current_job = str(task.job or "")
-            classified = self.intent_engine.classify(revision)
-            target = revision_target(current_job, revision, str(classified.job or ""))
-            candidate_source = "session"
-            downgrade_reason = ""
             flags = dict(task.flags or {})
-            if target:
+            task_text = revision
+            if clause is not None and (clause.status != "marked" or not clause.task):
+                hold_kept = True
+                if clause.status == "marked" and clause.question:
+                    pending_question = clause.question
+                decision = IntentDecision(
+                    job=current_job,
+                    flags=flags,
+                    source="session",
+                    rationale="revise_plan",
+                )
+                candidate_source = "session"
+                downgrade_reason = ""
+                steps = _rows_to_steps(kept_rows)
+                query = ""
+                q_lower = ""
+            else:
+                if clause is not None and clause.status == "marked" and clause.task:
+                    task_text = clause.task
+                    if clause.question:
+                        pending_question = clause.question
+                classified = self.intent_engine.classify(task_text)
+                target = revision_target(current_job, task_text, str(classified.job or ""))
+                candidate_source = "session"
+                downgrade_reason = ""
+            if not hold_kept and target:
                 replaced_rows = [dict(row) for row in kept_rows]
                 decision = IntentDecision(
                     job=target,
@@ -318,11 +370,11 @@ class Planner:
                 overrides.pop("shares", None)
                 self._market_overrides = overrides
                 self._revision_skip_shares = True
-                query = revision
+                query = task_text
                 q_lower = query.lower()
                 steps = compose_recipe(self, decision, query)
                 carry_rows = kept_rows
-            else:
+            elif not hold_kept:
                 from .intents import IntentCatalog
 
                 decision = IntentDecision(
@@ -334,11 +386,11 @@ class Planner:
                 if IntentCatalog().job_workflow(current_job) == "open":
                     revision_open = True
                     steps = _rows_to_steps(kept_rows)
-                    query = revision
+                    query = task_text
                     q_lower = query.lower()
                     fill_kept = kept_rows
                 else:
-                    compose_query = origin_text or revision
+                    compose_query = origin_text or task_text
                     steps = compose_recipe(self, decision, compose_query)
                     overlay_kept_inputs(steps, kept_rows)
                     from .slot_graph import _clear_open_prewrite
@@ -357,7 +409,7 @@ class Planner:
                         self._prior_commit_values(session),
                         kept_steps=kept_rows,
                     )
-                    query = revision
+                    query = task_text
                     q_lower = query.lower()
                     fill_kept = kept_rows
         elif resumed:
@@ -395,28 +447,28 @@ class Planner:
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
         else:
-            head, tail = split_prior_question(user_query.strip())
-            prior_slots = self._prior_commit_values(session)
-            reply = prior_turn_reply(tail, prior_slots)
-            if tail and not head:
+            if clause is not None and (clause.status != "marked" or not clause.task):
                 decision = IntentDecision(
                     job="clarify",
                     source="rule",
-                    rationale="prior_question",
-                    flags={"prior_reply": reply},
+                    rationale="unmatched",
                     llm_called=False,
                 )
+                query = ""
+                q_lower = ""
+                if clause.status == "marked" and clause.question:
+                    pending_question = clause.question
             else:
-                decision = self.intent_engine.classify(head or user_query.strip())
-                query = head or query
-                q_lower = query.lower()
-            if tail and reply:
-                decision.flags = dict(decision.flags or {})
-                decision.flags["prior_reply"] = reply
+                if clause is not None and clause.status == "marked" and clause.task:
+                    query = clause.task
+                    q_lower = query.lower()
+                    if clause.question:
+                        pending_question = clause.question
+                decision = self.intent_engine.classify(query)
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
-        if decision.job == "open" and not skip and not resumed and not revision_open:
+        if not hold_kept and decision.job == "open" and not skip and not resumed and not revision_open:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:
                 downgrade_reason = open_reason
@@ -429,17 +481,20 @@ class Planner:
                 steps = compose_recipe(self, decision, query)
             else:
                 steps = open_steps
-        steps, gate_extras = self._apply_post_candidate_gates(
-            steps,
-            query=query,
-            candidate_source=candidate_source,
-            job=decision.job,
-            session=session,
-            card_text=card_text,
-            card_items=card_items,
-            kept_steps=fill_kept,
-            carry_steps=carry_rows,
-        )
+        if hold_kept:
+            gate_extras: Dict[str, Any] = {}
+        else:
+            steps, gate_extras = self._apply_post_candidate_gates(
+                steps,
+                query=query,
+                candidate_source=candidate_source,
+                job=decision.job,
+                session=session,
+                card_text=card_text,
+                card_items=card_items,
+                kept_steps=fill_kept,
+                carry_steps=carry_rows,
+            )
         assumptions = {
             "planner": "hybrid_intent_h_prime",
             "provider_enabled": self.provider is not None,
@@ -450,9 +505,8 @@ class Planner:
             "intent_source": decision.source,
             "intent_rationale": decision.rationale,
         }
-        prior_reply = str((decision.flags or {}).get("prior_reply") or "")
-        if prior_reply:
-            assumptions["prior_reply"] = prior_reply
+        if pending_question:
+            assumptions["questions"] = [pending_question]
         if replaced_rows is not None:
             assumptions["replaced_steps"] = replaced_rows
         assumptions.update(gate_extras)
@@ -491,9 +545,12 @@ class Planner:
             assumptions["input_sources"] = input_sources
         missing = self._required_missing(decision.job, steps, session)
         if missing:
+            shown = user_query
+            if clause is not None and clause.status == "marked" and clause.task:
+                shown = query or user_query
             assumptions["clarification"] = finalize_clarification_for_emit(
                 self._factor_ic_clarification(
-                    self._session_clarification(user_query, missing),
+                    self._session_clarification(shown, missing),
                     steps,
                 )
             )

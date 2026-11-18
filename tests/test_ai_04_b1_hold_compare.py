@@ -367,6 +367,7 @@ class TestAi04B1HoldCompare(unittest.TestCase):
 
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": "做一条等权组合", "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
                 json.dumps(
                     {

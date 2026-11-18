@@ -260,6 +260,7 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
         benchmark = {"mention": "沪深300", "code": "000300.SH"}
         omitted = _planner(
             [
+                json.dumps({"task": _WINDOW_DIGIT, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "research.hold_compare"}),
                 json.dumps({"holdings": holdings, "benchmark": benchmark, "mode": "equal"}),
             ]
@@ -271,6 +272,7 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
 
         nulled = _planner(
             [
+                json.dumps({"task": _WINDOW_DIGIT, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "research.hold_compare"}),
                 json.dumps(
                     {

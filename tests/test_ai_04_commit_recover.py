@@ -44,11 +44,12 @@ class TestAi04CommitRecover(unittest.TestCase):
         print("\n[TestAi04CommitRecover] 不确定仍留在持有对比")
         ask = "平安、招行、茅台，轻重不同，放一起成一条线"
         unsure = json.dumps({"job": "research.hold_compare", "uncertain": True}, ensure_ascii=False)
-        plan, fake = self._plan(ask, [unsure])
+        split_ask = json.dumps({"task": ask, "question": ""}, ensure_ascii=False)
+        plan, fake = self._plan(ask, [split_ask, unsure])
         print(" job:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("intent_rationale"))
         print(" skills:", [step.skill_name for step in plan.steps])
         print(" pending:", _pending_names(plan))
-        print(" prompt:", fake.prompts[0])
+        print(" prompt:", fake.prompts)
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.hold_compare")
         self.assertEqual(_pending_names(plan), ["holdings"])
         self.assertNotIn("weights", _pending_names(plan))
@@ -62,46 +63,58 @@ class TestAi04CommitRecover(unittest.TestCase):
         self.assertNotIn("600519", dumped)
 
         trailed = ask + "，跟上次是一回事吗"
-        again, seen = self._plan(trailed, [unsure])
+        split_trailed = json.dumps(
+            {"task": ask, "question": "跟上次是一回事吗"},
+            ensure_ascii=False,
+        )
+        again, seen = self._plan(trailed, [split_trailed, unsure])
+        classify = [item for item in seen.prompts if "Official and system Job ids:" in item]
         print(" trailed job:", again.planner_trace.get("intent_job"))
-        print(" trailed prompt:", seen.prompts[0])
+        print(" trailed classify:", classify)
         self.assertEqual(again.planner_trace.get("intent_job"), "research.hold_compare")
-        self.assertNotIn("是一回事吗", seen.prompts[0])
-        self.assertNotIn("跟上次", seen.prompts[0])
+        self.assertTrue(classify)
+        self.assertNotIn("是一回事吗", classify[0])
+        self.assertNotIn("跟上次", classify[0])
 
     def test_unrelated_uncertain_stays_unmatched(self) -> None:
         """对不上闭合菜谱的短句仍是开放计划恢复，不新造 Job。"""
 
         print("\n[TestAi04CommitRecover] 对不上的短句保持未匹配")
         unsure = json.dumps({"job": "clarify", "uncertain": True}, ensure_ascii=False)
-        plan, _fake = self._plan("今天星期几", [unsure])
+        split_day = json.dumps({"task": "今天星期几", "question": ""}, ensure_ascii=False)
+        plan, _fake = self._plan("今天星期几", [split_day, unsure])
         print(" job:", plan.planner_trace.get("intent_job"))
         print(" pending:", _pending_names(plan))
         self.assertNotEqual(plan.planner_trace.get("intent_job"), "research.hold_compare")
         self.assertIn("unresolved_intent", _pending_names(plan))
 
     def test_prior_question_uses_previous_commit(self) -> None:
-        """只有反问时，用上一轮已提交的值回答。没有提交就说明没有可对照的运行。"""
+        """有模型的纯反问不进分类。没有模型时也不升成持有对比。"""
 
-        print("\n[TestAi04CommitRecover] 反问对照上一轮")
+        print("\n[TestAi04CommitRecover] 反问不升成持有对比")
         state = ConversationState.empty("commit-prior")
         state.start_task(query="000001.SZ 和 000002.SZ 做一条等权组合", job="research.hold_compare")
         state.set_slot("shares", "000001.SZ,000002.SZ", source="user", confirmed=True)
         state.set_slot("mode", "equal", source="user", confirmed=True)
-        plan = Planner(self.registry, provider=FakeLLMProvider(replies=[]), env_facts={}).build_plan(
-            "跟上次是一回事吗",
+        asked = "跟上次是一回事吗"
+        fake = FakeLLMProvider(
+            replies=[json.dumps({"task": "", "question": asked}, ensure_ascii=False)]
+        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            asked,
             mode="plan",
             session=state,
         )
-        reply = str((plan.assumptions or {}).get("prior_reply") or "")
-        print(" reply:", reply)
-        self.assertIn("000001.SZ,000002.SZ", reply)
-        self.assertIn("equal", reply)
-        self.assertEqual(plan.planner_trace.get("rationale"), "prior_question")
+        classify = [item for item in fake.prompts if "Official and system Job ids:" in item]
+        print(" job:", plan.planner_trace.get("intent_job"))
+        print(" classify:", classify)
+        print(" prompts:", fake.prompts)
+        self.assertNotEqual(plan.planner_trace.get("intent_job"), "research.hold_compare")
+        self.assertEqual(classify, [])
 
-        empty = Planner(self.registry, env_facts={}).build_plan("跟上次是一回事吗", mode="plan")
-        print(" empty:", empty.assumptions.get("prior_reply"))
-        self.assertIn("没有可对照的运行", str(empty.assumptions.get("prior_reply") or ""))
+        empty = Planner(self.registry, env_facts={}).build_plan(asked, mode="plan")
+        print(" empty job:", empty.planner_trace.get("intent_job"))
+        self.assertNotEqual(empty.planner_trace.get("intent_job"), "research.hold_compare")
 
 
 if __name__ == "__main__":

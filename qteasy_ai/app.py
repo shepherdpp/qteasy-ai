@@ -166,6 +166,19 @@ _CLARIFICATION_FAILED_MESSAGE = (
 )
 
 
+def _provider_for_narrative(provider: Any, assumptions: Any, query: str) -> Any:
+    """整句都是附带提问时，不再请模型改写计划说明。"""
+
+    questions = assumptions.get("questions") if isinstance(assumptions, dict) else None
+    if (
+        isinstance(questions, list)
+        and len(questions) == 1
+        and str(questions[0] or "").strip() == str(query or "").strip()
+    ):
+        return None
+    return provider
+
+
 def _normalize_patches(patches: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """去掉空键空值的结构化槽补丁。
 
@@ -1288,7 +1301,11 @@ class QteasyAssistant:
         if write_plan_md:
             plan_md = tool_plan_to_markdown(
                 payload.get("plan") or plan,
-                provider=getattr(self.planner, "provider", None),
+                provider=_provider_for_narrative(
+                    getattr(self.planner, "provider", None),
+                    assumptions,
+                    query,
+                ),
                 registry=self.registry,
             )
             payload["plan_md"] = plan_md
@@ -1907,6 +1924,7 @@ class QteasyAssistant:
         card_items: Dict[str, Any] = {}
         revision_query = ""
         kept_steps: Optional[List[Dict[str, Any]]] = None
+        clause_split = None
         revising = False
 
         if inbound == "composer" and asked:
@@ -1986,19 +2004,18 @@ class QteasyAssistant:
                 kept_steps = self._kept_plan_steps(state)
                 skip_classify = True
             elif gate.kind == "new_intent":
-                from .slot_graph import split_prior_question
+                from .slot_graph import split_task_and_question
 
-                head, tail = split_prior_question(asked)
-                if tail and state.task is not None:
-                    state.prior_inputs = {
-                        str(name): slot.value
-                        for name, slot in (state.task.slots or {}).items()
-                        if getattr(slot, "confirmed", False) and slot.value not in (None, "")
-                    }
+                clause_split = split_task_and_question(
+                    asked,
+                    self.planner.provider,
+                    identity_dir=getattr(self.planner, "identity_dir", None),
+                )
+                if clause_split.status == "marked" and clause_split.task:
+                    peek = self.planner.intent_engine.classify(clause_split.task)
                 else:
-                    state.prior_inputs = {}
-                peek = self.planner.intent_engine.classify(head or asked)
-                if str(getattr(peek, "job", "") or "") == "route_to_ask":
+                    peek = None
+                if peek is not None and str(getattr(peek, "job", "") or "") == "route_to_ask":
                     dummy = ToolPlan(
                         plan_id="",
                         user_query=asked,
@@ -2014,6 +2031,14 @@ class QteasyAssistant:
                 topic_skipped = bool(
                     state.task and state.task.status in {"clarifying", "ready", "running"}
                 ) and not backgrounded
+                if topic_skipped and state.task is not None:
+                    state.prior_inputs = {
+                        str(name): slot.value
+                        for name, slot in (state.task.slots or {}).items()
+                        if getattr(slot, "confirmed", False) and slot.value not in (None, "")
+                    }
+                else:
+                    state.prior_inputs = {}
                 if topic_skipped:
                     state.cancel_task()
                 state.start_task(query=asked)
@@ -2035,6 +2060,7 @@ class QteasyAssistant:
             card_items=card_items or None,
             revision_query=revision_query,
             kept_steps=kept_steps,
+            clause_split=clause_split,
         )
         accepted_dates = _accepted_card_slots(plan, card_text, card_items)
         if accepted_dates:
@@ -2420,9 +2446,15 @@ class QteasyAssistant:
             registry=self.registry,
             include_user_text=include_user_text,
         )
+        plan_blob = payload.get("plan") if isinstance(payload.get("plan"), dict) else {}
+        plan_assumptions = plan_blob.get("assumptions") if isinstance(plan_blob, dict) else {}
         cards = polish_human_cards(
             cards,
-            provider=getattr(self.planner, "provider", None),
+            provider=_provider_for_narrative(
+                getattr(self.planner, "provider", None),
+                plan_assumptions,
+                query,
+            ),
             query=query,
             identity_dir=self.memory_store.user_kb_dir,
         )

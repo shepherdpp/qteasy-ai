@@ -42,8 +42,10 @@ class TestAiPlannerE(unittest.TestCase):
         """open 合法低副作用 DAG 放行，不压成官方菜谱。"""
 
         print("\n[TestAiPlannerE] open legal dag")
+        query = "xyzzy unmatched formula 12345 000300.SH"
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {
@@ -56,9 +58,7 @@ class TestAiPlannerE(unittest.TestCase):
                 json.dumps({"shares": "000300.SH"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345 000300.SH", mode="plan"
-        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [s.skill_name for s in plan.steps]
         print(" skills:", names, "intent:", plan.planner_trace.get("intent_job"))
         print(" prompts:", len(fake.prompts))
@@ -70,8 +70,10 @@ class TestAiPlannerE(unittest.TestCase):
         """schema：丢掉未知键。"""
 
         print("\n[TestAiPlannerE] drop unknown keys")
+        query = "xyzzy unmatched formula 12345"
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {
@@ -86,9 +88,7 @@ class TestAiPlannerE(unittest.TestCase):
                 json.dumps({"strategy_id": "macd"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345", mode="plan"
-        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         print(" inputs:", plan.steps[0].inputs)
         print(" corrections:", plan.planner_trace.get("validator_trace", {}).get("corrections"))
         self.assertEqual(plan.steps[0].inputs.get("strategy_id"), "macd")
@@ -161,7 +161,12 @@ class TestAiPlannerE(unittest.TestCase):
             ),
         )
         for query, channel, names, skill_name, name_key in cases:
-            fake = FakeLLMProvider(replies=[json.dumps({"job": "data.read", "uncertain": False})])
+            fake = FakeLLMProvider(
+                replies=[
+                    json.dumps({"task": query, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "data.read", "uncertain": False}),
+                ]
+            )
             plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
             inputs = plan.steps[0].inputs
             print(" query:", query)
@@ -176,19 +181,22 @@ class TestAiPlannerE(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
+            asked = "please fetch cn_gdp from 20240101 to 20240131"
             reply = json.dumps({"job": "data.read", "uncertain": False})
-            fake = FakeLLMProvider(replies=[reply, reply])
+            fake = FakeLLMProvider(
+                replies=[
+                    json.dumps({"task": asked, "question": ""}, ensure_ascii=False),
+                    reply,
+                    reply,
+                ]
+            )
             assistant = QteasyAssistant(
                 memory_store=store,
                 registry=self.registry,
                 provider=fake,
             )
             sid = "s-gdp"
-            first = assistant.plan(
-                "please fetch cn_gdp from 20240101 to 20240131",
-                response_style="raw",
-                session_id=sid,
-            )
+            first = assistant.plan(asked, response_style="raw", session_id=sid)
             read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.system.fallback"]
             state = SessionStore(store).load(sid)
             print(" first inputs:", read[0]["inputs"] if read else None)

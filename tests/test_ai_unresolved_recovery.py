@@ -38,6 +38,12 @@ def _job(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _clause(text: str) -> str:
+    """整句是办事，没有附带提问。"""
+
+    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
+
+
 def _pending(plan):
     """澄清卡 pending。"""
 
@@ -73,12 +79,13 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             {"job": "not-a-job"},
         )
         for payload in replies:
-            fake = FakeLLMProvider(replies=[_job(payload), "polish-must-not-run"])
+            fake = FakeLLMProvider(replies=[_clause(_ZH), _job(payload), "polish-must-not-run"])
             plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(_ZH, mode="plan")
             row = _pending(plan)[0]
             print(" payload:", payload, "prompts:", len(fake.prompts), "left:", fake.replies)
             print(" prompt:", (plan.assumptions.get("clarification") or {}).get("confirm_prompt"))
-            self.assertEqual(len(fake.prompts), 1)
+            self.assertEqual(len(fake.prompts), 2)
+            self.assertEqual(fake.prompts[0], _ZH)
             self.assertEqual(fake.replies, ["polish-must-not-run"])
             self.assertEqual(_names(plan), ["unresolved_intent"])
             self.assertEqual([item["id"] for item in row["options"]], ["compose_open", "abandon"])
@@ -95,6 +102,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print("\n[TestAiUnresolvedRecovery] 确定 open 不出恢复卡")
         fake = FakeLLMProvider(
             replies=[
+                _clause(_ZH),
                 _job({"job": "open"}),
                 json.dumps({"steps": _STEPS}),
                 json.dumps({"shares": "000300.SH"}),
@@ -119,7 +127,9 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         self.assertEqual(_names(blocked), [])
         self.assertNotEqual(blocked.steps[0].inputs.get("fallback_action"), "clarify_required")
 
-        too_many = FakeLLMProvider(replies=[_job({"job": "open"}), json.dumps({"steps": _TOO_MANY})])
+        too_many = FakeLLMProvider(
+            replies=[_clause(_ZH), _job({"job": "open"}), json.dumps({"steps": _TOO_MANY})]
+        )
         rejected = Planner(self.registry, provider=too_many, env_facts={}).build_plan(_ZH, mode="plan")
         print(" open reason:", rejected.steps[0].inputs.get("reason"), _names(rejected))
         self.assertEqual(rejected.steps[0].inputs.get("reason"), "open_too_many_steps")
@@ -142,9 +152,10 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
 
         print("\n[TestAiUnresolvedRecovery] 强制 open 不再分类")
         decoy = _job({"job": "data.summary"})
-        # 首句会探路分类一次，再正式分类一次；其后才是开放图与不得被消耗的 Job。
+        # 首句先拆分，再探路分类一次、正式分类一次；其后才是开放图与不得被消耗的 Job。
         fake = FakeLLMProvider(
             replies=[
+                _clause(_ZH),
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _STEPS}),
@@ -207,6 +218,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print("\n[TestAiUnresolvedRecovery] 强制 open 超步数")
         fake = FakeLLMProvider(
             replies=[
+                _clause(_ZH),
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _TOO_MANY}),
@@ -252,7 +264,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
 
         print("\n[TestAiUnresolvedRecovery] 放弃收口")
         fake = FakeLLMProvider(
-            replies=[_job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"]
+            replies=[_clause(_ZH), _job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"]
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
@@ -284,7 +296,15 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         """开放输入整句替换原句并重新分类；选项标签文字不是强制 open。"""
 
         print("\n[TestAiUnresolvedRecovery] 重写后重新分类")
-        fake = FakeLLMProvider(replies=[_job({"job": "clarify"}), _job({"job": "clarify"})])
+        typed_later = "给出开放计划"
+        fake = FakeLLMProvider(
+            replies=[
+                _clause(_ZH),
+                _job({"job": "clarify"}),
+                _job({"job": "clarify"}),
+                _clause(typed_later),
+            ]
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 provider=fake,
@@ -294,7 +314,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             sid = "s-rewrite"
             asst.plan(_ZH, response_style="raw", session_id=sid)
             before = asst.session_store.load(sid)
-            typed = "给出开放计划"
+            typed = typed_later
             second = asst.plan(
                 "",
                 response_style="raw",
@@ -328,6 +348,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print("\n[TestAiUnresolvedRecovery] answers 按题号恢复")
         compose = FakeLLMProvider(
             replies=[
+                _clause(_ZH),
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _STEPS}),
@@ -353,7 +374,9 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "open")
             self.assertEqual(skills, ["qt.ai.data.kline", "qt.ai.hp.returns", "qt.ai.hp.plot"])
 
-        abandon = FakeLLMProvider(replies=[_job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"])
+        abandon = FakeLLMProvider(
+            replies=[_clause(_ZH), _job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"]
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 provider=abandon,
@@ -371,7 +394,15 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual(after.task.status, "done")
             self.assertEqual(len(abandon.prompts), prompts)
 
-        rewrite = FakeLLMProvider(replies=[_job({"job": "clarify"}), _job({"job": "clarify"})])
+        typed_rewrite = "只看沪深300的日线收益"
+        rewrite = FakeLLMProvider(
+            replies=[
+                _clause(_ZH),
+                _job({"job": "clarify"}),
+                _job({"job": "clarify"}),
+                _clause(typed_rewrite),
+            ]
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 provider=rewrite,
@@ -380,7 +411,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             )
             sid = "s-answers-rewrite"
             asst.plan(_ZH, response_style="raw", session_id=sid)
-            typed = "只看沪深300的日线收益"
+            typed = typed_rewrite
             second = asst.plan(
                 "",
                 response_style="raw",
@@ -418,6 +449,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         decoy = _job({"job": "data.refill"})
         fake = FakeLLMProvider(
             replies=[
+                _clause(query),
                 _job({"job": "open"}),
                 _job({"job": "open"}),
                 json.dumps({"steps": rough}),

@@ -363,6 +363,7 @@ class TestAi04CommitOpen(unittest.TestCase):
                 registry=self.registry,
                 provider=FakeLLMProvider(
                     replies=[
+                        json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                         job,
                         job,
                         json.dumps(compose, ensure_ascii=False),

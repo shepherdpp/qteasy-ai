@@ -39,6 +39,12 @@ def _job(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _clause(text: str) -> str:
+    """整句是办事，没有附带提问。"""
+
+    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
+
+
 class _ProbeProvider(FakeLLMProvider):
     """开放组图被调用时记下当时已经落盘的会话。"""
 
@@ -69,6 +75,7 @@ class TestAiProcessReceipt(unittest.TestCase):
             store = MemoryStore(base_dir=temp_dir)
             fake = _ProbeProvider(
                 replies=[
+                    _clause(_ZH),
                     _job({"job": "clarify"}),
                     _job({"job": "clarify"}),
                     json.dumps({"steps": _STEPS}),
@@ -118,6 +125,7 @@ class TestAiProcessReceipt(unittest.TestCase):
         calls = []
         fake = FakeLLMProvider(
             replies=[
+                _clause(_ZH),
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _TOO_MANY}),
@@ -193,6 +201,7 @@ class TestAiProcessReceipt(unittest.TestCase):
         print("\n[TestAiProcessReceipt] 已关闭澄清不再投影")
         fake = FakeLLMProvider(
             replies=[
+                _clause(_ZH),
                 _job({"job": "clarify"}),
                 _job({"job": "clarify"}),
                 json.dumps({"steps": _STEPS}),

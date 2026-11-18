@@ -93,22 +93,6 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
                 ),
             )
         ]
-    if job == "clarify" and decision.rationale == "prior_question":
-        hint = str((decision.flags or {}).get("prior_reply") or "没有可对照的运行。")
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.system.fallback",
-                inputs=planner._fallback_step_inputs(
-                    query=query,
-                    action="clarify_required",
-                    reason="prior_question",
-                    hint=hint,
-                    missing_info="none",
-                    next_step="Answer from the previous committed inputs.",
-                ),
-            )
-        ]
     if job == "clarify":
         if decision.rationale == "multi_high_risk_intent":
             return [

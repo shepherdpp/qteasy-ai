@@ -20,7 +20,7 @@ import ast
 import datetime
 import json
 import re
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
 from .slot_decl import clarification_prompt
 from .wire import align_steps, choice_card
@@ -590,10 +590,10 @@ def mentions_excess(query: str) -> bool:
 
 
 def mentions_cumret(query: str) -> bool:
-    """问句是否要累计收益。对数收益不在这里。"""
+    """问句是否要累计或累计收益。对数收益不在这里。"""
 
     text = str(query or "")
-    if "累计收益" in text:
+    if "累计" in text:
         return True
     lower = text.lower()
     return "cumulative return" in lower or "cumret" in lower
@@ -3017,7 +3017,6 @@ _HOLD_MENTIONS = (
     "一样重要",
 )
 _CHART_MENTIONS = ("出图", "一条线", "看图", "画一张", "图表", "一页图")
-_PRIOR_QUESTION = re.compile(r"(是一回事吗|跟上次|跟你这次)")
 
 
 def _empty_commit() -> Dict[str, Any]:
@@ -3448,18 +3447,6 @@ def revision_target(current_job: str, query: str, classified_job: str) -> str:
     return ""
 
 
-def split_prior_question(query: str) -> Tuple[str, str]:
-    """拆开指向上一轮的反问。返回任务句和反问，反问不参与分类。"""
-
-    text = str(query or "").strip()
-    match = _PRIOR_QUESTION.search(text)
-    if match is None:
-        return text, ""
-    head = text[: match.start()].strip(" ，,。;；")
-    tail = text[match.start() :].strip()
-    return head, tail
-
-
 def prior_turn_reply(meta: str, slots: Optional[Dict[str, Any]]) -> str:
     """用上一轮已提交的值回答反问。没有提交则说明没有可对照的运行。"""
 
@@ -3472,6 +3459,103 @@ def prior_turn_reply(meta: str, slots: Optional[Dict[str, Any]]) -> str:
     freq = values.get("freq") or "d"
     mode = values.get("mode") or "equal"
     return f"上一轮提交的是 shares={shares}, freq={freq}, mode={mode}。"
+
+
+class ClauseSplit(NamedTuple):
+    """办事子句和附带提问。
+
+    ``status`` 为 ``marked`` 时两段可以交给分类。``unmarked`` 时都不交。
+    """
+
+    task: str
+    question: str
+    status: str
+
+
+_CLAUSE_SPLIT_SYSTEM = (
+    "task 是要执行的连续原文，question 是顺口问的连续原文，可以是空字符串。\n"
+    "两段都必须是用户原句里的连续片段，不许改写。\n"
+    "question 非空时，task 不得包含它，两段不得重叠。做不到就两段都交空字符串。\n"
+    "「主要做累计、顺便问超额会变成什么」拆成办事「主要做累计」、提问「顺便问超额会变成什么」；"
+    "「哪个更值得」办事为空、提问是整句；一句没有附带提问的话，提问为空、办事是整句。"
+)
+
+
+def split_task_and_question(
+    query: str,
+    provider: Optional[Any] = None,
+    *,
+    identity_dir: Any = None,
+) -> ClauseSplit:
+    """有模型时按协议拆出办事和提问。没有模型时整句都是办事。
+
+    Parameters
+    ----------
+    query : str
+        用户原句。
+    provider : optional
+        语言模型。没有时不拆句。
+    identity_dir : optional
+        身份前缀用的用户库目录。
+
+    Returns
+    -------
+    ClauseSplit
+        ``task``、``question`` 和 ``marked`` / ``unmarked``。
+    """
+
+    text = str(query or "").strip()
+    if provider is None:
+        return ClauseSplit(text, "", "marked")
+    from .identity import prefix_system_prompt
+
+    try:
+        raw = provider.chat(
+            text,
+            system_prompt=prefix_system_prompt(_CLAUSE_SPLIT_SYSTEM, identity_dir),
+        )
+    except Exception:
+        return ClauseSplit("", "", "unmarked")
+    return _clause_from_protocol(text, str(raw or ""))
+
+
+def _clause_from_protocol(text: str, raw: str) -> ClauseSplit:
+    """协议对不上、两段重叠或不是原句片段时标成 unmarked。"""
+
+    payload = _parse_json(raw)
+    if not isinstance(payload, dict):
+        return ClauseSplit("", "", "unmarked")
+    if "job" in payload or "jobs" in payload:
+        return ClauseSplit("", "", "unmarked")
+    if "task" not in payload or "question" not in payload:
+        return ClauseSplit("", "", "unmarked")
+    task = payload.get("task")
+    question = payload.get("question")
+    if not isinstance(task, str) or not isinstance(question, str):
+        return ClauseSplit("", "", "unmarked")
+    if task == "" and question == "":
+        return ClauseSplit("", "", "unmarked")
+    if task and task not in text:
+        return ClauseSplit("", "", "unmarked")
+    if question and question not in text:
+        return ClauseSplit("", "", "unmarked")
+    if task and question and _clause_spans_conflict(text, task, question):
+        return ClauseSplit("", "", "unmarked")
+    return ClauseSplit(task, question, "marked")
+
+
+def _clause_spans_conflict(text: str, task: str, question: str) -> bool:
+    """提问非空时，办事不得包含它，两段也不得重叠。"""
+
+    if question in task or task in question:
+        return True
+    task_at = text.find(task)
+    question_at = text.find(question)
+    if task_at < 0 or question_at < 0:
+        return True
+    task_end = task_at + len(task)
+    question_end = question_at + len(question)
+    return task_at < question_end and question_at < task_end
 
 
 def committed_benchmark_role(inputs: Mapping[str, Any]) -> Tuple[str, str]:

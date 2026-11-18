@@ -62,7 +62,12 @@ class TestAiPlannerD(unittest.TestCase):
         """金句 Builder：Mode-D 信 LLM 的 strategy.builder，再走同一五步。"""
 
         print("\n[TestAiPlannerD] gold Mode-D llm builder")
-        fake = FakeLLMProvider(replies=[json.dumps({"job": "strategy.builder"})])
+        fake = FakeLLMProvider(
+            replies=[
+                json.dumps({"task": GOLDEN_D1, "question": ""}, ensure_ascii=False),
+                json.dumps({"job": "strategy.builder"}),
+            ]
+        )
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(GOLDEN_D1, mode="plan")
         names = [step.skill_name for step in hybrid.steps]
         print(" skills:", names)
@@ -80,6 +85,7 @@ class TestAiPlannerD(unittest.TestCase):
         print("\n[TestAiPlannerD] open forbidden refill")
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": "xyzzy unmatched formula 12345", "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {

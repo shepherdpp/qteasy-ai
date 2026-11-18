@@ -33,9 +33,12 @@ def _plan(
     session: Any = None,
     skip_classify: bool = False,
 ) -> Tuple[Any, Optional[FakeLLMProvider]]:
-    """无模型，或按队列喂假模型。"""
+    """无模型，或按队列喂假模型。有模型且会分类时，队首是整句拆分。"""
 
-    provider = FakeLLMProvider(replies=list(replies or [])) if replies is not None else None
+    queued = list(replies or [])
+    if replies is not None and not skip_classify:
+        queued.insert(0, json.dumps({"task": query, "question": ""}, ensure_ascii=False))
+    provider = FakeLLMProvider(replies=queued) if replies is not None else None
     planner = Planner(_registry(), provider=provider, env_facts={})
     plan = planner.build_plan(
         query,

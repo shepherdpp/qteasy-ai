@@ -34,6 +34,12 @@ def _job(payload) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _clause(text: str) -> str:
+    """整句是办事，没有附带提问。"""
+
+    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
+
+
 def _pending(plan):
     """澄清卡 pending。"""
 
@@ -282,6 +288,7 @@ class TestAi04Wire(unittest.TestCase):
         query = "取 000300.SH 日线，做汇总，再出一页图"
         fake = FakeLLMProvider(
             replies=[
+                _clause(query),
                 _job("open"),
                 _job("open"),
                 json.dumps({"steps": steps}, ensure_ascii=False),
@@ -334,6 +341,7 @@ class TestAi04Wire(unittest.TestCase):
 
         fake_plot = FakeLLMProvider(
             replies=[
+                _clause(query),
                 _job("open"),
                 _job("open"),
                 json.dumps({"steps": steps}, ensure_ascii=False),
@@ -387,11 +395,15 @@ class TestAi04Wire(unittest.TestCase):
             {"skill_name": "qt.ai.hp.agg", "inputs": {"stat": "mean"}},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_1"]},
         ]
+        sentence = "汇总之后出一页图"
+        rewrite = "列出内置策略"
         fake = FakeLLMProvider(
             replies=[
+                _clause(sentence),
                 _job("open"),
                 _job("open"),
                 json.dumps({"steps": steps}),
+                _clause(rewrite),
                 _job("strategy.meta"),
             ]
         )
@@ -402,13 +414,13 @@ class TestAi04Wire(unittest.TestCase):
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "wire-rewrite"
-            asst.plan("汇总之后出一页图", response_style="raw", session_id=sid)
+            asst.plan(sentence, response_style="raw", session_id=sid)
             before = len(fake.prompts)
             second = asst.plan(
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"wire_choice": "列出内置策略"},
+                patches={"wire_choice": rewrite},
             )
             plan = second.get("plan") or {}
             skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
@@ -433,9 +445,11 @@ class TestAi04Wire(unittest.TestCase):
         def _open():
             return FakeLLMProvider(
                 replies=[
+                    _clause(query),
                     _job("open"),
                     _job("open"),
                     json.dumps({"steps": steps}, ensure_ascii=False),
+                    _clause("列出内置策略"),
                     _job("strategy.meta"),
                 ]
             )

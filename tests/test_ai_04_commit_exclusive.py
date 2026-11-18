@@ -29,9 +29,12 @@ def _registry():
 
 
 def _plan(query: str, replies=None):
-    """无模型，或按队列喂假模型。"""
+    """无模型，或按队列喂假模型。有模型时队首是整句拆分。"""
 
-    provider = FakeLLMProvider(replies=list(replies or [])) if replies is not None else None
+    queued = list(replies or [])
+    if replies is not None:
+        queued.insert(0, json.dumps({"task": query, "question": ""}, ensure_ascii=False))
+    provider = FakeLLMProvider(replies=queued) if replies is not None else None
     planner = Planner(_registry(), provider=provider, env_facts={})
     plan = planner.build_plan(query, mode="plan")
     return plan, provider

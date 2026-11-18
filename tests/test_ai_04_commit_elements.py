@@ -168,9 +168,14 @@ class TestAi04CommitElements(unittest.TestCase):
             "mode": "equal",
             "asset_type": "E",
         }
+        sentence = "600519 和 000858 做一条等权组合"
         plan = _planner(
-            [json.dumps({"job": "research.hold_compare"}), json.dumps(protocol)]
-        ).build_plan("600519 和 000858 做一条等权组合", mode="plan")
+            [
+                json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                json.dumps({"job": "research.hold_compare"}),
+                json.dumps(protocol),
+            ]
+        ).build_plan(sentence, mode="plan")
         kline = _snap(plan, "qt.ai.data.kline")
         print(" kline:", kline)
         self.assertNotIn("asset_type", kline)
@@ -181,6 +186,7 @@ class TestAi04CommitElements(unittest.TestCase):
         print("\n[TestAi04CommitElements] 已确认项先关上")
         planner = _planner(
             [
+                json.dumps({"task": _QUERY, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "research.hold_compare"}),
                 json.dumps(_PROTOCOL),
                 json.dumps(_PROTOCOL),
@@ -530,6 +536,7 @@ class TestAi04HoldCompareCodeRule(unittest.TestCase):
         job = json.dumps({"job": "research.hold_compare"})
         provider = FakeLLMProvider(
             replies=[
+                json.dumps({"task": _HOLD_WINDOW, "question": ""}, ensure_ascii=False),
                 job,
                 job,
                 json.dumps(protocol),
@@ -545,12 +552,14 @@ class TestAi04HoldCompareCodeRule(unittest.TestCase):
             "holdings": _COMPANY_HOLDINGS,
             "mode": "equal",
         }
+        sentence = "贵州茅台和五粮液做一条等权组合"
         plan = _planner(
             [
+                json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "research.hold_compare"}),
                 json.dumps(protocol),
             ]
-        ).build_plan("贵州茅台和五粮液做一条等权组合", mode="plan")
+        ).build_plan(sentence, mode="plan")
         holdings = _snap(plan, "qt.ai.hp.portfolio").get("holdings") or []
         shares = str(_snap(plan, "qt.ai.data.kline").get("shares") or "")
         confirmable = "qt.ai.system.fallback" not in [step.skill_name for step in plan.steps]
