@@ -39,23 +39,23 @@ class TestAiSessionGate(unittest.TestCase):
     """CLI / 默认允许 Composer 填槽；ready/done 一律新 Task。"""
 
     def test_fill_slot_end_year_no_classify(self) -> None:
-        """CLI：缺 end 时「到 2023 年」为 fill_slot。"""
+        """CLI：缺 end 时「到 2023 年」升级同一份计划，不把整句塞进当前题。"""
 
-        print("\n[TestAiSessionGate] fill_slot end year")
+        print("\n[TestAiSessionGate] revise end year")
         gate = SessionGate(provider=None)
         session = _backtest_session()
         print(" status:", session.task_status(), "missing:", session.task.missing)
         decision = gate.classify(session, "到 2023 年")
         print(" kind:", decision.kind, "patches:", decision.patches, "source:", decision.source)
         self.assertEqual(session.task_status(), "clarifying")
-        self.assertEqual(decision.kind, "fill_slot")
+        self.assertEqual(decision.kind, "revise_plan")
         self.assertEqual(decision.patches, {})
         self.assertEqual(decision.source, "rule")
 
     def test_bband_fills_strategy_id_when_clarifying(self) -> None:
-        """CLI：pending strategy_id 时「bband」填槽。"""
+        """CLI：pending strategy_id 时「bband」是升级，不把整句写成当前题。"""
 
-        print("\n[TestAiSessionGate] bband fills strategy_id")
+        print("\n[TestAiSessionGate] bband revises")
         gate = SessionGate(provider=None)
         session = ConversationState.empty("g-bband")
         session.start_task(query="params", job="strategy.meta")
@@ -76,19 +76,19 @@ class TestAiSessionGate(unittest.TestCase):
         print(" status:", session.task_status(), "answers:", answers_pending_slot(session, "bband"))
         decision = gate.classify(session, "bband")
         print(" kind:", decision.kind, "patches:", decision.patches)
-        self.assertEqual(decision.kind, "fill_slot")
+        self.assertEqual(decision.kind, "revise_plan")
         self.assertEqual(decision.patches, {})
 
     def test_ready_composer_is_new_task_not_change_slot(self) -> None:
-        """ready 时「改用沪深300」是新 Task，不是 change_slot。"""
+        """ready 时「改用沪深300」升级同一份计划，不是 change_slot。"""
 
-        print("\n[TestAiSessionGate] ready composer new_intent")
+        print("\n[TestAiSessionGate] ready composer revise")
         gate = SessionGate(provider=None)
         session = _backtest_session(clarifying=False)
         decision = gate.classify(session, "改用沪深300")
         print(" kind:", decision.kind, "status:", session.task_status(), "patches:", decision.patches)
         self.assertEqual(session.task_status(), "ready")
-        self.assertEqual(decision.kind, "new_intent")
+        self.assertEqual(decision.kind, "revise_plan")
         merge_facts(session, {"shares": "000300.SH"}, source="user", confirmed=True)
         print(" slot after control merge:", session.task.slots["shares"].to_dict())
         self.assertEqual(session.task.slots["shares"].value, "000300.SH")
@@ -110,25 +110,25 @@ class TestAiSessionGate(unittest.TestCase):
         self.assertEqual(session.task.status, "done")
 
     def test_strategy_id_token_after_ready_is_new_intent(self) -> None:
-        """已 ready 后「strategy_id swma」是新 Task。"""
+        """已 ready 后「strategy_id swma」升级同一份计划。"""
 
-        print("\n[TestAiSessionGate] ready strategy_id token new_intent")
+        print("\n[TestAiSessionGate] ready strategy_id token revise")
         gate = SessionGate(provider=None)
         session = _backtest_session(clarifying=False)
         decision = gate.classify(session, "strategy_id swma")
         print(" kind:", decision.kind, "status:", session.task_status())
-        self.assertEqual(decision.kind, "new_intent")
+        self.assertEqual(decision.kind, "revise_plan")
 
     def test_new_intent_skips_without_abandon_card(self) -> None:
-        """未执行的回测上换题：new_intent，不要闭合 abandon 卡。"""
+        """未执行的回测上「再帮我优化参数」升级同一份计划，不另开 Task。"""
 
-        print("\n[TestAiSessionGate] new_intent skip no abandon")
+        print("\n[TestAiSessionGate] revise optimize no abandon")
         gate = SessionGate(provider=None)
         session = _backtest_session(clarifying=False)
         decision = gate.classify(session, "再帮我优化参数")
         print(" kind:", decision.kind)
         print(" job still:", session.task.job)
-        self.assertEqual(decision.kind, "new_intent")
+        self.assertEqual(decision.kind, "revise_plan")
         self.assertFalse(hasattr(decision, "needs_abandon"))
         self.assertEqual(session.task.job, "backtest.builtin")
         self.assertEqual(session.session_id, "g1")
@@ -204,12 +204,12 @@ class TestAiSessionGate(unittest.TestCase):
 
 
 class TestAiWebClarifyComposerGate(unittest.TestCase):
-    """S5：Web clarifying 只认 patches/skip；Composer 非空=换题。"""
+    """S5：Web clarifying 的打字升级同一份计划；整句跳过仍换题。"""
 
     def test_web_composer_bband_is_new_task_not_fill(self) -> None:
-        """allow_composer_slot_fill=False：澄清中「bband」换题，不填槽。"""
+        """allow_composer_slot_fill=False：澄清中「bband」升级，不换题。"""
 
-        print("\n[TestAiWebClarifyComposerGate] web bband new task")
+        print("\n[TestAiWebClarifyComposerGate] web bband revise")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=build_default_registry(),
@@ -248,9 +248,8 @@ class TestAiWebClarifyComposerGate(unittest.TestCase):
             print(" old task:", old_task_id, "new task:", after.task.id if after.task else None)
             print(" new status:", after.task.status if after.task else None)
             print(" strategy slot:", after.task.slots.get("strategy_id") if after.task else None)
-            self.assertIsNotNone(notice_card)
-            self.assertIn("Previous topic skipped.", str((notice_card or {}).get("text") or ""))
-            self.assertNotEqual(after.task.id, old_task_id)
+            self.assertTrue(notice_card is None or "Previous topic skipped." not in str(notice_card.get("text") or ""))
+            self.assertEqual(after.task.id, old_task_id)
             # 未把 bband 填进原澄清槽（换题后新 Task 不应继承已答 strategy_id=bband 为 confirmed 填槽路径）
             slot = after.task.slots.get("strategy_id") if after.task else None
             if slot is not None:
@@ -337,9 +336,9 @@ class TestAiWebClarifyComposerGate(unittest.TestCase):
             )
 
     def test_cli_default_still_fills_bband(self) -> None:
-        """默认 allow_composer_slot_fill=True：澄清中 bband 仍填槽。"""
+        """回答当前题走 answers，不把打字整句塞进这一题。"""
 
-        print("\n[TestAiWebClarifyComposerGate] cli default fill")
+        print("\n[TestAiWebClarifyComposerGate] answers fill bband")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=build_default_registry(),
@@ -349,7 +348,7 @@ class TestAiWebClarifyComposerGate(unittest.TestCase):
             asst.plan("请帮我列出内置交易策略的参数", response_style="raw", session_id=sid)
             before = asst.session_store.load(sid)
             old_id = before.task.id
-            filled = asst.plan("bband", response_style="raw", session_id=sid)
+            filled = asst.plan("", response_style="raw", session_id=sid, answers=["bband"])
             after = asst.session_store.load(sid)
             slot = after.task.slots.get("strategy_id") if after.task else None
             print(" task id:", old_id, after.task.id if after.task else None)
@@ -369,9 +368,9 @@ class TestAiWebClarifyComposerGate(unittest.TestCase):
             )
 
     def test_http_plan_composer_while_clarifying_is_new_task(self) -> None:
-        """POST /v1/plan 无 patches：clarifying 下 Composer 换题。"""
+        """POST /v1/plan 无 patches：clarifying 下 Composer 升级同一份计划。"""
 
-        print("\n[TestAiWebClarifyComposerGate] http composer new task")
+        print("\n[TestAiWebClarifyComposerGate] http composer revise")
         from starlette.testclient import TestClient
 
         from qteasy_ai.workbench.http_app import create_app
@@ -403,8 +402,8 @@ class TestAiWebClarifyComposerGate(unittest.TestCase):
             ]
             print(" notice texts:", notice_texts)
             print(" task:", old_id, "->", after.task.id if after.task else None)
-            self.assertTrue(any("Previous topic skipped." in t for t in notice_texts))
-            self.assertNotEqual(after.task.id, old_id)
+            self.assertFalse(any("Previous topic skipped." in t for t in notice_texts))
+            self.assertEqual(after.task.id, old_id)
 
 
 if __name__ == "__main__":

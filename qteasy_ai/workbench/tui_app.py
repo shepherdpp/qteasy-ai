@@ -119,8 +119,9 @@ class WorkbenchTui(App):
         self.apply_dto(map_assistant_payload(payload))
 
     def action_cancel_plan(self) -> None:
-        """取消确认，不 execute。"""
+        """取消尚未执行的计划，不 execute。"""
 
+        self.assistant.cancel_unexecuted_plan(self.session_id)
         if self.state is not None:
             self.state.plan_card = None
             if self.state.plan_card is None:

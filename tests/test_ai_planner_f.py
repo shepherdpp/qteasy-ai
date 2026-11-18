@@ -30,7 +30,7 @@ class TestAiPlannerF(unittest.TestCase):
         return QteasyAssistant(memory_store=store, registry=build_default_registry())
 
     def test_refill_clarify_then_fill_same_job(self) -> None:
-        """CLI：无日期下载先澄清，打字跟进日期后仍是同一 refill Job。"""
+        """CLI：无日期下载先澄清，日期跟进把开始日和结束日都写上，仍是同一 refill Job。"""
 
         print("\n[TestAiPlannerF] refill clarify then fill")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -70,17 +70,19 @@ class TestAiPlannerF(unittest.TestCase):
             print(" second missing:", second["plan"]["steps"][0]["inputs"].get("missing_info"))
             self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "data.refill")
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
-            self.assertEqual(names, ["qt.ai.system.fallback"])
-            self.assertEqual(second["plan"]["steps"][0]["inputs"].get("missing_info"), "end")
+            self.assertEqual(names, ["qt.ai.data.refill_basic_equity_and_index"])
+            written = second["plan"]["steps"][0]["inputs"]
+            print(" second dates:", written.get("start"), written.get("end"))
+            self.assertEqual(str(written.get("start") or ""), "20240101")
+            self.assertEqual(str(written.get("end") or ""), "20241231")
+            self.assertNotEqual(written.get("missing_info"), "20240101 到 20241231")
 
             store = SessionStore(assistant.memory_store)
             filled = store.load("s-refill")
             print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
-            print(" filled status:", filled.task.status)
-            self.assertEqual(filled.task.slots["start"].value, "20240101")
-            self.assertTrue(filled.task.slots["start"].confirmed)
-            self.assertNotIn("end", filled.task.slots)
-            self.assertEqual(filled.task.status, "clarifying")
+            print(" filled status:", filled.task.status, "job:", filled.task.job)
+            self.assertEqual(filled.task.job, "data.refill")
+            self.assertEqual(filled.task.status, "ready")
 
             confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
             cnames = [s["skill_name"] for s in confirm["plan"]["steps"]]

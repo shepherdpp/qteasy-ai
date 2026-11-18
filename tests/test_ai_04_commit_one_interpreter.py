@@ -162,7 +162,7 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
         self.assertNotEqual(accepted.get("shares"), "000001.SZ")
 
     def test_fill_slot_keeps_company_name_on_the_same_item(self) -> None:
-        """澄清中打出公司名仍是这一题，不换题，也不提前确认。"""
+        """卡片上的公司名仍是这一题，不换题，也不提前确认。"""
 
         print("\n[TestAi04OneInterpreter] 澄清跟进公司名")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -174,10 +174,10 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
             query = "贵州茅台和格力电器做一条等权组合，相对沪深300"
             first = _plan(assistant.plan(query, response_style="raw", session_id=sid))
             rows = _pending(first)
-            print(" entry: composer fill_slot")
+            print(" entry: card answers")
             print(" query:", query)
             print(" pending:", [(item.get("name"), item.get("index"), item.get("mention")) for item in rows])
-            second = _plan(assistant.plan("贵州茅台", response_style="raw", session_id=sid))
+            second = _plan(assistant.plan("", response_style="raw", session_id=sid, answers=["贵州茅台", ""]))
             again = _pending(second)
             confirmed = _confirmed(assistant, sid)
             print(" next:", [(item.get("name"), item.get("index"), item.get("error")) for item in again])

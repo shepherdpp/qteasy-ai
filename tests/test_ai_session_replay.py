@@ -149,7 +149,7 @@ class TestAiSessionReplay(unittest.TestCase):
             self.assertIn("strategy_id swma", swma["users"])
 
     def test_replay_muahqq6w(self) -> None:
-        """下载句是 data.refill 类新 Task，不是被策略任务吸走。"""
+        """下载句留在当前计划上，不落到 strategy.meta.get。"""
 
         print("\n[TestAiSessionReplay] muahqq6w")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -162,11 +162,11 @@ class TestAiSessionReplay(unittest.TestCase):
             download = traces[8]
             print(" download job:", download["job"], "skills:", download["skills"])
             self.assertIn(download["query"], download["users"])
-            self.assertNotEqual(download["job"], "strategy.meta")
+            self.assertEqual(download["job"], traces[7]["job"])
             self.assertFalse(any(name in META_GET_SKILLS for name in download["skills"]))
 
     def test_replay_mub3do17(self) -> None:
-        """bband 填槽有 answer；写策略取消未完成参数任务并 mode_notice。"""
+        """打出的 bband 不写进澄清答案；写策略升级到 builder，不发跳过提示。"""
 
         print("\n[TestAiSessionReplay] mub3do17")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -183,17 +183,19 @@ class TestAiSessionReplay(unittest.TestCase):
                 if str(row.get("kind") or "") == "clarify"
             ]
             print(" bband clarify payloads:", [row.get("payload") for row in clar])
-            self.assertTrue(
+            self.assertIn("bband", bband["users"])
+            self.assertFalse(
                 any(str((row.get("payload") or {}).get("answer") or "") == "bband" for row in clar)
             )
             write = traces[5]
             cards = write["payload"].get("human_cards") or []
             notices = [item for item in cards if item.get("kind") == "mode_notice"]
             print(" write job:", write["job"], "notices:", [item.get("text") for item in notices])
-            self.assertTrue(any("Previous topic skipped" in str(item.get("text") or "") for item in notices))
+            self.assertEqual(write["job"], "strategy.builder")
+            self.assertFalse(any("Previous topic skipped" in str(item.get("text") or "") for item in notices))
 
     def test_replay_mub9u1go(self) -> None:
-        """dma 填槽有 user_text+answer；其后两句均为新 Task。"""
+        """dma 只记成 user_text；其后两句升级同一份策略计划，不发跳过提示。"""
 
         print("\n[TestAiSessionReplay] mub9u1go")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -210,10 +212,13 @@ class TestAiSessionReplay(unittest.TestCase):
                 if str(row.get("kind") or "") == "clarify"
             ]
             print(" dma answers:", [(row.get("payload") or {}).get("answer") for row in clar])
-            self.assertTrue(any(str((row.get("payload") or {}).get("answer") or "") == "dma" for row in clar))
+            self.assertIn("dma", dma["users"])
+            self.assertFalse(any(str((row.get("payload") or {}).get("answer") or "") == "dma" for row in clar))
             trix = traces[2]
             note = traces[3]
             print(" trix job:", trix["job"], "note job:", note["job"])
+            self.assertEqual(trix["job"], "strategy.meta")
+            self.assertEqual(note["job"], "strategy.meta")
             self.assertIn("strategy_id trix", trix["users"])
             self.assertIn("note 列出macd的参数", note["users"])
             notices = [
@@ -222,7 +227,7 @@ class TestAiSessionReplay(unittest.TestCase):
                 if item.get("kind") == "mode_notice"
             ]
             print(" trix notices:", notices)
-            self.assertTrue(any("Previous topic skipped" in item for item in notices))
+            self.assertFalse(any("Previous topic skipped" in item for item in notices))
 
     def test_replay_mube2wfi_kline_not_swallowed(self) -> None:
         """每个 K 线句都是 user_text；Job 为读数/K线而非 strategy.meta.get。"""
@@ -242,7 +247,8 @@ class TestAiSessionReplay(unittest.TestCase):
                 if str(row.get("kind") or "") == "clarify"
             ]
             print(" bband kept:", [(row.get("payload") or {}).get("answer") for row in clar])
-            self.assertTrue(any(str((row.get("payload") or {}).get("answer") or "") == "bband" for row in clar))
+            self.assertIn("bband", bband["users"])
+            self.assertFalse(any(str((row.get("payload") or {}).get("answer") or "") == "bband" for row in clar))
             kline_turns = [item for item in traces if any(hint in item["query"] for hint in KLINE_HINTS)]
             print(" kline count:", len(kline_turns))
             self.assertGreaterEqual(len(kline_turns), 3)

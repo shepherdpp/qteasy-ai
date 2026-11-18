@@ -5,10 +5,10 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# 跟进句分类：填槽 / 新 Task / 执行 / 只讨论 / 跳过澄清。
+# 跟进句分类：升级未执行计划 / 放弃 / 新 Task / 执行 / 只讨论 / 跳过澄清。
 # ======================================
 
-"""会话门叠在 H′ 之上。填槽不调用 classify；Composer 换题开新 Task。"""
+"""会话门叠在 H′ 之上。未执行计划的下一句升级同一份计划。"""
 
 from __future__ import annotations
 
@@ -82,13 +82,20 @@ class SessionGate:
         hatch = _hatch_decision(session, text)
         if hatch is not None:
             return hatch
-        if session.task_status() == "clarifying" and text:
-            return GateDecision(kind="fill_slot", patches={}, rationale="answers_slot")
         status = session.task_status()
-        if status == "running" and bool(getattr(session.task, "high_side_effect", False)):
+        high = bool(session.task is not None and getattr(session.task, "high_side_effect", False))
+        if status == "running" and high:
             if is_live_backgrounded(session.session_id):
                 return GateDecision(kind="new_intent", rationale="background_run")
             return GateDecision(kind="block_running", rationale="high_side_effect_running")
+        if session.task is None or status in {"done", "cancelled", ""}:
+            return GateDecision(kind="new_intent", rationale="composer_new_task")
+        if status == "running":
+            return GateDecision(kind="new_intent", rationale="composer_new_task")
+        if status in {"clarifying", "ready"} and is_abandon_plan(text):
+            return GateDecision(kind="abandon_plan", rationale="abandon_plan")
+        if status in {"clarifying", "ready"}:
+            return GateDecision(kind="revise_plan", rationale="revise_plan")
         return GateDecision(kind="new_intent", rationale="composer_new_task")
 
 
@@ -169,6 +176,35 @@ def is_skip_clarify(text: str) -> bool:
 
     compact = re.sub(r"[\s,，。.!！]", "", str(text or "")).lower()
     return compact in {"skip", "跳过", "跳过吧", "skipit"}
+
+
+_ABANDON_PHRASES = {
+    "放弃当前计划",
+    "放弃这份计划",
+    "放弃并重开",
+    "放弃当前计划并重开",
+    "abandon this plan",
+    "abandon the plan",
+}
+
+
+def is_abandon_plan(text: str) -> bool:
+    """整句是放弃当前计划。去掉空白和句号后必须正好是其中一句。
+
+    Parameters
+    ----------
+    text : str
+        用户原文。
+
+    Returns
+    -------
+    bool
+        整句放弃时为 True。
+    """
+
+    compact = re.sub(r"[\s。.!！]", "", str(text or "")).lower()
+    folded = {re.sub(r"\s+", "", item).lower() for item in _ABANDON_PHRASES}
+    return bool(compact) and compact in folded
 
 
 def _hatch_decision(session: ConversationState, text: str) -> Optional[GateDecision]:

@@ -649,7 +649,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertNotIn("event: state", text)
 
     def test_confirm_list_strategies_persists_artifact(self) -> None:
-        """两次同文案 Plan 后 Confirm：messages 含 Finished，Artifacts 含策略表。"""
+        """同文案再送一次仍是这一份可确认计划，Confirm 后 Artifacts 含策略表。"""
 
         print("\n[TestAiWorkbenchHttp] confirm list strategies artifact")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -663,14 +663,16 @@ class TestAiWorkbenchHttp(unittest.TestCase):
                 "/v1/plan",
                 json={"query": "list built-in strategies", "session_id": sid},
             ).json()
+            first_id = (first.get("plan_card") or {}).get("plan_id")
             plan_id = (second.get("plan_card") or {}).get("plan_id")
-            print(" first plan:", (first.get("plan_card") or {}).get("plan_id"))
+            print(" first plan:", first_id)
             print(" second plan:", plan_id)
             self.assertTrue(plan_id)
+            self.assertEqual(plan_id, first_id)
             loaded = asst.session_store.load(sid)
             ready = [m for m in loaded.messages if m.get("kind") == "plan_ready"]
             print(" plan ready count:", len(ready), ready)
-            self.assertGreaterEqual(len(ready), 2)
+            self.assertGreaterEqual(len(ready), 1)
             self.assertTrue(all("Plan ready." in str(m.get("text") or "") for m in ready))
             self.assertTrue(all("plan_id:" in str(m.get("text") or "") for m in ready))
             user_lines = [m for m in loaded.messages if m.get("kind") == "user_text"]
@@ -1034,7 +1036,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertFalse(any(item.get("run_id") == run_id for item in arts_b))
 
     def test_plan_patches_change_slot_without_user_text(self) -> None:
-        """POST /v1/plan 带 patches、无 query：回执改槽，不追加 user_text，plan_id 不变。"""
+        """POST /v1/plan 带 patches、无 query：回执改槽，不追加 user_text，plan_id 不变。之后的下载句升级同一份计划。"""
 
         print("\n[TestAiWorkbenchHttp] plan patches control plane")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1100,7 +1102,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" spoken job:", session.task.job if session.task else None)
             print(" users spoken:", [row.get("text") for row in users_spoken])
             self.assertEqual(spoken.status_code, 200)
-            self.assertNotEqual(spoken_id, plan_id)
+            self.assertEqual(spoken_id, plan_id)
+            self.assertEqual(session.task.job if session.task else None, "data.refill")
             self.assertGreater(len(users_spoken), len(users_after))
 
             empty = client.post("/v1/plan", json={"session_id": sid})

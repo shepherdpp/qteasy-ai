@@ -1776,6 +1776,13 @@ async function confirmPlan() {
 
 async function cancelPlan() {
   if (busy) return;
+  if (sessionId) {
+    try {
+      await api("/v1/session/" + encodeURIComponent(sessionId) + "/cancel-plan", { method: "POST" });
+    } catch (exc) {
+      transcript.push({ kind: "error", text: (exc && exc.message) || "Could not cancel the plan." });
+    }
+  }
   transcript.push({
     kind: "mode_notice",
     text: "Plan card dismissed. Type freely; Confirm remains optional.",

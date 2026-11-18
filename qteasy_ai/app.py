@@ -705,7 +705,7 @@ class QteasyAssistant:
         非空 ``patches`` 为同一 Job 改槽回执：``query`` 可空，不跑跟进句分类。
         ``answers`` 是澄清卡按题序交回的列表，先折成槽补丁再走上面的回执。
         ``skip=True`` 为控件跳过澄清，不写 ``user_text``。
-        ``allow_composer_slot_fill=False``（Web）：clarifying 下 Composer 非空只换题，不填槽。
+        ``allow_composer_slot_fill=False``（Web）：clarifying 下打字升级同一份计划；整句「跳过」仍换题。
         """
 
         structured = _normalize_patches(patches)
@@ -821,7 +821,7 @@ class QteasyAssistant:
                 )
                 if identity is not None:
                     return identity
-                # Web clarifying：跳过 typed skip / discuss / execute，交给 assemble 换题。
+                # Web clarifying：不把「跳过」当成控件跳过，交给 assemble 换题。
                 skip_hatch = False
                 if not allow_composer_slot_fill:
                     sid = str(session_id or "").strip()
@@ -966,6 +966,52 @@ class QteasyAssistant:
             query=query,
             requested_mode="run",
         )
+
+    def cancel_unexecuted_plan(self, session_id: str) -> None:
+        """取消尚未执行的计划。已开始执行的不在这里取消。
+
+        Parameters
+        ----------
+        session_id : str
+            会话 id。没有任务，或状态不是 clarifying / ready 时不改。
+        """
+
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        state = self.session_store.load(sid)
+        if state.task is None or state.task.status not in {"clarifying", "ready"}:
+            return
+        state.cancel_task()
+        self.session_store.save(state)
+
+    def _kept_plan_steps(self, state: ConversationState) -> List[Dict[str, Any]]:
+        """澄清卡上的步骤；没有时读这份计划已经保存的图。"""
+
+        task = state.task
+        pending = task.pending_clarification if task is not None and isinstance(task.pending_clarification, dict) else {}
+        snapshot = pending.get("accepted_steps")
+        if isinstance(snapshot, list) and any(isinstance(row, dict) and row.get("skill_name") for row in snapshot):
+            return [row for row in snapshot if isinstance(row, dict)]
+        plan_id = str(task.plan_id or "") if task is not None else ""
+        if not plan_id:
+            return []
+        payload = self.memory_store.find_run_by_plan_id(plan_id)
+        plan = payload.get("plan") if isinstance(payload, dict) else None
+        if not isinstance(plan, dict):
+            return []
+        assumptions = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
+        accepted = assumptions.get("accepted_steps")
+        if isinstance(accepted, list) and accepted:
+            return [row for row in accepted if isinstance(row, dict)]
+        steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+        return [
+            row
+            for row in steps
+            if isinstance(row, dict)
+            and row.get("skill_name")
+            and row.get("skill_name") != "qt.ai.system.fallback"
+        ]
 
     def run_plan(
         self,
@@ -1257,6 +1303,11 @@ class QteasyAssistant:
 
         if assumptions.get("block_running"):
             payload["block_running"] = True
+        elif assumptions.get("abandoned"):
+            if session is not None and session.task is not None:
+                session.task.cancel()
+            if session is not None:
+                self.session_store.save(session)
         elif confirm:
             self._merge_env_facts_from_execution(payload)
         elif session is not None and session.task is not None:
@@ -1854,6 +1905,9 @@ class QteasyAssistant:
         slot_changes: List[Dict[str, Any]] = []
         card_text: Dict[str, str] = {}
         card_items: Dict[str, Any] = {}
+        revision_query = ""
+        kept_steps: Optional[List[Dict[str, Any]]] = None
+        revising = False
 
         if inbound == "composer" and asked:
             state.append_user_text(asked)
@@ -1894,38 +1948,43 @@ class QteasyAssistant:
                 if state.task.status in {"done", "cancelled", ""}:
                     state.task.mark_ready()
         else:
-            # Web clarifying：Composer 一律换题，不走 answers_pending_slot。
-            web_clarify_composer = (
+            web_typed_skip = (
                 not allow_composer_slot_fill
                 and state.task_status() == "clarifying"
                 and bool(asked)
+                and is_skip_clarify(asked)
             )
-            if web_clarify_composer:
+            if web_typed_skip:
                 gate = GateDecision(kind="new_intent", rationale="web_clarify_composer_new_task")
             else:
                 gate = self.session_gate.classify(state, asked)
             if gate.kind == "block_running":
                 self.session_store.save(state)
                 return self._block_running_plan(asked), state
-            if gate.kind == "fill_slot":
-                from .slot_graph import apply_ordered_answers
-
-                pending_card = (
-                    state.task.pending_clarification
-                    if state.task is not None and isinstance(state.task.pending_clarification, dict)
-                    else {}
+            if gate.kind == "abandon_plan":
+                if state.task is not None:
+                    state.cancel_task()
+                self.session_store.save(state)
+                dummy = ToolPlan(
+                    plan_id=str(state.task.plan_id or "") if state.task is not None else "",
+                    user_query=asked,
+                    steps=[],
+                    assumptions={"abandoned": True, "intent_job": "clarify"},
+                    execution_mode="dry_run",
+                    mode="plan",
+                    planner_trace={
+                        "intent_job": "clarify",
+                        "source": "session",
+                        "rationale": "abandon_plan",
+                    },
                 )
-                rows = [item for item in (pending_card.get("pending") or []) if isinstance(item, dict)]
-                answers = [""] * len(rows)
-                if rows:
-                    step_index = int(pending_card.get("step_index") or 1)
-                    cursor = min(max(step_index, 1), len(rows)) - 1
-                    answers[cursor] = asked
-                folded = apply_ordered_answers(rows, answers) if rows else {}
-                card_text, card_items = _take_card_payload(pending_card, dict(folded or {}))
-                self._seal_clarify(state, asked, option_answer_label(pending_card, asked))
-                user_answered = True
-                skip_classify = bool(state.task and state.task.job)
+                return dummy, state
+            elif gate.kind == "revise_plan":
+                revising = True
+                keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
+                revision_query = asked
+                kept_steps = self._kept_plan_steps(state)
+                skip_classify = True
             elif gate.kind == "new_intent":
                 from .slot_graph import split_prior_question
 
@@ -1974,6 +2033,8 @@ class QteasyAssistant:
             resume_steps=resume_steps,
             card_text=card_text or None,
             card_items=card_items or None,
+            revision_query=revision_query,
+            kept_steps=kept_steps,
         )
         accepted_dates = _accepted_card_slots(plan, card_text, card_items)
         if accepted_dates:
@@ -1989,7 +2050,7 @@ class QteasyAssistant:
             accepted_inputs = (getattr(plan, "assumptions", None) or {}).get("accepted_inputs")
             if isinstance(accepted_inputs, dict) and accepted_inputs:
                 merge_facts(state, accepted_inputs, source="user", confirmed=True)
-        if keep_plan_id and inbound == "control":
+        if keep_plan_id and (inbound == "control" or revising):
             plan.plan_id = keep_plan_id
         if topic_skipped:
             plan.assumptions = dict(plan.assumptions or {})
@@ -2002,6 +2063,12 @@ class QteasyAssistant:
             plan.assumptions["slot_changes"] = list(slot_changes)
             plan.assumptions["revision"] = int(getattr(state.task, "revision", 0) or 0) if state.task else 0
         self._sync_session_from_plan(state, plan, query=asked or query, skip_classify=skip_classify)
+        if revising and state.task is not None:
+            new_job = str((plan.assumptions or {}).get("intent_job") or "")
+            if new_job and new_job not in {"clarify", "route_to_ask", "unsafe", "open", "not_supported"}:
+                state.task.job = new_job
+            if keep_plan_id:
+                state.task.plan_id = keep_plan_id
         self._apply_clarify_answer_streak(state, plan, user_answered=user_answered)
         self._commit_match_if_needed(
             state,

@@ -995,6 +995,18 @@ class WorkbenchHttp:
             }
         )
 
+    async def cancel_plan(self, request: Request) -> JSONResponse:
+        """POST /v1/session/{session_id}/cancel-plan：取消尚未执行的计划。"""
+
+        session_id = str(request.path_params.get("session_id") or "").strip()
+        if not session_id:
+            return _error("SESSION_ID_REQUIRED", "Provide a session_id.", 400)
+        store = SessionStore(self.assistant.memory_store)
+        if not store.exists(session_id):
+            return _error("SESSION_NOT_FOUND", "Session not found.", 404)
+        self.assistant.cancel_unexecuted_plan(session_id)
+        return JSONResponse({"ok": True, "session_id": session_id})
+
     async def cancel_run(self, request: Request) -> JSONResponse:
         """POST /v1/session/{session_id}/cancel-run：确认后的 Stop。"""
 
@@ -1376,6 +1388,7 @@ def create_app(
         Route("/v1/sessions", api.create_session, methods=["POST"]),
         Route("/v1/session/{session_id}/rewind", api.rewind_session, methods=["POST"]),
         Route("/v1/session/{session_id}/cancel-run", api.cancel_run, methods=["POST"]),
+        Route("/v1/session/{session_id}/cancel-plan", api.cancel_plan, methods=["POST"]),
         Route("/v1/session/{session_id}/background-run", api.background_run, methods=["POST"]),
         Route("/v1/session/{session_id}/attachments", api.list_attachments, methods=["GET"]),
         Route("/v1/session/{session_id}/attachments", api.upload_attachment, methods=["POST"]),

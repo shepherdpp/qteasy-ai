@@ -145,6 +145,14 @@ class IntentEngine:
                 source="rule",
                 rationale="single_trigger",
             )
+        if not hits and "组合" in raw and "对比" in raw:
+            return IntentDecision(
+                job="research.hold_compare",
+                flags=self._flags_for("research.hold_compare", raw, q_lower),
+                source="rule",
+                rationale="portfolio_compare",
+                llm_called=False,
+            )
         rationale = "zero_trigger_hit" if not hits else "multi_trigger_hit"
         return IntentDecision(
             job="clarify",
@@ -211,6 +219,17 @@ class IntentEngine:
                 llm_called=True,
             )
         if parsed.kind == "uncertain":
+            from .slot_graph import looks_like_hold_compare
+
+            text = head or query
+            if looks_like_hold_compare(text):
+                return IntentDecision(
+                    job="research.hold_compare",
+                    flags=self._flags_for("research.hold_compare", query, query.lower()),
+                    source="rule",
+                    rationale="commit_mention",
+                    llm_called=True,
+                )
             return IntentDecision(
                 job="clarify",
                 source="rule",

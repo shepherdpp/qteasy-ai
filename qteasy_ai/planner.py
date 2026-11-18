@@ -43,10 +43,11 @@ from .slot_graph import (
     apply_slot_layer,
     contract_digest_lines,
     date_pending_rows,
-    looks_like_hold_compare,
+    overlay_kept_inputs,
     polish_clarification,
     prior_turn_reply,
     question_label,
+    revision_target,
     split_prior_question,
     strategy_id_options,
 )
@@ -175,6 +176,8 @@ class Planner:
         resume_steps: Optional[List[Dict[str, Any]]] = None,
         card_text: Optional[Dict[str, str]] = None,
         card_items: Optional[Dict[str, Any]] = None,
+        revision_query: str = "",
+        kept_steps: Optional[List[Dict[str, Any]]] = None,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -213,6 +216,8 @@ class Planner:
             resume_steps=resume_steps,
             card_text=card_text,
             card_items=card_items,
+            revision_query=revision_query,
+            kept_steps=kept_steps,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -229,6 +234,8 @@ class Planner:
         resume_steps: Optional[List[Dict[str, Any]]] = None,
         card_text: Optional[Dict[str, str]] = None,
         card_items: Optional[Dict[str, Any]] = None,
+        revision_query: str = "",
+        kept_steps: Optional[List[Dict[str, Any]]] = None,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -272,7 +279,88 @@ class Planner:
         self._diagnosis_statistic = self._statistic_followup(session, user_query, skip)
         forced = str(forced_job or "").strip()
         resumed = [row for row in (resume_steps or []) if isinstance(row, dict) and row.get("skill_name")]
-        if resumed:
+        revision = str(revision_query or "").strip()
+        kept_rows = [row for row in (kept_steps or []) if isinstance(row, dict)]
+        self._revision_skip_shares = False
+        revision_open = False
+        replaced_rows: Optional[List[Dict[str, Any]]] = None
+        fill_kept: Optional[List[Dict[str, Any]]] = None
+        carry_rows: Optional[List[Dict[str, Any]]] = None
+
+        def _rows_to_steps(rows: List[Dict[str, Any]]) -> List[ToolStep]:
+            return [
+                self._make_step(
+                    step_id=str(row.get("step_id") or f"step_{idx}"),
+                    skill_name=str(row.get("skill_name") or ""),
+                    inputs=dict(row.get("inputs") or {}) if isinstance(row.get("inputs"), dict) else {},
+                    depends_on=[str(item) for item in (row.get("depends_on") or [])],
+                )
+                for idx, row in enumerate(rows, start=1)
+                if row.get("skill_name")
+            ]
+
+        if revision and task is not None and str(getattr(task, "job", "") or ""):
+            current_job = str(task.job or "")
+            classified = self.intent_engine.classify(revision)
+            target = revision_target(current_job, revision, str(classified.job or ""))
+            candidate_source = "session"
+            downgrade_reason = ""
+            flags = dict(task.flags or {})
+            if target:
+                replaced_rows = [dict(row) for row in kept_rows]
+                decision = IntentDecision(
+                    job=target,
+                    flags=flags,
+                    source="session",
+                    rationale="revision_target",
+                )
+                overrides = dict(self._market_overrides or {})
+                overrides.pop("shares", None)
+                self._market_overrides = overrides
+                self._revision_skip_shares = True
+                query = revision
+                q_lower = query.lower()
+                steps = compose_recipe(self, decision, query)
+                carry_rows = kept_rows
+            else:
+                from .intents import IntentCatalog
+
+                decision = IntentDecision(
+                    job=current_job,
+                    flags=flags,
+                    source="session",
+                    rationale="revise_plan",
+                )
+                if IntentCatalog().job_workflow(current_job) == "open":
+                    revision_open = True
+                    steps = _rows_to_steps(kept_rows)
+                    query = revision
+                    q_lower = query.lower()
+                    fill_kept = kept_rows
+                else:
+                    compose_query = origin_text or revision
+                    steps = compose_recipe(self, decision, compose_query)
+                    overlay_kept_inputs(steps, kept_rows)
+                    from .slot_graph import _clear_open_prewrite
+
+                    projected = []
+                    seen_names = set()
+                    for step in steps:
+                        for key, value in (step.inputs or {}).items():
+                            if key in seen_names:
+                                continue
+                            seen_names.add(key)
+                            projected.append({"name": key, "filled": True, "value": value})
+                    _clear_open_prewrite(
+                        steps,
+                        projected,
+                        self._prior_commit_values(session),
+                        kept_steps=kept_rows,
+                    )
+                    query = revision
+                    q_lower = query.lower()
+                    fill_kept = kept_rows
+        elif resumed:
             decision = IntentDecision(
                 job="open",
                 flags={},
@@ -281,15 +369,7 @@ class Planner:
             )
             candidate_source = "session"
             downgrade_reason = ""
-            steps = [
-                self._make_step(
-                    step_id=str(row.get("step_id") or f"step_{idx}"),
-                    skill_name=str(row.get("skill_name") or ""),
-                    inputs=dict(row.get("inputs") or {}) if isinstance(row.get("inputs"), dict) else {},
-                    depends_on=[str(item) for item in (row.get("depends_on") or [])],
-                )
-                for idx, row in enumerate(resumed, start=1)
-            ]
+            steps = _rows_to_steps(resumed)
             q_lower = query.lower()
         elif forced == "open":
             skip = False
@@ -328,17 +408,6 @@ class Planner:
                 )
             else:
                 decision = self.intent_engine.classify(head or user_query.strip())
-                if (
-                    decision.job == "clarify"
-                    and decision.rationale == "llm_uncertain"
-                    and looks_like_hold_compare(head or user_query.strip())
-                ):
-                    decision = IntentDecision(
-                        job="research.hold_compare",
-                        source="rule",
-                        rationale="commit_mention",
-                        llm_called=True,
-                    )
                 query = head or query
                 q_lower = query.lower()
             if tail and reply:
@@ -347,7 +416,7 @@ class Planner:
             candidate_source = decision.source
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
-        if decision.job == "open" and not skip and not resumed:
+        if decision.job == "open" and not skip and not resumed and not revision_open:
             open_steps, open_reason = self._compose_open_dag(query)
             if open_steps is None:
                 downgrade_reason = open_reason
@@ -368,6 +437,8 @@ class Planner:
             session=session,
             card_text=card_text,
             card_items=card_items,
+            kept_steps=fill_kept,
+            carry_steps=carry_rows,
         )
         assumptions = {
             "planner": "hybrid_intent_h_prime",
@@ -382,6 +453,8 @@ class Planner:
         prior_reply = str((decision.flags or {}).get("prior_reply") or "")
         if prior_reply:
             assumptions["prior_reply"] = prior_reply
+        if replaced_rows is not None:
+            assumptions["replaced_steps"] = replaced_rows
         assumptions.update(gate_extras)
         for step in steps:
             if step.skill_name == "qt.ai.data.refill_basic_equity_and_index" and not step.inputs.get("symbols"):
@@ -391,7 +464,12 @@ class Planner:
                 assumptions["opti_sample_count"] = step.inputs.get("opti_sample_count", 32)
             if step.skill_name == "qt.ai.research.screen_stocks":
                 assumptions["screen_end"] = "latest trading day in local datasource"
-        steps = self._overlay_session_slots(steps, session, card_text=card_text)
+        steps = self._overlay_session_slots(
+            steps,
+            session,
+            card_text=card_text,
+            skip_names={"shares"} if self._revision_skip_shares else None,
+        )
         slot_defaults = dict(assumptions.get("slot_defaults") or {})
         if slot_defaults:
             assumptions["slot_defaults"] = slot_defaults
@@ -542,6 +620,7 @@ class Planner:
         steps: List[ToolStep],
         session: Any,
         card_text: Optional[Dict[str, str]] = None,
+        skip_names: Optional[set] = None,
     ) -> List[ToolStep]:
         """已通过校验的值按槽名抄到同名输入。不在这里改键。"""
 
@@ -570,7 +649,7 @@ class Planner:
             except Exception:
                 schema = {}
             for key, value in confirmed_map.items():
-                if key not in schema:
+                if key not in schema or key in (skip_names or set()):
                     continue
                 if key == "weights" and isinstance(value, dict) and str(value.get("mode") or "") == "equal":
                     step.inputs.pop("weights", None)
@@ -857,10 +936,22 @@ class Planner:
         session: Any = None,
         card_text: Optional[Dict[str, str]] = None,
         card_items: Optional[Dict[str, Any]] = None,
+        kept_steps: Optional[List[Dict[str, Any]]] = None,
+        carry_steps: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[List[ToolStep], Dict[str, Any]]:
         """投影填槽之后，再走日期/freq、必填槽与 env_facts 门禁。"""
 
-        gated, extras = apply_slot_layer(self, steps, query, job, session, card_text, card_items)
+        gated, extras = apply_slot_layer(
+            self,
+            steps,
+            query,
+            job,
+            session,
+            card_text,
+            card_items,
+            kept_steps=kept_steps,
+            carry_steps=carry_steps,
+        )
         gated = self._enforce_date_or_freq_clarify(gated, query=query)
         gated = self._enforce_refill_date_range(gated, query=query)
         gated = self._enforce_required_slots(gated, query=query)

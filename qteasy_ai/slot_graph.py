@@ -237,7 +237,9 @@ _BAD_LOOKBACK = re.compile(
     re.IGNORECASE,
 )
 _WINDOW_SPAN = r"(?:(?:\d+|[零〇一二两三四五六七八九十]+)\s*年|一段时间)"
-_WINDOW_PHRASE = re.compile(rf"(?:过去|近)\s*{_WINDOW_SPAN}")
+_WINDOW_PHRASE = re.compile(
+    rf"(?:过去|近)\s*{_WINDOW_SPAN}|[零〇一二两三四五六七八九十]+\s*年内"
+)
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _UPSTREAM_KEYS = {"upstream_payload", "upstream_payloads"}
 _WINDOW_HINT = (
@@ -516,7 +518,7 @@ def window_phrase(query: str) -> bool:
     Returns
     -------
     bool
-        出现「过去 / 近 + 年数 + 年」或「过去 / 近一段时间」时为 True。不折成日期。
+        出现「过去 / 近 + 年数 + 年」、「过去 / 近一段时间」或中文数字加「年内」时为 True。不折成日期。
     """
 
     return _WINDOW_PHRASE.search(str(query or "")) is not None
@@ -705,6 +707,8 @@ def apply_slot_layer(
     session: Any,
     card_text: Optional[Dict[str, str]] = None,
     card_items: Optional[Dict[str, Any]] = None,
+    kept_steps: Optional[Sequence[Dict[str, Any]]] = None,
+    carry_steps: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Tuple[List[Any], Dict[str, Any]]:
     """投影并填当前图。原句、卡片和澄清跟进共用这一次填写。
 
@@ -733,7 +737,17 @@ def apply_slot_layer(
 
     if _is_fallback(steps):
         return _rewrite_fallback(planner, steps, query)
-    return _fill_graph(planner, steps, query, session, job, card_text, card_items)
+    return _fill_graph(
+        planner,
+        steps,
+        query,
+        session,
+        job,
+        card_text,
+        card_items,
+        kept_steps=kept_steps,
+        carry_steps=carry_steps,
+    )
 
 
 def apply_polish_text(blob: Dict[str, Any], raw: str, original: str) -> Dict[str, Any]:
@@ -1092,6 +1106,8 @@ def _fill_graph(
     job: str = "",
     card_text: Optional[Dict[str, str]] = None,
     card_items: Optional[Dict[str, Any]] = None,
+    kept_steps: Optional[Sequence[Dict[str, Any]]] = None,
+    carry_steps: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Tuple[List[Any], Dict[str, Any]]:
     """填图上还空着的用户槽。缺必填就换成澄清卡。
 
@@ -1104,14 +1120,26 @@ def _fill_graph(
     if _bind_upstream(planner, steps):
         return _missing_upstream(planner, query)
     rejected = _canonicalize_steps(planner, steps)
+    if kept_steps is not None:
+        overlay_kept_inputs(steps, kept_steps)
     extras: Dict[str, Any] = {}
     projected = _project(planner, steps, rejected, job)
     confirmed = _confirmed_values(session)
-    cleared_prewrite = _clear_open_prewrite(steps, projected, confirmed)
+    recipe_htype = ""
+    for step in steps:
+        if step.skill_name == "qt.ai.data.history":
+            recipe_htype = str((step.inputs or {}).get("htype_names") or "") or recipe_htype
+    if carry_steps is not None:
+        for step in steps:
+            if isinstance(getattr(step, "inputs", None), dict):
+                step.inputs.pop("shares", None)
+    cleared_prewrite = _clear_open_prewrite(steps, projected, confirmed, kept_steps=kept_steps)
     closed_items: Dict[str, Any] = {}
     held_back: Dict[str, Any] = {}
     for slot in projected:
         if slot["filled"] or slot["name"] not in confirmed:
+            continue
+        if carry_steps is not None and slot["name"] == "shares":
             continue
         raw = confirmed[slot["name"]]
         if slot.get("element"):
@@ -1130,9 +1158,23 @@ def _fill_graph(
             slot["filled"] = True
             slot["value"] = value
     for name, raw in confirmed.items():
+        if carry_steps is not None and name == "shares":
+            continue
         if any(str(slot.get("name") or "") == name for slot in projected):
             continue
         _write_empty(planner, steps, name, raw)
+    if kept_steps is not None or carry_steps is not None:
+        _apply_sentence_values(planner, steps, projected, query)
+        if carry_steps is not None:
+            carry_confirmed_inputs(planner, carry_steps, steps, session)
+            if recipe_htype and not dtype_tokens(query):
+                for step in steps:
+                    if step.skill_name != "qt.ai.data.history":
+                        continue
+                    if str((step.inputs or {}).get("htype_names") or "").strip():
+                        continue
+                    step.inputs["htype_names"] = recipe_htype
+        _sync_projected(planner, steps, projected)
     open_slots = [slot for slot in projected if not slot["filled"]]
     answered = {
         str(name): str(text)
@@ -1182,7 +1224,9 @@ def _fill_graph(
     mentioned.update(name for name in cleared_prewrite if name in weight_names)
     illegal_mentioned = {"lookback_days"} if _bad_lookback(query) else set()
     blocked: Dict[str, str] = {}
-    first_report = _inspect_slots(steps, projected, query, mentioned, answered)
+    first_report = _inspect_slots(
+        steps, projected, query, mentioned, answered, kept_steps=kept_steps
+    )
     gap_names = {str(name) for name in (first_report.get("gaps") or ())}
     read_slots = [
         slot for slot in open_slots if str(slot.get("name") or "") in gap_names
@@ -1285,7 +1329,13 @@ def _fill_graph(
     same_column = reject_same_history_column(projected, set(submitted), steps, planner)
     _seal_elements(planner, steps, projected, closed_items)
     second_report = _inspect_slots(
-        steps, projected, query, mentioned, answered, fresh=set(submitted)
+        steps,
+        projected,
+        query,
+        mentioned,
+        answered,
+        fresh=set(submitted),
+        kept_steps=kept_steps,
     )
     _apply_inspected(planner, steps, projected, second_report)
     if not covered or "weights" in covered:
@@ -2989,7 +3039,12 @@ def _symbol_tokens(text: str) -> List[Tuple[int, str, str]]:
     for match in _EXCHANGE_CODE.finditer(text):
         hits.append((match.start(), "suffixed", match.group(0).upper()))
     lowered = text.lower()
-    for alias, code in (("沪深300", "000300.SH"), ("csi 300", "000300.SH"), ("csi300", "000300.SH")):
+    for alias, code in (
+        ("沪深300", "000300.SH"),
+        ("csi 300", "000300.SH"),
+        ("csi300", "000300.SH"),
+        ("hs300", "000300.SH"),
+    ):
         start = 0
         needle = alias.lower()
         while True:
@@ -3263,7 +3318,134 @@ def looks_like_hold_compare(query: str) -> bool:
     text = str(query or "")
     if any(phrase in text for phrase in _HOLD_MENTIONS):
         return True
+    if "组合" in text and "对比" in text:
+        return True
     return "组合" in text and len(re.findall(r"(?<!\d)\d{6}(?!\d)", text)) >= 2
+
+
+_NOT_SWITCHABLE = {"clarify", "open", "unsafe", "not_supported", "route_to_ask"}
+_SLOT_WORDS = (
+    "周线",
+    "周频",
+    "按周",
+    "日线",
+    "日频",
+    "月线",
+    "月频",
+    "沪深300",
+    "hs300",
+    "csi300",
+    "csi 300",
+    "基准",
+)
+
+
+def _points_at_held(query: str) -> bool:
+    """这句用「这两只」或「这两支」指已有持有。"""
+
+    text = str(query or "")
+    return "这两只" in text or "这两支" in text
+
+
+def _has_benchmark_mention(query: str) -> bool:
+    """这句点到基准槽。别名和「基准」都算。"""
+
+    if _benchmark_cue(query):
+        return True
+    return any(kind == "alias" for _pos, kind, _code in _symbol_tokens(query))
+
+
+def _touches_existing_slot(query: str) -> bool:
+    """这句点到频率、基准或日期。"""
+
+    if commit_freq(query).get("status") != "absent":
+        return True
+    if window_phrase(query):
+        return True
+    if re.search(r"(?<!\d)20\d{6}(?!\d)", str(query or "")):
+        return True
+    return _has_benchmark_mention(query)
+
+
+def _strip_slot_words(query: str) -> str:
+    """拿掉频率、基准、窗口和八位日期，留下句子里其余的要求。"""
+
+    text = str(query or "")
+    text = _WINDOW_PHRASE.sub(" ", text)
+    text = re.sub(r"(?<!\d)20\d{6}(?!\d)", " ", text)
+    for word in _SLOT_WORDS:
+        text = re.sub(re.escape(word), " ", text, flags=re.IGNORECASE)
+    return text
+
+
+def _closed_official_job(job: str) -> str:
+    """另一个官方闭合 Job。系统出口和开放图返回空串。"""
+
+    name = str(job or "").strip()
+    if not name or name in _NOT_SWITCHABLE:
+        return ""
+    from .intents import IntentCatalog
+
+    catalog = IntentCatalog()
+    if name not in set(catalog.official_ids):
+        return ""
+    if catalog.job_workflow(name) != "closed":
+        return ""
+    return name
+
+
+def _other_job_after_slots(query: str) -> str:
+    """去掉槽上的词之后，触发词还指着哪一个闭合 Job。"""
+
+    from .intent_engine import IntentEngine
+
+    decision = IntentEngine(provider=None).classify(_strip_slot_words(query))
+    return _closed_official_job(str(decision.job or ""))
+
+
+def revision_target(current_job: str, query: str, classified_job: str) -> str:
+    """这一句要不要换成另一张图。空串表示留在当前图。
+
+    先看这一句点到的槽，再看它有没有用「这两只」指已有持有。
+    分类结果只在上面都不中、且它是另一个官方闭合 Job 时才换图。
+
+    Parameters
+    ----------
+    current_job : str
+        当前计划的 Job。
+    query : str
+        这一句跟进，不拼上一句。
+    classified_job : str
+        只对这一句分类得到的 Job。
+
+    Returns
+    -------
+    str
+        目标 Job。不换时为空串。
+    """
+
+    text = str(query or "")
+    if (
+        _touches_existing_slot(text)
+        and not _points_at_held(text)
+        and not _other_job_after_slots(text)
+    ):
+        return ""
+    hold = str(current_job or "") == _HOLD_COMPARE_JOB
+    pointed = _points_at_held(text)
+    freq = commit_freq(text).get("status") == "value"
+    held_codes = [token for _pos, kind, token in _symbol_tokens(text) if kind != "alias"]
+    fresh_codes = bool(held_codes) and commit_shares(text).get("status") != "absent"
+    weights = _weight_cue(text) or bool(_ratio_values(text))
+    benchmark = _has_benchmark_mention(text)
+    if hold and pointed and freq and not fresh_codes and not weights and not benchmark:
+        return "data.read"
+    if hold and pointed and freq and not fresh_codes and not weights and benchmark:
+        return ""
+    other = _closed_official_job(classified_job)
+    if other and other != str(current_job or ""):
+        return other
+    return ""
 
 
 def split_prior_question(query: str) -> Tuple[str, str]:
@@ -3807,12 +3989,167 @@ def _sync_projected(planner: Any, steps: Sequence[Any], projected: Sequence[Dict
             slot["value"] = found
 
 
+def _kept_input_values(kept_steps: Optional[Sequence[Any]]) -> Dict[str, List[Any]]:
+    """上一份计划每个输入名上的值。清扫只用来认出刚盖回去的那一份。"""
+
+    found: Dict[str, List[Any]] = {}
+    for row in kept_steps or []:
+        if isinstance(row, dict):
+            inputs = row.get("inputs")
+        else:
+            inputs = getattr(row, "inputs", None)
+        if not isinstance(inputs, dict):
+            continue
+        for key, value in inputs.items():
+            found.setdefault(str(key), []).append(value)
+    return found
+
+
+def _same_as_kept(current: Any, saved: Sequence[Any]) -> bool:
+    """当前值和上一份计划里的同名输入相同。"""
+
+    if any(current == item for item in saved):
+        return True
+    if isinstance(current, list):
+        codes = ",".join(
+            str(item.get("code") or "")
+            for item in current
+            if isinstance(item, dict) and str(item.get("code") or "")
+        )
+        return any(codes == item for item in saved if isinstance(item, str) and codes)
+    return False
+
+
+def overlay_kept_inputs(steps: Sequence[Any], kept_steps: Optional[Sequence[Any]]) -> None:
+    """按 step_id 把上一份计划的 inputs 盖回同名步骤。
+
+    Parameters
+    ----------
+    steps : sequence
+        这一轮重新投影用的步骤。
+    kept_steps : sequence
+        上一份计划的步骤。没有同名步骤时不写。
+    """
+
+    by_id: Dict[str, Any] = {}
+    for row in kept_steps or []:
+        if isinstance(row, dict) and row.get("step_id"):
+            by_id[str(row.get("step_id"))] = row
+    for step in steps:
+        row = by_id.get(str(getattr(step, "step_id", "") or ""))
+        if not isinstance(row, dict):
+            continue
+        inputs = row.get("inputs") if isinstance(row.get("inputs"), dict) else {}
+        for key, value in inputs.items():
+            step.inputs[str(key)] = value
+
+
+def _confirmed_holding_codes(steps: Sequence[Any]) -> List[str]:
+    """上一份计划里已经确认的持有代码。不读取数步拼过基准的 shares。"""
+
+    codes: List[str] = []
+    for step in steps or []:
+        if isinstance(step, dict):
+            inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+            skill = str(step.get("skill_name") or "")
+        else:
+            inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else {}
+            skill = str(getattr(step, "skill_name", "") or "")
+        if skill != _PORTFOLIO_SKILL and "holdings" not in inputs:
+            continue
+        for item in inputs.get("holdings") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status") or "") != "confirmed":
+                continue
+            code = str(item.get("code") or "").strip()
+            if code and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def carry_confirmed_inputs(
+    planner: Any,
+    old_steps: Sequence[Any],
+    new_steps: Sequence[Any],
+    session: Any,
+) -> None:
+    """换图后把已确认的同名值写入仍空的槽。shares 只抄已确认持有代码。
+
+    Parameters
+    ----------
+    planner : Planner
+        用来看新图的 schema。
+    old_steps : sequence
+        被换掉的步骤。持有代码从这里读。
+    new_steps : sequence
+        新图。没有的名字不写。
+    session : ConversationState or None
+        已确认槽。这次抄写不写成新的用户确认。
+    """
+
+    confirmed = _confirmed_values(session)
+    for name, value in confirmed.items():
+        if name == "shares":
+            continue
+        _write_empty(planner, new_steps, name, value)
+    codes = _confirmed_holding_codes(old_steps)
+    if not codes:
+        return
+    joined = ",".join(codes)
+    for step in new_steps:
+        schema = _schema(planner, step.skill_name)
+        if "shares" not in schema:
+            continue
+        current = (step.inputs or {}).get("shares")
+        if current not in (None, "", []):
+            continue
+        step.inputs["shares"] = joined
+
+
+def _apply_sentence_values(planner: Any, steps: Sequence[Any], projected: Sequence[Dict[str, Any]], query: str) -> None:
+    """把这一句点到的频率、日期和元素写上。没点到的键不动。"""
+
+    freq = commit_freq(query)
+    if freq.get("status") == "value":
+        for step in steps:
+            if "freq" in _schema(planner, step.skill_name):
+                step.inputs["freq"] = freq.get("value")
+    market: Dict[str, Any] = {}
+    if hasattr(planner, "_extract_market_inputs"):
+        found = planner._extract_market_inputs(query, overrides=None)
+        if isinstance(found, dict):
+            market = found
+    if window_phrase(query) and not market.get("start") and not market.get("end"):
+        for step in steps:
+            schema = _schema(planner, step.skill_name)
+            for key in ("start", "end"):
+                if key in schema and isinstance(step.inputs, dict):
+                    step.inputs.pop(key, None)
+    for key in ("start", "end"):
+        if market.get(key) in (None, ""):
+            continue
+        for step in steps:
+            if key in _schema(planner, step.skill_name):
+                step.inputs[key] = market[key]
+    for name, value in _heuristic_elements(query, projected).items():
+        if value in (None, "", []):
+            continue
+        items = value if isinstance(value, list) else [value]
+        if name == "holdings" and not any(
+            isinstance(item, dict) and str(item.get("code") or "") for item in items
+        ):
+            continue
+        _write_element(planner, steps, name, value)
+
+
 def _clear_open_prewrite(
     steps: Sequence[Any],
     projected: Sequence[Dict[str, Any]],
     confirmed: Dict[str, Any],
+    kept_steps: Optional[Sequence[Any]] = None,
 ) -> Set[str]:
-    """清掉未确认投影槽上的预写。已确认的值，以及组图按这个值写下的同值，留下。
+    """清掉未确认投影槽上的预写。已确认的值，以及上一份计划里的同值，留下。
 
     Returns
     -------
@@ -3822,6 +4159,7 @@ def _clear_open_prewrite(
 
     names = set(confirmed)
     backed = [value for value in confirmed.values() if value not in (None, "", [])]
+    kept_values = _kept_input_values(kept_steps)
     cleared: Set[str] = set()
     for slot in projected:
         name = str(slot.get("name") or "")
@@ -3829,12 +4167,13 @@ def _clear_open_prewrite(
             continue
         kept = False
         popped = False
+        saved = kept_values.get(name) or []
         for step in steps:
             inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else None
             if inputs is None or name not in inputs:
                 continue
             current = inputs.get(name)
-            same = any(current == item for item in backed)
+            same = any(current == item for item in backed) or _same_as_kept(current, saved)
             if not same and isinstance(current, list):
                 codes = ",".join(
                     str(item.get("code") or "")
@@ -3897,7 +4236,8 @@ def _user_wrote_code(code: str, query: str) -> bool:
     if upper and upper in text.upper():
         return True
     compact = re.sub(r"\s+", "", text)
-    if upper == "000300.SH" and ("沪深300" in compact or "csi300" in compact.lower()):
+    folded = compact.lower()
+    if upper == "000300.SH" and ("沪深300" in compact or "csi300" in folded or "hs300" in folded):
         return True
     digits = upper.split(".", 1)[0]
     if digits == "000001":
@@ -3937,6 +4277,7 @@ _EDGE_PREFIXES = (
     "说明",
     "相对",
     "跟",
+    "进行",
     "看",
     "用",
     "以",
@@ -4335,6 +4676,24 @@ def _screen_mentioned(projected: Sequence[Dict[str, Any]], query: str) -> Set[st
     return found
 
 
+def _kept_element_source(value: Any) -> str:
+    """用已经收下的代码和提及当原文，避免跟进句把没再提到的项清掉。"""
+
+    items = value if isinstance(value, list) else [value]
+    parts: List[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            code = str(item.get("code") or "").strip()
+            mention = str(item.get("mention") or "").strip()
+            if code:
+                parts.append(code)
+            if mention and mention not in parts:
+                parts.append(mention)
+        elif item not in (None, ""):
+            parts.append(str(item).strip())
+    return " ".join(part for part in parts if part)
+
+
 def _tag_submitted_item(item: Any, query: str) -> Dict[str, Any]:
     """协议交来的一项。用户没写的代码保持 pending，不另切一句造提及。"""
 
@@ -4647,6 +5006,7 @@ def _inspect_slots(
     mentioned: Set[str],
     card_text: Optional[Dict[str, str]] = None,
     fresh: Optional[Set[str]] = None,
+    kept_steps: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """只读质检。每一格只调用 ``accept_slot_value``，拒因只用 ``_reject_reason``。
 
@@ -4680,6 +5040,7 @@ def _inspect_slots(
     gaps: Set[str] = set()
     answered = card_text or {}
     fresh_names = set(fresh or ())
+    kept_values = _kept_input_values(kept_steps)
     for slot in projected:
         name = str(slot.get("name") or "")
         if not name:
@@ -4693,7 +5054,12 @@ def _inspect_slots(
             source = answered.get(name, query) if name in answered else query
         elif slot.get("element") and not answered:
             # 没有卡片时，已确认不能跳过「原文里有没有这只代码」。
-            source = query
+            # 上一份计划里的同值用它自己的代码当原文，跟进句没再提到也不清。
+            saved = kept_values.get(name) or []
+            if _same_as_kept(current, saved):
+                source = _kept_element_source(current)
+            else:
+                source = query
         else:
             source = str(current)
         value = accept_slot_value(slot, current, source)

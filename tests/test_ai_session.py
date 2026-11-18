@@ -340,7 +340,7 @@ class TestAiSession(unittest.TestCase):
             self.assertTrue(backup.exists())
 
     def test_load_heals_stale_running(self) -> None:
-        """落盘 running 且无活执行时降为 ready，并写一次 notice。"""
+        """落盘 running 且无活执行时降为 ready，并写一次 notice。降成 ready 后，下一句升级这份计划。"""
 
         print("\n[TestAiSession] heal stale running on load")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -372,7 +372,7 @@ class TestAiSession(unittest.TestCase):
             self.assertEqual(again.task_status(), "ready")
             decision = SessionGate(provider=None).classify(again, "请列出所有内置交易策略")
             print(" gate after heal:", decision.kind)
-            self.assertEqual(decision.kind, "new_intent")
+            self.assertEqual(decision.kind, "revise_plan")
 
     def test_load_keeps_live_running(self) -> None:
         """进程内活执行时 load 不得把 running 降为 ready。"""

@@ -486,7 +486,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertNotIn("qt.ai.backtest.run_builtin", skills)
 
     def test_change_slot_keeps_plan_id_and_overwrites_md(self) -> None:
-        """控件 patches 保留 plan_id 并追加修订 notice；Composer 改槽句是新 Task 且必有 user_text。"""
+        """控件 patches 保留 plan_id 并追加修订 notice；Composer 跟进句升级同一份计划，并记下 user_text。"""
 
         print("\n[TestAiHumanCardPlanArtifact] change slot keeps plan_id")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -526,7 +526,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             users = [row for row in session.messages if row.get("kind") == "user_text"]
             print(" spoken:", spoken_id)
             print(" users:", [row.get("text") for row in users])
-            self.assertNotEqual(spoken_id, first_id)
+            self.assertEqual(spoken_id, first_id)
             self.assertIn("把慢线改成 50", [row.get("text") for row in users])
             self.assertGreater(len(users), len(users_before))
 
@@ -783,8 +783,13 @@ class TestAiHumanCardClarify(unittest.TestCase):
             self.assertEqual(users[0]["text"], "帮我下载日线")
             self.assertEqual(users[1]["text"], "start 20240101 end 20241231")
             self.assertTrue(clar)
-            self.assertEqual((clar[0].get("payload") or {}).get("answer"), "start 20240101 end 20241231")
-            self.assertEqual((clar[0].get("payload") or {}).get("status"), "answered")
+            self.assertIsNone((clar[0].get("payload") or {}).get("answer"))
+            steps = (follow.get("plan") or {}).get("steps") or []
+            inputs = steps[0].get("inputs") if steps else {}
+            print(" follow skill:", steps[0].get("skill_name") if steps else None, "inputs:", inputs)
+            self.assertEqual(steps[0].get("skill_name"), "qt.ai.data.refill_basic_equity_and_index")
+            self.assertEqual(str((inputs or {}).get("start") or ""), "20240101")
+            self.assertEqual(str((inputs or {}).get("end") or ""), "20241231")
 
     def test_run_plan_does_not_replay_user_query(self) -> None:
         """run_plan 不把 plan.user_query 再写成 user_text。"""
@@ -813,29 +818,33 @@ class TestAiHumanCardClarify(unittest.TestCase):
             self.assertIn("result", kinds)
 
     def test_topic_change_skips_without_abandon_options(self) -> None:
-        """PlanReady 后换题：skip 提示，无 abandon 选项卡。"""
+        """PlanReady 后的下载句升级同一份计划，不出现跳过提示，也没有 abandon 选项卡。"""
 
-        print("\n[TestAiHumanCardClarify] topic skip no abandon")
+        print("\n[TestAiHumanCardClarify] topic upgrade no abandon")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=build_default_registry(),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "s-abandon"
-            asst.plan("list built-in strategies", response_style="raw", session_id=sid)
+            first = asst.plan("list built-in strategies", response_style="raw", session_id=sid)
+            first_id = str((first.get("plan") or {}).get("plan_id") or "")
             payload = asst.plan("download daily bars from 20180101 to 20201231", response_style="raw", session_id=sid)
             session = asst.session_store.load(sid)
             cards = payload.get("human_cards") or []
             clarify = next((item for item in cards if item["kind"] == "clarify"), None)
             notice = next((item for item in cards if item["kind"] == "mode_notice"), None)
-            print(" status:", session.task.status if session.task else None)
+            print(" status:", session.task.status if session.task else None, "job:", session.task.job if session.task else None)
+            print(" plan:", first_id, (payload.get("plan") or {}).get("plan_id"))
             print(" kinds:", [item["kind"] for item in cards])
             print(" notice:", None if notice is None else notice.get("text"))
             print(" clarify:", None if clarify is None else clarify.get("text"))
             self.assertFalse(hasattr(session, "awaiting_abandon"))
+            self.assertEqual(str((payload.get("plan") or {}).get("plan_id") or ""), first_id)
+            self.assertEqual(session.task.job, "data.refill")
+            self.assertEqual(session.task.status, "ready")
             self.assertIsNone(clarify)
-            self.assertIsNotNone(notice)
-            self.assertIn("Previous topic skipped.", str((notice or {}).get("text") or ""))
+            self.assertIsNone(notice)
             options = ((clarify or {}).get("payload") or {}).get("options") or []
             self.assertFalse(any(str(item.get("id") or "") == "abandon" for item in options if isinstance(item, dict)))
 
@@ -1095,7 +1104,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotIn("plan_ready", kinds)
 
     def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
-        """CLI：缺 strategy_id 出 clarify；打字 macd 走 get；typed skip 失败收口。"""
+        """CLI：缺 strategy_id 出 clarify；卡片答案 macd 走 get；typed skip 失败收口。"""
 
         print("\n[TestAiJobLifecycleG9] clarify params")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1131,7 +1140,10 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             options = [str(item.get("id") or "") for item in ((strategy or {}).get("options") or [])]
             print(" strategy options:", options)
             self.assertEqual(options, strategy_id_options())
-            filled = asst.run("macd", response_style="raw", session_id="s-clar")
+            answered = asst.plan("", response_style="raw", session_id="s-clar", answers=["macd"])
+            plan_id = str((answered.get("plan") or {}).get("plan_id") or "")
+            print(" answered plan:", plan_id, "skills:", [step.get("skill_name") for step in ((answered.get("plan") or {}).get("steps") or [])])
+            filled = asst.run_plan(plan_id, response_style="raw", session_id="s-clar")
             filled_session = asst.session_store.load("s-clar")
             fill_steps = (filled.get("execution") or {}).get("steps") or []
             fill_names = [str(item.get("skill_name") or "") for item in fill_steps]
