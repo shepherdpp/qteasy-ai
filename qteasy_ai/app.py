@@ -90,8 +90,6 @@ from .session_gate import (
 from .side_effects import plan_has_high_side_effect
 
 _CJK_STAGE = re.compile(r"[\u4e00-\u9fff]")
-_STAGE_UNMATCHED_ZH = "未匹配到现成操作模版"
-_STAGE_UNMATCHED_EN = "No built-in operation template matched."
 _STAGE_OPEN_ZH = "正在创建开放计划"
 _STAGE_OPEN_EN = "Creating an open plan."
 from .skills import (
@@ -1774,56 +1772,6 @@ class QteasyAssistant:
         if callable(hook):
             hook(str(stage_id or ""), sentence)
 
-    def _job_summary(self, job: str) -> str:
-        """目录里的人读 Job 摘要。没有则空串。"""
-
-        catalog = self.planner.intent_engine.catalog
-        wanted = str(job or "").strip()
-        rows = list(catalog.jobs_doc.get("official") or []) + list(catalog.jobs_doc.get("system") or [])
-        for item in rows:
-            if str(item.get("id") or "") == wanted:
-                return str(item.get("summary") or "").strip()
-        return ""
-
-    def _stage_match_text(self, plan: Any, query: str) -> str:
-        """分类结束时的一句人话。澄清缺槽和开放组图不在这里写。"""
-
-        job = str((getattr(plan, "planner_trace", None) or {}).get("intent_job") or "")
-        clar = (getattr(plan, "assumptions", None) or {}).get("clarification")
-        names = [
-            str(item.get("name") or "")
-            for item in ((clar or {}).get("pending") or [])
-            if isinstance(item, dict) and item.get("name")
-        ]
-        chinese = bool(_CJK_STAGE.search(str(query or "")))
-        if "unresolved_intent" in names:
-            return _STAGE_UNMATCHED_ZH if chinese else _STAGE_UNMATCHED_EN
-        if job in {"", "clarify", "route_to_ask", "unsafe", "open"}:
-            return ""
-        summary = self._job_summary(job)
-        if not summary:
-            return ""
-        if chinese:
-            return f"已匹配：{summary}"
-        return f"Matched: {summary}"
-
-    def _commit_match_if_needed(
-        self,
-        state: ConversationState,
-        plan: Any,
-        query: str,
-        *,
-        classified: bool,
-    ) -> None:
-        """只在刚分类结束时写匹配回执。"""
-
-        if not classified:
-            return
-        text = self._stage_match_text(plan, query)
-        if not text:
-            return
-        self._commit_stage(state, "match", text)
-
     def _assemble_wire_resume(
         self,
         session_id: str | None,
@@ -2097,12 +2045,6 @@ class QteasyAssistant:
             if keep_plan_id:
                 state.task.plan_id = keep_plan_id
         self._apply_clarify_answer_streak(state, plan, user_answered=user_answered)
-        self._commit_match_if_needed(
-            state,
-            plan,
-            asked or query,
-            classified=inbound != "control" and not skip_classify and not resume_steps,
-        )
         self.session_store.save(state)
         return plan, state
 
@@ -2165,7 +2107,6 @@ class QteasyAssistant:
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["topic_skipped"] = True
         self._sync_session_from_plan(state, plan, query=text, skip_classify=False)
-        self._commit_match_if_needed(state, plan, text, classified=True)
         self.session_store.save(state)
         return plan, state
 

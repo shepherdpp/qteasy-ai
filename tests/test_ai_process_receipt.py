@@ -16,6 +16,7 @@ from pathlib import Path
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.human_card import clarify_receipt_line, drop_closed_clarification
+from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import SessionStore
@@ -139,16 +140,21 @@ class TestAiProcessReceipt(unittest.TestCase):
             )
             asst.on_stage = lambda stage_id, text: calls.append((stage_id, text))
             sid = "s-stage"
-            asst.plan(_ZH, response_style="raw", session_id=sid)
+            first_payload = asst.plan(_ZH, response_style="raw", session_id=sid)
             first = asst.session_store.load(sid)
             first_texts = [str(row.get("text") or "") for row in first.messages]
+            first_trace = (first_payload.get("plan") or {}).get("planner_trace") or {}
+            match = next(row for row in first.messages if (row.get("payload") or {}).get("stage_id") == "match")
+            match_text = str(match.get("text") or "")
             print(" first:", first_texts)
+            print(" first trace:", first_trace)
+            print(" first match:", match_text)
             print(" first calls:", calls)
-            self.assertIn("未匹配到现成操作模版", first_texts)
-            match = next(row for row in first.messages if row.get("text") == "未匹配到现成操作模版")
-            self.assertEqual((match.get("payload") or {}).get("stage_id"), "match")
-            self.assertNotIn("llm_uncertain", match.get("text") or "")
-            self.assertEqual(calls, [("match", "未匹配到现成操作模版")])
+            self.assertNotIn("未匹配到现成操作模版", first_texts)
+            self.assertEqual(match_text, render_match_notice(first_trace, chinese=True))
+            if "llm_uncertain" in match_text:
+                self.assertIn("llm_uncertain", str(first_trace.get("rationale") or ""))
+            self.assertEqual(calls, [])
 
             calls.clear()
             second = asst.plan(
@@ -185,15 +191,26 @@ class TestAiProcessReceipt(unittest.TestCase):
             self.assertIsNone(after.task.pending_clarification)
             self.assertEqual(after.task.status, "done")
             self.assertEqual(calls, [("compose_open", "正在创建开放计划")])
-            stage_text = "\n".join(
-                str(row.get("text") or "")
+            stage_rows = [
+                row
                 for row in after.messages
                 if (row.get("payload") or {}).get("stage_id")
+            ]
+            stage_text = "\n".join(str(row.get("text") or "") for row in stage_rows)
+            second_trace = (second.get("plan") or {}).get("planner_trace") or {}
+            second_match = next(
+                row for row in stage_rows if (row.get("payload") or {}).get("stage_id") == "match" and row.get("text") != match_text
             )
             print(" stage texts:", stage_text)
+            print(" second trace:", second_trace)
+            print(" second match:", second_match.get("text"))
+            self.assertEqual(second_match.get("text"), render_match_notice(second_trace, chinese=True))
+            self.assertNotIn("任务 open", str(second_match.get("text") or ""))
             self.assertNotIn("planner_trace", stage_text)
             self.assertNotIn("qt.ai", stage_text)
-            self.assertNotIn("llm_uncertain", stage_text)
+            if "llm_uncertain" in stage_text:
+                self.assertIn("llm_uncertain", str(first_trace.get("rationale") or ""))
+                self.assertIn("llm_uncertain", str(second_trace.get("rationale") or ""))
 
     def test_closed_run_clarification_is_not_projected_again(self) -> None:
         """已答之后，旧 run 的澄清块不再变成一张未答卡。"""
@@ -259,24 +276,28 @@ class TestAiProcessReceipt(unittest.TestCase):
             self.assertNotIn("clarification", (cleaned.get("plan") or {}).get("assumptions") or {})
 
     def test_matched_job_notice_uses_summary_not_trace(self) -> None:
-        """匹配到现成 Job 时写摘要，不写内部 trace。"""
+        """匹配到现成 Job 时，说明等于这份记录，不另查目录。"""
 
-        print("\n[TestAiProcessReceipt] 已匹配 Job 摘要")
+        print("\n[TestAiProcessReceipt] 已匹配 Job 跟记录")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=self.registry,
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            asst.plan("list built-in strategies", response_style="raw", session_id="s-match")
+            payload = asst.plan("list built-in strategies", response_style="raw", session_id="s-match")
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
             session = asst.session_store.load("s-match")
             notices = [row for row in session.messages if (row.get("payload") or {}).get("stage_id") == "match"]
+            print(" trace:", trace)
             print(" notices:", [row.get("text") for row in notices])
             self.assertEqual(len(notices), 1)
             text = str(notices[0].get("text") or "")
-            self.assertTrue(text.startswith("Matched:"))
+            self.assertEqual(text, render_match_notice(trace, chinese=False))
+            self.assertIn(str(trace.get("intent_job") or ""), text)
             self.assertNotIn("qt.ai", text)
-            self.assertNotIn("llm_uncertain", text)
             self.assertNotIn("planner_trace", text)
+            if "llm_uncertain" in text:
+                self.assertIn("llm_uncertain", str(trace.get("rationale") or ""))
             src = Path(__file__).resolve().parents[1].joinpath("qteasy_ai/workbench/static/app.js").read_text(encoding="utf-8")
             print(" web receipt:", "用户已选" in src, "Selected:" in src)
             self.assertIn("用户已选", src)

@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 from qteasy_ai.app import QteasyAssistant, _mark_rejected_slot_changes, build_default_registry
+from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.human_card import (
     HUMAN_CARD_KINDS,
     choice_rows,
@@ -833,20 +834,23 @@ class TestAiHumanCardClarify(unittest.TestCase):
             session = asst.session_store.load(sid)
             cards = payload.get("human_cards") or []
             clarify = next((item for item in cards if item["kind"] == "clarify"), None)
-            notice = next((item for item in cards if item["kind"] == "mode_notice"), None)
+            notices = [item for item in cards if item["kind"] == "mode_notice"]
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
             print(" status:", session.task.status if session.task else None, "job:", session.task.job if session.task else None)
             print(" plan:", first_id, (payload.get("plan") or {}).get("plan_id"))
             print(" kinds:", [item["kind"] for item in cards])
-            print(" notice:", None if notice is None else notice.get("text"))
+            print(" notices:", [item.get("text") for item in notices])
             print(" clarify:", None if clarify is None else clarify.get("text"))
             self.assertFalse(hasattr(session, "awaiting_abandon"))
             self.assertEqual(str((payload.get("plan") or {}).get("plan_id") or ""), first_id)
             self.assertEqual(session.task.job, "data.refill")
             self.assertEqual(session.task.status, "ready")
             self.assertIsNone(clarify)
-            self.assertIsNone(notice)
-            options = ((clarify or {}).get("payload") or {}).get("options") or []
-            self.assertFalse(any(str(item.get("id") or "") == "abandon" for item in options if isinstance(item, dict)))
+            self.assertEqual(len(notices), 1)
+            self.assertEqual((notices[0].get("payload") or {}).get("stage_id"), "match")
+            self.assertEqual(notices[0].get("text"), render_match_notice(trace, chinese=False))
+            self.assertNotIn("abandon", str(notices[0].get("text") or ""))
+            self.assertNotIn("skipped", str(notices[0].get("text") or "").lower())
 
 
     def test_format_human_includes_clarify_answer(self) -> None:
@@ -971,7 +975,18 @@ class TestAiHumanCardHumanCli(unittest.TestCase):
             self.assertIn("just discuss", text)
             self.assertIn("run this plan", text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
-            self.assertNotIn("gold_lock", text)
+            ready = next(item for item in (payload.get("human_cards") or []) if item.get("kind") == "plan_ready")
+            match = next(
+                item
+                for item in (payload.get("human_cards") or [])
+                if (item.get("payload") or {}).get("stage_id") == "match"
+            )
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
+            print(" ready gold:", "gold_lock" in str(ready.get("text") or ""))
+            print(" match:", match.get("text"))
+            self.assertNotIn("gold_lock", str(ready.get("text") or ""))
+            self.assertNotIn("Job:", str(ready.get("text") or ""))
+            self.assertEqual(match.get("text"), render_match_notice(trace, chinese=False))
             lone = asst.plan("list built-in strategies", response_style="raw")
             lone_text = format_human_from_payload(lone, query="list built-in strategies", registry=asst.registry)
             print(" no-session human:", lone_text[:200])

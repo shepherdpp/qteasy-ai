@@ -196,7 +196,8 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" after end:", body[:400])
         self.assertIn("Clarification skipped. This request ended.", body)
         self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
-        self.assertNotIn("refill", body.lower())
+        self.assertIn("Task data.refill", body)
+        self.assertNotIn("qt.ai.data.refill", body.lower())
 
     def test_ask_shows_source_without_confirm(self) -> None:
         """Ask 命中 KB，没有 Confirm。"""

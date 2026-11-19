@@ -17,6 +17,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
+from .match_notice import render_match_notice
 from .run_view import render_run_view
 from .slot_graph import (
     clarification_skips_polish,
@@ -368,6 +369,7 @@ def project_human_cards(
         text = str(clar.get("confirm_prompt") or clar.get("restatement") or "Clarification required.").strip()
         if not clarification_needs_answer(clar):
             cards.append(make_card("error", text, {"message": text}))
+            _append_match_notice(cards, plan)
             return cards
         pending = list(clar.get("pending") or []) if isinstance(clar.get("pending"), list) else []
         blob = dict(clar)
@@ -381,6 +383,7 @@ def project_human_cards(
         if plan_id:
             blob["plan_id"] = plan_id
         cards.append(make_card("clarify", text, blob))
+        _append_match_notice(cards, plan)
         return cards
 
     execution = raw.get("execution") if isinstance(raw.get("execution"), dict) else {}
@@ -453,6 +456,7 @@ def project_human_cards(
         if isinstance(choice, dict) and choice.get("options"):
             ready_payload["statistic_options"] = choice
         cards.append(make_card("plan_ready", text, ready_payload))
+        _append_match_notice(cards, plan)
 
     if err:
         cards.append(make_card("error", _error_card_text(err), dict(err)))
@@ -1330,6 +1334,38 @@ def _is_ask_payload(payload: Dict[str, Any]) -> bool:
     if "answer" in payload and "plan" not in payload:
         return True
     return False
+
+
+def _match_notice_card(plan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """已记下的任务、来源和理由。语言只看计划上的原句。
+
+    Parameters
+    ----------
+    plan : dict
+        含 ``user_query`` 与 ``planner_trace`` 的计划。
+
+    Returns
+    -------
+    dict or None
+        ``stage_id=match`` 的 ``mode_notice``。没有任务种类时不发卡。
+    """
+
+    if not isinstance(plan, dict):
+        return None
+    trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), dict) else {}
+    asked = str(plan.get("user_query") or "")
+    text = render_match_notice(trace, chinese=bool(_CJK_RE.search(asked)))
+    if not text:
+        return None
+    return make_card("mode_notice", text, {"stage_id": "match"})
+
+
+def _append_match_notice(cards: List[Dict[str, Any]], plan: Dict[str, Any]) -> None:
+    """在当前这张卡后面加上同一句匹配说明。"""
+
+    notice = _match_notice_card(plan)
+    if notice is not None:
+        cards.append(notice)
 
 
 def _clarification_blob(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -195,8 +195,14 @@ function latestNonUserMessage() {
 }
 
 function liveClarifyMessage() {
-  const last = latestNonUserMessage();
-  if (last && (last.kind === "clarify" || last.kind === "clarification")) return last;
+  const rows = transcript.concat(state.messages || []);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const msg = rows[i];
+    if (!msg || msg.kind === "user_text") continue;
+    if (msg.kind === "mode_notice" && msg.payload && msg.payload.stage_id === "match") continue;
+    if (msg.kind === "clarify" || msg.kind === "clarification") return msg;
+    return null;
+  }
   return null;
 }
 
@@ -3542,6 +3548,11 @@ function renderTurn(range, isLatest) {
   for (let i = range.start; i < range.end; i += 1) {
     const msg = transcript[i];
     if (transcriptRowHidden(msg, i)) continue;
+    if (msg.kind === "mode_notice" && msg.payload && msg.payload.stage_id === "match") {
+      flush();
+      parts.push(renderProcessMessage(msg, ""));
+      continue;
+    }
     if (PROCESS_KINDS.has(msg.kind)) {
       pending.push(renderProcessMessage(msg, i === execAt ? stepsHtml : ""));
       continue;

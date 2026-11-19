@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.workbench.human import format_human_error, format_human_from_payload
 
@@ -92,18 +93,29 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             self.assertTrue(md_path.is_file())
             self.assertFalse((store.runs_dir / f"{plan_id}.json").exists())
             self.assertFalse((store.runs_dir / f"{plan_id}.plan.md").exists())
+            cards = payload.get("human_cards") or []
+            ready = next(item for item in cards if item.get("kind") == "plan_ready")
+            match = next(
+                item
+                for item in cards
+                if (item.get("payload") or {}).get("stage_id") == "match"
+            )
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
+            print(" ready gold:", "gold_lock" in str(ready.get("text") or ""))
+            print(" match:", match.get("text"))
             self.assertIn("[MODE: PLAN]  dry_run — not executed", text)
             self.assertIn("Plan ready.", text)
             self.assertIn(plan_id, text)
             self.assertIn("just discuss", text)
             self.assertIn("run this plan", text)
-            self.assertNotIn("Job:", text)
+            self.assertNotIn("Job:", str(ready.get("text") or ""))
             self.assertNotIn("Skill: qt.ai.strategy_meta.list", text)
             self.assertNotIn("Calls: qteasy.built_in_list", text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
             self.assertNotIn("# ToolPlan", text)
             self.assertNotIn("**inputs**", text)
-            self.assertNotIn("gold_lock", text)
+            self.assertNotIn("gold_lock", str(ready.get("text") or ""))
+            self.assertEqual(match.get("text"), render_match_notice(trace, chinese=False))
             self.assertNotIn("hybrid_intent", text)
             self.assertNotIn("Review plan before execute.", text)
             disk_md = md_path.read_text(encoding="utf-8")
