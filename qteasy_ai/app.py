@@ -56,6 +56,7 @@ from .planner import Planner
 from .provider import BaseLLMProvider
 from .renderer import OutputRenderer
 from .registry import SkillRegistry
+from .result_reading import attach_result_reading
 from .run_policy import RunStorePolicy
 from .progress_bridge import bind_progress_callback, install_qteasy_tqdm_bridge, reset_progress_callback
 from .session import (
@@ -2456,6 +2457,14 @@ class QteasyAssistant:
                 query,
             ),
             query=query,
+            identity_dir=self.memory_store.user_kb_dir,
+        )
+        execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+        cards = attach_result_reading(
+            cards,
+            plan_blob if isinstance(plan_blob, dict) else {},
+            execution,
+            provider=getattr(self.planner, "provider", None),
             identity_dir=self.memory_store.user_kb_dir,
         )
         payload["human_cards"] = cards

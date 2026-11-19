@@ -3447,20 +3447,6 @@ def revision_target(current_job: str, query: str, classified_job: str) -> str:
     return ""
 
 
-def prior_turn_reply(meta: str, slots: Optional[Dict[str, Any]]) -> str:
-    """用上一轮已提交的值回答反问。没有提交则说明没有可对照的运行。"""
-
-    if not str(meta or "").strip():
-        return ""
-    values = dict(slots or {})
-    if not values:
-        return "没有可对照的运行。"
-    shares = values.get("shares", "")
-    freq = values.get("freq") or "d"
-    mode = values.get("mode") or "equal"
-    return f"上一轮提交的是 shares={shares}, freq={freq}, mode={mode}。"
-
-
 class ClauseSplit(NamedTuple):
     """办事子句和附带提问。
 
