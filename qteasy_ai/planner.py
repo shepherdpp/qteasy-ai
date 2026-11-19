@@ -163,6 +163,9 @@ class Planner:
         self.identity_dir = None
         self._strategy_alias_map: Optional[Dict[str, str]] = None
         self._skill_runtime = SkillRuntime()
+        self._classify_protocol = ""
+        self._fill_outputs: List[str] = []
+        self._validation_rejects: List[str] = []
 
     def build_plan(
         self,
@@ -258,6 +261,9 @@ class Planner:
             候选计划。
         """
 
+        self._classify_protocol = ""
+        self._fill_outputs = []
+        self._validation_rejects = []
         if mode == "ask":
             steps = []
             assumptions: Dict[str, Any] = {"mode": "ask", "no_skill_execution": True}
@@ -577,6 +583,7 @@ class Planner:
             assumptions["intent_flags"] = intent_flags
         self._market_overrides = None
         self._diagnosis_statistic = ""
+        self._classify_protocol = str(getattr(decision, "protocol", "") or "")
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=user_query,
@@ -591,8 +598,7 @@ class Planner:
 
         return self.validator.validate(candidate_plan)
 
-    @staticmethod
-    def finalize_plan(candidate_plan: ToolPlan, validated_plan: ToolPlan, trace: Dict[str, Any]) -> ToolPlan:
+    def finalize_plan(self, candidate_plan: ToolPlan, validated_plan: ToolPlan, trace: Dict[str, Any]) -> ToolPlan:
         """合并候选与校验结果，形成最终计划。"""
 
         final_plan = deepcopy(validated_plan)
@@ -605,7 +611,13 @@ class Planner:
             "intent_job": candidate_plan.assumptions.get("intent_job", ""),
             "source": candidate_plan.assumptions.get("intent_source", "rule"),
             "rationale": candidate_plan.assumptions.get("intent_rationale", ""),
+            "classify_protocol": str(self._classify_protocol or ""),
+            "fill_output": [str(item) for item in self._fill_outputs],
+            "validation_rejects": [str(item) for item in self._validation_rejects],
         }
+        self._fill_outputs.clear()
+        self._validation_rejects.clear()
+        self._classify_protocol = ""
         return final_plan
 
     @staticmethod

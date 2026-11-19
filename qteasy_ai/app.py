@@ -2467,6 +2467,12 @@ class QteasyAssistant:
             provider=getattr(self.planner, "provider", None),
             identity_dir=self.memory_store.user_kb_dir,
         )
+        from .run_view import stamp_result_cards
+        from .workbench.mapper import step_artifact_index
+
+        run_id = str(payload.get("run_id") or "")
+        exec_steps = [item for item in (execution.get("steps") or []) if isinstance(item, dict)]
+        cards = stamp_result_cards(cards, payload, step_artifact_index(run_id, exec_steps))
         payload["human_cards"] = cards
         if session is None:
             return

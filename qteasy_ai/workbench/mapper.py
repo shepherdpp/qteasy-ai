@@ -526,6 +526,42 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
     return [_json_safe(item.to_dict()) for item in items]
 
 
+def step_artifact_index(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """每一步已有产物的索引。字段与 ``classify_artifacts`` 相同，并带上 ``step_id``。
+
+    Parameters
+    ----------
+    run_id : str
+        这次 run。
+    steps : list of dict
+        执行步骤。
+
+    Returns
+    -------
+    list of dict
+        ``step_id``、``type``、``title``、``run_id``、``export_path``。
+    """
+
+    rows: List[Dict[str, str]] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("step_id") or "")
+        for art in classify_artifacts(run_id, [step]):
+            if not isinstance(art, dict):
+                continue
+            rows.append(
+                {
+                    "step_id": step_id,
+                    "type": str(art.get("type") or ""),
+                    "title": str(art.get("title") or ""),
+                    "run_id": str(art.get("run_id") or ""),
+                    "export_path": str(art.get("export_path") or ""),
+                }
+            )
+    return rows
+
+
 def _is_ask_payload(payload: Dict[str, Any]) -> bool:
     """判断 Ask 目标态载荷（无 ToolPlan execute 语义）。"""
 

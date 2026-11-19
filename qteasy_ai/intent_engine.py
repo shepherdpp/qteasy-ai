@@ -60,10 +60,11 @@ _MULTI_JOB_HINT = "Please focus on one task or split into two queries."
 
 
 class _LlmParse(NamedTuple):
-    """分类 LLM 协议解析结果。"""
+    """分类 LLM 协议解析结果。``raw`` 是这一次 chat 的原文。"""
 
     kind: str
     job: str
+    raw: str = ""
 
 
 def normalize_query_text(query: str) -> str:
@@ -103,8 +104,16 @@ class IntentEngine:
         Returns
         -------
         IntentDecision
-            job / flags / source / rationale。
+            job / flags / source / rationale。有模型时 ``protocol`` 是分类 chat 的原文。
         """
+
+        decision = self._classify_query(query)
+        if not decision.llm_called:
+            decision.protocol = str(decision.rationale or "")
+        return decision
+
+    def _classify_query(self, query: str) -> IntentDecision:
+        """分类本身。协议原文由 ``classify`` 补上。"""
 
         raw = (query or "").strip()
         q_lower = raw.lower()
@@ -200,6 +209,7 @@ class IntentEngine:
         """Mode-D：只信 LLM 协议；唯一合法且确定才接受。"""
 
         parsed = self._ask_llm_job(query, allowed)
+        protocol = parsed.raw
         if parsed.kind == "accept":
             return IntentDecision(
                 job=parsed.job,
@@ -207,6 +217,7 @@ class IntentEngine:
                 source="llm",
                 rationale="llm_certain",
                 llm_called=True,
+                protocol=protocol,
             )
         if parsed.kind == "uncertain":
             from .slot_graph import looks_like_hold_compare
@@ -218,12 +229,14 @@ class IntentEngine:
                     source="rule",
                     rationale="commit_mention",
                     llm_called=True,
+                    protocol=protocol,
                 )
             return IntentDecision(
                 job="clarify",
                 source="rule",
                 rationale="llm_uncertain",
                 llm_called=True,
+                protocol=protocol,
             )
         if parsed.kind == "multi":
             return IntentDecision(
@@ -231,12 +244,14 @@ class IntentEngine:
                 source="rule",
                 rationale=f"llm_multi_job:{_MULTI_JOB_HINT}",
                 llm_called=True,
+                protocol=protocol,
             )
         return IntentDecision(
             job="clarify",
             source="rule",
             rationale="illegal_llm_job",
             llm_called=True,
+            protocol=protocol,
         )
 
     def _ask_llm_job(self, query: str, allowed: Set[str]) -> _LlmParse:
@@ -257,8 +272,9 @@ class IntentEngine:
                 ),
             )
         except Exception:
-            return _LlmParse("illegal", "")
-        return _parse_llm_job_payload(raw, allowed)
+            return _LlmParse("illegal", "", "")
+        parsed = _parse_llm_job_payload(raw, allowed)
+        return _LlmParse(parsed.kind, parsed.job, raw)
 
     def _is_unsafe(self, query: str, q_lower: str) -> bool:
         """宪法：shell / 跳过确认。"""

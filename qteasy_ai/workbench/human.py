@@ -131,6 +131,7 @@ def format_human_from_payload(
     env_facts: Optional[Dict[str, Any]] = None,
     confirm_hint: str = "",
     registry: Any = None,
+    debug: bool = False,
 ) -> str:
     """raw / pretty 包装 → human 文本（只打内核卡）。
 
@@ -148,6 +149,8 @@ def format_human_from_payload(
         忽略。
     registry : SkillRegistry, optional
         投影 Plan/run 卡时查 metadata。
+    debug : bool, default False
+        为 True 时结果卡附上已保存的分类、填槽和校验原文。
 
     Returns
     -------
@@ -165,4 +168,4 @@ def format_human_from_payload(
             query=query,
             registry=registry,
         )
-    return format_human_cards(cards, payload=raw)
+    return format_human_cards(cards, payload=raw, debug=debug)

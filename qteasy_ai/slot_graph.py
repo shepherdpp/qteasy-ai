@@ -1227,6 +1227,7 @@ def _fill_graph(
     first_report = _inspect_slots(
         steps, projected, query, mentioned, answered, kept_steps=kept_steps
     )
+    _remember_validation_rejects(planner, first_report)
     gap_names = {str(name) for name in (first_report.get("gaps") or ())}
     read_slots = [
         slot for slot in open_slots if str(slot.get("name") or "") in gap_names
@@ -1240,8 +1241,10 @@ def _fill_graph(
             if str(slot.get("name") or "") in answered or not answered
         ]
         if model_slots:
+            raw_fill = provider.chat(_fill_prompt(planner, model_slots, query, answered))
+            _remember_fill_output(planner, raw_fill)
             model_submitted = _parse_model_slots(
-                provider.chat(_fill_prompt(planner, model_slots, query, answered)),
+                raw_fill,
                 [slot["name"] for slot in model_slots],
             ) or {}
             for slot in model_slots:
@@ -1337,6 +1340,7 @@ def _fill_graph(
         fresh=set(submitted),
         kept_steps=kept_steps,
     )
+    _remember_validation_rejects(planner, second_report)
     _apply_inspected(planner, steps, projected, second_report)
     if not covered or "weights" in covered:
         for step in steps:
@@ -1766,6 +1770,7 @@ def _materialize_declared_defaults(
     if written:
         subset = [slot for slot in projected if str(slot.get("name") or "") in set(written)]
         report = _inspect_slots(steps, subset, "", set(), None, fresh=set())
+        _remember_validation_rejects(planner, report)
         _apply_inspected(planner, steps, subset, report)
         report_gaps = {str(name) for name in (report.get("gaps") or ())}
         report_errors = {str(name) for name in (report.get("errors") or {})}
@@ -5067,6 +5072,29 @@ def _clear_weight_mode(steps: Sequence[Any]) -> None:
             continue
         step.inputs.pop("weights", None)
         step.inputs.pop("mode", None)
+
+
+def _remember_fill_output(planner: Any, raw: Any) -> None:
+    """把这一次填槽 chat 的原文留在 planner 上。"""
+
+    bucket = getattr(planner, "_fill_outputs", None)
+    if isinstance(bucket, list):
+        bucket.append(str(raw or ""))
+
+
+def _remember_validation_rejects(planner: Any, report: Dict[str, Any]) -> None:
+    """把这次质检已经返回的拒因原文留下。不重新计算。"""
+
+    bucket = getattr(planner, "_validation_rejects", None)
+    if not isinstance(bucket, list) or not isinstance(report, dict):
+        return
+    errors = report.get("errors")
+    if not isinstance(errors, dict):
+        return
+    for value in errors.values():
+        text = str(value or "").strip()
+        if text:
+            bucket.append(text)
 
 
 def _inspect_slots(

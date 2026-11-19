@@ -100,6 +100,7 @@ let renamingSessionId = "";
 /** 改名框还在时先记下，提交或取消后再补行首标记。 */
 let pendingMarkId = "";
 let openProcessTurns = new Set();
+let openRunDebug = new Set();
 const PENCIL_RESEND = "Edit the blue message (pencil) and send it again.";
 const REWIND_LATER_TURNS = "Later turns will be dropped from this session. Files in ai/runs/ stay on disk; this session will no longer track them.";
 const PROCESS_KINDS = new Set(["executing", "mode_notice", "plan_ready", "clarify", "clarification"]);
@@ -1832,6 +1833,14 @@ async function confirmIdentityWrite(confirm) {
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof Element)) return;
+  const debugBtn = t.closest("button.run-debug-toggle");
+  if (debugBtn) {
+    const key = Number(debugBtn.getAttribute("data-run-debug"));
+    if (openRunDebug.has(key)) openRunDebug.delete(key);
+    else openRunDebug.add(key);
+    renderChat();
+    return;
+  }
   const foldBtn = t.closest("button.process-toggle");
   if (foldBtn) {
     const key = Number(foldBtn.getAttribute("data-process-turn"));
@@ -3446,6 +3455,33 @@ function resultArtifactButtons(msg) {
   return `<div class="actions result-artifacts">${buttons}</div>`;
 }
 
+function renderRunSteps(msg) {
+  const steps = (msg.payload && msg.payload.steps) || [];
+  if (!steps.length) return "";
+  const rows = steps.map((step) => {
+    const error = step.error ? `<div>Error: ${escapeHtml(step.error)}</div>` : "";
+    const arts = (step.artifacts || []).map((art) => {
+      const title = String(art.title || art.type || "artifact");
+      return `<button type="button" class="ghost" data-open-artifact="${escapeHtml(art.type || "")}" data-open-artifact-run="${escapeHtml(art.run_id || "")}" data-open-artifact-title="${escapeHtml(art.title || "")}">${escapeHtml(title)}</button>`;
+    }).join("");
+    const artRow = arts ? `<div class="actions">${arts}</div>` : "";
+    return `<li>Step ${escapeHtml(step.step_id || "")} ${escapeHtml(step.skill_name || "")}: ok=${escapeHtml(String(step.ok))}<div>inputs: ${escapeHtml(step.input_summary || "(none)")}</div>${error}${artRow}</li>`;
+  }).join("");
+  return `<ol class="step-list" data-testid="run-steps">${rows}</ol>`;
+}
+
+function renderRunDebug(msg, index) {
+  const view = msg.payload && msg.payload.run_view;
+  if (!view) return "";
+  const open = openRunDebug.has(index);
+  const label = open ? "Hide debug" : "Debug";
+  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${index}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
+  if (!open) return `<div class="actions">${button}</div>`;
+  const fills = (view.fill_output || []).map((item) => `<pre>${escapeHtml(item)}</pre>`).join("");
+  const rejects = (view.validation_rejects || []).map((item) => `<div>${escapeHtml(item)}</div>`).join("");
+  return `<div class="actions">${button}</div><div class="process-body" data-testid="run-debug"><div>Classify protocol:</div><pre>${escapeHtml(view.classify_protocol || "")}</pre><div>Fill output:</div>${fills}<div>Validation rejects:</div>${rejects}</div>`;
+}
+
 function renderVisibleMessage(msg, index) {
   if (msg.kind === "user_text") {
     if (editingUserIndex === index) {
@@ -3472,7 +3508,7 @@ function renderVisibleMessage(msg, index) {
     return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">${icon("pencil")}</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderRunSteps(msg)}${renderRunDebug(msg, index)}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);

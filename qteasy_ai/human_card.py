@@ -17,6 +17,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
+from .run_view import render_run_view
 from .slot_graph import (
     clarification_skips_polish,
     committed_benchmark_role,
@@ -1222,6 +1223,7 @@ def format_human_cards(
     cards: Sequence[Dict[str, Any]],
     *,
     payload: Optional[Dict[str, Any]] = None,
+    debug: bool = False,
 ) -> str:
     """把已投影的人读卡打成 CLI stdout 文本。
 
@@ -1231,6 +1233,8 @@ def format_human_cards(
         ``project_human_cards`` 结果。
     payload : dict, optional
         用于 MODE 行。
+    debug : bool, default False
+        为 True 时，结果卡再附上已保存的分类、填槽和校验原文。
 
     Returns
     -------
@@ -1252,6 +1256,13 @@ def format_human_cards(
             receipt = clarify_receipt_line(text, blob)
             if receipt:
                 lines.append(receipt)
+        if kind == "result":
+            blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            shown = _run_view_for_card(blob)
+            if shown is not None:
+                block = render_run_view(shown, debug=debug).rstrip()
+                if block:
+                    lines.append(block)
         if kind == "ask":
             sources = []
             blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -1260,6 +1271,19 @@ def format_human_cards(
                 lines.append("Sources: " + ", ".join(sources))
     cleaned = [str(line).rstrip() for line in lines if str(line).strip()]
     return "\n".join(cleaned) + "\n"
+
+
+def _run_view_for_card(blob: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """结果卡上的逐步视图。有产物索引时用卡上的 steps。"""
+
+    view = blob.get("run_view") if isinstance(blob.get("run_view"), dict) else None
+    if view is None:
+        return None
+    shown = dict(view)
+    steps = blob.get("steps")
+    if isinstance(steps, list) and steps:
+        shown["steps"] = steps
+    return shown
 
 
 def _mode_line(payload: Dict[str, Any], cards: Sequence[Dict[str, Any]]) -> str:
