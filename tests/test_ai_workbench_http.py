@@ -1773,6 +1773,30 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertTrue(stopped.json().get("ok"))
             self.assertEqual(calls["n"], 1)
 
+    def test_system_versions(self) -> None:
+        """GET /v1/system 返回版本、发布日，以及当前数据源连接。"""
+
+        print("\n[TestAiWorkbenchHttp] system versions")
+        import qteasy
+        from qteasy_ai import __version__ as ai_version
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            res = client.get("/v1/system")
+            body = res.json()
+            source = (body.get("datasource") or {}).get("source")
+            print(" status_code:", res.status_code)
+            print(" qteasy_ai:", body.get("qteasy_ai"), "released:", body.get("qteasy_ai_released"))
+            print(" qteasy:", body.get("qteasy"), "released:", body.get("qteasy_released"))
+            print(" datasource:", body.get("datasource"), "expected source:", qteasy.QT_DATA_SOURCE.connection_type)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(body.get("qteasy_ai"), ai_version)
+            self.assertEqual(body.get("qteasy"), qteasy.__version__)
+            self.assertEqual(body.get("qteasy_released"), "Oct 3, 2026")
+            self.assertEqual(body.get("qteasy_ai_released"), "Oct 31, 2026")
+            self.assertEqual((body.get("datasource") or {}).get("status"), "connected")
+            self.assertEqual(source, qteasy.QT_DATA_SOURCE.connection_type)
+
 
 if __name__ == "__main__":
     unittest.main()

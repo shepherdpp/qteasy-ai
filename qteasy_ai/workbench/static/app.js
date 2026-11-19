@@ -96,6 +96,7 @@ let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
 let modeNotice = "";
 let editingUserIndex = -1;
 let providerInfo = null;
+let systemInfo = null;
 let renamingSessionId = "";
 /** 改名框还在时先记下，提交或取消后再补行首标记。 */
 let pendingMarkId = "";
@@ -3176,6 +3177,12 @@ async function refreshProvider() {
   renderStatusbar();
 }
 
+async function refreshSystem() {
+  const data = await api("/v1/system");
+  if (data && !data.error) systemInfo = data;
+  if (openTabs.some((tab) => tab.type === "settings")) renderArtifacts();
+}
+
 function timeBucketLabel(mtimeSeconds, nowMs) {
   const mtime = Number(mtimeSeconds);
   if (!Number.isFinite(mtime) || mtime <= 0) return "OLDER";
@@ -4194,18 +4201,41 @@ function renderProviderForm() {
   return `<div class="provider-list">${list}</div><div class="settings-add-row"><button type="button" class="icon-btn ghost" id="btn-prov-add" title="Add provider" aria-label="Add provider">${icon("plus")}</button></div>`;
 }
 
+function versionSentence(version, released) {
+  const ver = version == null || String(version).trim() === "" ? "" : String(version).trim();
+  const day = released == null ? "" : String(released).trim();
+  if (!ver) return "—";
+  if (!day) return `Version ${ver}`;
+  return `Version ${ver}, released on ${day}`;
+}
+
+function settingsStack(title, contentHtml) {
+  return `<p class="settings-item-title">${escapeHtml(title)}</p>
+      <div class="settings-quit-row"><span class="settings-quit-hint">${contentHtml}</span></div>`;
+}
+
+function dataSourceLine() {
+  const ds = (systemInfo && systemInfo.datasource) || {};
+  const status = ds.status ? String(ds.status) : "not connected";
+  const source = ds.source == null || String(ds.source).trim() === "" ? "—" : String(ds.source);
+  return escapeHtml(`status: ${status}, source: ${source}`);
+}
+
 function renderSettingsBody() {
   const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-  const serverOpen = !treeCollapsed.has("settings:server");
+  const systemOpen = !treeCollapsed.has("settings:system");
   const appearanceOpen = !treeCollapsed.has("settings:appearance");
   const providersOpen = !treeCollapsed.has("settings:providers");
-  const serverBody = serverOpen
+  const aboutOpen = !treeCollapsed.has("settings:about");
+  const systemBody = systemOpen
     ? `<div class="settings-group-body">
       <p class="settings-item-title">Workbench</p>
       <div class="settings-quit-row">
         <button type="button" class="danger" id="btn-quit-server" title="Stops this workbench process and frees its port.">Quit</button>
         <span class="settings-quit-hint">Stops this workbench process and frees its port.</span>
       </div>
+      <p class="settings-item-title">DataSource</p>
+      <div class="settings-quit-row"><span class="settings-quit-hint">${dataSourceLine()}</span></div>
     </div>`
     : "";
   const appearanceBody = appearanceOpen
@@ -4223,11 +4253,22 @@ function renderSettingsBody() {
     </div></div>`
     : "";
   const providersBody = providersOpen ? `<div class="settings-group-body">${renderProviderForm()}</div>` : "";
+  const docUrl = "https://qteasy.readthedocs.io/zh-cn/latest/";
+  const aboutBody = aboutOpen
+    ? `<div class="settings-group-body">
+      ${settingsStack("SYSTEM (QTEASY)", escapeHtml(versionSentence(systemInfo && systemInfo.qteasy, systemInfo && systemInfo.qteasy_released)))}
+      ${settingsStack("Agent (QTEASY-AI)", escapeHtml(versionSentence(systemInfo && systemInfo.qteasy_ai, systemInfo && systemInfo.qteasy_ai_released)))}
+      ${settingsStack("Author", escapeHtml("Jackie PENG, jackie_pengzhao@163.com"))}
+      ${settingsStack("LICENSE", escapeHtml("BSD 3-Clause License. Redistribution is allowed when the copyright notice and disclaimer are kept."))}
+      ${settingsStack("DOCUMENTS", `<a class="settings-doc-link" href="${docUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(docUrl)}</a>`)}
+    </div>`
+    : "";
   return `<div class="settings-panel">
     <h3>Settings</h3>
-    <div class="time-group">${renderTimeGroupHead("settings:server", "SERVER", serverOpen)}${serverBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:system", "SYSTEM", systemOpen)}${systemBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:appearance", "APPEARANCE", appearanceOpen)}${appearanceBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:providers", "PROVIDERS", providersOpen)}${providersBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:about", "ABOUT", aboutOpen)}${aboutBody}</div>
   </div>`;
 }
 
@@ -4693,6 +4734,7 @@ async function restoreCurrentSession() {
     if (!knownNow) await refreshSessions();
     else renderPanes();
     await refreshProvider();
+    await refreshSystem();
     applyComposerLock();
     projectCurrentWatch();
     return;
@@ -4709,6 +4751,7 @@ async function restoreCurrentSession() {
     state = emptyState();
     renderPanes();
     await refreshProvider();
+    await refreshSystem();
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
@@ -4721,6 +4764,7 @@ async function restoreCurrentSession() {
   }
   await refreshWorkspace();
   await refreshProvider();
+  await refreshSystem();
   await refreshAttachments();
   renderPanes();
   if (hasSessionSnapshot(dto)) applyRunningWatch(dto);

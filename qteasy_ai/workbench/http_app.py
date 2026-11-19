@@ -20,7 +20,7 @@ import signal
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import unquote
 
 from starlette.applications import Starlette
@@ -1152,6 +1152,12 @@ class WorkbenchHttp:
             )
         return self._dto_response(payload, query=query, session_id=session_id)
 
+    async def get_system(self, request: Request) -> JSONResponse:
+        """GET /v1/system：版本、发布日，以及当前数据源连接。"""
+
+        del request
+        return JSONResponse(system_versions())
+
     async def shutdown_server(self, request: Request) -> JSONResponse:
         """POST /v1/server/shutdown：确认后停止 ``qteasy-ai serve``。"""
 
@@ -1340,6 +1346,67 @@ class WorkbenchHttp:
         )
 
 
+_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+# 只记录已发布版本的日期。未知版本不编造。
+_QTEASY_RELEASED = {
+    "2.6.5": (2026, 10, 3),
+}
+_QTEASY_AI_RELEASED = {
+    "0.3.1": (2026, 10, 31),
+}
+
+
+def _released_on(table: Dict[str, Tuple[int, int, int]], version: str) -> str:
+    """把已知版本的日期写成 ``Oct 3, 2026``。未知版本返回空串。"""
+
+    parts = table.get(version)
+    if not parts:
+        return ""
+    year, month, day = parts
+    if month < 1 or month > 12:
+        return ""
+    return f"{_MONTHS[month - 1]} {day}, {year}"
+
+
+def system_versions() -> Dict[str, Any]:
+    """读取已安装版本、发布日，以及当前数据源连接。
+
+    qteasy 在调用时导入，避免工作台模块加载时拖入整个量化栈。
+    数据源取 ``QT_DATA_SOURCE.connection_type``，不含账号密码。
+
+    Returns
+    -------
+    dict
+        ``qteasy_ai`` / ``qteasy`` 版本，``qteasy_ai_released`` / ``qteasy_released``
+        英文日期，以及 ``datasource``（``status`` 与 ``source``）。
+    """
+
+    import qteasy
+
+    from .. import __version__ as ai_version
+
+    qt_version = str(getattr(qteasy, "__version__", "") or "")
+    ai_text = str(ai_version)
+    source = ""
+    status = "not connected"
+    data_source = getattr(qteasy, "QT_DATA_SOURCE", None)
+    if data_source is not None:
+        source = str(getattr(data_source, "connection_type", "") or "")
+        if source:
+            status = "connected"
+    return {
+        "qteasy_ai": ai_text,
+        "qteasy": qt_version,
+        "qteasy_ai_released": _released_on(_QTEASY_AI_RELEASED, ai_text),
+        "qteasy_released": _released_on(_QTEASY_RELEASED, qt_version),
+        "datasource": {"status": status, "source": source},
+    }
+
+
 def _collect_artifact_paths(payload: Dict[str, Any]) -> List[str]:
     """从 run JSON 收集 artifacts.path。"""
 
@@ -1400,6 +1467,7 @@ def create_app(
         Route("/v1/session/{session_id}", api.get_session, methods=["GET"]),
         Route("/v1/session/{session_id}", api.patch_session, methods=["PATCH"]),
         Route("/v1/session/{session_id}", api.delete_session, methods=["DELETE"]),
+        Route("/v1/system", api.get_system, methods=["GET"]),
         Route("/v1/server/shutdown", api.shutdown_server, methods=["POST"]),
         Route("/v1/provider", api.get_provider, methods=["GET"]),
         Route("/v1/provider", api.post_provider, methods=["POST"]),

@@ -649,8 +649,10 @@ html[data-theme="light"] .mode-notice {
   color: var(--text-muted);
   margin: 10px 0 2px;
 }
-.now-block .now-line { font-size: 12px; font-weight: 400; color: var(--text); }
-.now-block .now-line .now-label { font-weight: 700; }
+.now-block .now-line,
+.settings-panel .now-line { font-size: 12px; font-weight: 400; color: var(--text); }
+.now-block .now-line .now-label,
+.settings-panel .now-line .now-label { font-weight: 700; }
 .now-block .now-line.clip {
   white-space: nowrap;
   overflow: hidden;
@@ -1306,6 +1308,7 @@ html[data-theme="light"] .file-tree button.file.tree-plan.is-active {
   color: var(--text-muted);
   font-size: 12px;
 }
+.settings-doc-link { color: var(--accent); font-size: 12px; }
 .theme-choices { display: flex; gap: 16px; flex-wrap: wrap; }
 .settings-panel label.theme-choice {
   position: relative;
