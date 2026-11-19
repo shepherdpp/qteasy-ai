@@ -30,7 +30,7 @@ class TestAiPlannerF(unittest.TestCase):
         return QteasyAssistant(memory_store=store, registry=build_default_registry())
 
     def test_refill_clarify_then_fill_same_job(self) -> None:
-        """CLI：无日期下载先澄清，打字跟进日期后仍是同一 refill Job。"""
+        """CLI：无日期下载先澄清，日期跟进把开始日和结束日都写上，仍是同一 refill Job。"""
 
         print("\n[TestAiPlannerF] refill clarify then fill")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -65,22 +65,23 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id="s-refill",
             )
             names = [s["skill_name"] for s in second["plan"]["steps"]]
-            refill = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.refill_basic_equity_and_index"]
             print(" second skills:", names)
             print(" second trace:", second["plan"].get("planner_trace"))
-            print(" refill inputs:", refill[0]["inputs"] if refill else None)
+            print(" second missing:", second["plan"]["steps"][0]["inputs"].get("missing_info"))
             self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "data.refill")
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
-            self.assertTrue(refill)
-            self.assertEqual(refill[0]["inputs"].get("start"), "20240101")
-            self.assertEqual(refill[0]["inputs"].get("end"), "20241231")
+            self.assertEqual(names, ["qt.ai.data.refill_basic_equity_and_index"])
+            written = second["plan"]["steps"][0]["inputs"]
+            print(" second dates:", written.get("start"), written.get("end"))
+            self.assertEqual(str(written.get("start") or ""), "20240101")
+            self.assertEqual(str(written.get("end") or ""), "20241231")
+            self.assertNotEqual(written.get("missing_info"), "20240101 到 20241231")
 
             store = SessionStore(assistant.memory_store)
             filled = store.load("s-refill")
             print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
-            print(" filled status:", filled.task.status)
-            self.assertTrue(filled.task.slots["start"].confirmed)
-            self.assertTrue(filled.task.slots["end"].confirmed)
+            print(" filled status:", filled.task.status, "job:", filled.task.job)
+            self.assertEqual(filled.task.job, "data.refill")
             self.assertEqual(filled.task.status, "ready")
 
             confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
@@ -88,8 +89,8 @@ class TestAiPlannerF(unittest.TestCase):
             print(" confirm skills:", cnames)
             print(" confirm trace:", confirm["plan"].get("planner_trace"))
             print(" confirm source:", confirm["plan"]["planner_trace"].get("source"))
-            self.assertNotEqual(confirm["plan"]["planner_trace"].get("source"), "session")
-            self.assertNotEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
+            self.assertEqual(confirm["plan"]["planner_trace"].get("source"), "session")
+            self.assertEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
     def test_clarify_submit_round_streak_warn_and_fail(self) -> None:
         """提交轮次 streak：首卡 0；第 3 次 last chance；第 4 次失败收口。"""
@@ -164,7 +165,7 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(missing, ["end"])
 
     def test_builder_followup_changes_slow_with_session(self) -> None:
-        """ready 后 Composer「改慢线」是新 Task，不是 session 修订。"""
+        """第一句仍在澄清时，跟进句留在原任务，不另起一条已改慢线的计划。"""
 
         print("\n[TestAiPlannerF] builder change slow")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -181,13 +182,13 @@ class TestAiPlannerF(unittest.TestCase):
             print(" second source:", second["plan"]["planner_trace"].get("source"))
             print(" second skills:", [s["skill_name"] for s in second["plan"]["steps"]])
             print(" second plan_id:", second_id)
-            self.assertNotEqual(second["plan"]["planner_trace"].get("source"), "session")
-            self.assertNotEqual(second_id, first_id)
+            self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
+            self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "strategy.builder")
             store = SessionStore(assistant.memory_store)
             state = store.load("s-d")
             print(" task job:", state.task.job if state.task else None)
             print(" slow slot:", state.task.slots.get("slow").to_dict() if state.task and "slow" in state.task.slots else None)
-            self.assertNotEqual(state.task.job, "strategy.builder")
+            self.assertEqual(state.task.job, "strategy.builder")
 
     def test_no_session_followup_stays_single_turn(self) -> None:
         """无 session_id 保持今日单句（D G7）。"""
@@ -221,19 +222,14 @@ class TestAiPlannerF(unittest.TestCase):
             plan = raw["plan"]
             bt = [s for s in plan["steps"] if s["skill_name"] == "qt.ai.backtest.run_builtin"]
             print(" skills:", [s["skill_name"] for s in plan["steps"]])
-            print(" bt inputs:", bt[0]["inputs"] if bt else None)
-            print(" assumptions:", plan.get("assumptions"))
-            print(" narrative:", pretty.narrative)
-            self.assertTrue(bt)
-            self.assertEqual(bt[0]["inputs"].get("asset_pool"), "000300.SH")
-            self.assertEqual((plan.get("assumptions") or {}).get("slot_defaults", {}).get("shares"), "profile")
-            self.assertIn("profile", pretty.narrative.lower())
+            print(" missing:", plan["steps"][0]["inputs"].get("missing_info"))
+            self.assertFalse(bt)
+            self.assertEqual(plan["steps"][0]["inputs"].get("missing_info"), "strategy_id")
             store = SessionStore(assistant.memory_store)
             state = store.load("s-def")
-            print(" shares slot:", state.task.slots["shares"].to_dict())
-            self.assertEqual(state.task.slots["shares"].value, "000300.SH")
-            self.assertEqual(state.task.slots["shares"].source, "default")
-            self.assertFalse(state.task.slots["shares"].confirmed)
+            print(" slots:", {k: v.to_dict() for k, v in state.task.slots.items()})
+            self.assertNotIn("shares", state.task.slots)
+            self.assertNotIn("000300.SH", str(plan["steps"]))
 
     def test_no_defaults_does_not_invent_shares(self) -> None:
         """无 defaults 且句中无标的 → 不发明 shares。"""
@@ -247,9 +243,10 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id="s-none",
             )
             bt = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.backtest.run_builtin"]
-            print(" bt inputs:", bt[0]["inputs"] if bt else None)
-            self.assertTrue(bt)
-            self.assertFalse(bt[0]["inputs"].get("asset_pool"))
+            print(" skills:", [s["skill_name"] for s in payload["plan"]["steps"]])
+            print(" missing:", payload["plan"]["steps"][0]["inputs"].get("missing_info"))
+            self.assertFalse(bt)
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "strategy_id")
             store = SessionStore(assistant.memory_store)
             state = store.load("s-none")
             print(" slots:", {k: v.to_dict() for k, v in state.task.slots.items()})
@@ -274,7 +271,7 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
 
     def test_confirmed_slot_overrides_old_symbol_on_data_read(self) -> None:
-        """已确认 shares 盖过问句里更早的旧代码；data.read 步骤输入跟着新槽。"""
+        """已确认 shares 盖过问句里更早的旧代码。这张卡没交的列名不从原句补。"""
 
         print("\n[TestAiPlannerF] confirmed slot overrides data.read shares")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -285,7 +282,7 @@ class TestAiPlannerF(unittest.TestCase):
                 response_style="raw",
                 session_id=sid,
             )
-            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
             print(" first inputs:", read[0]["inputs"] if read else None)
             self.assertTrue(read)
             self.assertEqual(read[0]["inputs"].get("shares"), "000300.SH")
@@ -296,19 +293,32 @@ class TestAiPlannerF(unittest.TestCase):
                 session_id=sid,
                 patches={"shares": "000001.SZ", "freq": "w", "start": "20240201"},
             )
-            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            accepted = [
+                step
+                for step in ((second["plan"].get("assumptions") or {}).get("accepted_steps") or [])
+                if step.get("skill_name") == "qt.ai.data.history"
+            ]
+            pending = [
+                str(item.get("name") or "")
+                for item in (((second["plan"].get("assumptions") or {}).get("clarification") or {}).get("pending") or [])
+                if isinstance(item, dict)
+            ]
             store = SessionStore(assistant.memory_store)
             state = store.load(sid)
             slot = state.task.slots["shares"].to_dict()
+            inputs = accepted[0].get("inputs") if accepted else {}
             print(" slot:", slot)
-            print(" second inputs:", read2[0]["inputs"] if read2 else None)
-            self.assertTrue(read2)
+            print(" accepted:", inputs)
+            print(" pending:", pending)
+            self.assertTrue(accepted)
             self.assertTrue(slot["confirmed"])
             self.assertEqual(slot["value"], "000001.SZ")
-            self.assertEqual(read2[0]["inputs"].get("shares"), "000001.SZ")
-            self.assertEqual(read2[0]["inputs"].get("freq"), "w")
-            self.assertEqual(read2[0]["inputs"].get("start"), "20240201")
-            self.assertNotIn("000300.SH", str(read2[0]["inputs"].get("shares")))
+            self.assertEqual(inputs.get("shares"), "000001.SZ")
+            self.assertEqual(inputs.get("freq"), "w")
+            self.assertEqual(inputs.get("start"), "20240201")
+            self.assertNotIn("htype_names", inputs)
+            self.assertIn("htype_names", pending)
+            self.assertNotIn("000300.SH", str(inputs.get("shares")))
 
     def test_unconfirmed_profile_shares_do_not_override_explicit_code(self) -> None:
         """未确认的 profile 默认不盖过问句里的显式代码。"""
@@ -321,10 +331,45 @@ class TestAiPlannerF(unittest.TestCase):
                 response_style="raw",
                 session_id="s-explicit",
             )
-            read = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
             print(" inputs:", read[0]["inputs"] if read else None)
             self.assertTrue(read)
             self.assertEqual(read[0]["inputs"].get("shares"), "000001.SZ")
+
+    def test_refill_date_patches_stay_on_the_recipe(self) -> None:
+        """下载缺日期用控件补上后仍是 refill 菜谱，不走开放图快照。"""
+
+        print("\n[TestAiPlannerF] 下载补日期仍走菜谱")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self._assistant(temp_dir)
+            first = assistant.plan(
+                "download A-share daily data to local datasource",
+                response_style="raw",
+                session_id="s-refill-patch",
+            )
+            clar = (first.get("plan") or {}).get("assumptions", {}).get("clarification") or {}
+            print(" resume_job:", clar.get("resume_job"), "pending:", [item.get("name") for item in (clar.get("pending") or [])])
+            self.assertNotEqual(clar.get("resume_job"), "open")
+            self.assertFalse(clar.get("accepted_steps"))
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-refill-patch",
+                patches={"start": "20240101", "end": "20241231"},
+            )
+            plan = second.get("plan") or {}
+            refill = [
+                step
+                for step in (plan.get("steps") or [])
+                if step.get("skill_name") == "qt.ai.data.refill_basic_equity_and_index"
+            ]
+            print(" intent:", (plan.get("planner_trace") or {}).get("intent_job"))
+            print(" inputs:", refill[0]["inputs"] if refill else None)
+            self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "data.refill")
+            self.assertEqual((plan.get("planner_trace") or {}).get("source"), "session")
+            self.assertTrue(refill)
+            self.assertEqual(refill[0]["inputs"].get("start"), "20240101")
+            self.assertEqual(refill[0]["inputs"].get("end"), "20241231")
 
 
 if __name__ == "__main__":

@@ -16,8 +16,11 @@ import unittest
 from pathlib import Path
 
 from qteasy_ai.app import QteasyAssistant, _mark_rejected_slot_changes, build_default_registry
+from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.human_card import (
     HUMAN_CARD_KINDS,
+    choice_rows,
+    clarify_receipt_line,
     format_human_cards,
     infer_effective_kind,
     polish_human_cards,
@@ -25,6 +28,7 @@ from qteasy_ai.human_card import (
     revision_notice_text,
     usage_notice_card,
 )
+from qteasy_ai.slot_graph import date_pending_rows
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState, SessionStore
@@ -483,7 +487,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertNotIn("qt.ai.backtest.run_builtin", skills)
 
     def test_change_slot_keeps_plan_id_and_overwrites_md(self) -> None:
-        """控件 patches 保留 plan_id 并追加修订 notice；Composer 改槽句是新 Task 且必有 user_text。"""
+        """控件 patches 保留 plan_id 并追加修订 notice；Composer 跟进句升级同一份计划，并记下 user_text。"""
 
         print("\n[TestAiHumanCardPlanArtifact] change slot keeps plan_id")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -491,7 +495,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             asst = QteasyAssistant(registry=build_default_registry(), memory_store=store)
             sid = "s-slot"
             first = asst.plan(
-                "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+                "get_history_data close for 000300.SH from 20240101 to 20240131",
                 response_style="raw",
                 session_id=sid,
             )
@@ -503,18 +507,18 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             self.assertTrue(first_id)
             self.assertTrue(first_run)
 
-            second = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
+            second = asst.plan("", response_style="raw", session_id=sid, patches={"start": "20200101"})
             second_id = str((second.get("plan") or {}).get("plan_id") or "")
             second_run = str(second.get("run_id") or "")
             session = asst.session_store.load(sid)
             notices = [row for row in session.messages if row.get("kind") == "mode_notice"]
-            print(" second:", second_id, second_run, "slow:", (session.task.slots.get("slow").value if session.task and "slow" in session.task.slots else None))
+            print(" second:", second_id, second_run, "start:", (session.task.slots.get("start").value if session.task and "start" in session.task.slots else None))
             print(" notices:", [row.get("text") for row in notices])
             self.assertEqual(second_id, first_id)
             self.assertEqual(second_run, first_run)
-            self.assertEqual(int(session.task.slots["slow"].value), 50)
+            self.assertEqual(str(session.task.slots["start"].value), "20200101")
             self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
-            self.assertTrue(any("Accepted slow = 50." in str(row.get("text") or "") for row in notices))
+            self.assertTrue(any("Accepted start = 20200101." in str(row.get("text") or "") for row in notices))
             self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
             spoken = asst.plan("把慢线改成 50", response_style="raw", session_id=sid)
@@ -523,7 +527,7 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
             users = [row for row in session.messages if row.get("kind") == "user_text"]
             print(" spoken:", spoken_id)
             print(" users:", [row.get("text") for row in users])
-            self.assertNotEqual(spoken_id, first_id)
+            self.assertEqual(spoken_id, first_id)
             self.assertIn("把慢线改成 50", [row.get("text") for row in users])
             self.assertGreater(len(users), len(users_before))
 
@@ -583,6 +587,29 @@ class TestAiHumanCardPlanArtifact(unittest.TestCase):
         self.assertIn("Accepted Return column = close.", split_text)
         self.assertIn("Filled Factor column = volume from Return column.", split_text)
         self.assertNotIn("from Factor", split_text)
+
+    def test_revision_notice_lists_each_confirmed_holding(self) -> None:
+        """已确认的持仓逐项列出，未确认的不写进修订说明。"""
+
+        print("\n[TestAiHumanCardPlanArtifact] 持仓修订逐项")
+        holdings = [
+            {"mention": "贵州茅台", "code": "600519.SH", "status": "confirmed"},
+            {"mention": "格力电器", "code": "000651.SZ", "status": "confirmed"},
+            {"mention": "工商银行", "code": "601398.SH", "status": "confirmed"},
+            {"mention": "招商银行", "code": "600036.SH", "status": "confirmed"},
+        ]
+        text = revision_notice_text(
+            2,
+            {},
+            [{"name": "holdings", "label": "holdings", "value": holdings, "origin": "accepted"}],
+        )
+        print(" notice:", text)
+        self.assertIn("Accepted 贵州茅台 = 600519.SH.", text)
+        self.assertIn("Accepted 格力电器 = 000651.SZ.", text)
+        self.assertIn("Accepted 工商银行 = 601398.SH.", text)
+        self.assertIn("Accepted 招商银行 = 600036.SH.", text)
+        self.assertNotIn("Accepted holdings", text)
+        self.assertEqual(text.count("Accepted "), 4)
 
     def test_rejected_slot_is_not_called_accepted(self) -> None:
         """各类被拒输入不写成 Accepted；整笔拒绝不发 Notice，混合则分开写。"""
@@ -757,8 +784,13 @@ class TestAiHumanCardClarify(unittest.TestCase):
             self.assertEqual(users[0]["text"], "帮我下载日线")
             self.assertEqual(users[1]["text"], "start 20240101 end 20241231")
             self.assertTrue(clar)
-            self.assertEqual((clar[0].get("payload") or {}).get("answer"), "start 20240101 end 20241231")
-            self.assertEqual((clar[0].get("payload") or {}).get("status"), "answered")
+            self.assertIsNone((clar[0].get("payload") or {}).get("answer"))
+            steps = (follow.get("plan") or {}).get("steps") or []
+            inputs = steps[0].get("inputs") if steps else {}
+            print(" follow skill:", steps[0].get("skill_name") if steps else None, "inputs:", inputs)
+            self.assertEqual(steps[0].get("skill_name"), "qt.ai.data.refill_basic_equity_and_index")
+            self.assertEqual(str((inputs or {}).get("start") or ""), "20240101")
+            self.assertEqual(str((inputs or {}).get("end") or ""), "20241231")
 
     def test_run_plan_does_not_replay_user_query(self) -> None:
         """run_plan 不把 plan.user_query 再写成 user_text。"""
@@ -787,31 +819,38 @@ class TestAiHumanCardClarify(unittest.TestCase):
             self.assertIn("result", kinds)
 
     def test_topic_change_skips_without_abandon_options(self) -> None:
-        """PlanReady 后换题：skip 提示，无 abandon 选项卡。"""
+        """PlanReady 后的下载句升级同一份计划，不出现跳过提示，也没有 abandon 选项卡。"""
 
-        print("\n[TestAiHumanCardClarify] topic skip no abandon")
+        print("\n[TestAiHumanCardClarify] topic upgrade no abandon")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=build_default_registry(),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "s-abandon"
-            asst.plan("list built-in strategies", response_style="raw", session_id=sid)
+            first = asst.plan("list built-in strategies", response_style="raw", session_id=sid)
+            first_id = str((first.get("plan") or {}).get("plan_id") or "")
             payload = asst.plan("download daily bars from 20180101 to 20201231", response_style="raw", session_id=sid)
             session = asst.session_store.load(sid)
             cards = payload.get("human_cards") or []
             clarify = next((item for item in cards if item["kind"] == "clarify"), None)
-            notice = next((item for item in cards if item["kind"] == "mode_notice"), None)
-            print(" status:", session.task.status if session.task else None)
+            notices = [item for item in cards if item["kind"] == "mode_notice"]
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
+            print(" status:", session.task.status if session.task else None, "job:", session.task.job if session.task else None)
+            print(" plan:", first_id, (payload.get("plan") or {}).get("plan_id"))
             print(" kinds:", [item["kind"] for item in cards])
-            print(" notice:", None if notice is None else notice.get("text"))
+            print(" notices:", [item.get("text") for item in notices])
             print(" clarify:", None if clarify is None else clarify.get("text"))
             self.assertFalse(hasattr(session, "awaiting_abandon"))
+            self.assertEqual(str((payload.get("plan") or {}).get("plan_id") or ""), first_id)
+            self.assertEqual(session.task.job, "data.refill")
+            self.assertEqual(session.task.status, "ready")
             self.assertIsNone(clarify)
-            self.assertIsNotNone(notice)
-            self.assertIn("Previous topic skipped.", str((notice or {}).get("text") or ""))
-            options = ((clarify or {}).get("payload") or {}).get("options") or []
-            self.assertFalse(any(str(item.get("id") or "") == "abandon" for item in options if isinstance(item, dict)))
+            self.assertEqual(len(notices), 1)
+            self.assertEqual((notices[0].get("payload") or {}).get("stage_id"), "match")
+            self.assertEqual(notices[0].get("text"), render_match_notice(trace, chinese=False))
+            self.assertNotIn("abandon", str(notices[0].get("text") or ""))
+            self.assertNotIn("skipped", str(notices[0].get("text") or "").lower())
 
 
     def test_format_human_includes_clarify_answer(self) -> None:
@@ -827,6 +866,85 @@ class TestAiHumanCardClarify(unittest.TestCase):
         print(" human:", text)
         self.assertIn("Need start.", text)
         self.assertIn("Answered: start 20240101", text)
+        labeled = [
+            {
+                "kind": "clarify",
+                "text": "是否创建开放计划？",
+                "payload": {"answer": "compose_open", "answer_label": "给出开放计划", "status": "answered"},
+            }
+        ]
+        labeled_text = format_human_cards(labeled, payload={"mode": "plan"})
+        print(" labeled human:", labeled_text)
+        self.assertIn("用户已选 给出开放计划", labeled_text)
+        self.assertNotIn("compose_open", labeled_text)
+        english = clarify_receipt_line(
+            "Create an open plan?",
+            {"answer": "compose_open", "answer_label": "Create an open plan"},
+        )
+        print(" english receipt:", english)
+        self.assertEqual(english, "Selected: Create an open plan")
+
+    def test_multi_question_receipt_lists_each_answer(self) -> None:
+        """多题回执逐行列出；一题仍是原来的一行。"""
+
+        print("\n[TestAiHumanCardClarify] 多题回执")
+        many = clarify_receipt_line(
+            "Please provide holdings.",
+            {
+                "answers": [
+                    {"prompt": "贵州茅台", "answer": "600519.SH", "answer_label": "600519.SH"},
+                    {"prompt": "格力电器", "answer": "000651.SZ", "answer_label": "000651.SZ"},
+                    {"prompt": "工商银行", "answer": "601398.SH", "answer_label": "601398.SH"},
+                    {"prompt": "招商银行", "answer": "600036.SH", "answer_label": "600036.SH"},
+                ]
+            },
+        )
+        print(" many:", many)
+        self.assertEqual(
+            many,
+            "贵州茅台: 600519.SH\n格力电器: 000651.SZ\n工商银行: 601398.SH\n招商银行: 600036.SH",
+        )
+        one = clarify_receipt_line(
+            "Need start.",
+            {"answers": [{"prompt": "Start", "answer": "20240101", "answer_label": ""}]},
+        )
+        print(" one:", one)
+        self.assertEqual(one, "Answered: 20240101")
+        labeled = clarify_receipt_line(
+            "是否创建开放计划？",
+            {"answers": [{"prompt": "开放计划", "answer": "compose_open", "answer_label": "给出开放计划"}]},
+        )
+        print(" labeled one:", labeled)
+        self.assertEqual(labeled, "用户已选 给出开放计划")
+
+    def test_choice_rows_split_presets_and_open(self) -> None:
+        """恢复卡是两条预设加一条开放；日期格不是开放选项。"""
+
+        print("\n[TestAiHumanCardClarify] choice_rows")
+        recovery = {
+            "name": "unresolved_intent",
+            "options": [
+                {"id": "compose_open", "label": "给出开放计划"},
+                {"id": "abandon", "label": "放弃"},
+            ],
+            "open": {"label": "重写需求"},
+        }
+        rows = choice_rows(recovery)
+        print(" recovery rows:", rows)
+        self.assertEqual([item["kind"] for item in rows], ["option", "option", "open"])
+        self.assertEqual(rows[0]["id"], "compose_open")
+        self.assertEqual(rows[-1]["label"], "重写需求")
+        date_rows = choice_rows(date_pending_rows()[0])
+        print(" date rows:", date_rows, "slot:", date_pending_rows()[0].get("name"))
+        self.assertEqual(date_rows, [])
+        self.assertNotIn("open", date_pending_rows()[0])
+        src = Path(__file__).resolve().parents[1].joinpath("qteasy_ai/workbench/static/app.js").read_text(encoding="utf-8")
+        fn = src.split("function renderClarifyStepOptions")[1].split("function exampleFromRow")[0]
+        print(" open row gated:", "row.open" in fn, "placeholder:", "escapeAttr(openLabel)" in fn)
+        self.assertIn("row.open", fn)
+        self.assertIn('placeholder="${escapeAttr(openLabel)}"', fn)
+        self.assertNotIn("openCaption", fn)
+        self.assertNotIn("open_label", src)
 
 
 class TestAiHumanCardHumanCli(unittest.TestCase):
@@ -857,7 +975,18 @@ class TestAiHumanCardHumanCli(unittest.TestCase):
             self.assertIn("just discuss", text)
             self.assertIn("run this plan", text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
-            self.assertNotIn("gold_lock", text)
+            ready = next(item for item in (payload.get("human_cards") or []) if item.get("kind") == "plan_ready")
+            match = next(
+                item
+                for item in (payload.get("human_cards") or [])
+                if (item.get("payload") or {}).get("stage_id") == "match"
+            )
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
+            print(" ready gold:", "gold_lock" in str(ready.get("text") or ""))
+            print(" match:", match.get("text"))
+            self.assertNotIn("gold_lock", str(ready.get("text") or ""))
+            self.assertNotIn("Job:", str(ready.get("text") or ""))
+            self.assertEqual(match.get("text"), render_match_notice(trace, chinese=False))
             lone = asst.plan("list built-in strategies", response_style="raw")
             lone_text = format_human_from_payload(lone, query="list built-in strategies", registry=asst.registry)
             print(" no-session human:", lone_text[:200])
@@ -990,7 +1119,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotIn("plan_ready", kinds)
 
     def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
-        """CLI：缺 strategy_id 出 clarify；打字 macd 走 get；typed skip 失败收口。"""
+        """CLI：缺 strategy_id 出 clarify；卡片答案 macd 走 get；typed skip 失败收口。"""
 
         print("\n[TestAiJobLifecycleG9] clarify params")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1021,15 +1150,29 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertEqual(int(pending_blob.get("step_index") or 0), 1)
             strategy = next((item for item in pending_rows if item.get("name") == "strategy_id"), None)
             self.assertIsNotNone(strategy)
-            self.assertTrue(any(str(o.get("id") or "") == "macd" for o in ((strategy or {}).get("options") or [])))
-            filled = asst.run("macd", response_style="raw", session_id="s-clar")
+            from qteasy_ai.slot_graph import strategy_id_options
+
+            options = [str(item.get("id") or "") for item in ((strategy or {}).get("options") or [])]
+            print(" strategy options:", options)
+            self.assertEqual(options, strategy_id_options())
+            answered = asst.plan("", response_style="raw", session_id="s-clar", answers=["macd"])
+            plan_id = str((answered.get("plan") or {}).get("plan_id") or "")
+            print(" answered plan:", plan_id, "skills:", [step.get("skill_name") for step in ((answered.get("plan") or {}).get("steps") or [])])
+            filled = asst.run_plan(plan_id, response_style="raw", session_id="s-clar")
             filled_session = asst.session_store.load("s-clar")
             fill_steps = (filled.get("execution") or {}).get("steps") or []
             fill_names = [str(item.get("skill_name") or "") for item in fill_steps]
             fill_status = str((filled.get("execution") or {}).get("status") or "")
+            get_step = next(
+                item for item in fill_steps if str(item.get("skill_name") or "") == "qt.ai.strategy_meta.get"
+            )
+            result = get_step.get("result") if isinstance(get_step.get("result"), dict) else {}
+            readback = str(((result.get("payload") or {}).get("strategy_id")) or "")
             print(" fill status:", fill_status, "skills:", fill_names)
+            print(" macd readback:", readback)
             print(" fill complete:", filled_session.task.status if filled_session.task else None)
             self.assertIn("qt.ai.strategy_meta.get", fill_names)
+            self.assertEqual(readback, "macd")
             self.assertEqual(fill_status, "success")
 
             asst2 = QteasyAssistant(
@@ -1200,7 +1343,7 @@ class TestAiHumanCardPolish(unittest.TestCase):
                     "status": "success",
                     "steps": [
                         {
-                            "skill_name": "qt.ai.visual.export_kline",
+                            "skill_name": "qt.ai.hp.plot",
                             "result": {
                                 "ok": True,
                                 "metrics": {"close_min": 1.0},
@@ -1222,7 +1365,7 @@ class TestAiHumanCardPolish(unittest.TestCase):
         self.assertNotIn("rows", chart_text)
 
     def test_failed_result_quotes_error_message(self) -> None:
-        """失败 result 打印错误原文和一句解读，不编新数字。"""
+        """失败 result 打印错误原文，不编换代码的建议。"""
 
         print("\n[TestAiHumanCardPolish] failed result quote")
         message = "Failed to get strategy details: unknown id."
@@ -1251,7 +1394,7 @@ class TestAiHumanCardPolish(unittest.TestCase):
         print(" result:\n", result["text"])
         self.assertIn("**Run did not finish.**", result["text"])
         self.assertIn(f"Error: {message}", result["text"])
-        self.assertIn("Check the name, then edit the blue message and send it again.", result["text"])
+        self.assertNotIn("Check the name, then edit the blue message and send it again.", result["text"])
         self.assertNotIn("run this plan", result["text"])
         self.assertNotIn("Next:", result["text"])
         self.assertNotIn("next_mode", result["payload"])
@@ -1600,6 +1743,62 @@ class TestAiHumanCardPolish(unittest.TestCase):
         self.assertIn("start_date", out["text"])
         self.assertEqual(out["payload"]["pending"][0]["name"], "start_date")
         self.assertNotIn("TEXT:", provider.prompts[0])
+
+    def test_clarify_polish_rewrites_date_labels_and_keeps_format(self) -> None:
+        """自由输入的日期格可改 label 与 hint，format 和 example 不动。"""
+
+        print("\n[TestAiHumanCardPolish] 日期格润色保留格式")
+        cards = [
+            {
+                "kind": "clarify",
+                "text": "Provide at least one of start or end.",
+                "payload": {
+                    "pending": [
+                        {
+                            "name": "start",
+                            "label": "Start date",
+                            "hint": "The first day of the range.",
+                            "format": "YYYYMMDD",
+                            "example": "20250101",
+                        },
+                        {
+                            "name": "end",
+                            "label": "End date",
+                            "hint": "The last day of the range.",
+                            "format": "YYYYMMDD",
+                            "example": "20251231",
+                        },
+                    ],
+                    "step_index": 1,
+                    "step_total": 2,
+                },
+            }
+        ]
+        reply = (
+            "TEXT:\n"
+            "请至少给出 start 或 end。\n"
+            "FIELDS:\n"
+            "start|起始日期|区间的第一天\n"
+            "end|结束日期|区间的最后一天\n"
+        )
+        provider = FakeLLMProvider(replies=[reply, reply.replace("start|", "begin|", 1)])
+        polished = polish_human_cards(cards, provider=provider, query="取 000300.SH 的 close")
+        out = next(item for item in polished if item["kind"] == "clarify")
+        pending = out["payload"]["pending"]
+        print(" text:", out["text"])
+        print(" rows:", [(item.get("name"), item.get("label"), item.get("hint"), item.get("format"), item.get("example")) for item in pending])
+        self.assertEqual(out["text"], "请至少给出 start 或 end。")
+        self.assertEqual([item.get("name") for item in pending], ["start", "end"])
+        self.assertEqual([item.get("label") for item in pending], ["起始日期", "结束日期"])
+        self.assertEqual([item.get("hint") for item in pending], ["区间的第一天", "区间的最后一天"])
+        self.assertEqual([item.get("format") for item in pending], ["YYYYMMDD", "YYYYMMDD"])
+        self.assertEqual([item.get("example") for item in pending], ["20250101", "20251231"])
+        rolled = polish_human_cards(cards, provider=provider, query="取 000300.SH 的 close")
+        rolled_out = next(item for item in rolled if item["kind"] == "clarify")
+        print(" rolled text:", rolled_out["text"])
+        self.assertEqual(rolled_out["text"], cards[0]["text"])
+        self.assertEqual(rolled_out["payload"]["pending"][0]["label"], "Start date")
+        self.assertEqual(rolled_out["payload"]["pending"][0]["example"], "20250101")
 
     def test_attach_human_cards_stores_chinese_plan_ready(self) -> None:
         """装配层把通过校验的中文 plan_ready 写入 session。"""

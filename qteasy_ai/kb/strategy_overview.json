@@ -11,7 +11,7 @@
   ],
   "title": "Strategy, Operator, and Group roles",
   "summary": "Strategy computes signals; Operator schedules strategies; Group holds strategies that share timing. This card names the three roles only—creation, mixing, bases, and lookup are separate cards.",
-  "narrative": "In qteasy, three names work together:\n\n- Strategy: given history DataTypes and tunable parameters, realize() returns a trading signal for the current bar.\n- Operator: holds strategies, sets how they run (timing and signal_type as construction knobs), and produces a unified signal stream for backtest or live.\n- Group: strategies that share the same run timing land in one Group; that Group can mix their outputs with a blender.\n\nThis card only answers what each word means. How to construct an Operator, how blender works, which base class to inherit, and how to look up built-in ids are separate strategy topics. Signal-number meanings (target weight versus order size) are a separate card too.",
+  "narrative": "In qteasy, three names work together. Strategy: given history DataTypes and tunable parameters, realize() returns a trading signal for the current bar. Operator: holds strategies, sets how they run, and produces a unified signal stream for backtest or live. Group: strategies that share the same run timing land in one Group; that Group can mix their outputs with a blender.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. Create an Operator, add strategies, and set shared parameter names.\n2. Run frequency and timing belong on the Operator or Group, not on qt.run.\n3. PT, PS, and VS are the three signal-number meanings.\n4. A Group blender mixes same-timing strategies; group_merge_type mixes across Groups.\n5. Look up built-in strategies with the list, doc, and get-by-id calls.\n6. Three base classes: timing rules, cross-section rank, or a flexible shape.\n7. A custom strategy declares parameters and a data window, then implements realize().",
   "python_code": "import qteasy as qt\nop = qt.Operator(strategies='dma', signal_type='pt')\nprint(type(op).__name__, list(op.groups.keys()))",
   "risk_notes": "Ask explains roles only. Creating files, running backtests, and listing every built-in id are other cards or Plan.",
   "type": "concept",
@@ -21,6 +21,13 @@
     {"rel": "see_also", "to": "operator_create"},
     {"rel": "see_also", "to": "strategy_blender"},
     {"rel": "see_also", "to": "strategy_bases"},
-    {"rel": "see_also", "to": "builtin_strategy_lookup"}
+    {"rel": "see_also", "to": "builtin_strategy_lookup"},
+    {"rel": "details", "to": "operator_create", "item": 1},
+    {"rel": "details", "to": "operator_run_freq", "item": 2},
+    {"rel": "details", "to": "pt_ps_vs", "item": 3},
+    {"rel": "details", "to": "strategy_blender", "item": 4},
+    {"rel": "details", "to": "builtin_strategy_lookup", "item": 5},
+    {"rel": "details", "to": "strategy_bases", "item": 6},
+    {"rel": "details", "to": "strategy_realize", "item": 7}
   ]
 }

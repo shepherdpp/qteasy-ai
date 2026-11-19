@@ -12,7 +12,7 @@
   ],
   "title": "Custom strategy: Parameter, data window, realize()",
   "summary": "Declare Parameter and data windows, implement realize() with get_pars / get_data, then add_strategy. File generation is StrategyBuilder (Plan). Tutorials 5–7 executable loops are out of this card.",
-  "narrative": "A hand-written custom strategy needs three pieces:\n\n1. Parameters — declare Parameter objects (name, range, default) and pass them as pars=[...] in __init__.\n2. Data window — declare required DataTypes, window_length, and related flags so the framework prepares history; inside realize() call get_data(dtype_id) and get_pars().\n3. realize() — no arguments; return the signal shape your base class expects.\n\nThen add the instance with Operator.add_strategy (details on the Operator creation card). Generating a strategy file from natural language is StrategyBuilder on Plan—Ask does not write files.\n\nTutorials chapters 5–7 closed runnable loops are out of this Ask card (later milestone). Tracing intermediate variables inside realize() is a separate card.",
+  "narrative": "A hand-written custom strategy needs three pieces:\n\n- Parameters — declare Parameter objects (name, range, default) and pass them as pars=[...] in __init__.\n- Data window — declare required DataTypes, window_length, and related flags so the framework prepares history; inside realize() call get_data(dtype_id) and get_pars().\n- realize() — no arguments; return the signal shape your base class expects.\n\nThen add the instance with Operator.add_strategy. Generating a strategy file from natural language is StrategyBuilder on Plan—Ask does not write files. Tutorials chapters 5–7 closed runnable loops are out of this Ask card.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. Record intermediate variables while realize() runs with self.trace. Tracing is not a run mode.\n2. Natural-language file generation for a dual-moving-average template is StrategyBuilder, and it is Plan-only.\n3. Process data (proc.*) is cash, holdings, and completed fills the engine injects at the current step. You do not declare them in data_types.",
   "python_code": "import qteasy as qt\nfrom qteasy import RuleIterator, Parameter\n\nclass SimpleDMA(RuleIterator):\n    def __init__(self):\n        super().__init__(pars=[\n            Parameter('short_period', (5, 20), 10),\n            Parameter('long_period', (20, 60), 30),\n        ])\n    def realize(self):\n        close = self.get_data('close')\n        p = self.get_pars()\n        short = close[-p['short_period']:].mean()\n        long_ = close[-p['long_period']:].mean()\n        return 1.0 if short > long_ else 0.0\n\nop = qt.Operator(signal_type='pt')\nop.add_strategy(SimpleDMA())",
   "risk_notes": "Ask explains realize contracts only. Codegen and disk writes require Plan / StrategyBuilder.",
   "type": "concept",
@@ -23,6 +23,9 @@
     {"rel": "see_also", "to": "strategy_trace"},
     {"rel": "see_also", "to": "strategy_bases"},
     {"rel": "see_also", "to": "operator_create"},
-    {"rel": "see_also", "to": "lookahead_isolation"}
+    {"rel": "see_also", "to": "lookahead_isolation"},
+    {"rel": "details", "to": "strategy_trace", "item": 1},
+    {"rel": "details", "to": "strategy_builder_intro", "item": 2},
+    {"rel": "details", "to": "process_data", "item": 3}
   ]
 }

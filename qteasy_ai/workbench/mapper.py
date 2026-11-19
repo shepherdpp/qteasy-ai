@@ -15,7 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..human_card import normalize_card_kind, project_human_cards
+from ..human_card import (
+    clarification_is_live,
+    drop_closed_clarification,
+    normalize_card_kind,
+    project_human_cards,
+)
 from ..memory_store import _json_safe
 from ..plan_markdown import plan_artifact_title, skill_step_title
 from ..session import ConversationState
@@ -331,7 +336,12 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             )
             continue
-        if skill in {"qt.ai.data.read", "qt.ai.data.summary_kline"} or (
+        if skill in {
+            "qt.ai.data.read",
+            "qt.ai.data.summary_kline",
+            "qt.ai.hp.describe",
+            "qt.ai.hp.volatility",
+        } or (
             isinstance(result.get("data_summary"), dict)
             and skill.startswith("qt.ai.data.")
             and "export" not in skill
@@ -500,7 +510,7 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             continue
         image_art = _image_artifact(arts)
-        if image_art is not None or skill == "qt.ai.visual.export_kline":
+        if image_art is not None or skill in {"qt.ai.visual.export_kline", "qt.ai.hp.plot"}:
             path = str((image_art or {}).get("path") or "")
             warnings = [] if path else ["Chart file path is missing."]
             items.append(
@@ -514,6 +524,42 @@ def classify_artifacts(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[st
                 )
             )
     return [_json_safe(item.to_dict()) for item in items]
+
+
+def step_artifact_index(run_id: str, steps: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """每一步已有产物的索引。字段与 ``classify_artifacts`` 相同，并带上 ``step_id``。
+
+    Parameters
+    ----------
+    run_id : str
+        这次 run。
+    steps : list of dict
+        执行步骤。
+
+    Returns
+    -------
+    list of dict
+        ``step_id``、``type``、``title``、``run_id``、``export_path``。
+    """
+
+    rows: List[Dict[str, str]] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("step_id") or "")
+        for art in classify_artifacts(run_id, [step]):
+            if not isinstance(art, dict):
+                continue
+            rows.append(
+                {
+                    "step_id": step_id,
+                    "type": str(art.get("type") or ""),
+                    "title": str(art.get("title") or ""),
+                    "run_id": str(art.get("run_id") or ""),
+                    "export_path": str(art.get("export_path") or ""),
+                }
+            )
+    return rows
 
 
 def _is_ask_payload(payload: Dict[str, Any]) -> bool:
@@ -777,6 +823,8 @@ def map_assistant_payload(
     """
 
     raw = dict(payload or {})
+    if session is not None and not clarification_is_live(session):
+        raw = drop_closed_clarification(raw)
     sid = ""
     if session is not None:
         sid = session.session_id
@@ -866,7 +914,8 @@ def map_assistant_payload(
         tagged.insert(0, plan_art)
 
     sidebar = _sidebar_from_session(session, raw, env_facts)
-    if missing_from_pending and not sidebar.missing:
+    live_clarify = session is None or clarification_is_live(session)
+    if missing_from_pending and not sidebar.missing and live_clarify:
         sidebar.missing = missing_from_pending
     trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), dict) else {}
     job = str(trace.get("intent_job") or "")

@@ -149,7 +149,8 @@ class TestAiProfileAgent(unittest.TestCase):
             print(" assumptions:", payload["plan"].get("assumptions"))
             self.assertEqual(payload["execution"]["status"], "dry_run")
             self.assertEqual(called.get("backtest", 0), 0)
-            self.assertIn("qt.ai.backtest.run_builtin", payload["plan"]["assumptions"].get("allow_gate_blocked") or [])
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "strategy_id")
+            self.assertEqual(payload["plan"]["assumptions"].get("allow_gate_blocked") or [], [])
 
     def test_agent_auto_executes_backtest_when_allowed(self) -> None:
         """agent_auto + allow_backtest=True → 可 execute（替身 handler）。"""
@@ -170,8 +171,9 @@ class TestAiProfileAgent(unittest.TestCase):
                 agent_auto=True,
             )
             print(" status:", payload["execution"]["status"], "called:", called)
-            self.assertIn(payload["execution"]["status"], ["success", "partial_failed"])
-            self.assertGreaterEqual(called.get("backtest", 0), 1)
+            self.assertEqual(payload["execution"]["status"], "dry_run")
+            self.assertEqual(called.get("backtest", 0), 0)
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "strategy_id")
 
     def test_live_never_auto(self) -> None:
         """live 步在 agent_auto 下永不执行。"""
@@ -219,8 +221,9 @@ class TestAiProfileAgent(unittest.TestCase):
             )
             payload = assistant.run("用 macd 做回测，2018 到 2023", response_style="raw")
             print(" status:", payload["execution"]["status"], "called:", called)
-            self.assertIn(payload["execution"]["status"], ["success", "partial_failed"])
-            self.assertGreaterEqual(called.get("backtest", 0), 1)
+            self.assertEqual(payload["execution"]["status"], "dry_run")
+            self.assertEqual(called.get("backtest", 0), 0)
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "strategy_id")
 
 
 if __name__ == "__main__":

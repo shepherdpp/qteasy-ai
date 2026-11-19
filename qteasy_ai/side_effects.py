@@ -22,6 +22,7 @@ HIGH_SIDE_EFFECT_SKILLS = frozenset(
         "qt.ai.strategy.codegen_hybrid",
         "qt.ai.pipeline.live_trade_plan_only",
         "qt.ai.visual.export_kline",
+        "qt.ai.hp.plot",
     }
 )
 

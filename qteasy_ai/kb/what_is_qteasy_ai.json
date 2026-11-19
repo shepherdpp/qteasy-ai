@@ -1,0 +1,28 @@
+{
+  "id": "what_is_qteasy_ai",
+  "tags": ["qteasy-ai", "assistant", "ask", "plan"],
+  "keywords": [
+    "什么是 qteasy-ai",
+    "qteasy-ai 是什么",
+    "what is qteasy-ai",
+    "qteasy-ai",
+    "内置助手"
+  ],
+  "title": "What qteasy-ai is",
+  "summary": "qteasy-ai is the assistant on top of qteasy: Ask explains, Plan shows steps, and Agent runs only after you confirm.",
+  "narrative": "qteasy-ai is the built-in assistant that sits on qteasy. It explains the toolkit, drafts reviewable plans, and runs those plans only after you confirm. It is not a second backtest engine and it does not replace the qteasy library.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. Three modes. Ask is read-only Q&A. Plan shows a ToolPlan and waits. Agent (run) executes after confirmation. Live-trade steps stay plan-only.\n2. Web workbench. Switch Ask, Plan, and Agent with the composer mode badge. Confirm is optional, and Ask never clicks it.\n3. CLI and Notebook. The qteasy-ai command line and the notebook magic share one session_id.\n4. Knowledge. Ask reads only the packaged official cards. A local user_kb scaffold is not mixed into those answers.\n5. What does not happen by itself. High-side-effect steps need a visible plan. Ask alone does not download, backtest, or send an order.\n\nWhat qteasy the library is, as distinct from this assistant, is a separate product card.",
+  "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nprint(assistant.ask('什么是 qteasy-ai', response_style='raw')['sources'])",
+  "risk_notes": "Ask never downloads data, runs a backtest, or sends an order. Plan waits for confirmation before high-side-effect work.",
+  "type": "concept",
+  "manual_anchor": "",
+  "topics": ["capability", "onboarding"],
+  "relations": [
+    {"rel": "see_also", "to": "what_is_qteasy"},
+    {"rel": "see_also", "to": "capability_map"},
+    {"rel": "details", "to": "ask_plan_agent", "item": 1},
+    {"rel": "details", "to": "workbench_entry", "item": 2},
+    {"rel": "details", "to": "notebook_cli", "item": 3},
+    {"rel": "details", "to": "official_vs_user_kb", "item": 4},
+    {"rel": "details", "to": "side_effects_safety", "item": 5}
+  ]
+}

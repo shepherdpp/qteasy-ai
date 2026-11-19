@@ -33,6 +33,29 @@ _GOAL_MET_LABEL = {
     "partial": "部分达到",
     "no": "未达到",
 }
+_STYLE_LABEL = {
+    "standard": "标准（固定题）",
+    "random": "随机（新主题）",
+}
+
+
+def _topic_phrase(topics: Any) -> str:
+    """把主题列表收成一行。"""
+
+    parts: List[str] = []
+    for item in topics or []:
+        if isinstance(item, Mapping):
+            topic_id = str(item.get("id") or "").strip()
+            scope = str(item.get("scope") or "").strip()
+            if topic_id and scope:
+                parts.append(f"{topic_id}（{scope}）")
+            elif topic_id or scope:
+                parts.append(topic_id or scope)
+        else:
+            text = str(item).strip()
+            if text:
+                parts.append(text)
+    return "、".join(parts)
 
 
 def _score_table(scores: Mapping[str, Any]) -> str:
@@ -97,6 +120,7 @@ def render_markdown(payload: Mapping[str, Any]) -> str:
         "",
         f"- 生成时间：{payload.get('generated_at', '')}",
         f"- 当前产品地板：`{payload.get('current_product', '')}`",
+        f"- 提问风格：{_STYLE_LABEL.get(str(payload.get('question_style') or 'standard'), payload.get('question_style'))}",
         f"- 说明：**非关单**；低分只作改进指引；Jackie 可填 `jackie_scores` 复核。",
         "",
     ]
@@ -116,6 +140,18 @@ def render_markdown(payload: Mapping[str, Any]) -> str:
             [
                 f"## {persona.get('display_name', '')} · `{task.get('id', '')}`",
                 "",
+            ]
+        )
+        theme = str(task.get("theme") or "").strip()
+        if theme:
+            lines.append(f"**本轮主题：** {theme}")
+            lines.append("")
+        covered = _topic_phrase(task.get("topics"))
+        if covered:
+            lines.append(f"**覆盖主题：** {covered}")
+            lines.append("")
+        lines.extend(
+            [
                 f"**目标：** {task.get('goal', '').strip()}",
                 "",
                 _score_table(judge),

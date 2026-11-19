@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 from pathlib import Path
 
 _DIR = Path(__file__).resolve().parent
@@ -31,6 +33,21 @@ _DRAG = 8.0
 class TestWorkbenchBrowser(WorkbenchBrowserCase):
     """壳、对话和运行控制。"""
 
+    def rename_box(self, session_id: str, name: str, *, submit: str = "") -> None:
+        """在改名框里逐字输入。
+
+        ``fill`` 先选中框内文字，再把新字插入当前焦点。焦点不在框上时，
+        空会话框里仍是 ``New session``，回车会把这个占位词提交成空名字。
+        """
+
+        row = self.page.locator(f'[data-session-id="{session_id}"]')
+        row.hover()
+        row.locator("[data-session-rename]").click()
+        box = self.page.locator(".session-rename")
+        box.press_sequentially(name)
+        if submit:
+            box.press(submit)
+
     def _wait_macd_plan(self) -> None:
         """等改写后的 plan 卡出现，而不是气泡先被本地改掉的那一帧。"""
 
@@ -41,7 +58,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
               const elapsed = document.querySelector('#busy-elapsed');
               if (elapsed && elapsed.textContent.includes('Planning')) return false;
               const nodes = [...document.querySelectorAll('.bubble-text')].map((n) => n.textContent || '');
-              return nodes.some((t) => t.includes('macd')) && !nodes.some((t) => t.includes('list built-in'));
+              return nodes.some((t) => t.includes('000300.SH')) && !nodes.some((t) => t.includes('list built-in'));
             }""",
             timeout=_PLAN_TIMEOUT_MS,
         )
@@ -179,7 +196,8 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" after end:", body[:400])
         self.assertIn("Clarification skipped. This request ended.", body)
         self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
-        self.assertNotIn("refill", body.lower())
+        self.assertIn("Task data.refill", body)
+        self.assertNotIn("qt.ai.data.refill", body.lower())
 
     def test_ask_shows_source_without_confirm(self) -> None:
         """Ask 命中 KB，没有 Confirm。"""
@@ -211,7 +229,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" submit label:", label)
         self.assertEqual(label.strip(), "Send")
         self.dialogs.clear()
-        self.page.fill("#rewind-text", "show me macd strategy parameters")
+        self.page.fill("#rewind-text", "kline summary of 000300.SH")
         self.page.click("#btn-rewind-submit")
         self._wait_macd_plan()
         print(" dialogs:", self.dialogs)
@@ -251,7 +269,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" submit label:", label)
         self.assertEqual(label.strip(), "Discard and resend")
         self.dialogs.clear()
-        self.page.fill("#rewind-text", "show me macd strategy parameters")
+        self.page.fill("#rewind-text", "kline summary of 000300.SH")
         self.page.click("#btn-rewind-submit")
         self._wait_macd_plan()
         chat = self.page.locator("#chat-log").inner_text()
@@ -283,10 +301,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         query = "list built-in strategies"
         session_id = self.session_id()
         row = self.page.locator(f'[data-session-id="{session_id}"]')
-        row.hover()
-        row.locator("[data-session-rename]").click()
-        self.page.fill(".session-rename", custom)
-        self.page.press(".session-rename", "Enter")
+        self.rename_box(session_id, custom, submit="Enter")
         self.page.wait_for_function(
             "() => document.querySelector('#session-title').textContent.includes('Pre-named empty')",
             timeout=10000,
@@ -326,10 +341,7 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
             encoding="utf-8",
         )
         row = self.page.locator(f'[data-session-id="{session_id}"]')
-        row.hover()
-        row.locator("[data-session-rename]").click()
-        self.page.fill(".session-rename", "Browser drill")
-        self.page.press(".session-rename", "Enter")
+        self.rename_box(session_id, "Browser drill", submit="Enter")
         self.page.wait_for_function(
             "() => document.querySelector('#session-title').textContent.includes('Browser drill')",
             timeout=10000,
@@ -370,11 +382,21 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         )
         clock = self.page.locator("#busy-elapsed").inner_text()
         bars = self.page.locator("#busy-msg .progress-indet, #busy-msg .progress-det").count()
-        print(" background:", clock, "bars:", bars, "input enabled:", self.page.locator("#query-input").is_enabled())
+        send_enabled = self.page.locator("#btn-send").is_enabled()
+        print(
+            " background:",
+            clock,
+            "bars:",
+            bars,
+            "input enabled:",
+            self.page.locator("#query-input").is_enabled(),
+            "send enabled:",
+            send_enabled,
+        )
         self.assertIn("Background", clock)
         self.assertGreater(bars, 0)
         self.assertTrue(self.page.locator("#query-input").is_enabled())
-        self.assertTrue(self.page.locator("#btn-send").is_enabled())
+        self.assertFalse(send_enabled)
 
     def test_stop_confirms_and_clears_run(self) -> None:
         """Stop 经过确认框，hold 因取消结束。"""
@@ -422,3 +444,281 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         )
         print(" chips after remove:", self.page.locator(".attach-chip").count())
         self.assertEqual(self.page.locator(".attach-chip").count(), 0)
+
+    def _second_session_then_back(self) -> str:
+        """再建一条会话，再点回当前这条。返回新建的 id。"""
+
+        first = self.session_id()
+        self.page.click("#btn-new-session")
+        self.page.wait_for_function(
+            "(prev) => { const id = localStorage.getItem('qteasy-ai.session_id'); return Boolean(id) && id !== prev; }",
+            arg=first,
+            timeout=10000,
+        )
+        second = self.session_id()
+        print(" second session:", second)
+        self.page.locator(f'[data-session-id="{first}"]').click()
+        self.page.wait_for_function(
+            "(id) => localStorage.getItem('qteasy-ai.session_id') === id",
+            arg=first,
+            timeout=10000,
+        )
+        return second
+
+    def _choose_ask(self) -> None:
+        """切到 Ask。"""
+
+        self.page.click("#composer-mode")
+        self.page.locator('#mode-menu button[data-mode="ask"]').click()
+        badge = self.page.locator("#composer-mode").inner_text().strip()
+        print(" mode:", badge)
+        self.assertTrue(badge.startswith("Ask"))
+
+    def _hold_until(self, held: dict, timeout: float = 10.0) -> None:
+        """等到拦截下的请求被页面发出。"""
+
+        deadline = time.monotonic() + timeout
+        while held.get("route") is None and time.monotonic() < deadline:
+            self.page.wait_for_timeout(50)
+        print(" held route:", held.get("route") is not None)
+        self.assertIsNotNone(held.get("route"))
+
+    def _fulfill_json(self, held: dict, payload: dict) -> None:
+        """放行一条被拦住的请求。"""
+
+        route = held.get("route")
+        self.assertIsNotNone(route)
+        held["route"] = None
+        held["done"] = True
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(payload),
+        )
+
+    def _drop_held(self, held: dict) -> None:
+        """用例收尾时丢掉还没放行的假请求。"""
+
+        route = held.get("route")
+        if route is None or held.get("done"):
+            return
+        held["route"] = None
+        held["done"] = True
+        try:
+            route.abort()
+        except Exception as exc:
+            print(" drop held:", type(exc).__name__, exc)
+
+    def test_reply_dot_appears_while_rename_stays(self) -> None:
+        """空闲是气泡。POST 回来时蓝点立刻出现，改名框不被提交。"""
+
+        print("\n[TestWorkbenchBrowser] reply dot while rename stays")
+        marker = "REPLY-DOT-7f3a"
+        query = "parked ask one"
+        first = self.session_id()
+        second = self._second_session_then_back()
+        print(" first:", first, "second:", second)
+        bubbles = self.page.locator(".session-item .session-bubble")
+        print(" idle bubbles:", bubbles.count(), "rows:", self.page.locator(".session-item").count())
+        self.assertGreaterEqual(self.page.locator(".session-item").count(), 2)
+        self.assertEqual(bubbles.count(), self.page.locator(".session-item").count())
+        self._choose_ask()
+        held = {"route": None, "done": False}
+        patches = []
+        stamp = {"on": False}
+
+        def hold_ask(route):
+            if route.request.method != "POST":
+                route.fallback()
+                return
+            held["route"] = route
+
+        def stamp_busy(route):
+            if route.request.method != "GET" or not stamp["on"]:
+                route.fallback()
+                return
+            response = route.fetch()
+            data = response.json()
+            for row in data.get("sessions") or []:
+                if row.get("session_id") == first:
+                    row["kernel_busy"] = True
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(data))
+
+        def note_patch(request):
+            if request.method == "PATCH":
+                patches.append(request.url)
+
+        self.page.on("request", note_patch)
+        self.page.route("**/v1/sessions", stamp_busy)
+        self.page.route("**/v1/ask", hold_ask)
+        try:
+            self.send(query)
+            self.page.wait_for_selector(
+                f'[data-session-id="{first}"] .session-busy-ring',
+                timeout=10000,
+            )
+            self._hold_until(held)
+            stamp["on"] = True
+            self.page.click("#btn-new-session")
+            self.page.wait_for_function(
+                "(known) => { const id = localStorage.getItem('qteasy-ai.session_id'); return Boolean(id) && id !== known[0] && id !== known[1]; }",
+                arg=[first, second],
+                timeout=10000,
+            )
+            ring_after_list = self.page.locator(f'[data-session-id="{first}"] .session-busy-ring').count()
+            print(" ring after stale kernel_busy:", ring_after_list, "rows:", self.page.locator(".session-item").count())
+            self.assertEqual(ring_after_list, 1)
+            self.page.locator(f'[data-session-id="{second}"]').click()
+            self.page.wait_for_function(
+                "(id) => localStorage.getItem('qteasy-ai.session_id') === id",
+                arg=second,
+                timeout=10000,
+            )
+            row = self.page.locator(f'[data-session-id="{second}"]')
+            self.rename_box(second, "Half name")
+            print(" rename draft:", self.page.locator(".session-rename").input_value())
+            self._fulfill_json(held, {
+                "ok": True,
+                "mode": "ask",
+                "session_id": first,
+                "transcript": [
+                    {"kind": "user_text", "text": query},
+                    {"kind": "ask", "text": marker, "payload": {}},
+                ],
+                "execution": {"status": "", "steps": []},
+                "kernel_busy": False,
+                "messages": [],
+            })
+            self.page.wait_for_selector(
+                f'[data-session-id="{first}"] .session-unseen-dot',
+                timeout=10000,
+            )
+            draft = self.page.locator(".session-rename").input_value()
+            first_row = self.page.locator(f'[data-session-id="{first}"]')
+            print(" draft after post:", draft, "patches:", patches)
+            print(
+                " first mark dot:",
+                first_row.locator(".session-unseen-dot").count(),
+                "bubble:",
+                first_row.locator(".session-bubble").count(),
+            )
+            self.assertEqual(draft, "Half name")
+            self.assertEqual(patches, [])
+            self.assertEqual(first_row.locator(".session-unseen-dot").count(), 1)
+            self.assertEqual(first_row.locator(".session-bubble").count(), 0)
+            self.page.press(".session-rename", "Escape")
+            self.page.locator(f'[data-session-id="{first}"]').click()
+            self.page.wait_for_selector(f"text={marker}", timeout=10000)
+            planning = self.page.locator("[data-testid='planning-wait']").count()
+            back_bubble = self.page.locator(f'[data-session-id="{first}"] .session-bubble').count()
+            back_dot = self.page.locator(f'[data-session-id="{first}"] .session-unseen-dot').count()
+            print(" planning:", planning, "bubble:", back_bubble, "dot:", back_dot)
+            self.assertEqual(planning, 0)
+            self.assertEqual(back_bubble, 1)
+            self.assertEqual(back_dot, 0)
+        finally:
+            self._drop_held(held)
+            self.page.wait_for_function(
+                "() => !document.querySelector('.session-busy-ring')",
+                timeout=10000,
+            )
+
+    def test_hung_ask_keeps_ring_until_session_get(self) -> None:
+        """POST 不回来时圆圈保持。点回去先见 Planning，GET 变长后才是回复。"""
+
+        print("\n[TestWorkbenchBrowser] hung ask keeps ring until session get")
+        marker = "REPLY-LATE-9c2e"
+        query = "parked ask two"
+        first = self.session_id()
+        second = self._second_session_then_back()
+        print(" first:", first, "second:", second)
+        self._choose_ask()
+        held = {"route": None, "done": False}
+        late = {"route": None, "done": False}
+
+        def hold_ask(route):
+            if route.request.method != "POST":
+                route.fallback()
+                return
+            held["route"] = route
+
+        def hold_session_get(route):
+            path = route.request.url.split("?")[0].rstrip("/")
+            if route.request.method != "GET" or not path.endswith(f"/v1/session/{first}"):
+                route.fallback()
+                return
+            late["route"] = route
+
+        self.page.route("**/v1/session/**", hold_session_get)
+        self.page.route("**/v1/ask", hold_ask)
+        try:
+            self.send(query)
+            self.page.wait_for_selector(
+                f'[data-session-id="{first}"] .session-busy-ring',
+                timeout=10000,
+            )
+            self._hold_until(held)
+            self.page.locator(f'[data-session-id="{second}"]').click()
+            self.page.wait_for_function(
+                "(id) => localStorage.getItem('qteasy-ai.session_id') === id",
+                arg=second,
+                timeout=10000,
+            )
+            self.page.wait_for_timeout(2500)
+            first_row = self.page.locator(f'[data-session-id="{first}"]')
+            second_row = self.page.locator(f'[data-session-id="{second}"]')
+            print(
+                " after wait ring:",
+                first_row.locator(".session-busy-ring").count(),
+                "dot:",
+                first_row.locator(".session-unseen-dot").count(),
+                "second bubble:",
+                second_row.locator(".session-bubble").count(),
+            )
+            self.assertEqual(first_row.locator(".session-busy-ring").count(), 1)
+            self.assertEqual(first_row.locator(".session-unseen-dot").count(), 0)
+            self.assertEqual(first_row.locator(".session-bubble").count(), 0)
+            self.assertEqual(second_row.locator(".session-bubble").count(), 1)
+            self.rename_box(second, "Side two", submit="Enter")
+            self.page.wait_for_function(
+                "() => document.querySelector('#session-title').textContent.includes('Side two')",
+                timeout=10000,
+            )
+            print(
+                " renamed ring:",
+                self.page.locator(f'[data-session-id="{first}"] .session-busy-ring').count(),
+                "second bubble:",
+                self.page.locator(f'[data-session-id="{second}"] .session-bubble').count(),
+            )
+            self.assertEqual(self.page.locator(f'[data-session-id="{first}"] .session-busy-ring').count(), 1)
+            self.assertEqual(self.page.locator(f'[data-session-id="{second}"] .session-bubble').count(), 1)
+            self.page.locator(f'[data-session-id="{first}"]').click()
+            self.page.wait_for_selector("[data-testid='planning-wait']", timeout=10000)
+            self._hold_until(late)
+            print(" planning before get:", self.page.locator("[data-testid='planning-wait']").count())
+            self.assertEqual(self.page.locator("[data-testid='planning-wait']").count(), 1)
+            self._fulfill_json(late, {
+                "ok": True,
+                "mode": "ask",
+                "session_id": first,
+                "transcript": [
+                    {"kind": "user_text", "text": query},
+                    {"kind": "ask", "text": marker, "payload": {}},
+                ],
+                "execution": {"status": "", "steps": []},
+                "kernel_busy": False,
+                "messages": [],
+            })
+            self.page.wait_for_selector(f"text={marker}", timeout=10000)
+            planning = self.page.locator("[data-testid='planning-wait']").count()
+            bubble = self.page.locator(f'[data-session-id="{first}"] .session-bubble').count()
+            print(" planning after get:", planning, "bubble:", bubble)
+            self.assertEqual(planning, 0)
+            self.assertEqual(bubble, 1)
+        finally:
+            self._drop_held(late)
+            self._drop_held(held)
+            self.page.wait_for_function(
+                "() => !document.querySelector('.session-busy-ring')",
+                timeout=10000,
+            )

@@ -594,21 +594,26 @@ class TestAiAskEngine(unittest.TestCase):
             print(" card prompt:", card_prompt)
             print(" menu ids:", sorted(menu_ids))
             print(" sources:", third.get("sources"))
-            print(" writer has history answers:", _NAN_ANSWER in writer_prompt, _DATA_ANSWER in writer_prompt)
+            print(
+                " writer has history answers:",
+                _NAN_ANSWER in writer_prompt,
+                _DATA_ANSWER in writer_prompt,
+            )
             self._assert_no_plan_execution(third)
             self.assertEqual(len(fake.prompts) - before, 3)
             self.assertIn(nan_line, topic_prompt)
             self.assertIn(data_line, topic_prompt)
+            self.assertIn("Session outline:", topic_prompt)
+            self.assertIn("User: 停牌", topic_prompt)
+            self.assertIn("User: 参考数据", topic_prompt)
             self.assertNotIn(_NAN_ANSWER, topic_prompt)
             self.assertNotIn(_DATA_ANSWER, topic_prompt)
-            self.assertNotIn("停牌", topic_prompt)
-            self.assertNotIn("参考数据", topic_prompt)
             self.assertNotIn("ask_focus", topic_prompt)
             self.assertNotIn("The engine should not trade that symbol on that bar", topic_prompt)
             self.assertIn("User: 停牌", card_prompt)
             self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
-            self.assertNotIn(_DATA_ANSWER, card_prompt)
-            self.assertNotIn("参考数据", card_prompt)
+            self.assertIn("User: 参考数据", card_prompt)
+            self.assertIn(f"Answer shown: {_DATA_ANSWER}", card_prompt)
             self.assertEqual(
                 menu_ids,
                 {
@@ -622,8 +627,9 @@ class TestAiAskEngine(unittest.TestCase):
             )
             self.assertNotIn("data_three_entries", card_prompt)
             self.assertIn("optimize_intro", card_prompt)
-            self.assertNotIn(_NAN_ANSWER, writer_prompt)
-            self.assertNotIn(_DATA_ANSWER, writer_prompt)
+            self.assertIn("Session outline:", writer_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
+            self.assertIn(_DATA_ANSWER, writer_prompt)
             self.assertIn("The engine should not trade that symbol on that bar", writer_prompt)
             self.assertEqual(third.get("sources"), ["common_errors_nan"])
             self.assertEqual(focus.get("topic"), "backtest")
@@ -668,8 +674,9 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertTrue(topic_prompt.startswith("Topic registry:"))
             self.assertIn("Ask history index:", topic_prompt)
             self.assertIn(nan_line, topic_prompt)
+            self.assertIn("Session outline:", topic_prompt)
+            self.assertIn("User: 停牌", topic_prompt)
             self.assertNotIn(_NAN_ANSWER, topic_prompt)
-            self.assertNotIn("停牌", topic_prompt)
             self.assertNotIn("ask_focus", topic_prompt)
             self.assertNotIn("A built-in backtest Job needs", topic_prompt)
             self.assertNotIn("Named turns:", card_prompt)
@@ -680,10 +687,31 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertIn("A built-in backtest Job needs", writer_prompt)
             self.assertEqual(second.get("sources"), ["backtest_intro"])
 
-    def test_bad_prior_or_uncertain_does_not_call_writer(self) -> None:
-        """点名对不上或 uncertain 时不调用作家，也不退回猜卡。"""
+    def test_button_question_prompts_name_onboarding_and_workbench(self) -> None:
+        """问网页按钮时，定主题提示带 onboarding，点卡提示选 workbench_entry。"""
 
-        print("\n[TestAiAskEngine] 非法点名不调用作家")
+        print("\n[TestAiAskEngine] 网页按钮走已有工作台卡")
+        fake = self._protocol(
+            ["optimize", "onboarding"],
+            ["optimize_intro", "workbench_entry"],
+            answer="在作曲区的模式徽章里选 Plan。",
+        )
+        payload = AskEngine(knowledge_base=self.kb, provider=fake).ask(
+            "优化在网页上点哪个按钮"
+        ).to_dict()
+        print(" topic hint:", "include onboarding as the second topic" in fake.prompts[0])
+        print(" card hint:", "select workbench_entry" in fake.prompts[1])
+        print(" sources:", payload.get("sources"))
+        self._assert_no_plan_execution(payload)
+        self.assertIn("include onboarding as the second topic", fake.prompts[0])
+        self.assertIn("点哪个", fake.prompts[0])
+        self.assertIn("select workbench_entry", fake.prompts[1])
+        self.assertEqual(payload.get("sources"), ["optimize_intro", "workbench_entry"])
+
+    def test_bad_prior_or_uncertain_does_not_call_writer(self) -> None:
+        """没有 topics 时，点名对不上或 uncertain 不调用作家。"""
+
+        print("\n[TestAiAskEngine] 没有 topics 的非法点名不调用作家")
         from qteasy_ai.app import QteasyAssistant
         from qteasy_ai.memory_store import MemoryStore
         from qteasy_ai.provider import FakeLLMProvider
@@ -692,10 +720,6 @@ class TestAiAskEngine(unittest.TestCase):
             ('{"prior":[{"turn":9,"sources":["common_errors_nan"]}]}', "轮次不在索引"),
             ('{"prior":[{"turn":1,"sources":["data_three_entries"]}]}', "source 不属于该轮"),
             ('{"uncertain": true}', "uncertain"),
-            (
-                '{"topics":["backtest"],"prior":[{"turn":1,"sources":["common_errors_nan"]}]}',
-                "同时给出 topics 和 prior",
-            ),
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = QteasyAssistant(
@@ -725,6 +749,178 @@ class TestAiAskEngine(unittest.TestCase):
                 self.assertEqual((missed.get("error") or {}).get("message"), _OFFLINE_NOT_FOUND_MESSAGE)
                 self.assertEqual(missed.get("sources"), [])
                 self.assertNotIn("data-downloading", missed.get("answer") or "")
+
+    def test_topics_and_prior_menu_follows_topics(self) -> None:
+        """topics 与 prior 同时出现时，菜单听 topics，上文是被点名的轮次。"""
+
+        print("\n[TestAiAskEngine] topics 加 prior：菜单听 topics")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["data-analysis"]}',
+            '{"ids":["data_three_entries"]}',
+            _DATA_ANSWER,
+            '{"topics":["data-analysis"],"prior":[{"turn":1,"sources":["common_errors_nan"]}]}',
+            '{"ids":["data_three_entries"]}',
+            "WRITER-BOTH",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-both")
+            second = assistant.ask("参考数据", response_style="raw", session_id="a7-both")
+            print(" first sources:", first.get("sources"))
+            print(" second sources:", second.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            self.assertEqual(second.get("sources"), ["data_three_entries"])
+            before = len(fake.prompts)
+            third = assistant.ask(
+                "把第一轮再用数据的说法讲一遍",
+                response_style="raw",
+                session_id="a7-both",
+            )
+            topic_prompt = fake.prompts[before]
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            focus = (third.get("raw") or {}).get("ask_focus") or {}
+            print(" menu ids:", sorted(menu_ids))
+            print(" sources:", third.get("sources"))
+            print(" focus:", focus)
+            print(
+                " writer turns:",
+                _NAN_ANSWER in writer_prompt,
+                _DATA_ANSWER in writer_prompt,
+            )
+            self._assert_no_plan_execution(third)
+            self.assertEqual(len(fake.prompts) - before, 3)
+            self.assertIn("Ask history index:", topic_prompt)
+            self.assertNotIn(_NAN_ANSWER, topic_prompt)
+            self.assertNotIn(_DATA_ANSWER, topic_prompt)
+            self.assertIn("data_three_entries", menu_ids)
+            self.assertNotIn("backtest_intro", menu_ids)
+            self.assertNotIn("common_errors_nan", menu_ids)
+            self.assertIn("User: 停牌", card_prompt)
+            self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
+            self.assertIn("User: 参考数据", card_prompt)
+            self.assertIn(f"Answer shown: {_DATA_ANSWER}", card_prompt)
+            self.assertIn("Session outline:", writer_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
+            self.assertIn(_DATA_ANSWER, writer_prompt)
+            self.assertEqual(third.get("sources"), ["data_three_entries"])
+            self.assertEqual(focus.get("topic"), "data-analysis")
+            self.assertTrue(third.get("ok"))
+
+    def test_referential_question_without_prior_uses_latest_turn(self) -> None:
+        """只有 topics 且问句像指代时，附上近两轮全文，菜单仍听 topics。"""
+
+        print("\n[TestAiAskEngine] 指代问句没有 prior 时附最近两轮")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["data-analysis"]}',
+            '{"ids":["data_three_entries"]}',
+            _DATA_ANSWER,
+            '{"topics":["backtest"]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-HEUR",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-heur")
+            second = assistant.ask("参考数据", response_style="raw", session_id="a7-heur")
+            print(" first sources:", first.get("sources"))
+            print(" second sources:", second.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            self.assertEqual(second.get("sources"), ["data_three_entries"])
+            before = len(fake.prompts)
+            third = assistant.ask(
+                "刚才说的第2条",
+                response_style="raw",
+                session_id="a7-heur",
+            )
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            focus = (third.get("raw") or {}).get("ask_focus") or {}
+            print(" menu ids:", sorted(menu_ids))
+            print(" sources:", third.get("sources"))
+            print(" focus:", focus)
+            self._assert_no_plan_execution(third)
+            self.assertEqual(len(fake.prompts) - before, 3)
+            self.assertIn("backtest_intro", menu_ids)
+            self.assertIn("common_errors_nan", menu_ids)
+            self.assertNotIn("data_three_entries", menu_ids)
+            self.assertIn("User: 参考数据", card_prompt)
+            self.assertIn(f"Answer shown: {_DATA_ANSWER}", card_prompt)
+            self.assertIn("User: 停牌", card_prompt)
+            self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
+            self.assertIn("Session outline:", writer_prompt)
+            self.assertIn(_DATA_ANSWER, writer_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
+            self.assertEqual(third.get("sources"), ["backtest_intro", "backtest_result"])
+            self.assertEqual(focus.get("topic"), "backtest")
+            self.assertTrue(third.get("ok"))
+
+    def test_invalid_prior_with_topics_falls_back_to_heuristic(self) -> None:
+        """topics 有效但 prior 对不上索引时不失败，指代问句改附最近一轮。"""
+
+        print("\n[TestAiAskEngine] 非法 prior 有 topics 时退回启发式")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["backtest"],"prior":[{"turn":9,"sources":["common_errors_nan"]}]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-FALLBACK",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-fallback")
+            print(" first sources:", first.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            before = len(fake.prompts)
+            second = assistant.ask(
+                "刚才说的第2条",
+                response_style="raw",
+                session_id="a7-fallback",
+            )
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            print(" menu ids:", sorted(menu_ids))
+            print(" sources:", second.get("sources"))
+            print(" ok:", second.get("ok"))
+            self._assert_no_plan_execution(second)
+            self.assertEqual(len(fake.prompts) - before, 3)
+            self.assertTrue(second.get("ok"))
+            self.assertIn("backtest_intro", menu_ids)
+            self.assertNotIn("data_three_entries", menu_ids)
+            self.assertIn(f"Answer shown: {_NAN_ANSWER}", card_prompt)
+            self.assertIn(_NAN_ANSWER, writer_prompt)
+            self.assertEqual(second.get("sources"), ["backtest_intro", "backtest_result"])
 
     def test_plan_ready_text_stays_out_of_ask_prompts(self) -> None:
         """定主题提示不读 plan_ready、clarify 或 result 的正文。"""
@@ -774,7 +970,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertEqual(second.get("sources"), ["backtest_intro"])
 
     def test_second_item_follows_model_json(self) -> None:
-        """「第二项」只跟随模型 JSON，代码不按这四个字打开数据主题。"""
+        """「第二项」菜单仍听模型 JSON；sources 带上该条的 details 子卡。"""
 
         print("\n[TestAiAskEngine] 第二项跟随 JSON")
         from qteasy_ai.app import QteasyAssistant
@@ -823,7 +1019,7 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertNotIn("data_three_entries", card_prompt)
             self.assertNotIn("env_ready", card_prompt)
             self.assertNotIn("Resolved ask_focus:", card_prompt)
-            self.assertEqual(second.get("sources"), ["backtest_intro"])
+            self.assertEqual(second.get("sources"), ["backtest_intro", "backtest_result"])
 
             plain = self._protocol(["backtest"], ["backtest_intro"], answer="回测需要明确的日期窗口。")
             bare = QteasyAssistant(memory_store=store, provider=plain)
@@ -847,7 +1043,7 @@ class TestAiAskEngine(unittest.TestCase):
                 },
             )
             self.assertNotIn("data_three_entries", plain.prompts[1])
-            self.assertEqual(payload.get("sources"), ["backtest_intro"])
+            self.assertEqual(payload.get("sources"), ["backtest_intro", "backtest_result"])
             self.assertNotIn("session", payload)
 
     def test_offline_self_contained_hit_and_history_miss(self) -> None:
@@ -1055,7 +1251,7 @@ class TestAiAskEngine(unittest.TestCase):
                 self.assertNotIn("plan_id", encoded)
 
     def test_selected_cards_without_edge_state_no_curated_relation(self) -> None:
-        """选中集内部没有边时只答这些卡，并说明没有策展关联。"""
+        """选中集内部没有边时各自作答，不对用户说策展关联。"""
 
         print("\n[TestAiAskEngine] 无策展边")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1067,18 +1263,20 @@ class TestAiAskEngine(unittest.TestCase):
             fake = self._protocol(
                 ["backtest"],
                 ["alpha", "zeta"],
-                answer="只说明这两张卡，没有策展关联。",
+                answer="这两张说明各自讲一件事。",
             )
             payload = AskEngine(knowledge_base=kb, provider=fake).ask("alpha 和 zeta 有什么关系").to_dict()
             print(" sources:", payload.get("sources"))
             print(" writer:", fake.prompts[2])
             self._assert_no_plan_execution(payload)
             self.assertEqual(payload["sources"], ["alpha", "zeta"])
-            self.assertIn("没有策展关联", fake.prompts[2])
+            self.assertIn("Answer each selected card on its own", fake.prompts[2])
+            self.assertIn("Do not tell the user the words 策展关联", fake.prompts[2])
+            self.assertNotIn("say that there is no curated relation", fake.prompts[2])
             self.assertNotIn(_CONTRAST_CLAUSE, fake.prompts[2])
             self.assertNotIn("NARR-ZETA", fake.prompts[1])
             self.assertIn("NARR-ZETA", fake.prompts[2])
-            self.assertEqual(payload["answer"], "只说明这两张卡，没有策展关联。")
+            self.assertEqual(payload["answer"], "这两张说明各自讲一件事。")
 
     def test_depth2_id_is_dropped_and_body_stays_out(self) -> None:
         """深度 2 的 id 丢掉，正文不进作家提示。"""
@@ -1189,6 +1387,227 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertEqual(payload["sources"], ["backtest_intro"])
         self.assertNotIn("optimize_intro", payload["sources"])
         self.assertNotIn("没有策展关联", payload["answer"])
+
+    def test_outline_keeps_old_numbered_item_and_promotes_named_turn(self) -> None:
+        """六轮之后，简略提纲仍留第 4 项；prior 点名后该轮升为全文。"""
+
+        print("\n[TestAiAskEngine] 远轮提纲与点名升全文")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        turn1 = (
+            "1. 概念问答\n"
+            "2. 获取数据\n"
+            "3. 回测策略\n"
+            "4. 参数优化\n"
+            "TURN1-TAIL-NOT-IN-BRIEF\n"
+        )
+        replies = []
+        answers = [turn1]
+        for index in range(2, 7):
+            answers.append(f"TURN{index}-FULL-BODY " + ("近文。" * 20))
+        for answer in answers:
+            replies.extend([
+                '{"topics":["backtest"]}',
+                '{"ids":["common_errors_nan"]}',
+                answer,
+            ])
+        replies.extend([
+            '{"topics":["backtest"]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-BRIEF",
+            '{"topics":["backtest"],"prior":[{"turn":1,"sources":["common_errors_nan"]}]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-PROMOTED",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake = FakeLLMProvider(replies=replies)
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            for index, answer in enumerate(answers, start=1):
+                payload = assistant.ask(
+                    f"第{index}问",
+                    response_style="raw",
+                    session_id="a7-outline",
+                )
+                print(" turn", index, "sources:", payload.get("sources"), "ok:", payload.get("ok"))
+                self.assertTrue(payload.get("ok"))
+            before = len(fake.prompts)
+            brief = assistant.ask(
+                "之前说的第四点",
+                response_style="raw",
+                session_id="a7-outline",
+            )
+            writer_prompt = fake.prompts[before + 2]
+            card_prompt = fake.prompts[before + 1]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            print(" brief ok:", brief.get("ok"))
+            print(" brief has item:", "4. 参数优化" in writer_prompt)
+            print(" brief has tail:", "TURN1-TAIL-NOT-IN-BRIEF" in writer_prompt)
+            print(" brief has turn6:", "TURN6-FULL-BODY" in writer_prompt)
+            self.assertTrue(brief.get("ok"))
+            self.assertIn("backtest_intro", menu_ids)
+            self.assertNotIn("data_three_entries", menu_ids)
+            self.assertIn("4. 参数优化", writer_prompt)
+            self.assertNotIn("TURN1-TAIL-NOT-IN-BRIEF", writer_prompt)
+            self.assertIn("Answer shown: TURN5-FULL-BODY", writer_prompt)
+            self.assertIn("Answer shown: TURN6-FULL-BODY", writer_prompt)
+            self.assertEqual(brief.get("sources"), ["backtest_intro", "backtest_engine"])
+            promoted = assistant.ask(
+                "把第一轮再说一遍",
+                response_style="raw",
+                session_id="a7-outline",
+            )
+            promoted_writer = fake.prompts[before + 5]
+            print(" promoted ok:", promoted.get("ok"))
+            print(" promoted has tail:", "TURN1-TAIL-NOT-IN-BRIEF" in promoted_writer)
+            self.assertTrue(promoted.get("ok"))
+            self.assertIn("Answer shown: " + turn1.strip(), promoted_writer)
+            self.assertIn("TURN1-TAIL-NOT-IN-BRIEF", promoted_writer)
+
+    def test_details_edge_load_rules(self) -> None:
+        """details 缺 item、重复、其它边带 item、目标不存在，都在装载时失败。"""
+
+        print("\n[TestAiAskEngine] details 装载校验")
+        cases = (
+            ("missing-item", [{"rel": "details", "to": "child"}], "missing a positive item"),
+            (
+                "duplicate-item",
+                [
+                    {"rel": "details", "to": "child", "item": 2},
+                    {"rel": "details", "to": "other", "item": 2},
+                ],
+                "repeats details item",
+            ),
+            (
+                "item-on-see-also",
+                [{"rel": "see_also", "to": "child", "item": 2}],
+                "must not include item",
+            ),
+            (
+                "missing-target",
+                [{"rel": "details", "to": "missing_card", "item": 2}],
+                "does not exist",
+            ),
+        )
+        for label, relations, message in cases:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                kb_dir = _write_details_kb(Path(temp_dir), relations, include_other=(label == "duplicate-item"))
+                print(" case:", label)
+                with self.assertRaises(ValueError) as caught:
+                    KnowledgeBase(kb_dir=kb_dir, list_func=lambda: [], doc_func=lambda sid: "")
+                print(" error:", caught.exception)
+                self.assertIn(message, str(caught.exception))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kb_dir = _write_details_kb(
+                Path(temp_dir),
+                [{"rel": "details", "to": "child", "item": 2}],
+            )
+            kb = KnowledgeBase(kb_dir=kb_dir, list_func=lambda: [], doc_func=lambda sid: "")
+            stored = kb._by_id["parent"].relations
+            print(" loaded item:", stored)
+            self.assertEqual(stored, [{"rel": "details", "to": "child", "item": 2}])
+
+    def test_details_item_inserts_child_and_stops_at_one_hop(self) -> None:
+        """第 2 项把子卡插到父卡后；没有编号不插；孙子卡不进命中。"""
+
+        print("\n[TestAiAskEngine] details 下钻一跳")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kb_dir = _write_details_kb(
+                Path(temp_dir),
+                [{"rel": "details", "to": "child", "item": 2}],
+                child_relations=[{"rel": "details", "to": "grand", "item": 1}],
+                extra_menu=("filler_a", "filler_b"),
+            )
+            kb = KnowledgeBase(kb_dir=kb_dir, list_func=lambda: [], doc_func=lambda sid: "")
+            drilled = self._protocol(["backtest"], ["parent"], answer="展开第2项")
+            payload = AskEngine(knowledge_base=kb, provider=drilled).ask("上面说的第二点").to_dict()
+            writer = drilled.prompts[2]
+            print(" sources:", payload.get("sources"))
+            print(" card edge:", "edge details -> child item=2" in drilled.prompts[1])
+            print(" writer has child:", "CHILD-BODY" in writer)
+            print(" writer has grand:", "GRAND-BODY" in writer)
+            self._assert_no_plan_execution(payload)
+            self.assertEqual(payload.get("sources"), ["parent", "child"])
+            self.assertLessEqual(len(payload.get("sources") or []), 3)
+            self.assertIn("edge details -> child item=2:", drilled.prompts[1])
+            self.assertIn("CHILD-BODY", writer)
+            self.assertNotIn("GRAND-BODY", writer)
+            self.assertIn("Detail item 2 of parent is expanded by child.", writer)
+            self.assertIn("Explain that item from child.", writer)
+            self.assertIn("Do not restate the other items of parent.", writer)
+            plain = self._protocol(["backtest"], ["parent"], answer="只答父卡")
+            plain_payload = AskEngine(knowledge_base=kb, provider=plain).ask("如何用qteasy回测").to_dict()
+            print(" plain sources:", plain_payload.get("sources"))
+            self.assertEqual(plain_payload.get("sources"), ["parent"])
+            self.assertNotIn("CHILD-BODY", plain.prompts[2])
+            crowded = self._protocol(
+                ["backtest"],
+                ["parent", "filler_a", "filler_b"],
+                answer="仍只留三张",
+            )
+            crowded_payload = AskEngine(knowledge_base=kb, provider=crowded).ask("展开第二点").to_dict()
+            print(" crowded sources:", crowded_payload.get("sources"))
+            self.assertEqual(crowded_payload.get("sources"), ["parent", "child", "filler_a"])
+            self.assertNotIn("filler_b", crowded_payload.get("sources"))
+            self.assertNotIn("grand", crowded_payload.get("sources"))
+
+    def test_capability_map_details_match_hierarchy(self) -> None:
+        """官方能力地图的六条 details 按编号指向下一层卡。"""
+
+        print("\n[TestAiAskEngine] capability_map 六条 details")
+        raw = json.loads(
+            (Path(__file__).resolve().parents[1] / "qteasy_ai" / "kb" / "capability_map.json").read_text(
+                encoding="utf-8",
+            )
+        )
+        details = [item for item in raw.get("relations") or [] if item.get("rel") == "details"]
+        print(" details:", details)
+        self.assertEqual(
+            details,
+            [
+                {"rel": "details", "to": "what_is_qteasy", "item": 1},
+                {"rel": "details", "to": "data_intro", "item": 2},
+                {"rel": "details", "to": "backtest_intro", "item": 3},
+                {"rel": "details", "to": "optimize_intro", "item": 4},
+                {"rel": "details", "to": "live_what", "item": 5},
+                {"rel": "details", "to": "what_is_qteasy_ai", "item": 6},
+            ],
+        )
+
+    def test_official_details_reach_every_card(self) -> None:
+        """从三扇纯入口沿 details 能走到其余每一张官方卡。"""
+
+        print("\n[TestAiAskEngine] details 图覆盖全部官方卡")
+        kb = KnowledgeBase()
+        by_id = {entry.id: entry for entry in kb._entries}
+        roots = ("what_is_qteasy", "capability_map", "getting_started")
+        seen = set(roots)
+        pending = list(roots)
+        while pending:
+            current = pending.pop()
+            for item in by_id[current].relations:
+                if item.get("rel") != "details":
+                    continue
+                child = item["to"]
+                prefix = f"{item['item']}."
+                numbered = [
+                    line.strip() for line in by_id[current].narrative.splitlines()
+                ]
+                print(" edge:", current, prefix, "->", child)
+                self.assertTrue(
+                    any(line.startswith(prefix) for line in numbered),
+                    f"{current} narrative missing {prefix}",
+                )
+                if child not in seen:
+                    seen.add(child)
+                    pending.append(child)
+        missing = sorted(set(by_id) - seen)
+        print(" card count:", len(by_id), "reached:", len(seen), "missing:", missing)
+        self.assertEqual(missing, [])
 
 
 _CONTRAST_CLAUSE = (
@@ -1416,6 +1835,65 @@ _RELATION_REGISTRY = {
         {"id": "plan_handoff", "compose": "plan_switch"},
     ]
 }
+
+
+def _write_details_kb(
+        root: Path,
+        parent_relations: list,
+        *,
+        include_other: bool = False,
+        child_relations: list = None,
+        extra_menu: tuple = (),
+) -> Path:
+    """临时库：父卡在回测菜单，子卡在另一个主题。"""
+
+    kb_dir = root / "kb"
+    kb_dir.mkdir(parents=True)
+    source = kb_dir / "_source"
+    source.mkdir()
+    registry = {
+        "topics": [
+            {"id": "backtest", "scope": "回测解释"},
+            {"id": "strategy", "scope": "策略、信号、Operator"},
+        ]
+    }
+    (source / "topic_registry.json").write_text(
+        json.dumps(registry, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    relations = list(_RELATION_REGISTRY["relations"]) + [
+        {"id": "details", "compose": "detail"},
+    ]
+    (source / "relation_registry.json").write_text(
+        json.dumps({"relations": relations}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    cards = [
+        _relation_card("parent", "Parent title", "PARENT-BODY", ["backtest"], parent_relations),
+    ]
+    targets = {str(item.get("to") or "") for item in parent_relations}
+    if "child" in targets or child_relations is not None:
+        cards.append(
+            _relation_card(
+                "child",
+                "Child title",
+                "CHILD-BODY",
+                ["strategy"],
+                list(child_relations or []),
+            )
+        )
+    if include_other or "other" in targets:
+        cards.append(_relation_card("other", "Other title", "OTHER-BODY", ["strategy"], []))
+    if child_relations:
+        cards.append(_relation_card("grand", "Grand title", "GRAND-BODY", ["strategy"], []))
+    for name in extra_menu:
+        cards.append(_relation_card(name, f"{name} title", f"{name}-BODY", ["backtest"], []))
+    for card in cards:
+        (kb_dir / f"{card['id']}.json").write_text(
+            json.dumps(card, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    return kb_dir
 
 
 if __name__ == "__main__":

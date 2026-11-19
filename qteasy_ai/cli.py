@@ -66,6 +66,11 @@ def _add_format_flags(parser: argparse.ArgumentParser) -> None:
         help="Machine-readable payload JSON.",
     )
     parser.set_defaults(output_format="human")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="On human output, also show the saved classify, fill, and validation text.",
+    )
 
 
 def _response_style_for(output_format: str) -> str:
@@ -83,6 +88,7 @@ def _print_result(
     assistant: QteasyAssistant,
     query: str = "",
     session_id: str = "",
+    debug: bool = False,
 ) -> None:
     """按档位打印：human 纯文本，pretty/raw 为 JSON。"""
 
@@ -102,6 +108,7 @@ def _print_result(
             session=session,
             env_facts=env,
             registry=assistant.registry,
+            debug=debug,
         ),
         end="",
     )
@@ -287,6 +294,7 @@ def main() -> int:
             assistant=assistant,
             query=str(args.query),
             session_id=session_arg,
+            debug=bool(getattr(args, "debug", False)),
         )
         return 0
     if args.command in {"plan", "preview"}:
@@ -316,6 +324,7 @@ def main() -> int:
             assistant=assistant,
             query=str(args.query),
             session_id=session_arg,
+            debug=bool(getattr(args, "debug", False)),
         )
         return 0
     if args.command == "run":
@@ -341,6 +350,7 @@ def main() -> int:
                 assistant=assistant,
                 query=query,
                 session_id=session_arg,
+                debug=bool(getattr(args, "debug", False)),
             )
             return 0
         if not query:
@@ -368,6 +378,7 @@ def main() -> int:
             assistant=assistant,
             query=query,
             session_id=session_arg,
+            debug=bool(getattr(args, "debug", False)),
         )
         return 0
     if args.command == "provider-check":
@@ -390,17 +401,20 @@ def main() -> int:
             )
             return 1
         from .workbench.http_app import create_app
+        from .workbench.serve_exit import ConfirmExitServer
         from .workbench.serve_log import build_serve_log_config, configure_qteasy_console_for_serve
 
         app = create_app(assistant=assistant)
         app.state.allow_quit = True
         configure_qteasy_console_for_serve()
-        uvicorn.run(
-            app,
-            host=str(args.host),
-            port=int(args.port),
-            log_config=build_serve_log_config(),
-        )
+        ConfirmExitServer(
+            uvicorn.Config(
+                app,
+                host=str(args.host),
+                port=int(args.port),
+                log_config=build_serve_log_config(),
+            )
+        ).run()
         return 0
     if args.command == "tui":
         try:

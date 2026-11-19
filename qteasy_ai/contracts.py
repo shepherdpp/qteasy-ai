@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 
@@ -60,6 +60,18 @@ class SkillSideEffects:
     description: str = ""
 
 
+@dataclass(frozen=True)
+class Wire:
+    """步骤之间的一条线：payload 键、Python 类型名，数组可再加 dtype。
+
+    组图时对象还没算出来，所以这里记类型的稳定名字，不做 ``isinstance``。
+    """
+
+    key: str
+    py_type: str
+    dtype: str = ""
+
+
 @dataclass
 class SkillMetadata:
     """技能元数据契约。
@@ -86,6 +98,18 @@ class SkillMetadata:
     """技能子标签：``api``（默认 L1 原子）、``guide``（环境引导）、``insight``（只读归因）。"""
     expected_artifact: str = ""
     """plan.md 人读预期：产物形态与 Artifacts 位置。空串时由渲染器用 summary 与入口名合成。"""
+    any_of: List[List[str]] = field(default_factory=list)
+    """每组至少填一个。组内全空时追问，填上任意一个即通过。"""
+    consumes: Optional[Tuple[Wire, ...]] = None
+    """必须从上游读到的线。``None`` 表示这条边不参加检查；空元组表示不读上游产物。"""
+    produces: Optional[Tuple[Wire, ...]] = None
+    """形状开关没写时交出的线。``None`` 表示不参加检查；空元组表示没有可传递的产物。"""
+    produces_when: Dict[str, Dict[str, Tuple[Wire, ...]]] = field(default_factory=dict)
+    """某个入参取某值时改交哪些线。键是入参名，内层键是取值记号。"""
+    consumes_any: Optional[Tuple[Wire, ...]] = None
+    """备选线：组内有一条能从依赖里找到即可。"""
+    consumes_any_when: Dict[str, Dict[str, Tuple[Wire, ...]]] = field(default_factory=dict)
+    """某个入参为空或取某值时，再要求备选组里有一条能接上。空串记号表示该入参没填。"""
 
 
 @dataclass
@@ -107,6 +131,7 @@ class ToolStep:
     run_if: str = ""
     on_fail: str = "stop"
     retry_limit: int = 0
+    slot_decls: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -165,6 +190,7 @@ class ToolPlan:
                     run_if=str(item.get("run_if") or ""),
                     on_fail=str(item.get("on_fail") or "stop"),
                     retry_limit=int(item.get("retry_limit") or 0),
+                    slot_decls=dict(item.get("slot_decls") or {}),
                 )
             )
         return cls(

@@ -13,7 +13,7 @@
   ],
   "title": "Built-in parameter optimization",
   "summary": "Optimization is many backtests plus an objective comparison—not a single replay. Needs a built-in strategy_id; default sampler is a small Monte Carlo.",
-  "narrative": "Plan `optimize DMA parameters` routes to `qt.ai.optimize.run_builtin`. Optimization means many backtests under different parameter sets, then ranking them by an objective—it is not a single historical replay.\n\nThe recipe fills opti_method=montecarlo and a small opti_sample_count unless you override later. Missing strategy_id triggers clarify. Unattended optimize requires `allow_optimize`. One-shot `qteasy-ai run` is still a human confirmation and does not read that flag.\n\nHow to set mode=2 knobs, which sampler to choose, and how to read Top-K results are separate optimize cards.",
+  "narrative": "Plan `optimize DMA parameters` routes to `qt.ai.optimize.run_builtin`. Optimization means many backtests under different parameter sets, then ranking them by an objective—it is not a single historical replay.\n\nThe recipe fills opti_method=montecarlo and a small opti_sample_count unless you override later. Missing strategy_id triggers clarify. Unattended optimize requires `allow_optimize`. One-shot `qteasy-ai run` is still a human confirmation and does not read that flag.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. mode=2 knobs: sample count, how many rows to keep, and each parameter's range.\n2. Pick grid for a tiny discrete space, montecarlo for a broader sample, and a heavier search when the space is hard.\n3. Read the ranked rows, then write a chosen parameter set back onto the Operator.",
   "python_code": "from qteasy_ai.app import QteasyAssistant\nassistant = QteasyAssistant()\nplan = assistant.plan('optimize DMA parameters', response_style='raw')\nprint(plan['plan']['steps'][0]['inputs'])",
   "risk_notes": "Optimization is heavy compute. Do not confuse it with a single backtest. Ask never invents performance numbers.",
   "type": "concept",
@@ -24,6 +24,9 @@
     {"rel": "plan_handoff", "to": "side_effects_safety"},
     {"rel": "see_also", "to": "optimize_config"},
     {"rel": "see_also", "to": "optimize_algorithms"},
-    {"rel": "see_also", "to": "optimize_result"}
+    {"rel": "see_also", "to": "optimize_result"},
+    {"rel": "details", "to": "optimize_config", "item": 1},
+    {"rel": "details", "to": "optimize_algorithms", "item": 2},
+    {"rel": "details", "to": "optimize_result", "item": 3}
   ]
 }

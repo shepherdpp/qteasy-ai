@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.workbench.human import format_human_error, format_human_from_payload
 
@@ -53,12 +54,10 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             print(" human:", text)
             print(" exec:", (payload.get("execution") or {}).get("status"))
             self.assertIn("[MODE: PLAN]", text)
-            self.assertTrue(
-                "missing" in text.lower()
-                or "provide" in text.lower()
-                or "Reply" in text
-                or "Clarification" in text
-                or "start" in text.lower()
+            self.assertIn(
+                "Download/refill requires an explicit start and end date. "
+                "Unbounded full-history download is not allowed.",
+                text,
             )
             self.assertNotIn("Status: success", text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
@@ -94,18 +93,29 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             self.assertTrue(md_path.is_file())
             self.assertFalse((store.runs_dir / f"{plan_id}.json").exists())
             self.assertFalse((store.runs_dir / f"{plan_id}.plan.md").exists())
+            cards = payload.get("human_cards") or []
+            ready = next(item for item in cards if item.get("kind") == "plan_ready")
+            match = next(
+                item
+                for item in cards
+                if (item.get("payload") or {}).get("stage_id") == "match"
+            )
+            trace = (payload.get("plan") or {}).get("planner_trace") or {}
+            print(" ready gold:", "gold_lock" in str(ready.get("text") or ""))
+            print(" match:", match.get("text"))
             self.assertIn("[MODE: PLAN]  dry_run — not executed", text)
             self.assertIn("Plan ready.", text)
             self.assertIn(plan_id, text)
             self.assertIn("just discuss", text)
             self.assertIn("run this plan", text)
-            self.assertNotIn("Job:", text)
+            self.assertNotIn("Job:", str(ready.get("text") or ""))
             self.assertNotIn("Skill: qt.ai.strategy_meta.list", text)
             self.assertNotIn("Calls: qteasy.built_in_list", text)
             self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
             self.assertNotIn("# ToolPlan", text)
             self.assertNotIn("**inputs**", text)
-            self.assertNotIn("gold_lock", text)
+            self.assertNotIn("gold_lock", str(ready.get("text") or ""))
+            self.assertEqual(match.get("text"), render_match_notice(trace, chinese=False))
             self.assertNotIn("hybrid_intent", text)
             self.assertNotIn("Review plan before execute.", text)
             disk_md = md_path.read_text(encoding="utf-8")
@@ -321,7 +331,7 @@ class TestAiWorkbenchHuman(unittest.TestCase):
         print(" human:", text)
         self.assertIn("[MODE: RUN]  executed", text)
         self.assertIn("**Run did not finish.**", text)
-        self.assertIn("Check the name, then edit the blue message and send it again.", text)
+        self.assertNotIn("Check the name, then edit the blue message and send it again.", text)
         self.assertIn("Failed to get strategy details: unknown id.", text)
         self.assertNotIn("Result: FAILED", text)
 
@@ -453,15 +463,11 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             print(" exec status:", (payload.get("execution") or {}).get("status"))
             print(" skill:", result.get("skill_name"))
             print(" doc head:", doc[:180])
-            self.assertIn("[MODE: RUN]  executed", text)
-            self.assertIn("**Run succeeded.**", text)
+            self.assertIn("[MODE: PLAN]  dry_run", text)
+            self.assertIn("Which built-in strategy?", text)
             self.assertIn("trix", text.lower())
+            self.assertNotIn("[MODE: RUN]  executed", text)
             self.assertNotIn("qt.ai.strategy_meta.get", text)
-            gold = next((line.strip() for line in doc.splitlines() if line.strip()), "")
-            print(" gold line:", gold)
-            self.assertTrue(gold)
-            self.assertNotIn(gold[:40], text)
-            self.assertNotIn("Confirm: qteasy-ai run --plan-id", text)
 
 
 if __name__ == "__main__":

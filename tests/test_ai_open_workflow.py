@@ -9,6 +9,7 @@
 # ======================================
 
 import unittest
+from typing import Optional
 
 from qteasy_ai.app import build_default_registry
 from qteasy_ai.intents import load_default_catalog
@@ -105,7 +106,11 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" pending:", names_pending)
         print(" errors:", [item.get("error") for item in pending])
         self.assertEqual(names_pending, ["return_htype"])
-        self.assertIn("pct_chg", str(pending[0].get("error") or ""))
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        written = (accepted[0].get("inputs") or {}) if accepted else {}
+        print(" accepted inputs:", written)
+        self.assertEqual(written.get("factor_htype"), "close")
+        self.assertNotEqual(written.get("return_htype"), "pct_chg")
         self.assertNotIn("two local history columns", str(clar.get("confirm_prompt") or ""))
         self.assertNotIn("qt.ai.research.factor_ic_summary", names)
 
@@ -131,15 +136,27 @@ class TestAiOpenWorkflow(unittest.TestCase):
         self.assertEqual(inputs.get("factor_htype"), "close")
         self.assertEqual(inputs.get("return_htype"), "volume")
 
-    def _factor_ic_replan(self, slots: dict) -> ToolPlan:
-        """用已确认槽、跳过分类，重出因子 IC 计划。"""
+    def _factor_ic_shares(self, plan: ToolPlan) -> Optional[str]:
+        """已确认的代码在 IC 步上；被挡住时留在已收下的快照里。"""
 
+        for step in plan.steps:
+            if step.skill_name == "qt.ai.research.factor_ic_summary":
+                return (step.inputs or {}).get("shares")
+        for row in (plan.assumptions or {}).get("accepted_steps") or []:
+            if row.get("skill_name") == "qt.ai.research.factor_ic_summary":
+                return (row.get("inputs") or {}).get("shares")
+        return None
+
+    def _factor_ic_replan(self, slots: dict) -> ToolPlan:
+        """用已确认槽、跳过分类，重出因子 IC 计划。原句不含代码，已确认的输入只复查形式。"""
+
+        query = "factor IC summary for selection pool"
         session = ConversationState.empty("factor-ic-reclarify")
-        session.start_task(query="factor IC summary for selection pool", job="research.factor_ic")
+        session.start_task(query=query, job="research.factor_ic")
         for name, value in slots.items():
             session.set_slot(name, value, source="user", confirmed=True)
         return Planner(self.registry, env_facts={}).build_plan(
-            "factor IC summary for selection pool",
+            query,
             mode="plan",
             session=session,
             skip_classify=True,
@@ -167,9 +184,12 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" missing_info:", inputs.get("missing_info"))
         print(" pending:", pending)
         print(" confirm_prompt:", prompt)
+        print(" shares:", self._factor_ic_shares(plan))
         self.assertEqual(names, ["qt.ai.system.fallback"])
         self.assertEqual(inputs.get("missing_info"), "factor_htype")
         self.assertEqual(pending, ["factor_htype"])
+        self.assertNotIn("shares", pending)
+        self.assertEqual(self._factor_ic_shares(plan), "000001.SZ,000002.SZ")
         factor = next(item for item in (clar.get("pending") or []) if item.get("name") == "factor_htype")
         print(" factor error:", factor.get("error"))
         print(" factor hint:", factor.get("hint"))
@@ -223,48 +243,44 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" pending:", pending)
         print(" error:", factor.get("error"))
         print(" missing_info:", plan.steps[0].inputs.get("missing_info") if plan.steps else None)
+        print(" shares:", self._factor_ic_shares(plan))
         self.assertEqual(pending, ["factor_htype"])
+        self.assertNotIn("shares", pending)
+        self.assertEqual(self._factor_ic_shares(plan), "000001.SZ,000002.SZ")
         self.assertIn("close, volume", str(factor.get("error") or ""))
         self.assertNotIn("return_htype", pending)
         self.assertEqual(plan.steps[0].inputs.get("missing_info"), "factor_htype")
 
     def test_factor_ic_two_segments_fill_the_empty_partner(self) -> None:
-        """两段合法列名填进空着的 Return，且 Factor 为空时拆成两格。"""
+        """两段列名写在 Return 上时停在这一题，不拆进空着的 Factor。"""
 
-        print("\n[TestAiOpenWorkflow] split return into empty factor")
-        from qteasy_ai.slot_decl import interpret_declared_slots
-
-        declarations = self.catalog.job_slots("research.factor_ic")
-        verdict = interpret_declared_slots(
-            declarations,
-            {
+        print("\n[TestAiOpenWorkflow] two column names stay on return")
+        session = ConversationState.empty("factor-ic-split-read")
+        session.start_task(query="factor IC summary for selection pool", job="research.factor_ic")
+        plan = Planner(self.registry, env_facts={}).build_plan(
+            "factor IC summary for selection pool",
+            mode="plan",
+            session=session,
+            skip_classify=True,
+            card_text={
                 "shares": "000001.SZ,000002.SZ",
                 "start": "20240101",
                 "end": "20240331",
-                "factor_htype": "",
                 "return_htype": "close, volume",
             },
-            is_history_column=Planner._is_history_panel_htype,
         )
-        print(" patches:", verdict["patches"])
-        print(" pending:", [item.get("name") for item in verdict["pending"]])
-        self.assertEqual(verdict["patches"].get("return_htype"), "close")
-        self.assertEqual(verdict["patches"].get("factor_htype"), "volume")
-        self.assertEqual(verdict["pending"], [])
-        plan = self._factor_ic_replan(
-            {
-                "shares": "000001.SZ,000002.SZ",
-                "start": "20240101",
-                "end": "20240331",
-                "return_htype": "close, volume",
-            }
-        )
-        inputs = plan.steps[0].inputs if plan.steps else {}
+        clar = (plan.assumptions or {}).get("clarification") or {}
+        pending = [str(item.get("name") or "") for item in (clar.get("pending") or []) if isinstance(item, dict)]
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        written = (accepted[0].get("inputs") or {}) if accepted else {}
         print(" skills:", [step.skill_name for step in plan.steps])
-        print(" inputs:", inputs)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.research.factor_ic_summary")
-        self.assertEqual(inputs.get("return_htype"), "close")
-        self.assertEqual(inputs.get("factor_htype"), "volume")
+        print(" pending:", pending)
+        print(" accepted:", written)
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(pending, ["factor_htype", "return_htype"])
+        self.assertIn("close, volume", str((clar.get("pending") or [{}])[-1].get("error") or ""))
+        self.assertNotEqual(written.get("factor_htype"), "close")
+        self.assertNotEqual(written.get("return_htype"), "volume")
 
     def test_factor_ic_occupied_partner_rejects_only_the_current_field(self) -> None:
         """Factor 已有值时，Return 上的两段只重开 Return。"""
@@ -282,63 +298,45 @@ class TestAiOpenWorkflow(unittest.TestCase):
         clar = (plan.assumptions or {}).get("clarification") or {}
         pending = [str(item.get("name") or "") for item in (clar.get("pending") or []) if isinstance(item, dict)]
         print(" pending:", pending)
+        print(" shares:", self._factor_ic_shares(plan))
         self.assertEqual(pending, ["return_htype"])
+        self.assertEqual(self._factor_ic_shares(plan), "000001.SZ,000002.SZ")
         self.assertIn("close, volume", str(clar["pending"][0].get("error") or ""))
 
     def test_factor_ic_extra_partner_does_not_split(self) -> None:
         """同 kind 的空伙伴不是恰好一个时，不拆，只拒绝当前格。"""
 
-        print("\n[TestAiOpenWorkflow] zero or many partners do not split")
-        from qteasy_ai.slot_decl import interpret_declared_slots
+        print("\n[TestAiOpenWorkflow] same history column rejects the later field")
+        from qteasy_ai.slot_graph import accept_slot_value
 
-        rows = [
-            {
-                "name": "a",
-                "label": "A",
-                "hint": "One column, such as close.",
-                "cardinality": "one",
-                "value_kind": "history_panel_column",
+        session = ConversationState.empty("factor-ic-same")
+        session.start_task(query="factor IC summary for selection pool", job="research.factor_ic")
+        plan = Planner(self.registry, env_facts={}).build_plan(
+            "factor IC summary for selection pool",
+            mode="plan",
+            session=session,
+            skip_classify=True,
+            card_text={
+                "shares": "000001.SZ,000002.SZ",
+                "start": "20240101",
+                "end": "20240331",
+                "factor_htype": "close",
+                "return_htype": "close",
             },
-            {
-                "name": "b",
-                "label": "B",
-                "hint": "One column, such as volume.",
-                "cardinality": "one",
-                "value_kind": "history_panel_column",
-            },
-            {
-                "name": "c",
-                "label": "C",
-                "hint": "One column, such as high.",
-                "cardinality": "one",
-                "value_kind": "history_panel_column",
-            },
-        ]
-        verdict = interpret_declared_slots(
-            rows,
-            {"a": "close, volume", "b": "", "c": ""},
-            is_history_column=lambda name: name in {"close", "volume"},
         )
-        print(" patches:", verdict["patches"])
-        print(" pending:", [(item["name"], item["error"]) for item in verdict["pending"]])
-        self.assertEqual(verdict["patches"], {})
-        self.assertEqual([item["name"] for item in verdict["pending"]], ["a", "b", "c"])
-        self.assertIn("close, volume", verdict["pending"][0]["error"])
-        unknown = interpret_declared_slots(
-            [{
-                "name": "x",
-                "label": "X",
-                "hint": "One value.",
-                "cardinality": "one",
-                "value_kind": "not_a_kind",
-            }],
-            {"x": "close"},
-            is_history_column=lambda _name: True,
-        )
-        print(" unknown:", unknown["pending"])
-        self.assertEqual(unknown["values"], {})
-        self.assertEqual(unknown["pending"][0]["name"], "x")
-        self.assertIn("close", unknown["pending"][0]["error"])
+        clar = (plan.assumptions or {}).get("clarification") or {}
+        pending = [str(item.get("name") or "") for item in (clar.get("pending") or []) if isinstance(item, dict)]
+        print(" pending:", pending)
+        print(" error:", (clar.get("pending") or [{}])[0].get("error") if clar.get("pending") else None)
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        written = (accepted[0].get("inputs") or {}) if accepted else {}
+        print(" accepted:", written)
+        self.assertEqual(pending, ["return_htype"])
+        self.assertEqual(written.get("factor_htype"), "close")
+        self.assertNotEqual(written.get("return_htype"), "close")
+        unknown = accept_slot_value({"name": "x", "type": "string"}, "close", "close")
+        print(" unknown:", unknown)
+        self.assertEqual(unknown, "close")
 
     def test_factor_ic_slots_match_skill_schema_and_skip_internal_fields(self) -> None:
         """slots 五格都在 schema 里；method / min_assets 不进澄清卡。"""
@@ -366,12 +364,12 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" pending:", pending)
         self.assertNotIn("method", pending)
         self.assertNotIn("min_assets", pending)
-        self.assertEqual(pending, ["shares", "start", "end", "factor_htype", "return_htype"])
+        self.assertEqual(pending, ["factor_htype", "return_htype", "shares", "start", "end"])
 
     def test_factor_ic_control_patches_emit_both_split_values(self) -> None:
-        """控件把两段列名写入空槽时，修订补丁同时带上伙伴格。"""
+        """控件提交的两段列名留在当前格，修订补丁不另造伙伴格。"""
 
-        print("\n[TestAiOpenWorkflow] control patches split both columns")
+        print("\n[TestAiOpenWorkflow] control patches keep both names on one field")
         import tempfile
 
         from qteasy_ai.app import QteasyAssistant
@@ -399,19 +397,16 @@ class TestAiOpenWorkflow(unittest.TestCase):
             inputs = ((second.get("plan") or {}).get("steps") or [{}])[0].get("inputs") or {}
             print(" revision:", revision)
             print(" inputs:", inputs)
-            notices = [
-                str(row.get("text") or "")
-                for row in (second.get("human_cards") or [])
-                if row.get("kind") == "mode_notice"
-            ]
-            print(" notices:", notices)
-            self.assertEqual(revision.get("return_htype"), "close")
-            self.assertEqual(revision.get("factor_htype"), "volume")
-            self.assertEqual(inputs.get("return_htype"), "close")
-            self.assertEqual(inputs.get("factor_htype"), "volume")
-            joined = "\n".join(notices)
-            self.assertIn("Accepted Return column = close.", joined)
-            self.assertIn("Filled Factor column = volume from Return column.", joined)
+            clar = ((second.get("plan") or {}).get("assumptions") or {}).get("clarification") or {}
+            pending = [str(item.get("name") or "") for item in (clar.get("pending") or []) if isinstance(item, dict)]
+            print(" pending:", pending)
+            self.assertEqual(revision.get("return_htype"), "close, volume")
+            self.assertNotIn("factor_htype", revision)
+            self.assertEqual((second.get("plan") or {}).get("steps", [{}])[0].get("skill_name"), "qt.ai.system.fallback")
+            self.assertIn("return_htype", pending)
+            self.assertIn("factor_htype", pending)
+            self.assertNotEqual(inputs.get("factor_htype"), "close")
+            self.assertNotEqual(inputs.get("return_htype"), "volume")
 
     def test_system_open_job_still_legal_dag(self) -> None:
         """系统 Job open 仍走合法边 DAG，不是设计环。"""
@@ -419,8 +414,10 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print("\n[TestAiOpenWorkflow] system open job")
         import json
 
+        query = "xyzzy unmatched formula 12345"
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {
@@ -431,9 +428,7 @@ class TestAiOpenWorkflow(unittest.TestCase):
                 ),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345", mode="plan"
-        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [step.skill_name for step in plan.steps]
         print(" intent:", plan.planner_trace.get("intent_job"), "skills:", names)
         print(" design_loop:", (plan.assumptions or {}).get("design_loop"))
@@ -535,7 +530,9 @@ class TestAiClarifyEmitS1(unittest.TestCase):
         options = list((strategy or {}).get("options") or [])
         print(" options:", [item.get("id") for item in options])
         self.assertLessEqual(len(options), 5)
-        self.assertTrue(any(str(item.get("id") or "") == "macd" for item in options))
+        from qteasy_ai.slot_graph import strategy_id_options
+
+        self.assertEqual([str(item.get("id") or "") for item in options], strategy_id_options())
         self.assertEqual(int(clar.get("step_index") or 0), 1)
         self.assertEqual(int(clar.get("step_total") or 0), len(pending))
 

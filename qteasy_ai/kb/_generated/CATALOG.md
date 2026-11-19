@@ -57,6 +57,11 @@
   - see_also -> backtest_result
   - see_also -> backtest_trade_log
   - see_also -> backtest_engine
+  - details item=1 -> backtest_config
+  - details item=2 -> backtest_result
+  - details item=3 -> backtest_trade_log
+  - details item=4 -> backtest_engine
+  - details item=5 -> common_errors_nan
 - questions:
   - 如何用 qteasy 回测
   - 怎么回测
@@ -113,6 +118,12 @@
 - manual_anchor: 
 - relations:
   - see_also -> ask_plan_agent
+  - details item=1 -> what_is_qteasy
+  - details item=2 -> data_intro
+  - details item=3 -> backtest_intro
+  - details item=4 -> optimize_intro
+  - details item=5 -> live_what
+  - details item=6 -> what_is_qteasy_ai
 - questions:
   - 你能帮我做什么？
   - what can you help me do
@@ -178,6 +189,27 @@
 - questions:
   - 怎么按行业筛选股票
 
+## data_intro
+
+- type: concept
+- topics: data-downloading, data-analysis
+- manual_anchor: docs/source/manage_data/01. overview.md
+- relations:
+  - see_also -> data_three_entries
+  - see_also -> refill_bounded
+  - details item=1 -> datasource_local
+  - details item=2 -> data_channels
+  - details item=3 -> refill_bounded
+  - details item=4 -> data_minimum
+  - details item=5 -> env_ready
+  - details item=6 -> data_three_entries
+  - details item=7 -> data_filter
+  - details item=8 -> historypanel_basics
+- questions:
+  - 数据这块怎么分
+  - qteasy 数据从哪来到哪去
+  - data pipeline overview
+
 ## data_minimum
 
 - type: concept
@@ -201,6 +233,8 @@
   - see_also -> data_filter
   - see_also -> historypanel_basics
   - see_also -> capability_map
+  - details item=1 -> datatype_lookup
+  - details item=2 -> common_errors_date_window
 - questions:
   - 三入口
   - 历史数据
@@ -282,6 +316,13 @@
   - see_also -> install_and_env
   - see_also -> get_help
   - next_topic -> data_three_entries
+  - details item=1 -> install_and_env
+  - details item=2 -> data_intro
+  - details item=3 -> backtest_intro
+  - details item=4 -> strategy_overview
+  - details item=5 -> optimize_intro
+  - details item=6 -> live_what
+  - details item=7 -> get_help
 - questions:
   - getting started
   - how to start
@@ -315,6 +356,8 @@
   - see_also -> historypanel_analysis
   - see_also -> historypanel_plot
   - see_also -> capability_map
+  - details item=1 -> historypanel_analysis
+  - details item=2 -> historypanel_plot
 - questions:
   - HistoryPanel 的三维是什么
   - 什么是 HistoryPanel
@@ -342,6 +385,7 @@
 - relations:
   - see_also -> getting_started
   - see_also -> faq_datasource
+  - details item=1 -> faq_datasource
 - questions:
   - 如何安装 TA-Lib
   - how to install qteasy
@@ -355,6 +399,11 @@
 - relations:
   - see_also -> what_is_qteasy
   - see_also -> qteasy_advantages
+  - details item=1 -> data_intro
+  - details item=2 -> strategy_overview
+  - details item=3 -> backtest_intro
+  - details item=4 -> optimize_intro
+  - details item=5 -> live_what
 - questions:
   - qteasy 有哪些模块
   - what modules does qteasy have
@@ -382,6 +431,7 @@
   - contrasts_with -> backtest_intro
   - see_also -> live_plan_only
   - see_also -> qteasy_advantages
+  - details item=1 -> live_plan_only
 - questions:
   - 模拟实盘是什么
   - what is simulated live
@@ -445,6 +495,7 @@
   - see_also -> common_errors_run_freq
   - see_also -> operator_create
   - see_also -> backtest_config
+  - details item=1 -> common_errors_run_freq
 - questions:
   - run timing
   - 运行频率
@@ -487,6 +538,9 @@
   - see_also -> optimize_config
   - see_also -> optimize_algorithms
   - see_also -> optimize_result
+  - details item=1 -> optimize_config
+  - details item=2 -> optimize_algorithms
+  - details item=3 -> optimize_result
 - questions:
   - 优化入门
   - how to optimize
@@ -509,6 +563,19 @@
 - questions:
   - 最优参数怎么读
   - optimize result Top-K
+
+## process_data
+
+- type: concept
+- topics: strategy
+- manual_anchor: docs/source/design/09-process-data-and-dynamic-backtest.md
+- relations:
+  - see_also -> strategy_realize
+  - see_also -> lookahead_isolation
+- questions:
+  - 过程数据是什么
+  - proc.own_cash
+  - 策略里怎么读持仓和现金
 
 ## pt_ps_vs
 
@@ -535,6 +602,10 @@
   - see_also -> library_map
   - see_also -> lookahead_isolation
   - see_also -> live_what
+  - details item=1 -> data_intro
+  - details item=2 -> lookahead_isolation
+  - details item=3 -> live_what
+  - details item=4 -> builtin_strategy_lookup
 - questions:
   - 为什么用 qteasy 而不是自己写回测
   - why use qteasy instead of writing your own backtest
@@ -616,6 +687,13 @@
   - see_also -> strategy_blender
   - see_also -> strategy_bases
   - see_also -> builtin_strategy_lookup
+  - details item=1 -> operator_create
+  - details item=2 -> operator_run_freq
+  - details item=3 -> pt_ps_vs
+  - details item=4 -> strategy_blender
+  - details item=5 -> builtin_strategy_lookup
+  - details item=6 -> strategy_bases
+  - details item=7 -> strategy_realize
 - questions:
   - 策略、Operator 和 Group 各管什么
 
@@ -630,6 +708,9 @@
   - see_also -> strategy_bases
   - see_also -> operator_create
   - see_also -> lookahead_isolation
+  - details item=1 -> strategy_trace
+  - details item=2 -> strategy_builder_intro
+  - details item=3 -> process_data
 - questions:
   - 自定义策略的 realize 要返回什么
 
@@ -656,12 +737,34 @@
   - see_also -> library_map
   - see_also -> qteasy_advantages
   - next_topic -> getting_started
+  - details item=1 -> library_map
+  - details item=2 -> qteasy_advantages
+  - details item=3 -> getting_started
+  - details item=4 -> what_is_qteasy_ai
 - questions:
   - what is qteasy
   - 什么是 qteasy
   - 什么是qteasy
   - qteasy是什么
   - qteasy 是什么
+
+## what_is_qteasy_ai
+
+- type: concept
+- topics: capability, onboarding
+- manual_anchor: 
+- relations:
+  - see_also -> what_is_qteasy
+  - see_also -> capability_map
+  - details item=1 -> ask_plan_agent
+  - details item=2 -> workbench_entry
+  - details item=3 -> notebook_cli
+  - details item=4 -> official_vs_user_kb
+  - details item=5 -> side_effects_safety
+- questions:
+  - 什么是 qteasy-ai
+  - qteasy-ai 是什么
+  - what is qteasy-ai
 
 ## workbench_entry
 

@@ -3,6 +3,22 @@
 All notable user-visible changes to **qteasy-ai** are documented here.  
 SemVer applies independently from [qteasy](https://github.com/shepherdpp/qteasy).
 
+## 0.4.0 (2026-11-19)
+
+### Added
+
+- Hold several named symbols as one portfolio (equal weight or a stated ratio) and plot it after confirm. A benchmark is its own field.
+- Short read-only plans can chain up to three steps (read, transform, plot) after confirm. Backtest, refill, strategy writing, and live trade do not run from there.
+- Settings can show the qteasy and qteasy-ai versions and release dates, and whether a data source is connected. Account details stay hidden.
+
+### Changed
+
+- A check-up or export keeps only the steps the sentence uses. Switching between volatility and return stays the same check-up.
+- A plan does not finish from symbols, dates, or weights you did not write. Company names are not turned into codes. An illegal date stays on the same question. Ratios become weights; equal weight stays equal weight. Several holdings are one question each. An unexecuted plan changes only the fields the next sentence touches. A side question stays out of the plan.
+- Confirm and result show the saved steps. The matched job and why it matched stay on the result; classify and validation text stay in the debug view.
+- Ask follows numbered notes and keeps a fading outline of the session. A question about an earlier turn continues from that turn.
+- The first Ctrl+C asks before serve exits; only y within 5 seconds quits. The clarify card stays above the composer. A failed step no longer blanks the chat.
+
 ## 0.3.1 (2026-10-31)
 
 ### Changed

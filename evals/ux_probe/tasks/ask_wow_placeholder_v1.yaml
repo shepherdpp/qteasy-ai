@@ -4,6 +4,9 @@ persona_id: chen_yan
 channel: ask
 min_product: "0.4-wow"
 upgrade_of: ask_researcher_boundary_v1
+# 随机风格抽主题时避开本占位题的 HistoryPanel 主场。
+random_avoid_topics:
+  - data-analysis
 goal: HistoryPanel 2.6 择时可执行讲解（0.4 才跑；当前应跳过）。
 turns:
   - id: T1

@@ -204,9 +204,12 @@ class OutputRenderer:
         output_path = artifacts[0].get("path", "") if artifacts else ""
         narrative = f"Kline chart export completed. Output saved to: {output_path}"
         python_code = (
-            "from qteasy_ai.skills.visual_export import build_visual_export_skill\n"
-            "meta, export = build_visual_export_skill()\n"
-            "res = export(shares='000300.SH', freq='D')\n"
+            "from qteasy_ai.skills.data_kline import build_data_kline_skill\n"
+            "from qteasy_ai.skills.hp_plot import build_hp_plot_skill\n"
+            "_, read = build_data_kline_skill()\n"
+            "_, plot = build_hp_plot_skill()\n"
+            "panel = read(shares='000300.SH', freq='d')\n"
+            "res = plot(upstream_payload=panel['payload'])\n"
             "print(res['artifacts'])"
         )
         result_preview = f"artifacts={artifacts}"

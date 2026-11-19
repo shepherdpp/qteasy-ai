@@ -3,6 +3,10 @@ id: ask_backtest_learn_v1
 persona_id: zhou_jie
 channel: ask
 min_product: "0.3-ask"
+# 随机风格抽主题时避开标准题已经覆盖的官方主题。
+random_avoid_topics:
+  - backtest
+  - optimize
 goal: >
   半懂用户搞清回测是什么、和优化差别、结果大概看什么；办事「帮我回测」只解释切 Plan、无 plan_id。
 turns:

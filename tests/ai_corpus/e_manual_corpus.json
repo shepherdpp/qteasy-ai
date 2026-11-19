@@ -15,7 +15,10 @@
       "expected_skill": "qt.ai.env.check_tushare",
       "expected_skills": [
         "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info",
+        "qt.ai.datasource.table_info"
       ],
       "notes": "gold E1 lock; source=rule"
     },
@@ -45,8 +48,8 @@
       "query": "kline summary of 000300.SH",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.summary_kline",
-      "expected_skills": ["qt.ai.data.summary_kline"],
+      "expected_skill": "qt.ai.data.kline",
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
       "notes": "gold B2; G4 pretty must say Dry-run plan (not executed); no successfully/completed"
     },
     {
@@ -55,8 +58,8 @@
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
       "expected_job": "data.export",
-      "expected_skill": "qt.ai.visual.export_kline",
-      "expected_skills": ["qt.ai.visual.export_kline"],
+      "expected_skill": "qt.ai.data.kline",
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.plot"],
       "notes": "gold C1; plan only"
     },
     {
@@ -65,8 +68,8 @@
       "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
       "mode": "plan",
       "expected_job": "data.read",
-      "expected_skill": "qt.ai.data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skill": "qt.ai.data.history",
+      "expected_skills": ["qt.ai.data.history"],
       "notes": "channel=history; names=close"
     },
     {
@@ -75,8 +78,8 @@
       "query": "get_reference_data cn_gdp from 20240101 to 20240131",
       "mode": "plan",
       "expected_job": "data.read",
-      "expected_skill": "qt.ai.data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skill": "qt.ai.data.reference",
+      "expected_skills": ["qt.ai.data.reference"],
       "notes": "channel=reference; missing local table may fail at execute; plan routing must be correct"
     },
     {
@@ -85,8 +88,8 @@
       "query": "get_static_data industry for 000001.SZ",
       "mode": "plan",
       "expected_job": "data.read",
-      "expected_skill": "qt.ai.data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skill": "qt.ai.data.static",
+      "expected_skills": ["qt.ai.data.static"],
       "notes": "channel=static; names=industry"
     },
     {
@@ -359,8 +362,8 @@
       "query": "kline summary of 000300.SH",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.summary_kline",
-      "expected_skills": ["qt.ai.data.summary_kline"],
+      "expected_skill": "qt.ai.data.kline",
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.volatility", "qt.ai.hp.describe"],
       "notes": "Mode-D lock gold; source=rule even if model vetoes"
     },
     {

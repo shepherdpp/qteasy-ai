@@ -199,8 +199,8 @@ def build_research_screen_skill(
         inputs_schema={
             "industry": {"type": "string", "required": True},
             "threshold": {"type": "number", "required": True},
-            "metric": {"type": "string", "required": False},
-            "lookback_days": {"type": "integer", "required": False},
+            "metric": {"type": "string", "required": False, "enum": ["drawdown", "gain"], "enum_strict": True},
+            "lookback_days": {"type": "integer", "required": False, "resolve": "int", "default": 126},
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
             "max_hits": {"type": "integer", "required": False},
@@ -553,8 +553,8 @@ def build_price_predicate_skill(
         summary="Optional lookback simple-return predicate on an upstream universe.",
         inputs_schema={
             "threshold": {"type": "number", "required": True},
-            "metric": {"type": "string", "required": False},
-            "lookback_days": {"type": "integer", "required": False},
+            "metric": {"type": "string", "required": False, "enum": ["drawdown", "gain"], "enum_strict": True},
+            "lookback_days": {"type": "integer", "required": False, "resolve": "int", "default": 126},
             "start": {"type": "string", "required": False},
             "end": {"type": "string", "required": False},
             "upstream_payload": {"type": "object", "required": False},

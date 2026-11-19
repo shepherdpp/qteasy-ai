@@ -28,8 +28,13 @@ SLOT_WHITELIST = frozenset(
         "slow",
         "asset_pool",
         "channel",
+        "holdings",
+        "weights",
+        "mode",
+        "benchmark",
     }
 )
+_COMMITTED_SLOT_NAMES = frozenset({"holdings", "weights", "mode", "benchmark"})
 ASSUMPTION_BLACKLIST = frozenset(
     {
         "gold_lock",
@@ -63,6 +68,47 @@ SKILL_TITLES = {
     "qt.ai.data.refill_basic_equity_and_index": "Download daily bars (bounded window)",
     "qt.ai.data.read": "Read market data (history / reference / static)",
     "qt.ai.data.summary_kline": "Summarize k-line statistics",
+    "qt.ai.data.kline": "Read an OHLCV panel",
+    "qt.ai.data.history": "Read a history panel",
+    "qt.ai.data.reference": "Read reference series",
+    "qt.ai.data.static": "Read static attributes",
+    "qt.ai.data.statement": "Read one financial statement",
+    "qt.ai.dtype.find": "Find data types",
+    "qt.ai.datasource.table_info": "Describe one local table",
+    "qt.ai.datasource.table_overview": "Overview named tables",
+    "qt.ai.hp.volatility": "Rolling volatility",
+    "qt.ai.hp.describe": "Describe panel shape",
+    "qt.ai.hp.slice": "Slice a panel",
+    "qt.ai.hp.drop": "Drop panel columns or shares",
+    "qt.ai.hp.rename": "Rename panel labels",
+    "qt.ai.hp.fill": "Fill missing panel values",
+    "qt.ai.hp.dropna": "Drop empty panel slices",
+    "qt.ai.hp.resample": "Resample a panel",
+    "qt.ai.hp.assign": "Add one panel column",
+    "qt.ai.hp.align": "Align two panels",
+    "qt.ai.hp.join": "Join two panels",
+    "qt.ai.hp.returns": "Simple or log returns",
+    "qt.ai.hp.shift": "Shift a panel along time",
+    "qt.ai.hp.diff": "Difference a panel along time",
+    "qt.ai.hp.pct_change": "Percent change along time",
+    "qt.ai.hp.rank": "Cross-sectional rank",
+    "qt.ai.hp.zscore": "Cross-sectional or rolling z-score",
+    "qt.ai.hp.rolling": "Rolling window statistic",
+    "qt.ai.hp.agg": "Aggregate a whole panel",
+    "qt.ai.hp.corr": "Correlation across shares",
+    "qt.ai.hp.compare": "Compare a column",
+    "qt.ai.hp.combine_mask": "Combine boolean masks",
+    "qt.ai.hp.where": "Broadcast a boolean mask",
+    "qt.ai.hp.expr": "Column arithmetic expression",
+    "qt.ai.hp.indicator": "Append a technical indicator",
+    "qt.ai.hp.candle_pattern": "Detect a candlestick pattern",
+    "qt.ai.hp.research_preset": "Append the OHLCV MACD and SMA preset",
+    "qt.ai.hp.portfolio": "Build a research portfolio",
+    "qt.ai.hp.cum_return": "Cumulative return",
+    "qt.ai.hp.normalize": "Normalize a price column",
+    "qt.ai.hp.alpha_beta": "Alpha and beta versus a benchmark",
+    "qt.ai.hp.performance": "CAGR from cumulative return",
+    "qt.ai.hp.plot": "Plot one static page",
     "qt.ai.visual.export_kline": "Export a k-line chart",
     "qt.ai.backtest.run_builtin": "Run a built-in backtest",
     "qt.ai.optimize.run_builtin": "Run built-in parameter optimization",
@@ -273,6 +319,16 @@ def _unpack_plan(plan: Union[ToolPlan, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _slot_text(name: str, value: Any) -> str:
+    """白名单槽的展示文本。代码、权重和基准不把字典原样写出去。"""
+
+    if name in _COMMITTED_SLOT_NAMES:
+        from .slot_graph import format_committed_slot
+
+        return format_committed_slot(name, value).strip()
+    return str(value).strip()
+
+
 def _slot_title(name: str) -> str:
     """槽位显示名。"""
 
@@ -296,7 +352,7 @@ def _collect_slots(
             continue
         if name not in allowed:
             continue
-        text = str(value).strip()
+        text = _slot_text(name, value)
         if text:
             collected[name] = text
     for step in steps:
@@ -307,7 +363,7 @@ def _collect_slots(
             name = str(key or "").strip()
             if name in ASSUMPTION_BLACKLIST or name not in allowed:
                 continue
-            text = str(value).strip()
+            text = _slot_text(name, value)
             if text:
                 collected[name] = text
     return [(key, collected[key]) for key in sorted(collected)]
@@ -368,7 +424,7 @@ def _escape_mermaid_label(text: str) -> str:
 
 
 def _build_mermaid(steps: Sequence[Dict[str, Any]]) -> str:
-    """由 depends_on 生成 flowchart；无依赖则顺序串。"""
+    """由已对上 ``step_id`` 的 ``depends_on`` 生成 flowchart。"""
 
     if not steps:
         return "flowchart TD\n  empty[No steps]\n"
@@ -392,8 +448,6 @@ def _build_mermaid(steps: Sequence[Dict[str, Any]]) -> str:
                 source = id_by_step.get(dep)
                 if source:
                     edges.add((source, target))
-        elif index > 0:
-            edges.add((node_ids[index - 1], target))
     for source, target in edges:
         lines.append(f"  {source} --> {target}")
     return "\n".join(lines) + "\n"
@@ -531,6 +585,8 @@ def _mode_r_body(
 ) -> str:
     """无 Provider 时的确定性人读正文。"""
 
+    from .slot_graph import committed_benchmark_role, committed_fact_lines, drop_role_conflicts
+
     source_map = dict(sources or {})
     meta = dict(slot_meta or {})
     declared = set(meta)
@@ -562,7 +618,9 @@ def _mode_r_body(
             lines.append("   - Calls: this step")
         reads = _reads_writes_line(skill, step.get("side_effects"), registry)
         lines.append(f"   - Reads / writes: {reads}")
-        expect = _expected_output(skill, registry)
+        inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+        _code, role = committed_benchmark_role(inputs)
+        expect = drop_role_conflicts(_expected_output(skill, registry), role)
         lines.append(f"   - Expected output: {expect}")
         if skill:
             inventory.append(f"- {title} (`{skill}`): {expect}")
@@ -576,6 +634,10 @@ def _mode_r_body(
             lines.extend(_optimize_lines(step, source_map))
         lines.append("")
     lines.extend(["## Flow", "", "```mermaid", _build_mermaid(steps).rstrip(), "```", ""])
+    facts = committed_fact_lines(steps)
+    if facts:
+        lines.extend(facts)
+        lines.append("")
     if slots:
         lines.extend(["## Slots", ""])
         for key, value in slots:

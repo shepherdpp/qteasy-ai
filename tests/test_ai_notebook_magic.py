@@ -138,7 +138,7 @@ class TestAiNotebookMagic(unittest.TestCase):
             self.assertIn("config_sources", payload["diagnostics"])
 
     def test_notebook_session_id_followup(self) -> None:
-        """同一 --session-id 跟进能改槽。"""
+        """同一 --session-id 的日期跟进升级同一份下载计划。"""
 
         print("\n[TestAiNotebookMagic] session-id follow-up")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -155,9 +155,15 @@ class TestAiNotebookMagic(unittest.TestCase):
             outcome = execute_magic_command(second, assistant=assistant, plan_cache=plan_cache)
             payload = outcome["result"]
             names = [s["skill_name"] for s in payload["plan"]["steps"]]
+            inputs = payload["plan"]["steps"][0]["inputs"]
             print(" skills:", names, "source:", payload["plan"]["planner_trace"].get("source"))
-            self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
+            print(" dates:", inputs.get("start"), inputs.get("end"))
+            self.assertEqual(names, ["qt.ai.data.refill_basic_equity_and_index"])
+            self.assertEqual(str(inputs.get("start") or ""), "20240101")
+            self.assertEqual(str(inputs.get("end") or ""), "20241231")
+            self.assertNotEqual(inputs.get("missing_info"), "20240101 到 20241231")
             self.assertEqual(payload["plan"]["planner_trace"].get("source"), "session")
+            self.assertEqual(payload["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
     def test_notebook_ask_session_zero_skill(self) -> None:
         """Ask 带 session-id 仍无 execution。"""

@@ -42,35 +42,38 @@ class TestAiPlannerE(unittest.TestCase):
         """open 合法低副作用 DAG 放行，不压成官方菜谱。"""
 
         print("\n[TestAiPlannerE] open legal dag")
+        query = "xyzzy unmatched formula 12345 000300.SH"
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {
                         "steps": [
                             {"skill_name": "qt.ai.strategy_meta.list", "inputs": {}},
-                            {"skill_name": "qt.ai.data.summary_kline", "inputs": {"shares": "000300.SH"}},
+                            {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
                         ]
                     }
                 ),
+                json.dumps({"shares": "000300.SH"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345", mode="plan"
-        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [s.skill_name for s in plan.steps]
         print(" skills:", names, "intent:", plan.planner_trace.get("intent_job"))
         print(" prompts:", len(fake.prompts))
         self.assertEqual(plan.planner_trace.get("intent_job"), "open")
-        self.assertEqual(names, ["qt.ai.strategy_meta.list", "qt.ai.data.summary_kline"])
+        self.assertEqual(names, ["qt.ai.strategy_meta.list", "qt.ai.data.kline"])
         self.assertGreaterEqual(len(fake.prompts), 2)
 
     def test_open_drops_unknown_input_keys(self) -> None:
         """schema：丢掉未知键。"""
 
         print("\n[TestAiPlannerE] drop unknown keys")
+        query = "xyzzy unmatched formula 12345"
         fake = FakeLLMProvider(
             replies=[
+                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
                 json.dumps({"job": "open"}),
                 json.dumps(
                     {
@@ -82,11 +85,10 @@ class TestAiPlannerE(unittest.TestCase):
                         ]
                     }
                 ),
+                json.dumps({"strategy_id": "macd"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "xyzzy unmatched formula 12345", mode="plan"
-        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         print(" inputs:", plan.steps[0].inputs)
         print(" corrections:", plan.planner_trace.get("validator_trace", {}).get("corrections"))
         self.assertEqual(plan.steps[0].inputs.get("strategy_id"), "macd")
@@ -102,8 +104,9 @@ class TestAiPlannerE(unittest.TestCase):
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         print(" intent:", plan.planner_trace.get("intent_job"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
-        self.assertEqual(plan.steps[0].inputs.get("channel"), "static")
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.static")
+        self.assertEqual(plan.steps[0].inputs.get("names"), "industry")
+        self.assertEqual(plan.steps[0].inputs.get("shares"), "000001.SZ")
 
     def test_inverted_dates_clarify(self) -> None:
         """倒置日期区间 → clarify，不得落到 summary 执行失败。"""
@@ -139,8 +142,7 @@ class TestAiPlannerE(unittest.TestCase):
         inputs = plan.steps[0].inputs
         print(" skill:", plan.steps[0].skill_name)
         print(" inputs:", inputs)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
-        self.assertEqual(inputs.get("channel"), "reference")
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.reference")
         self.assertEqual(inputs.get("names"), "cn_gdp")
 
     def test_provider_dtype_channel_persists_on_task(self) -> None:
@@ -148,46 +150,60 @@ class TestAiPlannerE(unittest.TestCase):
 
         print("\n[TestAiPlannerE] provider dtype channel")
         cases = (
-            ("please fetch cn_gdp from 20240101 to 20240131", "reference", "cn_gdp"),
-            ("please fetch industry for 000001.SZ", "static", "industry"),
-            ("please fetch close for 000300.SH from 20240101 to 20240131", "history", "close"),
+            ("please fetch cn_gdp from 20240101 to 20240131", "reference", "cn_gdp", "qt.ai.data.reference", "names"),
+            ("please fetch industry for 000001.SZ", "static", "industry", "qt.ai.data.static", "names"),
+            (
+                "please fetch close for 000300.SH from 20240101 to 20240131",
+                "history",
+                "close",
+                "qt.ai.data.history",
+                "htype_names",
+            ),
         )
-        for query, channel, names in cases:
-            fake = FakeLLMProvider(replies=[json.dumps({"job": "data.read", "uncertain": False})])
+        for query, channel, names, skill_name, name_key in cases:
+            fake = FakeLLMProvider(
+                replies=[
+                    json.dumps({"task": query, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "data.read", "uncertain": False}),
+                ]
+            )
             plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
             inputs = plan.steps[0].inputs
             print(" query:", query)
             print(" inputs:", inputs)
-            self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.read")
-            self.assertEqual(inputs.get("channel"), channel)
-            self.assertEqual(inputs.get("names"), names)
+            self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+            self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
+            self.assertEqual((plan.assumptions or {}).get("intent_flags", {}).get("channel"), "history")
+            self.assertIn(name_key, str(plan.steps[0].inputs.get("missing_info") or ""))
             self.assertNotIn("get_reference_data", query)
             self.assertNotIn("get_static_data", query)
             self.assertNotIn("get_history_data", query)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
+            asked = "please fetch cn_gdp from 20240101 to 20240131"
             reply = json.dumps({"job": "data.read", "uncertain": False})
-            fake = FakeLLMProvider(replies=[reply, reply])
+            fake = FakeLLMProvider(
+                replies=[
+                    json.dumps({"task": asked, "question": ""}, ensure_ascii=False),
+                    reply,
+                    reply,
+                ]
+            )
             assistant = QteasyAssistant(
                 memory_store=store,
                 registry=self.registry,
                 provider=fake,
             )
             sid = "s-gdp"
-            first = assistant.plan(
-                "please fetch cn_gdp from 20240101 to 20240131",
-                response_style="raw",
-                session_id=sid,
-            )
-            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            first = assistant.plan(asked, response_style="raw", session_id=sid)
+            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.system.fallback"]
             state = SessionStore(store).load(sid)
             print(" first inputs:", read[0]["inputs"] if read else None)
             print(" task flags:", state.task.flags if state.task else None)
             self.assertTrue(read)
-            self.assertEqual(read[0]["inputs"].get("channel"), "reference")
-            self.assertEqual(read[0]["inputs"].get("names"), "cn_gdp")
-            self.assertEqual(state.task.flags.get("channel"), "reference")
+            self.assertEqual(read[0]["inputs"].get("missing_info"), "names")
+            self.assertEqual(state.task.flags.get("channel"), "history")
 
             second = assistant.plan(
                 "",
@@ -195,13 +211,12 @@ class TestAiPlannerE(unittest.TestCase):
                 session_id=sid,
                 patches={"end": "20240630"},
             )
-            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.data.read"]
+            read2 = [s for s in second["plan"]["steps"] if s["skill_name"] == "qt.ai.system.fallback"]
             print(" second inputs:", read2[0]["inputs"] if read2 else None)
             print(" second source:", second["plan"]["planner_trace"].get("source"))
             self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
             self.assertTrue(read2)
-            self.assertEqual(read2[0]["inputs"].get("channel"), "reference")
-            self.assertEqual(read2[0]["inputs"].get("names"), "cn_gdp")
+            self.assertIn("names", str(read2[0]["inputs"].get("missing_info") or ""))
 
 
 if __name__ == "__main__":

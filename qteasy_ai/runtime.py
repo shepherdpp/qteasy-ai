@@ -109,5 +109,13 @@ class SkillRuntime:
             }
         result.setdefault("skill_name", metadata.name)
         result.setdefault("rollback_hint", "")
+        if result.get("ok") is False and isinstance(result.get("error"), dict):
+            error = result["error"]
+            details = error.get("details")
+            if not isinstance(details, dict) or not details:
+                error["details"] = {
+                    "code": str(error.get("code") or ""),
+                    "message": str(error.get("message") or ""),
+                }
         return result
 

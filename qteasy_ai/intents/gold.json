@@ -167,6 +167,22 @@
       "source": "rule",
       "flags": {},
       "lock": true
+    },
+    {
+      "id": "HC1",
+      "query": "000001.SZ 和 000002.SZ 做一条等权组合，相对沪深300",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HC2",
+      "query": "000001.SZ 和 000002.SZ 按权重 6:4 做一条组合，看累计收益",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
     }
   ]
 }

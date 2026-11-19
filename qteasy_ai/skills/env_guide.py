@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ..contracts import SkillError, SkillMetadata, SkillResult, SkillSideEffects, new_run_id
+from .datasource_tables import column_notes
 
 # B0 固定核心表集合，禁止默认扫全库。
 DEFAULT_CORE_TABLES: List[str] = [
@@ -216,6 +217,7 @@ def build_overview_tables_skill(
                     }
                 else:
                     entry = _normalize_table_probe(name, info)
+                entry["columns"] = column_notes(name)
                 tables_probe[name] = entry
                 if not entry["exists"]:
                     missing.append(name)

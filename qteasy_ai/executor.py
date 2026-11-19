@@ -327,6 +327,7 @@ class PlanExecutor:
         merged_inputs = dict(step.inputs)
         if confirm and step.skill_name == "qt.ai.strategy.codegen_hybrid":
             merged_inputs["overwrite"] = True
+        payloads: List[Any] = []
         for dep_id in step.depends_on:
             dep_result = (step_results or {}).get(dep_id) or {}
             if not dep_result.get("ok"):
@@ -337,7 +338,10 @@ class PlanExecutor:
             if dep_result.get("artifacts"):
                 merged_inputs.setdefault("upstream_artifacts", dep_result.get("artifacts"))
             if dep_result.get("payload"):
+                payloads.append(dep_result.get("payload"))
                 merged_inputs.setdefault("upstream_payload", dep_result.get("payload"))
+        if payloads:
+            merged_inputs.setdefault("upstream_payloads", payloads)
         max_attempts = 1
         if step.on_fail == "retry":
             max_attempts = max(1, int(step.retry_limit) + 1)

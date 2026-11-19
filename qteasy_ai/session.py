@@ -632,6 +632,22 @@ def _user_texts(messages: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def _new_web_session_id() -> str:
+    """工作台会话 id：``web-``、毫秒的 base36、4 位十六进制。均可做文件名。"""
+
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    number = int(time.time() * 1000)
+    chars: List[str] = []
+    if number <= 0:
+        chars.append("0")
+    else:
+        while number:
+            number, rem = divmod(number, 36)
+            chars.append(alphabet[rem])
+        chars.reverse()
+    return "web-" + "".join(chars) + uuid.uuid4().hex[:4]
+
+
 def clip_session_name(raw: Any) -> str:
     """规范化用户标签：去空白，最长 80。空串表示回退默认。"""
 
@@ -820,15 +836,27 @@ class ConversationState:
         self.messages = self.messages[-120:]
         return list(self.messages)
 
-    def close_open_card(self, answer: str, *, status: str = "answered") -> bool:
+    def close_open_card(
+        self,
+        answer: str,
+        *,
+        status: str = "answered",
+        answer_label: str = "",
+        answers: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
         """就地关闭最近一张未答开卡（优先 clarify，其次 plan_ready）。
 
         Parameters
         ----------
         answer : str
-            本轮回执原文，写入 ``payload.answer``。
+            选项 id 或用户原文，写入 ``payload.answer``。多题时改看 ``answers``。
         status : str, optional
             ``answered`` 或 ``skipped``。
+        answer_label : str, optional
+            用户看见的标签。有则写入 ``payload.answer_label``。
+        answers : list of dict, optional
+            与题同一顺序。每项含 ``prompt`` / ``answer`` / ``answer_label``。
+            只有一题时同时写入原来的 ``answer`` / ``answer_label``。
 
         Returns
         -------
@@ -837,6 +865,8 @@ class ConversationState:
         """
 
         text = str(answer or "").strip()
+        label = str(answer_label or "").strip()
+        packed = [item for item in (answers or []) if isinstance(item, dict)]
         mark = str(status or "answered").strip() or "answered"
         for kind in ("clarify", "plan_ready"):
             for row in reversed(self.messages):
@@ -845,8 +875,27 @@ class ConversationState:
                 payload = dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {}
                 if str(payload.get("status") or "") in {"answered", "skipped"}:
                     continue
-                if text:
-                    payload["answer"] = text
+                if packed:
+                    payload["answers"] = [
+                        {
+                            "prompt": str(item.get("prompt") or ""),
+                            "answer": str(item.get("answer") or ""),
+                            "answer_label": str(item.get("answer_label") or ""),
+                        }
+                        for item in packed
+                    ]
+                    if len(packed) == 1:
+                        one_text = str(packed[0].get("answer") or "").strip()
+                        one_label = str(packed[0].get("answer_label") or "").strip()
+                        if one_text:
+                            payload["answer"] = one_text
+                        if one_label:
+                            payload["answer_label"] = one_label
+                else:
+                    if text:
+                        payload["answer"] = text
+                    if label:
+                        payload["answer_label"] = label
                 payload["status"] = mark
                 row["payload"] = payload
                 return True
@@ -981,6 +1030,29 @@ class SessionStore:
                 pass
         remove_session_blob_dir(self.memory_store, session_id)
         return True
+
+    def create_empty(self) -> Dict[str, Any]:
+        """新建空会话并立即落盘，返回列表摘要。
+
+        典型调用方是工作台 ``POST /v1/sessions``。``name`` 留空，首条用户句仍可成为标题。
+
+        Returns
+        -------
+        dict
+            ``summarize_one`` 的摘要。文件已在 ``sessions/`` 下，``mtime`` 大于 0。
+        """
+
+        state: Optional[ConversationState] = None
+        for _ in range(8):
+            session_id = _new_web_session_id()
+            if self.exists(session_id):
+                continue
+            state = ConversationState.empty(session_id)
+            self.save(state)
+            break
+        if state is None:
+            raise OSError("Could not allocate a new session id.")
+        return self.summarize_one(state)
 
     def summarize_one(self, state: ConversationState) -> Dict[str, Any]:
         """单条列表摘要（与 ``list_summaries`` 同行形状）。"""

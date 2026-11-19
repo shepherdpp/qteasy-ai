@@ -151,6 +151,7 @@ def _install_hold(assistant: Any, probe: HoldProbe) -> None:
         agent_auto: Optional[bool] = None,
         patches: Optional[Dict[str, Any]] = None,
         allow_composer_slot_fill: bool = True,
+        **kwargs: Any,
     ) -> Tuple[Any, Optional[Any]]:
         asked = str(query or "").strip()
         if asked == HOLD_QUERY and not patches:
@@ -166,6 +167,7 @@ def _install_hold(assistant: Any, probe: HoldProbe) -> None:
             agent_auto=agent_auto,
             patches=patches,
             allow_composer_slot_fill=allow_composer_slot_fill,
+            **kwargs,
         )
 
     assistant._assemble_plan = assemble
@@ -320,6 +322,14 @@ class WorkbenchBrowserCase(unittest.TestCase):
         self.page.wait_for_selector("#composer-mode", timeout=15000)
         self.page.evaluate("() => window.dispatchEvent(new Event('resize'))")
         self.page.click("#btn-new-session")
+        self.page.wait_for_function(
+            """() => {
+                const id = localStorage.getItem('qteasy-ai.session_id');
+                if (!id) return false;
+                return Boolean(document.querySelector('[data-session-id="' + CSS.escape(id) + '"]'));
+            }""",
+            timeout=10000,
+        )
         self.page.wait_for_selector("#query-input")
 
     def tearDown(self) -> None:

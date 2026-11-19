@@ -8,6 +8,7 @@
 # Unittest for workbench SPA shell (G.4)
 # ======================================
 
+import datetime
 import json
 import re
 import subprocess
@@ -27,9 +28,15 @@ def _extract_js_function(src: str, name: str) -> str:
     """按花括号配对抽出 ``function name`` 源码。"""
 
     marker = f"function {name}"
-    start = src.find(marker)
-    if start < 0:
-        raise AssertionError(f"missing function {name}")
+    start = 0
+    while True:
+        start = src.find(marker, start)
+        if start < 0:
+            raise AssertionError(f"missing function {name}")
+        nxt = src[start + len(marker):start + len(marker) + 1]
+        if nxt in {"", "(", " ", "\n", "\r"}:
+            break
+        start += len(marker)
     brace = src.find("{", start)
     if brace < 0:
         raise AssertionError(f"missing body for {name}")
@@ -152,7 +159,11 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" js has data-clarify-option:", "data-clarify-option" in js.text)
             print(" js followUp chip:", "followUp(t.dataset.clarifyOption)" in js.text)
             self.assertIn("data-clarify-option", js.text)
-            self.assertIn("data-clarify-slot", js.text)
+            self.assertIn("data-clarify-index", js.text)
+            self.assertNotIn("data-clarify-slot", js.text)
+            self.assertIn("sendControlAnswers", js.text)
+            self.assertNotIn("prompt: String(name)", js.text)
+            self.assertIn("cardText.trim() === promptText.trim()", js.text)
             self.assertIn("clarify-options", js.text)
             self.assertNotIn("clarify-chip", js.text)
             self.assertIn("row.options", js.text)
@@ -197,7 +208,6 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("AbortController", js.text)
             self.assertIn("heartbeat", js.text)
             self.assertIn("progress-indet", js.text)
-            self.assertNotIn("busy-label", js.text)
             self.assertIn("data-now-edit", js.text)
             self.assertIn("Switched to", js.text)
             self.assertNotIn("g7-slot", js.text)
@@ -252,6 +262,19 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("payload.answer", src)
             self.assertIn("Answered:", src)
             self.assertIn("shouldShowLiveClarify", src)
+            show_fn = src.split("function shouldShowLiveClarify")[1].split("function pendingDecision")[0]
+            submit_fn = src.split("function submitClarification")[1].split("function syncClarifyWizardControls")[0]
+            hidden_at = submit_fn.find("clarifyCardHidden = true")
+            send_at = submit_fn.find("sendControlAnswers")
+            print(" submit sends answers:", "answers" in submit_fn)
+            self.assertIn("answers", submit_fn)
+            self.assertIn("data-clarify-index", src)
+            self.assertNotIn("patches[name]", submit_fn)
+            print(" clarify flag before send:", hidden_at, send_at)
+            print(" shouldShow reads flag:", "clarifyCardHidden" in show_fn)
+            self.assertIn("if (clarifyCardHidden) return false;", show_fn)
+            self.assertGreaterEqual(hidden_at, 0)
+            self.assertLess(hidden_at, send_at)
             self.assertIn("clarification-form", src)
             self.assertIn("plan-card", src)
             self.assertIn("liveClarifyMessage", src)
@@ -358,6 +381,69 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" css session-actions:", "session-actions" in css.text)
             self.assertIn("session-actions", css.text)
             self.assertIn(":focus-within", css.text)
+            session_click = _extract_js_function(src, "onSessionListClick")
+            now_click = _extract_js_function(src, "onNowClick")
+            print(" session click accepts Element:", "instanceof Element" in session_click)
+            print(" now click accepts Element:", "instanceof Element" in now_click)
+            self.assertIn("instanceof Element", session_click)
+            self.assertNotIn("instanceof HTMLElement", session_click)
+            self.assertIn("instanceof Element", now_click)
+            self.assertNotIn("instanceof HTMLElement", now_click)
+            icon_css = css.text.split(".ui-icon {", 1)[1].split("}", 1)[0]
+            print(" ui-icon css:", icon_css.strip())
+            self.assertIn("pointer-events: none", icon_css)
+            now_fn = _extract_js_function(src, "renderNow")
+            clip_fn = _extract_js_function(src, "nowClipLine")
+            print(" now session before job:", now_fn.find("Session ID"), now_fn.find('"Job"'))
+            self.assertIn("Session ID", now_fn)
+            self.assertIn("Session Name", now_fn)
+            self.assertIn("Last Update", now_fn)
+            self.assertLess(now_fn.find("Session ID"), now_fn.find('"Job"'))
+            self.assertIn('nowClipLine("Job", job, false)', now_fn)
+            self.assertIn('nowClipLine("Plan"', now_fn)
+            self.assertIn('nowClipLine("Run"', now_fn)
+            self.assertIn('"now-line clip"', clip_fn)
+            self.assertIn("now-label", clip_fn)
+            self.assertIn("title=", clip_fn)
+            refresh_fn = _extract_js_function(src, "refreshSessions")
+            rename_fn = _extract_js_function(src, "commitRenameSession")
+            print(" refresh paints now:", "renderNow()" in refresh_fn)
+            print(" rename refreshes sessions:", "refreshSessions()" in rename_fn)
+            self.assertIn("renderNow()", refresh_fn)
+            self.assertIn("refreshSessions()", rename_fn)
+            line_css = css.text.split(".now-block .now-line {", 1)[1].split("}", 1)[0]
+            label_css = css.text.split(".now-block .now-line .now-label {", 1)[1].split("}", 1)[0]
+            clip_css = css.text.split(".now-block .now-line.clip {", 1)[1].split("}", 1)[0]
+            print(" now line css:", line_css.strip(), "label:", label_css.strip(), "clip:", clip_css.strip())
+            self.assertIn("font-size: 12px", line_css)
+            self.assertIn("font-weight: 400", line_css)
+            self.assertIn("font-weight: 700", label_css)
+            self.assertIn("white-space: nowrap", clip_css)
+            self.assertIn("text-overflow: ellipsis", clip_css)
+            prelude = (
+                _extract_js_function(src, "escapeHtml")
+                + "\n"
+                + _extract_js_function(src, "escapeAttr")
+                + "\n"
+                + _extract_js_function(src, "formatSessionUpdated")
+                + "\n"
+                + clip_fn
+            )
+            stamp = 1762320000
+            expected = datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M")
+            formatted = _eval_js(prelude, f"formatSessionUpdated({stamp})")
+            missing = _eval_js(prelude, "formatSessionUpdated(0)")
+            quoted = _eval_js(prelude, """nowClipLine("Session Name", 'say "hi"')""")
+            print(" last update:", formatted, "expected:", expected)
+            print(" missing mtime:", missing)
+            print(" clip line:", quoted)
+            self.assertEqual(formatted, expected)
+            self.assertEqual(missing, "—")
+            self.assertIsInstance(quoted, str)
+            self.assertIn('class="now-line clip"', quoted)
+            self.assertIn('<span class="now-label">Session Name:</span> say "hi"', quoted)
+            self.assertIn('title="Session Name: say &quot;hi&quot;"', quoted)
+            self.assertNotIn(".now-v", css.text)
 
     def test_artifact_tabs_open_on_demand_not_auto(self) -> None:
         """中栏 openTabs；Workspace / Open plan 共用 openArtifactTab；ingest 不自动打开。"""
@@ -417,7 +503,57 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("composer-provider", src)
             self.assertIn("btn-settings", src)
             self.assertIn("statusbar", src)
-            self.assertIn('title="Edit">✎</button>', src)
+            pencil_body = src.split("pencil:")[1].split("trash:")[0]
+            print(" pencil path:", "M10.1 2.3" in pencil_body)
+            print(" edit uses pencil icon:", 'title="Edit">${icon("pencil")}</button>' in src)
+            print(" send stays arrow:", 'aria-label="Send">↑</button>' in src)
+            self.assertIn("M10.1 2.3", pencil_body)
+            self.assertIn('title="Edit">${icon("pencil")}</button>', src)
+            self.assertIn('aria-label="Send">↑</button>', src)
+            self.assertIn(".ui-icon", css)
+            icon_btn = css.split("button.icon-btn {", 1)[1].split("}", 1)[0]
+            provider_badge = css.split("button.provider-badge {", 1)[1].split("}", 1)[0]
+            pager_css = css.split(".ix-card-pager {", 1)[1].split("}", 1)[0]
+            title_css = css.split(".ix-card-title {", 1)[1].split("}", 1)[0]
+            foot_css = css.split(".ix-card-foot {", 1)[1].split("}", 1)[0]
+            mount = src.split("function mountShell")[1].split("function bindShell")[0]
+            chat_at = mount.find('id="chat-log"')
+            live_at = mount.find('id="live-cards"')
+            composer_at = mount.find('id="composer"')
+            chat_fn = src.split("function renderChat()")[1].split("function latestMessage")[0]
+            end_fn = src.split('t.id === "btn-clarify-end-confirm"')[1].split('if (t.id === "btn-clarify-prev")')[0]
+            plan_fn = src.split("function renderPlanCard()")[1].split("function renderSteps()")[0]
+            confirm_fn = src.split("async function confirmPlan()")[1].split("async function cancelPlan()")[0]
+            end_flag = end_fn.find("clarifyCardHidden = true")
+            end_skip = end_fn.find("sendControlSkip(")
+            confirm_flag = confirm_fn.find("planCardHidden = true")
+            confirm_await = confirm_fn.find("await api")
+            print(" icon border 0:", "border: 0" in icon_btn)
+            print(" provider border 0:", "border: 0" in provider_badge)
+            print(" dock order:", chat_at, live_at, composer_at)
+            print(" cards leave chat-log:", "parts.push(renderClarification())" not in chat_fn)
+            print(" pager 12:", "font-size: 12px" in pager_css)
+            print(" title bold:", "font-weight: 600" in title_css)
+            print(" foot min-height:", "min-height: 34px" in foot_css)
+            print(" end hide before skip:", end_flag, end_skip)
+            print(" confirm flag before await:", confirm_flag, confirm_await)
+            self.assertIn("border: 0", icon_btn)
+            self.assertIn("border: 0", provider_badge)
+            self.assertLess(chat_at, live_at)
+            self.assertLess(live_at, composer_at)
+            self.assertIn('const cards = $("live-cards")', chat_fn)
+            self.assertIn("renderClarification()", chat_fn)
+            self.assertIn("renderPlanCard()", chat_fn)
+            self.assertNotIn("parts.push(renderClarification())", chat_fn)
+            self.assertNotIn("parts.push(renderPlanCard())", chat_fn)
+            self.assertIn("font-size: 12px", pager_css)
+            self.assertIn("font-weight: 600", title_css)
+            self.assertNotIn("min-height: 34px", foot_css)
+            self.assertGreaterEqual(end_flag, 0)
+            self.assertLess(end_flag, end_skip)
+            self.assertIn("if (planCardHidden) return", plan_fn)
+            self.assertGreaterEqual(confirm_flag, 0)
+            self.assertLess(confirm_flag, confirm_await)
             self.assertIn('id="btn-rewind-submit">${escapeHtml(action.label)}</button>', src)
             self.assertIn('id="btn-rewind-cancel">Cancel</button>', src)
             self.assertIn("Discard and resend", src)
@@ -640,18 +776,107 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertNotIn("Stopped watching this run. The server may still finish", src)
             switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
             self.assertNotIn("|| busy", switch_fn)
-            self.assertIn("dropRunWatch", switch_fn)
+            self.assertNotIn("dropRunWatch", switch_fn)
+            self.assertIn("parkCurrentSession", switch_fn)
             self.assertNotIn("cancel-run", switch_fn)
             self.assertNotIn("background-run", switch_fn)
             create_fn = src.split("async function createSession")[1].split("async function switchSession")[0]
-            print(" create calls dropRunWatch:", "dropRunWatch" in create_fn)
-            self.assertIn("dropRunWatch", create_fn)
+            print(" create posts session:", "/v1/sessions" in create_fn, "dropRunWatch:", "dropRunWatch" in create_fn)
+            self.assertNotIn("dropRunWatch", create_fn)
+            self.assertIn("/v1/sessions", create_fn)
+            self.assertIn("parkCurrentSession", create_fn)
+            send_fn = _extract_js_function(src, "sendQueryBody")
+            print(" send has owner:", "const owner = sessionId" in send_fn)
+            print(" send ensures session:", "ensureSession()" in send_fn)
+            self.assertIn("const owner = sessionId", send_fn)
+            self.assertIn("ensureSession()", send_fn)
+            self.assertNotIn("newSessionId", src)
+            self.assertNotIn("local_only", src)
+            rename_fn = _extract_js_function(src, "beginRenameSession")
+            delete_fn = _extract_js_function(src, "deleteSession")
+            upload_fn = _extract_js_function(src, "uploadAttachmentFile")
+            print(" rename notice:", "showStatusNotice" in rename_fn, "delete notice:", "showStatusNotice" in delete_fn)
+            self.assertIn("showStatusNotice", rename_fn)
+            self.assertIn("showStatusNotice", delete_fn)
+            self.assertIn("ensureSession()", upload_fn)
             consume = src.split("async function consumeSse")[1].split("function applyLiveStep")[0]
             print(" consume heartbeat:", "heartbeat" in consume)
             self.assertIn("heartbeat", consume)
             print(" css progress-indet:", "progress-indet" in css)
             self.assertIn("progress-indet", css)
             self.assertIn("now-run-status", src)
+
+    def test_kernel_send_lock_and_session_mark(self) -> None:
+        """一路内核时锁住发送，会话行有转圈和未读蓝点，切换先重画列表。"""
+
+        print("\n[TestAiWorkbenchWeb] kernel send lock and session mark")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
+            paint_at = switch_fn.find("renderSessionList()")
+            get_at = switch_fn.find("await api(`/v1/session/")
+            print(" paint before get:", paint_at, get_at)
+            print(" lock copy:", "Another session is still replying." in src)
+            print(" ring:", "session-busy-ring" in src, "dot:", "session-unseen-dot" in src)
+            self.assertIn("function sendLocked", src)
+            self.assertIn("Another session is still replying. Send stays locked until it finishes.", src)
+            self.assertIn("This session is still running. Send stays locked until it finishes.", src)
+            self.assertIn("session-busy-ring", src)
+            self.assertIn("session-unseen-dot", src)
+            self.assertIn("Loading…", src)
+            self.assertGreaterEqual(paint_at, 0)
+            self.assertLess(paint_at, get_at)
+            self.assertIn("session-busy-spin", css)
+            self.assertIn(".session-busy-ring { animation: none;", css)
+
+    def test_reply_mark_follows_one_watch(self) -> None:
+        """本地等待不刷列表。收场只改行首标记，切回仍在等的会话再 GET 这一条。"""
+
+        print("\n[TestAiWorkbenchWeb] reply mark follows one watch")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            css = client.get("/static/app.css").text
+            poll = _extract_js_function(src, "ensureKernelPoll")
+            settle = _extract_js_function(src, "settleOwnerReply")
+            revalidate = _extract_js_function(src, "revalidateWaitingSession")
+            busy_for = _extract_js_function(src, "setBusyFor")
+            mark = _extract_js_function(src, "sessionMark")
+            switch_fn = src.split("async function switchSession")[1].split("async function refreshSessions")[0]
+            viewing_return = busy_for.split("viewing(owner)")[1].split("return;")[0]
+            print(" poll needs idle local:", "!localKernelOwner" in poll)
+            print(" settle kernel flag:", "kernel_busy = false" in settle, "paint:", "paintSessionMark" in settle)
+            print(" settle refresh:", "refreshSessions" in settle, "list html:", "session-list" in settle and "innerHTML" in settle)
+            print(" viewing writes watch:", "sessionWatches[owner]" in viewing_return)
+            print(" mark bubble:", "session-bubble" in mark)
+            print(" switch revalidate:", "revalidateWaitingSession" in switch_fn, "drop:", "dropRunWatch" in switch_fn)
+            self.assertIn("!localKernelOwner", poll)
+            self.assertIn("kernel_busy = false", settle)
+            self.assertIn("paintSessionMark", settle)
+            self.assertNotIn("refreshSessions", settle)
+            self.assertNotIn("innerHTML", settle)
+            self.assertNotIn(".abort(", settle)
+            self.assertIn("sessionWatches[owner]", viewing_return)
+            self.assertIn("session-bubble", mark)
+            self.assertIn("session-bubble", css)
+            self.assertIn("--text-muted", css.split(".session-bubble")[1].split("}")[0])
+            self.assertIn(".session-status", css)
+            self.assertNotIn("dropRunWatch", switch_fn)
+            self.assertIn("restoreParked", switch_fn)
+            self.assertLess(switch_fn.find("restoreParked"), switch_fn.find("revalidateWaitingSession"))
+            self.assertIn("/v1/session/", revalidate)
+            self.assertNotIn("refreshSessions", revalidate)
+            self.assertNotIn(".abort(", revalidate)
 
     def test_background_watch_keeps_clock_and_plan_card(self) -> None:
         """后台监视：计时不被 setBusy 清掉，结束后收起进度条，Confirm 不被轮询关掉。"""
@@ -665,7 +890,7 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             client = TestClient(app)
             src = client.get("/static/app.js").text
             set_busy = _extract_js_function(src, "setBusy")
-            clock = _extract_js_function(src, "updateBusyElapsedDom")
+            clock = _extract_js_function(src, "busyStatusText")
             watch = _extract_js_function(src, "applyRunningWatch")
             poll = _extract_js_function(src, "startLivePoll")
             stop_fn = _extract_js_function(src, "stopWatchingRun")
@@ -678,7 +903,8 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" watch starts clock after elapsed:", "startElapsedClock();\n  if (!executeSseOpen)" in watch)
             print(" poll clears backgrounded:", "backgrounded = false" in poll)
             print(" poll guards confirmable:", "blocks_composer" in poll and "confirmable: false" in poll)
-            print(" poll ignores error dto:", "dto.error" in poll)
+            print(" poll skips non-snapshot:", "!hasSessionSnapshot(dto)" in poll)
+            print(" poll ingests terminal:", "isTerminalRun" in poll and "ingestDto" in poll)
             print(" stop ingests:", "ingestDto" in stop_fn)
             print(" confirm guards sse:", "if (!backgrounded)" in confirm and confirm.find("executeSseOpen = true") > confirm.find("if (!backgrounded)"))
             print(" steps hidden when backgrounded:", "if (backgrounded) return" in steps)
@@ -691,7 +917,10 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("backgrounded = false", poll)
             self.assertIn("blocks_composer", poll)
             self.assertIn("confirmable: false", poll)
-            self.assertIn("dto.error", poll)
+            self.assertIn("!hasSessionSnapshot(dto)", poll)
+            self.assertIn("isTerminalRun", poll)
+            self.assertIn("ingestDto", poll)
+            self.assertNotIn("dto.error", poll)
             self.assertIn("elapsed_s", poll)
             self.assertIn("ingestDto", stop_fn)
             self.assertIn("if (!backgrounded)", confirm)
@@ -699,6 +928,64 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("if (backgrounded) return", steps)
             self.assertIn('backgrounded ? "Background"', now)
             self.assertIn("dto.plan_card", background_fn)
+
+    def test_session_snapshot_projects_run_error(self) -> None:
+        """有 transcript 的快照照常投影；无 transcript 的 error 才当成请求失败。"""
+
+        print("\n[TestAiWorkbenchWeb] session snapshot projects run error")
+        from starlette.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(base_dir=temp_dir)
+            app = create_app(assistant=QteasyAssistant(memory_store=store, registry=build_default_registry()))
+            client = TestClient(app)
+            src = client.get("/static/app.js").text
+            pred = _extract_js_function(src, "hasSessionSnapshot")
+            switch_fn = _extract_js_function(src, "switchSession")
+            restore_fn = _extract_js_function(src, "restoreCurrentSession")
+            refresh_fn = _extract_js_function(src, "refreshSessions")
+            revalidate = _extract_js_function(src, "revalidateWaitingSession")
+            stop_fn = _extract_js_function(src, "stopWatchingRun")
+            background_fn = _extract_js_function(src, "backgroundThisRun")
+            print(" predicate:", "Array.isArray(dto.transcript)" in pred)
+            print(" switch snapshot before notice:", switch_fn.find("hasSessionSnapshot(dto)") < switch_fn.find("Session not found."))
+            print(" restore uses snapshot:", "hasSessionSnapshot(dto)" in restore_fn)
+            print(" refresh uses snapshot:", "hasSessionSnapshot(dto)" in refresh_fn)
+            merge = _extract_js_function(src, "mergeBusyTranscript")
+            submit_clar = _extract_js_function(src, "submitClarification")
+            print(" revalidate merges while busy:", "mergeBusyTranscript" in revalidate)
+            print(" merge skips plan card:", "ingestDto" not in merge, "state.plan_card" not in merge)
+            print(" submit seals locally:", "sealLocalClarify" in submit_clar)
+            print(" stop projects snapshot:", stop_fn.find("hasSessionSnapshot(dto)") < stop_fn.find("ingestDto"))
+            print(" background projects snapshot:", background_fn.find("hasSessionSnapshot(dto)") < background_fn.find("applyServerTranscript"))
+            self.assertIn("Array.isArray(dto.transcript)", pred)
+            self.assertNotIn("!dto.error", switch_fn)
+            self.assertLess(switch_fn.find("hasSessionSnapshot(dto)"), switch_fn.find("Session not found."))
+            self.assertIn("ingestDto", switch_fn)
+            self.assertNotIn("!dto.error", restore_fn)
+            self.assertIn("hasSessionSnapshot(dto)", restore_fn)
+            self.assertIn("applyServerTranscript", restore_fn)
+            self.assertNotIn("!dto.error", refresh_fn)
+            self.assertIn("hasSessionSnapshot(dto)", refresh_fn)
+            self.assertNotIn("dto.error", revalidate)
+            self.assertIn("!hasSessionSnapshot(dto)", revalidate)
+            self.assertIn("dto.kernel_busy", revalidate)
+            self.assertIn("isDtoRunning(dto)", revalidate)
+            self.assertIn("mergeBusyTranscript", revalidate)
+            self.assertGreater(revalidate.find("mergeBusyTranscript"), revalidate.find("dto.kernel_busy"))
+            self.assertLess(revalidate.find("mergeBusyTranscript"), revalidate.find("ingestDto"))
+            self.assertNotIn("ingestDto", merge)
+            self.assertNotIn("state.plan_card", merge)
+            self.assertIn("serverClarifyBehindLocal", merge)
+            self.assertIn("sealLocalClarify", submit_clar)
+            self.assertIn("optionLabelFor", submit_clar)
+            patches = _extract_js_function(src, "sendControlPatches")
+            self.assertIn("startBusyTranscriptPoll", patches)
+            self.assertLess(patches.find("stopBusyTranscriptPoll()"), patches.find("adoptServerResult"))
+            self.assertLess(stop_fn.find("!hasSessionSnapshot(dto)"), stop_fn.find("Stop did not complete."))
+            self.assertLess(stop_fn.find("Stop did not complete."), stop_fn.find("ingestDto"))
+            self.assertLess(background_fn.find("!hasSessionSnapshot(dto)"), background_fn.find("Background did not complete."))
+            self.assertLess(background_fn.find("Background did not complete."), background_fn.find("applyServerTranscript"))
 
     def test_live_restore_poll_and_column_splitter(self) -> None:
         """切回 running 不重 POST run-plan；2s GET 轮询；Session|Artifacts 可拖分隔。"""
@@ -1197,17 +1484,34 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("renderTimeGroupHead", render_ws)
             self.assertIn("renderTimeGroupHead", now_fn)
             self.assertIn("renderTimeGroupHead", settings_fn)
-            group_names = ("NOW", "AUDIT", "THIS SESSION", "SERVER", "APPEARANCE", "PROVIDERS")
+            group_names = ("NOW", "AUDIT", "THIS SESSION", "SYSTEM", "APPEARANCE", "PROVIDERS", "ABOUT")
             print(" group names:", [name for name in group_names if name in now_fn or name in render_ws or name in settings_fn])
             self.assertIn("NOW", now_fn)
             self.assertIn("AUDIT", now_fn)
             self.assertLess(now_fn.find("NOW"), now_fn.find("AUDIT"))
             self.assertIn("THIS SESSION", render_ws)
-            self.assertIn("SERVER", settings_fn)
+            self.assertIn("SYSTEM", settings_fn)
             self.assertIn("APPEARANCE", settings_fn)
             self.assertIn("PROVIDERS", settings_fn)
-            self.assertLess(settings_fn.find("SERVER"), settings_fn.find("APPEARANCE"))
-            self.assertLess(settings_fn.find("APPEARANCE"), settings_fn.find("PROVIDERS"))
+            self.assertIn("ABOUT", settings_fn)
+            system_head = 'renderTimeGroupHead("settings:system", "SYSTEM"'
+            appearance_head = 'renderTimeGroupHead("settings:appearance", "APPEARANCE"'
+            providers_head = 'renderTimeGroupHead("settings:providers", "PROVIDERS"'
+            about_head = 'renderTimeGroupHead("settings:about", "ABOUT"'
+            self.assertLess(settings_fn.find(system_head), settings_fn.find(appearance_head))
+            self.assertLess(settings_fn.find(appearance_head), settings_fn.find(providers_head))
+            self.assertLess(settings_fn.find(providers_head), settings_fn.find(about_head))
+            self.assertIn(">DataSource<", settings_fn)
+            self.assertIn('settingsStack("SYSTEM (QTEASY)"', settings_fn)
+            self.assertIn('settingsStack("Agent (QTEASY-AI)"', settings_fn)
+            self.assertIn('settingsStack("Author"', settings_fn)
+            self.assertIn('settingsStack("LICENSE"', settings_fn)
+            self.assertIn('settingsStack("DOCUMENTS"', settings_fn)
+            self.assertIn("settings-quit-row", settings_fn)
+            print(" stacked under titles:", "settingsStack" in settings_fn)
+            self.assertIn("settings:about", settings_fn)
+            self.assertIn('"/v1/system"', src)
+            print(" about titles:", "SYSTEM (QTEASY)" in settings_fn, "Agent (QTEASY-AI)" in settings_fn)
             self.assertNotIn("Provider manager", settings_fn)
             self.assertIn("data-art-index", render_ws)
             bucket_css = css.split(".time-bucket {", 1)[1].split("}", 1)[0]
@@ -1353,7 +1657,8 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("position: absolute", edit_block)
             self.assertIn("right: 6px", edit_block)
             self.assertIn("display: none", edit_block)
-            self.assertIn("display: inline-block", hover_block)
+            print(" hover display flex:", "display: inline-flex" in hover_block)
+            self.assertIn("display: inline-flex", hover_block)
             self.assertIn(".msg.user:focus-within .bubble-edit", css)
             user_bubble = css.split(".msg.user .bubble {", 1)[1].split("}", 1)[0]
             print(" user bubble:", user_bubble.strip())
@@ -1388,14 +1693,25 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             self.assertIn("state.plan_card = null", rewind)
             self.assertNotIn("if (busy || backgrounded) return true", owns)
             self.assertIn("runWatchActive()", owns)
-            self.assertIn("Planning…", chat)
+            markup = _extract_js_function(src, "busyMarkup")
+            self.assertIn('busyMarkup("Planning")', chat)
+            self.assertIn("busy-ellipsis", markup)
+            self.assertNotIn("Planning…", chat)
             self.assertIn('data-testid="planning-wait"', chat)
+            elapsed = _extract_js_function(src, "updateBusyElapsedDom")
+            print(" elapsed writes label:", "busy-label" in elapsed, "whole Planning…:", "Planning…" in elapsed)
+            self.assertIn("busy-label", elapsed)
+            self.assertNotIn("Planning…", elapsed)
+            self.assertIn("busy-ellipsis-blink", css)
             print(" renderChat calls renderTurn:", "renderTurn(" in chat)
             print(" renderTurn calls renderSteps:", "renderSteps()" in turn)
+            print(" answered clarify stays in the process group:", 'clarifyStatus(msg) === "answered"' not in turn)
             print(" submit gates confirm:", "action.confirm && !window.confirm(action.dialog)" in submit)
             self.assertIn("renderTurn(", chat)
             self.assertNotIn("renderSteps()", chat)
             self.assertIn("renderSteps()", turn)
+            self.assertNotIn('clarifyStatus(msg) === "answered"', turn)
+            self.assertIn("PROCESS_KINDS.has(msg.kind)", turn)
             self.assertIn("Show process", src)
             self.assertIn("process-fold", css)
             self.assertIn("action.confirm && !window.confirm(action.dialog)", submit)

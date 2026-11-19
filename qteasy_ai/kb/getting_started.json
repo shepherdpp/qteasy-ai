@@ -14,7 +14,7 @@
   ],
   "title": "Getting started with qteasy",
   "summary": "The first hour is an environment, a data channel, one bounded download, and one built-in-strategy backtest, then the tutorial route.",
-  "narrative": "The first hour with qteasy has four steps. Install qteasy into a Python environment that can import it; install options, including TA-Lib, are a separate question. Choose a data channel, often a Tushare token, or another supported channel. Download one bounded set of data, for example daily bars of the CSI 300 index for a date range you name. Run one backtest of a built-in strategy on that data. A result report means the one-minute path worked.\n\nThe tutorial route after that is: configure the data source, download data, optionally learn the data panel, pick or define a strategy and backtest it, optimize parameters, then read the simulated-live boundary. Ask explains each step. To actually download or backtest, use Plan and confirm. Sample profit figures from the manual are not repeated here.",
+  "narrative": "The first hour with qteasy is an environment, one bounded download, and one built-in-strategy backtest. A result report means that path worked. Ask explains each step. To actually download or backtest, use Plan and confirm. Sample profit figures from the manual are not repeated here. A download or backtest without an explicit date range is not this path.\n\nThe numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. Install qteasy into a Python environment that can import it, including optional TA-Lib.\n2. Choose a data channel and download one bounded set, for example daily bars of an index for dates you name.\n3. Run one backtest of a built-in strategy on that data.\n4. Strategies: what Strategy, Operator, and Group each do, then signals and a custom realize().\n5. Parameter optimization after a backtest exists.\n6. The simulated-live boundary: same logic, a real clock, and Ask does not start Trader.\n7. How to report a bug or ask for help.",
   "python_code": "import qteasy as qt\nprint(qt.__version__)\nqt.update_start_up_setting(tushare_token='your_token')",
   "risk_notes": "A download or backtest without an explicit date range is not the first-hour path. Confirm before anything that writes data or recomputes a backtest.",
   "type": "concept",
@@ -25,6 +25,13 @@
     {"rel": "see_also", "to": "notebook_cli"},
     {"rel": "see_also", "to": "install_and_env"},
     {"rel": "see_also", "to": "get_help"},
-    {"rel": "next_topic", "to": "data_three_entries"}
+    {"rel": "next_topic", "to": "data_three_entries"},
+    {"rel": "details", "to": "install_and_env", "item": 1},
+    {"rel": "details", "to": "data_intro", "item": 2},
+    {"rel": "details", "to": "backtest_intro", "item": 3},
+    {"rel": "details", "to": "strategy_overview", "item": 4},
+    {"rel": "details", "to": "optimize_intro", "item": 5},
+    {"rel": "details", "to": "live_what", "item": 6},
+    {"rel": "details", "to": "get_help", "item": 7}
   ]
 }

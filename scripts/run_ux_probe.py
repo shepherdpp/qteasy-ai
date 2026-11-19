@@ -21,6 +21,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from evals.ux_probe.loader import DEFAULT_PRODUCT, PROBE_ROOT  # noqa: E402
+from evals.ux_probe.questions import QUESTION_STYLES  # noqa: E402
 from evals.ux_probe.runner import run_probe  # noqa: E402
 
 
@@ -44,6 +45,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--product",
         default=DEFAULT_PRODUCT,
         help=f"Current product floor (default: {DEFAULT_PRODUCT}).",
+    )
+    parser.add_argument(
+        "--style",
+        default="standard",
+        choices=list(QUESTION_STYLES),
+        help=(
+            "Question style: standard reuses the YAML script; "
+            "random samples a new theme per persona and writes a series "
+            "(default: standard)."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional RNG seed for random style. Omit to vary each run.",
     )
     parser.add_argument(
         "--no-judge",
@@ -80,12 +97,15 @@ def main(argv: list | None = None) -> int:
             judge=not bool(args.no_judge),
             out_dir=Path(args.out) if str(args.out or "").strip() else None,
             run_id=str(args.run_id or "").strip() or None,
+            question_style=str(args.style),
+            rng_seed=args.seed,
         )
     except Exception as exc:  # noqa: BLE001 — CLI surface
         print(f"[ux_probe] FAILED: {exc}", file=sys.stderr)
         return 2
     paths = payload.get("paths") or {}
     print("[ux_probe] not a release gate; scores are guidance only.")
+    print(f"[ux_probe] style={payload.get('question_style')}")
     print(f"[ux_probe] run_id={payload.get('run_id')}")
     print(f"[ux_probe] runs={len(payload.get('runs') or [])}")
     print(f"[ux_probe] skipped={len(payload.get('skipped') or [])}")

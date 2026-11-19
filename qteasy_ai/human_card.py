@@ -17,6 +17,15 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .identity import prefix_system_prompt
+from .match_notice import render_match_notice
+from .run_view import render_run_view
+from .slot_graph import (
+    clarification_skips_polish,
+    committed_benchmark_role,
+    committed_fact_lines,
+    drop_role_conflicts,
+    is_bound_item_list,
+)
 from .side_effects import step_needs_confirm as _step_needs_confirm
 
 HUMAN_CARD_KINDS = frozenset(
@@ -144,8 +153,11 @@ def infer_effective_kind(payload: Dict[str, Any]) -> str:
     raw = payload if isinstance(payload, dict) else {}
     if _is_ask_payload(raw):
         return "ask"
-    if _clarification_blob(raw):
+    clar = _clarification_blob(raw)
+    if clar and clarification_needs_answer(clar):
         return "clarify"
+    if clar:
+        return "error"
     execution = raw.get("execution") if isinstance(raw.get("execution"), dict) else {}
     status = str(execution.get("status") or "")
     if status in {"success", "partial_failed", "failed"}:
@@ -190,9 +202,27 @@ def revision_notice_text(
         label = str(item.get("label") or item.get("name") or "").strip()
         value = item.get("value")
         origin = str(item.get("origin") or "accepted")
+        source = str(item.get("from_label") or item.get("from") or "").strip()
+        if is_bound_item_list(value):
+            verb = "Filled" if origin == "filled" else "Rejected" if origin == "rejected" else "Accepted"
+            wrote = False
+            for held in value:
+                if str(held.get("status") or "") != "confirmed":
+                    continue
+                mention = str(held.get("mention") or held.get("code") or "").strip()
+                code = str(held.get("code") or "").strip()
+                if not mention or not code:
+                    continue
+                wrote = True
+                if origin == "filled" and source:
+                    lines.append(f"Filled {mention} = {code} from {source}.")
+                else:
+                    lines.append(f"{verb} {mention} = {code}.")
+            if wrote and origin != "rejected":
+                progressed = True
+            continue
         if origin == "filled":
             progressed = True
-            source = str(item.get("from_label") or item.get("from") or "").strip()
             if source:
                 lines.append(f"Filled {label} = {value} from {source}.")
             else:
@@ -337,6 +367,10 @@ def project_human_cards(
     assumptions = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
     if clar:
         text = str(clar.get("confirm_prompt") or clar.get("restatement") or "Clarification required.").strip()
+        if not clarification_needs_answer(clar):
+            cards.append(make_card("error", text, {"message": text}))
+            _append_match_notice(cards, plan)
+            return cards
         pending = list(clar.get("pending") or []) if isinstance(clar.get("pending"), list) else []
         blob = dict(clar)
         blob["pending"] = pending
@@ -349,6 +383,7 @@ def project_human_cards(
         if plan_id:
             blob["plan_id"] = plan_id
         cards.append(make_card("clarify", text, blob))
+        _append_match_notice(cards, plan)
         return cards
 
     execution = raw.get("execution") if isinstance(raw.get("execution"), dict) else {}
@@ -412,17 +447,16 @@ def project_human_cards(
             confirmable=confirmable,
         )
         text = "\n".join(brief)
-        cards.append(
-            make_card(
-                "plan_ready",
-                text,
-                {
-                    "plan_id": plan_id,
-                    "run_id": run_id,
-                    "confirmable": confirmable,
-                },
-            )
-        )
+        ready_payload: Dict[str, Any] = {
+            "plan_id": plan_id,
+            "run_id": run_id,
+            "confirmable": confirmable,
+        }
+        choice = assumptions.get("statistic_options") if isinstance(assumptions, dict) else None
+        if isinstance(choice, dict) and choice.get("options"):
+            ready_payload["statistic_options"] = choice
+        cards.append(make_card("plan_ready", text, ready_payload))
+        _append_match_notice(cards, plan)
 
     if err:
         cards.append(make_card("error", _error_card_text(err), dict(err)))
@@ -448,6 +482,21 @@ _CARD_SYSTEM_PROMPT = (
     "Keep every qt.ai skill id, plan_id, error code, parameter, and number exactly as written. "
     "Do not add steps, returns, drawdowns, hit counts, or any number that is not already in the card. "
     "Output the rewritten card text only."
+)
+_CLARIFY_FIELDS_SYSTEM_PROMPT = (
+    "Rewrite this qteasy-ai clarification card into Simplified Chinese. "
+    "The input has TEXT and FIELDS sections. FIELDS lines are name|label|hint. "
+    "Change only tone and language of the card text, each label, and each hint. "
+    "Keep every field name exactly as written. Do not add, drop, or rename fields. "
+    "Do not change formats or examples; they are not in the input. "
+    "Keep every qt.ai skill id, plan_id, error code, parameter, and number exactly as written. "
+    "Do not add steps, returns, drawdowns, hit counts, or any number that is not already present. "
+    "Output exactly two sections:\n"
+    "TEXT:\n"
+    "<rewritten card text>\n"
+    "FIELDS:\n"
+    "<name>|<rewritten label>|<rewritten hint>\n"
+    "with one FIELDS line per input field, same names, same order."
 )
 _CLARIFY_OPTIONS_SYSTEM_PROMPT = (
     "Rewrite this qteasy-ai clarification card into Simplified Chinese. "
@@ -511,7 +560,7 @@ def polish_human_cards(
 
     改 ``clarify`` / ``plan_ready`` / ``error`` / ``result`` 的 ``text``。
     ``clarify`` 另可改 ``pending[i].options[].label``；禁止改 ``id`` / ``pending[].name`` /
-    数值；失败整卡回滚为英文。其余 kind 的 ``payload`` 不改。
+    ``pending[].prompt`` / 题序 / 数值；失败整卡回滚为英文。其余 kind 的 ``payload`` 不改。
     result 只读 ``payload.next_mode``：``open`` 时允许改写最后一句 Next，``job`` 只翻译。
 
     Parameters
@@ -547,6 +596,9 @@ def polish_human_cards(
             continue
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         if kind == "clarify":
+            if clarification_skips_polish(payload):
+                out.append(item)
+                continue
             polished = _polish_clarify_card(
                 item,
                 provider=provider,
@@ -598,6 +650,117 @@ def _format_clarify_polish_prompt(text: str, option_rows: Sequence[Tuple[str, st
     for oid, label, _opt, _p, _o in option_rows:
         lines.append(f"{oid}|{label}")
     return "\n".join(lines)
+
+
+def _rows_keep_format(payload: Dict[str, Any]) -> bool:
+    """自由输入格带了格式或例子时，润色不得改这两项。"""
+
+    pending = payload.get("pending") if isinstance(payload.get("pending"), list) else []
+    return any(
+        isinstance(item, dict) and (str(item.get("format") or "") or str(item.get("example") or ""))
+        for item in pending
+    )
+
+
+def _format_field_polish_prompt(text: str, pending: Sequence[Dict[str, Any]]) -> str:
+    """TEXT 加 FIELDS：name|label|hint。"""
+
+    lines = ["TEXT:", str(text or "").rstrip(), "", "FIELDS:"]
+    for row in pending:
+        lines.append(
+            f"{row.get('name')}|{row.get('label') or ''}|{row.get('hint') or ''}"
+        )
+    return "\n".join(lines)
+
+
+def _parse_field_polish_reply(
+    raw: str,
+    *,
+    expected_names: Sequence[str],
+) -> Optional[Tuple[str, Dict[str, Tuple[str, str]]]]:
+    """解析 TEXT:/FIELDS:。名字或顺序不对则返回 None。"""
+
+    body = str(raw or "").strip()
+    fenced = _FENCE_RE.match(body)
+    if fenced:
+        body = str(fenced.group(1) or "").strip()
+    if not body:
+        return None
+    upper = body.upper()
+    text_mark = upper.find("TEXT:")
+    fields_mark = upper.find("FIELDS:")
+    if text_mark < 0 or fields_mark < 0 or fields_mark <= text_mark:
+        return None
+    text_body = body[text_mark + len("TEXT:") : fields_mark].strip()
+    fields_body = body[fields_mark + len("FIELDS:") :].strip()
+    if not text_body:
+        return None
+    parsed: List[Tuple[str, str, str]] = []
+    for line in fields_body.splitlines():
+        row = str(line or "").strip()
+        if not row:
+            continue
+        name, sep, rest = row.partition("|")
+        label, sep2, hint = rest.partition("|")
+        name = name.strip()
+        label = label.strip()
+        hint = hint.strip()
+        if not sep or not sep2 or not name or not label or not hint:
+            return None
+        parsed.append((name, label, hint))
+    names = [item[0] for item in parsed]
+    if names != list(expected_names):
+        return None
+    return text_body, {name: (label, hint) for name, label, hint in parsed}
+
+
+def _polish_clarify_fields(
+    item: Dict[str, Any],
+    *,
+    provider: Any,
+    identity_dir: Any = None,
+) -> Dict[str, Any]:
+    """改写正文、label 和 hint。format 与 example 留在原行上。"""
+
+    text = str(item.get("text") or "")
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    pending = [dict(row) for row in (payload.get("pending") or []) if isinstance(row, dict)]
+    names = [str(row.get("name") or "") for row in pending]
+    try:
+        raw = provider.chat(
+            _format_field_polish_prompt(text, pending),
+            system_prompt=prefix_system_prompt(_CLARIFY_FIELDS_SYSTEM_PROMPT, identity_dir),
+        )
+    except Exception:
+        return item
+    parsed = _parse_field_polish_reply(str(raw or ""), expected_names=names)
+    if parsed is None:
+        return item
+    new_text, fields = parsed
+    if not _card_rewrite_ok(text, new_text, kind="clarify"):
+        return item
+    new_pending: List[Dict[str, Any]] = []
+    for row in pending:
+        name = str(row.get("name") or "")
+        label, hint = fields[name]
+        if not _card_rewrite_ok(str(row.get("label") or ""), label, kind="clarify"):
+            return item
+        if not _card_rewrite_ok(str(row.get("hint") or ""), hint, kind="clarify"):
+            return item
+        cloned = dict(row)
+        cloned["label"] = label
+        cloned["hint"] = hint
+        if row.get("index") is not None:
+            cloned["hint"] = str(row.get("hint") or "")
+        if "prompt" in row:
+            cloned["prompt"] = row.get("prompt")
+        new_pending.append(cloned)
+    out_payload = dict(payload)
+    out_payload["pending"] = new_pending
+    cloned_item = dict(item)
+    cloned_item["text"] = new_text
+    cloned_item["payload"] = out_payload
+    return cloned_item
 
 
 def _parse_clarify_polish_reply(
@@ -707,6 +870,12 @@ def _polish_clarify_card(
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     option_rows = _clarify_option_rows(payload)
     if not option_rows:
+        if _rows_keep_format(payload):
+            return _polish_clarify_fields(
+                item,
+                provider=provider,
+                identity_dir=identity_dir,
+            )
         rewritten = _rewrite_card_text(
             provider,
             text,
@@ -750,6 +919,8 @@ def _polish_clarify_card(
         if not isinstance(src_item, dict) or not isinstance(dst_item, dict):
             continue
         if src_item.get("name") != dst_item.get("name"):
+            return item
+        if str(src_item.get("prompt") or "") != str(dst_item.get("prompt") or ""):
             return item
         src_opts = src_item.get("options") if isinstance(src_item.get("options"), list) else []
         dst_opts = dst_item.get("options") if isinstance(dst_item.get("options"), list) else []
@@ -825,10 +996,238 @@ def _card_rewrite_ok(source: str, rewritten: str, *, kind: str) -> bool:
     return True
 
 
+def question_answer_rows(pending: Any, answers: Sequence[Any]) -> List[Dict[str, str]]:
+    """按题序做成回执行。标签只在这一题的选项里找。
+
+    Parameters
+    ----------
+    pending : dict
+        澄清卡。``pending`` 里是每一题。
+    answers : sequence
+        与题同一顺序的答案。
+
+    Returns
+    -------
+    list of dict
+        ``prompt`` / ``answer`` / ``answer_label``。
+    """
+
+    blob = pending if isinstance(pending, dict) else {}
+    rows = blob.get("pending") if isinstance(blob.get("pending"), list) else []
+    out: List[Dict[str, str]] = []
+    for index, raw in enumerate(answers or []):
+        row = rows[index] if index < len(rows) and isinstance(rows[index], dict) else {}
+        text = str("" if raw is None else raw).strip()
+        label = text
+        for opt in row.get("options") or []:
+            if isinstance(opt, dict) and str(opt.get("id") or "") == text:
+                label = str(opt.get("label") or text)
+                break
+        prompt = str(row.get("prompt") or row.get("label") or "").strip()
+        out.append({"prompt": prompt, "answer": text, "answer_label": label})
+    return out
+
+
+def option_answer_label(pending: Any, answer: str) -> str:
+    """选项 id 换成用户看见的标签。对不上时退回原文。
+
+    Parameters
+    ----------
+    pending : dict
+        澄清卡。``pending`` 里是每一格。
+    answer : str
+        选项 id 或开放输入原文。
+
+    Returns
+    -------
+    str
+        标签或原文。
+    """
+
+    text = str(answer or "").strip()
+    blob = pending if isinstance(pending, dict) else {}
+    for item in blob.get("pending") or []:
+        if not isinstance(item, dict):
+            continue
+        for opt in item.get("options") or []:
+            if isinstance(opt, dict) and str(opt.get("id") or "") == text:
+                return str(opt.get("label") or text)
+    return text
+
+
+def choice_rows(pending_item: Any) -> List[Dict[str, str]]:
+    """一格上的预设项，以及至多一条开放项。
+
+    没有 ``options`` 的格子（日期等）返回空列表。那是一个输入字段，不是开放选项。
+
+    Parameters
+    ----------
+    pending_item : dict
+        ``pending[i]``。
+
+    Returns
+    -------
+    list of dict
+        ``kind`` 为 ``option`` 或 ``open``。
+    """
+
+    row = pending_item if isinstance(pending_item, dict) else {}
+    rows: List[Dict[str, str]] = []
+    for item in row.get("options") or []:
+        if not isinstance(item, dict):
+            continue
+        oid = str(item.get("id") or "").strip()
+        if not oid:
+            continue
+        rows.append(
+            {
+                "kind": "option",
+                "id": oid,
+                "label": str(item.get("label") or oid),
+            }
+        )
+    opened = row.get("open") if isinstance(row.get("open"), dict) else None
+    label = str((opened or {}).get("label") or "").strip()
+    if label:
+        rows.append({"kind": "open", "label": label})
+    return rows
+
+
+def _one_clarify_receipt(text: str, label: str, answer: str) -> str:
+    """一题的回执。有标签时用「用户已选」或 ``Selected``。"""
+
+    shown = str(label or "").strip()
+    raw = str(answer or "").strip()
+    if shown:
+        sample = f"{shown}\n{text or ''}"
+        if _CJK_RE.search(sample):
+            return f"用户已选 {shown}"
+        return f"Selected: {shown}"
+    if raw:
+        return f"Answered: {raw}"
+    return ""
+
+
+def clarify_receipt_line(text: str, payload: Any) -> str:
+    """已答澄清的回执。一题仍是一行；多题按题干逐行列出。
+
+    Parameters
+    ----------
+    text : str
+        澄清卡正文，用来判断中英文。
+    payload : dict
+        ``answers`` 或单个 ``answer`` / ``answer_label``。
+
+    Returns
+    -------
+    str
+        空串表示还没有答案。
+    """
+
+    blob = payload if isinstance(payload, dict) else {}
+    rows = blob.get("answers") if isinstance(blob.get("answers"), list) else []
+    usable = [
+        item
+        for item in rows
+        if isinstance(item, dict) and str(item.get("answer_label") or item.get("answer") or "").strip()
+    ]
+    if len(usable) > 1:
+        lines: List[str] = []
+        for item in usable:
+            shown = str(item.get("answer_label") or item.get("answer") or "").strip()
+            prompt = str(item.get("prompt") or "").strip()
+            lines.append(f"{prompt}: {shown}" if prompt else shown)
+        return "\n".join(lines)
+    if len(usable) == 1:
+        one = usable[0]
+        return _one_clarify_receipt(text, str(one.get("answer_label") or ""), str(one.get("answer") or ""))
+    return _one_clarify_receipt(text, str(blob.get("answer_label") or ""), str(blob.get("answer") or ""))
+
+
+def clarification_needs_answer(blob: Any) -> bool:
+    """``pending`` 里至少有一格带名字时，才是必须回答的澄清。
+
+    Parameters
+    ----------
+    blob : dict
+        澄清载荷。``pending`` 为空或没有名字时为说明，不是中断。
+
+    Returns
+    -------
+    bool
+        有可答项时为 True。
+    """
+
+    if not isinstance(blob, dict):
+        return False
+    pending = blob.get("pending")
+    if not isinstance(pending, list):
+        return False
+    for item in pending:
+        if isinstance(item, dict) and str(item.get("name") or "").strip():
+            return True
+        if isinstance(item, str) and str(item).strip():
+            return True
+    return False
+
+
+def clarification_is_live(session: Any) -> bool:
+    """Task 仍有未关闭的澄清时，run 里的澄清块才是活卡。
+
+    Parameters
+    ----------
+    session : ConversationState or None
+        已加载的会话。
+
+    Returns
+    -------
+    bool
+        没有会话时为 False。没有可答项、或最近一条 clarify 已答或已跳过时为 False。
+    """
+
+    task = getattr(session, "task", None) if session is not None else None
+    pending = getattr(task, "pending_clarification", None) if task is not None else None
+    if not isinstance(pending, dict) or not clarification_needs_answer(pending):
+        return False
+    for row in reversed(getattr(session, "messages", None) or []):
+        if str(row.get("kind") or "") != "clarify":
+            continue
+        status = str((row.get("payload") or {}).get("status") or "")
+        return status not in {"answered", "skipped"}
+    return True
+
+
+def drop_closed_clarification(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """去掉 run 上的澄清块，避免已关闭的卡被再投影成未答。
+
+    Parameters
+    ----------
+    payload : dict
+        Assistant raw dict。
+
+    Returns
+    -------
+    dict
+        副本。顶层和 ``plan.assumptions`` 都不再带 ``clarification``。
+    """
+
+    raw = dict(payload or {})
+    raw.pop("clarification", None)
+    plan = raw.get("plan")
+    if isinstance(plan, dict):
+        plan = dict(plan)
+        assumptions = dict(plan.get("assumptions") or {})
+        assumptions.pop("clarification", None)
+        plan["assumptions"] = assumptions
+        raw["plan"] = plan
+    return raw
+
+
 def format_human_cards(
     cards: Sequence[Dict[str, Any]],
     *,
     payload: Optional[Dict[str, Any]] = None,
+    debug: bool = False,
 ) -> str:
     """把已投影的人读卡打成 CLI stdout 文本。
 
@@ -838,6 +1237,8 @@ def format_human_cards(
         ``project_human_cards`` 结果。
     payload : dict, optional
         用于 MODE 行。
+    debug : bool, default False
+        为 True 时，结果卡再附上已保存的分类、填槽和校验原文。
 
     Returns
     -------
@@ -856,9 +1257,16 @@ def format_human_cards(
             lines.append(text)
         if kind == "clarify":
             blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-            answer = str(blob.get("answer") or "").strip()
-            if answer:
-                lines.append(f"Answered: {answer}")
+            receipt = clarify_receipt_line(text, blob)
+            if receipt:
+                lines.append(receipt)
+        if kind == "result":
+            blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            shown = _run_view_for_card(blob)
+            if shown is not None:
+                block = render_run_view(shown, debug=debug).rstrip()
+                if block:
+                    lines.append(block)
         if kind == "ask":
             sources = []
             blob = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -867,6 +1275,19 @@ def format_human_cards(
                 lines.append("Sources: " + ", ".join(sources))
     cleaned = [str(line).rstrip() for line in lines if str(line).strip()]
     return "\n".join(cleaned) + "\n"
+
+
+def _run_view_for_card(blob: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """结果卡上的逐步视图。有产物索引时用卡上的 steps。"""
+
+    view = blob.get("run_view") if isinstance(blob.get("run_view"), dict) else None
+    if view is None:
+        return None
+    shown = dict(view)
+    steps = blob.get("steps")
+    if isinstance(steps, list) and steps:
+        shown["steps"] = steps
+    return shown
 
 
 def _mode_line(payload: Dict[str, Any], cards: Sequence[Dict[str, Any]]) -> str:
@@ -913,6 +1334,38 @@ def _is_ask_payload(payload: Dict[str, Any]) -> bool:
     if "answer" in payload and "plan" not in payload:
         return True
     return False
+
+
+def _match_notice_card(plan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """已记下的任务、来源和理由。语言只看计划上的原句。
+
+    Parameters
+    ----------
+    plan : dict
+        含 ``user_query`` 与 ``planner_trace`` 的计划。
+
+    Returns
+    -------
+    dict or None
+        ``stage_id=match`` 的 ``mode_notice``。没有任务种类时不发卡。
+    """
+
+    if not isinstance(plan, dict):
+        return None
+    trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), dict) else {}
+    asked = str(plan.get("user_query") or "")
+    text = render_match_notice(trace, chinese=bool(_CJK_RE.search(asked)))
+    if not text:
+        return None
+    return make_card("mode_notice", text, {"stage_id": "match"})
+
+
+def _append_match_notice(cards: List[Dict[str, Any]], plan: Dict[str, Any]) -> None:
+    """在当前这张卡后面加上同一句匹配说明。"""
+
+    notice = _match_notice_card(plan)
+    if notice is not None:
+        cards.append(notice)
 
 
 def _clarification_blob(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1220,7 +1673,13 @@ def _slim_plan_ready_lines(
         "To execute, say so in Plan mode (run this plan / 执行上面的计划) or use Confirm."
     )
     lines.append("To discuss only, say just discuss / 本次只讨论 (Ask; no plan).")
-    del plan
+    assumptions = plan.get("assumptions") if isinstance(plan.get("assumptions"), dict) else {}
+    choice = assumptions.get("statistic_options") if isinstance(assumptions, dict) else None
+    if isinstance(choice, dict) and choice.get("options"):
+        current = str(choice.get("current") or "")
+        shown = "returns" if current.endswith("returns") else "volatility"
+        lines.append(f"Statistic: {shown}. Reply 收益 or 波动 to switch that step.")
+    lines.extend(committed_fact_lines(card_steps))
     return lines
 
 
@@ -1246,6 +1705,18 @@ def _result_next(plan: Dict[str, Any], status: str) -> Tuple[Optional[str], Opti
     return _OPEN_RESULT_NEXT, "open"
 
 
+def _committed_role(plan: Dict[str, Any]) -> str:
+    """组合步已提交输入的角色。没有组合步时是 ``none``。"""
+
+    for row in _plan_step_rows(plan):
+        if str(row.get("skill_name") or "") != "qt.ai.hp.portfolio":
+            continue
+        inputs = row.get("inputs") if isinstance(row.get("inputs"), dict) else {}
+        _code, role = committed_benchmark_role(inputs)
+        return role
+    return "none"
+
+
 def _slim_result_lines(
     *,
     plan: Dict[str, Any],
@@ -1255,20 +1726,23 @@ def _slim_result_lines(
     """result 人读句：按 expected_artifact 说明产物，并保留已有标量。"""
 
     status = str(execution.get("status") or "").strip() or "unknown"
-    sentences = [
-        sentence
-        for sentence in (
-            _result_step_sentence(item, registry)
-            for item in (execution.get("steps") or [])
-            if isinstance(item, dict)
-        )
-        if sentence
-    ]
+    facts = committed_fact_lines(_plan_step_rows(plan))
+    role = _committed_role(plan)
+    sentences: List[str] = []
+    for item in execution.get("steps") or []:
+        if not isinstance(item, dict):
+            continue
+        sentence = drop_role_conflicts(_result_step_sentence(item, registry), role)
+        if sentence:
+            sentences.append(sentence)
     lines: List[str] = []
     if status == "success":
-        if sentences:
+        if sentences or facts:
             for sentence in sentences:
                 lines.append(f"**Run succeeded.** {sentence}")
+                lines.append("")
+            lines.extend(facts)
+            if facts:
                 lines.append("")
         else:
             lines.extend(["**Run succeeded.**", "", "No rows or metrics in the result.", ""])
@@ -1279,15 +1753,15 @@ def _slim_result_lines(
             lines.append("")
         err = _execution_error_message(execution)
         if err:
-            lines.extend([f"Error: {err[0]}", "", err[1], ""])
+            lines.extend([f"Error: {err}", ""])
     sentence, next_mode = _result_next(plan, status)
     if sentence:
         lines.append(sentence)
     return lines, next_mode
 
 
-def _execution_error_message(execution: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-    """失败步的原文和一句固定解读。没有 message 时不编错误。"""
+def _execution_error_message(execution: Dict[str, Any]) -> str:
+    """失败步记录里的 ``error.message``。没有原文时为空串。"""
 
     for raw in execution.get("steps") or []:
         if not isinstance(raw, dict):
@@ -1295,24 +1769,9 @@ def _execution_error_message(execution: Dict[str, Any]) -> Optional[Tuple[str, s
         result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
         err = result.get("error") if isinstance(result.get("error"), dict) else None
         message = str((err or {}).get("message") or "").strip()
-        if not message:
-            continue
-        return message, _failure_hint(err or {})
-    return None
-
-
-def _failure_hint(err: Dict[str, Any]) -> str:
-    """按错误码或原文关键词选一句英文解读。"""
-
-    code = str(err.get("code") or "")
-    message = str(err.get("message") or "").lower()
-    if code.endswith("NOT_FOUND") or "not found" in message or "unknown" in message:
-        return "Check the name, then edit the blue message and send it again."
-    if "token" in message:
-        return "Set the Tushare token, then edit the blue message and send it again."
-    if code == "ALLOW_GATE_BLOCKED" or "allow_" in message:
-        return "Confirm the plan manually, or enable the matching allow flag, then edit the blue message and send it again."
-    return "Edit the blue message (pencil) and send it again."
+        if message:
+            return message
+    return ""
 
 
 def _result_step_sentence(step: Dict[str, Any], registry: Any) -> str:

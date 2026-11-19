@@ -38,6 +38,7 @@ class IntentDecision:
     source: str = "rule"
     rationale: str = ""
     llm_called: bool = False
+    protocol: str = ""
 
 
 class IntentCatalog:

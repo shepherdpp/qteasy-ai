@@ -234,6 +234,116 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(loaded.session_id, "web-demo")
             self.assertTrue(any(m.get("kind") == "user_text" for m in loaded.messages))
 
+    def test_post_sessions_creates_empty_file(self) -> None:
+        """POST /v1/sessions 立刻落盘空会话；未知 id 的 GET 为 404。"""
+
+        print("\n[TestAiWorkbenchHttp] create empty session")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            created = client.post("/v1/sessions")
+            body = created.json()
+            sid = str(body.get("session_id") or "")
+            print(" status:", created.status_code, "id:", sid)
+            print(" name:", body.get("name"), "mtime:", body.get("mtime"), "last_user:", body.get("last_user"))
+            self.assertEqual(created.status_code, 200)
+            self.assertTrue(body.get("ok"))
+            self.assertTrue(sid.startswith("web-"))
+            self.assertEqual(body.get("name"), sid)
+            self.assertEqual(body.get("last_user"), "")
+            self.assertGreater(float(body.get("mtime") or 0), 0)
+            path = store.sessions_dir / f"{sid}.json"
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            print(" file:", path.name, "messages:", raw.get("messages"), "name:", repr(raw.get("name")))
+            self.assertTrue(path.is_file())
+            self.assertEqual(raw.get("messages"), [])
+            self.assertEqual(raw.get("name"), "")
+            listed = client.get("/v1/sessions").json()
+            ids = [row.get("session_id") for row in (listed.get("sessions") or [])]
+            print(" listed:", ids)
+            self.assertIn(sid, ids)
+            second = client.post("/v1/sessions").json()
+            sid2 = str(second.get("session_id") or "")
+            print(" second id:", sid2)
+            self.assertTrue(sid2.startswith("web-"))
+            self.assertNotEqual(sid2, sid)
+            missing = client.get("/v1/session/no-such-session")
+            print(" missing:", missing.status_code, missing.json().get("error"))
+            self.assertEqual(missing.status_code, 404)
+            self.assertEqual((missing.json().get("error") or {}).get("code"), "SESSION_NOT_FOUND")
+            got = client.get(f"/v1/session/{sid}")
+            print(" get created:", got.status_code, "transcript:", got.json().get("transcript"))
+            self.assertEqual(got.status_code, 200)
+            self.assertEqual(got.json().get("transcript"), [])
+
+    def test_kernel_busy_lets_session_get_through(self) -> None:
+        """慢 Ask 占住内核时，会话 GET 仍返回，第二次 Ask 为 409。"""
+
+        print("\n[TestAiWorkbenchHttp] kernel busy keeps session GET alive")
+        import threading
+        import time
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, assistant = self._client(temp_dir)
+            entered = threading.Event()
+            release = threading.Event()
+
+            def slow_ask(*_args: object, **_kwargs: object) -> dict:
+                entered.set()
+                release.wait(5)
+                return {"mode": "ask", "answer": "done", "sources": ["stub"]}
+
+            assistant.ask = slow_ask
+            box: dict = {}
+
+            with client:
+                created = client.post("/v1/sessions").json()
+                other = client.post("/v1/sessions").json()
+                sid = str(created.get("session_id") or "")
+                sid2 = str(other.get("session_id") or "")
+                print(" sessions:", sid, sid2)
+                self.assertTrue(sid)
+                self.assertNotEqual(sid2, sid)
+
+                def post_ask() -> None:
+                    box["res"] = client.post(
+                        "/v1/ask",
+                        json={"query": "hold the kernel", "session_id": sid},
+                    )
+
+                worker = threading.Thread(target=post_ask)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(3))
+                    started = time.monotonic()
+                    listed = client.get("/v1/sessions")
+                    elapsed = time.monotonic() - started
+                    rows = {row.get("session_id"): row for row in (listed.json().get("sessions") or [])}
+                    print(" list elapsed:", round(elapsed, 3), "kernel:", rows.get(sid, {}).get("kernel_busy"))
+                    self.assertLess(elapsed, 2.0)
+                    self.assertEqual(listed.status_code, 200)
+                    self.assertTrue(rows[sid].get("kernel_busy"))
+                    self.assertFalse(rows[sid2].get("kernel_busy"))
+                    denied = client.post("/v1/ask", json={"query": "second", "session_id": sid2})
+                    print(" second:", denied.status_code, (denied.json().get("error") or {}).get("code"))
+                    self.assertEqual(denied.status_code, 409)
+                    self.assertEqual((denied.json().get("error") or {}).get("code"), "KERNEL_BUSY")
+                    other_view = client.get(f"/v1/session/{sid2}")
+                    print(" other view:", other_view.status_code, other_view.json().get("kernel_busy"))
+                    self.assertEqual(other_view.status_code, 200)
+                    self.assertFalse(other_view.json().get("kernel_busy"))
+                finally:
+                    release.set()
+                    worker.join(5)
+                first = box.get("res")
+                print(" first:", None if first is None else first.status_code)
+                self.assertIsNotNone(first)
+                self.assertEqual(first.status_code, 200)
+                cleared = client.get("/v1/sessions").json()
+            flags = [bool(row.get("kernel_busy")) for row in (cleared.get("sessions") or [])]
+            print(" cleared flags:", flags)
+            self.assertEqual(len(flags), 2)
+            self.assertFalse(any(flags))
+
     def test_workspace_orphan_run_has_human_title_and_mtime(self) -> None:
         """无 plan.md 的 run 在 workspace 上带人话 run_title 与文件 mtime，且不造 plan 项。"""
 
@@ -328,6 +438,91 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertIn("user_text", kinds)
             self.assertTrue(any(k in {"ask", "ask_text", "clarify", "clarification", "plan_ready"} for k in kinds))
             self.assertTrue(any("Plan ready" in str(t) or "Clarif" in str(t) or "qteasy" in str(t).lower() for t in texts))
+
+    def test_get_session_keeps_transcript_when_run_failed(self) -> None:
+        """失败 run 的 GET 仍是快照：transcript 与顶层 error、sidebar job 同时在。"""
+
+        print("\n[TestAiWorkbenchHttp] failed run session keeps transcript")
+        from qteasy_ai.session import ConversationState, SessionStore
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, store, _asst = self._client(temp_dir)
+            sid = "s-failed-run"
+            plan_id = "plan_failedsnap01"
+            rid = "run_failedsnap01"
+            store.save_run(
+                rid,
+                {
+                    "run_id": rid,
+                    "plan": {
+                        "plan_id": plan_id,
+                        "steps": [
+                            {
+                                "step_id": "step_1",
+                                "skill_name": "qt.ai.data.kline",
+                                "inputs": {"freq": "daily"},
+                            }
+                        ],
+                    },
+                    "execution": {
+                        "run_id": rid,
+                        "plan_id": plan_id,
+                        "status": "partial_failed",
+                        "steps": [
+                            {
+                                "step_id": "step_1",
+                                "skill_name": "qt.ai.data.kline",
+                                "result": {
+                                    "ok": False,
+                                    "skill_name": "qt.ai.data.kline",
+                                    "error": {
+                                        "code": "KLINE_FETCH_FAILED",
+                                        "message": "invalid freq",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                },
+            )
+            conv = ConversationState.empty(sid)
+            conv.start_task(query="draw the index", job="data.export")
+            conv.task.plan_id = plan_id
+            conv.task.run_id = rid
+            conv.task.mark_done()
+            conv.append_messages(
+                [
+                    {"kind": "user_text", "text": "draw the index", "payload": {}},
+                    {
+                        "kind": "error",
+                        "text": "invalid freq",
+                        "payload": {
+                            "code": "KLINE_FETCH_FAILED",
+                            "message": "invalid freq",
+                        },
+                    },
+                ]
+            )
+            SessionStore(store).save(conv)
+            res = client.get(f"/v1/session/{sid}")
+            body = res.json()
+            rows = body.get("transcript") or []
+            kinds = [row.get("kind") for row in rows]
+            texts = [row.get("text") for row in rows]
+            err = body.get("error") or {}
+            job = ((body.get("sidebar") or {}).get("active_intent") or {}).get("job")
+            print(" status:", res.status_code, "ok:", body.get("ok"))
+            print(" kinds:", kinds)
+            print(" texts:", texts)
+            print(" error code:", err.get("code"), "message:", err.get("message"))
+            print(" job:", job)
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(body.get("ok"))
+            self.assertEqual(kinds, ["user_text", "error"])
+            self.assertEqual(texts, ["draw the index", "invalid freq"])
+            self.assertEqual(err.get("code"), "KLINE_FETCH_FAILED")
+            self.assertEqual(err.get("message"), "invalid freq")
+            self.assertEqual(job, "data.export")
 
     def test_run_plan_optional_sse_keeps_default_json(self) -> None:
         """?stream=1 返回 SSE；默认 POST 仍是 JSON 且含 steps。"""
@@ -454,7 +649,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertNotIn("event: state", text)
 
     def test_confirm_list_strategies_persists_artifact(self) -> None:
-        """两次同文案 Plan 后 Confirm：messages 含 Finished，Artifacts 含策略表。"""
+        """同文案再送一次仍是这一份可确认计划，Confirm 后 Artifacts 含策略表。"""
 
         print("\n[TestAiWorkbenchHttp] confirm list strategies artifact")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -468,14 +663,16 @@ class TestAiWorkbenchHttp(unittest.TestCase):
                 "/v1/plan",
                 json={"query": "list built-in strategies", "session_id": sid},
             ).json()
+            first_id = (first.get("plan_card") or {}).get("plan_id")
             plan_id = (second.get("plan_card") or {}).get("plan_id")
-            print(" first plan:", (first.get("plan_card") or {}).get("plan_id"))
+            print(" first plan:", first_id)
             print(" second plan:", plan_id)
             self.assertTrue(plan_id)
+            self.assertEqual(plan_id, first_id)
             loaded = asst.session_store.load(sid)
             ready = [m for m in loaded.messages if m.get("kind") == "plan_ready"]
             print(" plan ready count:", len(ready), ready)
-            self.assertGreaterEqual(len(ready), 2)
+            self.assertGreaterEqual(len(ready), 1)
             self.assertTrue(all("Plan ready." in str(m.get("text") or "") for m in ready))
             self.assertTrue(all("plan_id:" in str(m.get("text") or "") for m in ready))
             user_lines = [m for m in loaded.messages if m.get("kind") == "user_text"]
@@ -568,27 +765,10 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             ]
             print(" plan_id:", plan_id, "skills:", skills)
             self.assertTrue(plan_id)
-            self.assertIn("qt.ai.strategy_meta.get", skills)
-            ran = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
-            body = ran.json()
-            print(" exec:", (body.get("execution") or {}).get("status"))
-            print(" artifacts:", body.get("artifacts"))
-            self.assertEqual(ran.status_code, 200)
-            self.assertEqual((body.get("execution") or {}).get("status"), "success")
-            arts = body.get("artifacts") or []
-            self.assertTrue(arts)
-            table = next((item for item in arts if item.get("type") == "data_table"), None)
-            print(" table art type:", (table or {}).get("type"))
-            self.assertIsNotNone(table)
-            summary = (table.get("preview") or {}).get("data_summary") or {}
-            print(" summary:", summary)
-            self.assertEqual(summary.get("strategy_id"), "bband")
-            rows = (table.get("preview") or {}).get("preview_rows") or []
-            print(" doc lines head:", rows[:3])
-            self.assertTrue(rows)
-            ws = client.get("/v1/workspace", params={"session_id": sid}).json()
-            print(" workspace:", len(ws.get("artifacts") or []))
-            self.assertTrue(ws.get("artifacts"))
+            self.assertEqual(skills, ["qt.ai.system.fallback"])
+            missing = ((planned.get("plan_card") or {}).get("steps") or [{}])[0].get("inputs", {}).get("missing_info")
+            print(" missing:", missing)
+            self.assertEqual(missing, "strategy_id")
 
     def test_http_error_includes_next_action(self) -> None:
         """4xx 错误含英文 next_action。"""
@@ -856,7 +1036,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertFalse(any(item.get("run_id") == run_id for item in arts_b))
 
     def test_plan_patches_change_slot_without_user_text(self) -> None:
-        """POST /v1/plan 带 patches、无 query：回执改槽，不追加 user_text，plan_id 不变。"""
+        """POST /v1/plan 带 patches、无 query：回执改槽，不追加 user_text，plan_id 不变。之后的下载句升级同一份计划。"""
 
         print("\n[TestAiWorkbenchHttp] plan patches control plane")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -865,7 +1045,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             first = client.post(
                 "/v1/plan",
                 json={
-                    "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
+                    "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
                     "session_id": sid,
                 },
             )
@@ -903,12 +1083,12 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
             self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))
 
-            via_asst = asst.plan("", response_style="raw", session_id=sid, patches={"slow": 50})
+            via_asst = asst.plan("", response_style="raw", session_id=sid, patches={"end": "20241231"})
             session = asst.session_store.load(sid)
             print(" asst patches plan_id:", (via_asst.get("plan") or {}).get("plan_id"))
-            print(" slow slot:", session.task.slots["slow"].value if session.task and "slow" in session.task.slots else None)
+            print(" end slot:", session.task.slots["end"].value if session.task and "end" in session.task.slots else None)
             self.assertEqual(str((via_asst.get("plan") or {}).get("plan_id") or ""), plan_id)
-            self.assertEqual(int(session.task.slots["slow"].value), 50)
+            self.assertEqual(str(session.task.slots["end"].value), "20241231")
 
             spoken = client.post(
                 "/v1/plan",
@@ -922,7 +1102,8 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" spoken job:", session.task.job if session.task else None)
             print(" users spoken:", [row.get("text") for row in users_spoken])
             self.assertEqual(spoken.status_code, 200)
-            self.assertNotEqual(spoken_id, plan_id)
+            self.assertEqual(spoken_id, plan_id)
+            self.assertEqual(session.task.job if session.task else None, "data.refill")
             self.assertGreater(len(users_spoken), len(users_after))
 
             empty = client.post("/v1/plan", json={"session_id": sid})
@@ -1591,6 +1772,30 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(stopped.status_code, 200)
             self.assertTrue(stopped.json().get("ok"))
             self.assertEqual(calls["n"], 1)
+
+    def test_system_versions(self) -> None:
+        """GET /v1/system 返回版本、发布日，以及当前数据源连接。"""
+
+        print("\n[TestAiWorkbenchHttp] system versions")
+        import qteasy
+        from qteasy_ai import __version__ as ai_version
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client, _store, _asst = self._client(temp_dir)
+            res = client.get("/v1/system")
+            body = res.json()
+            source = (body.get("datasource") or {}).get("source")
+            print(" status_code:", res.status_code)
+            print(" qteasy_ai:", body.get("qteasy_ai"), "released:", body.get("qteasy_ai_released"))
+            print(" qteasy:", body.get("qteasy"), "released:", body.get("qteasy_released"))
+            print(" datasource:", body.get("datasource"), "expected source:", qteasy.QT_DATA_SOURCE.connection_type)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(body.get("qteasy_ai"), ai_version)
+            self.assertEqual(body.get("qteasy"), qteasy.__version__)
+            self.assertEqual(body.get("qteasy_released"), "Oct 3, 2026")
+            self.assertEqual(body.get("qteasy_ai_released"), "Nov 19, 2026")
+            self.assertEqual((body.get("datasource") or {}).get("status"), "connected")
+            self.assertEqual(source, qteasy.QT_DATA_SOURCE.connection_type)
 
 
 if __name__ == "__main__":

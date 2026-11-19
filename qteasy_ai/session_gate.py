@@ -5,10 +5,10 @@
 # Contact: jackie.pengzhao@gmail.com
 # Created: 2026-09-05
 # Desc:
-# 跟进句分类：填槽 / 新 Task / 执行 / 只讨论 / 跳过澄清。
+# 跟进句分类：升级未执行计划 / 放弃 / 新 Task / 执行 / 只讨论 / 跳过澄清。
 # ======================================
 
-"""会话门叠在 H′ 之上。填槽不调用 classify；Composer 换题开新 Task。"""
+"""会话门叠在 H′ 之上。未执行计划的下一句升级同一份计划。"""
 
 from __future__ import annotations
 
@@ -82,17 +82,20 @@ class SessionGate:
         hatch = _hatch_decision(session, text)
         if hatch is not None:
             return hatch
-        if answers_pending_slot(session, text):
-            patches = extract_patches(text)
-            missing = list(session.task.missing) if session.task is not None else []
-            if "strategy_id" in missing and _STRATEGY_TOKEN_RE.match(text) and "strategy_id" not in patches:
-                patches["strategy_id"] = text
-            return GateDecision(kind="fill_slot", patches=patches, rationale="answers_slot")
         status = session.task_status()
-        if status == "running" and bool(getattr(session.task, "high_side_effect", False)):
+        high = bool(session.task is not None and getattr(session.task, "high_side_effect", False))
+        if status == "running" and high:
             if is_live_backgrounded(session.session_id):
                 return GateDecision(kind="new_intent", rationale="background_run")
             return GateDecision(kind="block_running", rationale="high_side_effect_running")
+        if session.task is None or status in {"done", "cancelled", ""}:
+            return GateDecision(kind="new_intent", rationale="composer_new_task")
+        if status == "running":
+            return GateDecision(kind="new_intent", rationale="composer_new_task")
+        if status in {"clarifying", "ready"} and is_abandon_plan(text):
+            return GateDecision(kind="abandon_plan", rationale="abandon_plan")
+        if status in {"clarifying", "ready"}:
+            return GateDecision(kind="revise_plan", rationale="revise_plan")
         return GateDecision(kind="new_intent", rationale="composer_new_task")
 
 
@@ -175,6 +178,35 @@ def is_skip_clarify(text: str) -> bool:
     return compact in {"skip", "跳过", "跳过吧", "skipit"}
 
 
+_ABANDON_PHRASES = {
+    "放弃当前计划",
+    "放弃这份计划",
+    "放弃并重开",
+    "放弃当前计划并重开",
+    "abandon this plan",
+    "abandon the plan",
+}
+
+
+def is_abandon_plan(text: str) -> bool:
+    """整句是放弃当前计划。去掉空白和句号后必须正好是其中一句。
+
+    Parameters
+    ----------
+    text : str
+        用户原文。
+
+    Returns
+    -------
+    bool
+        整句放弃时为 True。
+    """
+
+    compact = re.sub(r"[\s。.!！]", "", str(text or "")).lower()
+    folded = {re.sub(r"\s+", "", item).lower() for item in _ABANDON_PHRASES}
+    return bool(compact) and compact in folded
+
+
 def _hatch_decision(session: ConversationState, text: str) -> Optional[GateDecision]:
     """模式缺口与 skip。"""
 
@@ -238,6 +270,48 @@ def extract_patches(text: str) -> Dict[str, Any]:
     named = re.search(r"(?:named|叫)\s+([A-Za-z0-9_]+)", text, flags=re.IGNORECASE)
     if named:
         patches["name"] = named.group(1)
+    return patches
+
+
+def _current_pending_row(session: ConversationState) -> Optional[Dict[str, Any]]:
+    """澄清卡当前这一页。step_index 从 1 起。"""
+
+    task = session.task
+    if task is None or not isinstance(task.pending_clarification, dict):
+        return None
+    pending = task.pending_clarification
+    rows = [item for item in (pending.get("pending") or []) if isinstance(item, dict)]
+    if not rows:
+        return None
+    index = int(pending.get("step_index") or 1)
+    if index < 1 or index > len(rows):
+        index = 1
+    return rows[index - 1]
+
+
+def _pending_slot_names(session: ConversationState) -> List[str]:
+    """当前卡片还在问的槽名。没有行时用 missing。"""
+
+    task = session.task
+    if task is None:
+        return []
+    pending = task.pending_clarification if isinstance(task.pending_clarification, dict) else {}
+    names = [
+        str(item.get("name") or "")
+        for item in (pending.get("pending") or [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    if names:
+        return names
+    return [str(item) for item in (task.missing or [])]
+
+
+def new_task_patches(text: str) -> Dict[str, Any]:
+    """新任务不把代码、频率和日期标成已确认。"""
+
+    patches = extract_patches(text)
+    for key in ("shares", "freq", "start", "end"):
+        patches.pop(key, None)
     return patches
 
 

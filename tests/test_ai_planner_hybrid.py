@@ -23,6 +23,12 @@ def _llm_job(job: str) -> str:
     return json.dumps({"job": job}, ensure_ascii=False)
 
 
+def _clause(text: str) -> str:
+    """整句是办事，没有附带提问。"""
+
+    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
+
+
 class TestAiPlannerHybrid(unittest.TestCase):
     """测试 Job 分类 + 规则出图。"""
 
@@ -33,29 +39,31 @@ class TestAiPlannerHybrid(unittest.TestCase):
         """0 命中 + LLM Job=data.summary：出图且 side_effects 来自 registry。"""
 
         print("\n[TestAiPlannerHybrid] llm summary job")
-        fake = FakeLLMProvider(replies=[_llm_job("data.summary")])
+        query = "xyzzy unmatched formula 000300.SH"
+        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("data.summary")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("xyzzy unmatched formula 12345", mode="plan")
+        plan = planner.build_plan(query, mode="plan")
         step = plan.steps[0]
-        meta = self.registry.get_metadata("qt.ai.data.summary_kline")
         print(" intent:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("source"))
-        print(" skill:", step.skill_name)
+        print(" skills:", [item.skill_name for item in plan.steps])
         print(" side_effects:", step.side_effects)
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
         self.assertEqual(plan.planner_trace.get("source"), "llm")
-        self.assertEqual(step.skill_name, "qt.ai.data.summary_kline")
-        self.assertEqual(step.side_effects, meta.side_effects)
-        self.assertTrue(fake.prompts)
-        self.assertIn("data.summary:", fake.prompts[0])
-        self.assertNotIn("qt.ai.backtest.run_builtin:", fake.prompts[0])
+        self.assertEqual(step.skill_name, "qt.ai.system.fallback")
+        self.assertEqual(step.inputs.get("missing_info"), "shares")
+        catalog = next(text for text in fake.prompts if text.startswith("Official and system Job ids:"))
+        self.assertTrue(any(text.startswith("Slot protocol") for text in fake.prompts))
+        self.assertIn("data.summary:", catalog)
+        self.assertNotIn("qt.ai.backtest.run_builtin:", catalog)
 
     def test_llm_unknown_job_clarifies_not_skill_menu(self) -> None:
         """未知 Job id → clarify，不得落到 skill 菜单。"""
 
         print("\n[TestAiPlannerHybrid] unknown job clarify")
-        fake = FakeLLMProvider(replies=[_llm_job("qt.ai.invented.skill")])
+        query = "xyzzy unmatched formula 12345"
+        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("qt.ai.invented.skill")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("xyzzy unmatched formula 12345", mode="plan")
+        plan = planner.build_plan(query, mode="plan")
         print(" skills:", [s.skill_name for s in plan.steps])
         print(" intent:", plan.planner_trace.get("intent_job"), plan.steps[0].inputs)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
@@ -63,12 +71,13 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertNotEqual(plan.planner_trace.get("intent_job"), "data.summary")
 
     def test_gold_refill_without_dates_still_clarify(self) -> None:
-        """下载缺日期仍 clarify date_range。"""
+        """下载缺日期仍 clarify，pending 是 start 与 end。"""
 
         print("\n[TestAiPlannerHybrid] refill missing dates")
-        fake = FakeLLMProvider(replies=[_llm_job("data.refill")])
+        query = "download A-share daily data to local datasource"
+        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("data.refill")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("download A-share daily data to local datasource", mode="plan")
+        plan = planner.build_plan(query, mode="plan")
         step = plan.steps[0]
         print(" skill:", step.skill_name, "inputs:", step.inputs)
         print(" intent:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("source"))
@@ -77,7 +86,14 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertEqual(plan.planner_trace.get("source"), "llm")
         self.assertEqual(step.skill_name, "qt.ai.system.fallback")
         self.assertEqual(step.inputs.get("fallback_action"), "clarify_required")
-        self.assertEqual(step.inputs.get("missing_info"), "date_range")
+        self.assertEqual(step.inputs.get("missing_info"), "start|end")
+        pending = [
+            str(item.get("name") or "")
+            for item in ((plan.assumptions.get("clarification") or {}).get("pending") or [])
+            if isinstance(item, dict)
+        ]
+        self.assertEqual(pending, ["start", "end"])
+        self.assertNotEqual(step.inputs.get("missing_info"), "date_range")
         self.assertTrue(fake.prompts)
 
     def test_no_provider_p0_skill_sequence_matches_rules(self) -> None:
@@ -93,18 +109,18 @@ class TestAiPlannerHybrid(unittest.TestCase):
         print(" none:", names_none)
         print(" intent:", rule_plan.planner_trace.get("intent_job"), rule_plan.planner_trace.get("source"))
         self.assertEqual(names_none, names_rule)
-        self.assertEqual(names_none, ["qt.ai.backtest.run_builtin", "qt.ai.insight.summarize_backtest"])
+        self.assertEqual(names_none, ["qt.ai.system.fallback"])
         self.assertEqual(rule_plan.planner_trace.get("intent_job"), "backtest.builtin")
         self.assertEqual(rule_plan.planner_trace.get("source"), "rule")
-        self.assertEqual(rule_plan.steps[0].inputs.get("strategy_id").lower(), "macd")
-        self.assertEqual(hybrid_none.steps[0].inputs.get("asset_pool"), "000300.SH")
+        self.assertEqual(rule_plan.steps[0].inputs.get("missing_info"), "strategy_id")
+        self.assertEqual(hybrid_none.steps[0].inputs.get("missing_info"), "strategy_id")
 
     def test_screen_paraphrase_mode_d_uses_llm_job(self) -> None:
         """筛股改写句：Mode-D 信 LLM Job，再走同一菜谱。"""
 
         print("\n[TestAiPlannerHybrid] screen Mode-D llm job")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
-        fake = FakeLLMProvider(replies=[_llm_job("research.screen")])
+        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("research.screen")])
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [s.skill_name for s in hybrid.steps]
         print(" skills:", names)
@@ -113,10 +129,9 @@ class TestAiPlannerHybrid(unittest.TestCase):
         print(" prompts:", len(fake.prompts))
         self.assertEqual(hybrid.planner_trace.get("intent_job"), "research.screen")
         self.assertEqual(hybrid.planner_trace.get("source"), "llm")
-        self.assertEqual(names[0], "qt.ai.research.universe_filter")
-        self.assertEqual(hybrid.steps[0].inputs.get("industry"), "公共交通")
-        self.assertIn("qt.ai.research.price_predicate", names)
-        self.assertTrue(fake.prompts)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(hybrid.steps[0].inputs.get("missing_info"), "industry|threshold")
+        self.assertTrue(any(text.startswith("Slot protocol") for text in fake.prompts))
         self.assertNotIn("recipe_slots_from", hybrid.planner_trace)
 
     def test_zero_hit_hello_clarifies(self) -> None:
@@ -133,10 +148,11 @@ class TestAiPlannerHybrid(unittest.TestCase):
         """分类 prompt 含 Job 一行定义，不含扁平 skill 菜单。"""
 
         print("\n[TestAiPlannerHybrid] job catalog prompt")
-        fake = FakeLLMProvider(replies=[_llm_job("data.summary")])
+        query = "xyzzy unmatched formula 12345"
+        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("data.summary")])
         planner = Planner(self.registry, provider=fake, env_facts={})
-        plan = planner.build_plan("xyzzy unmatched formula 12345", mode="plan")
-        prompt = fake.prompts[0]
+        plan = planner.build_plan(query, mode="plan")
+        prompt = next(text for text in fake.prompts if text.startswith("Official and system Job ids:"))
         print(" prompt excerpt:", prompt[:400])
         print(" plan skill:", plan.steps[0].skill_name)
         self.assertIn("- data.summary:", prompt)

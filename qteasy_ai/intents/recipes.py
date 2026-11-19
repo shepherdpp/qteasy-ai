@@ -12,10 +12,12 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from ..intent_engine import IntentDecision
+from ..skills.env_guide import DEFAULT_CORE_TABLES
 
 if TYPE_CHECKING:
     from ..planner import Planner
@@ -137,26 +139,9 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
             )
         ]
     if job == "env.ready":
-        return [
-            planner._make_step(step_id="step_1", skill_name="qt.ai.env.check_tushare", inputs={}),
-            planner._make_step(step_id="step_2", skill_name="qt.ai.env.overview_tables", inputs={}),
-        ]
-    if job == "data.summary":
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.data.summary_kline",
-                inputs=planner._market_inputs(query),
-            )
-        ]
-    if job == "data.export":
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.visual.export_kline",
-                inputs=planner._export_kline_inputs(query),
-            )
-        ]
+        return env_ready_steps(planner)
+    if job in {"data.summary", "data.export"}:
+        return _diagnosis_steps(planner, query, job)
     if job == "data.refill":
         steps = planner._infer_refill_steps(query=query, q_lower=q_lower, skip_query_guard=True)
         return steps if steps is not None else _not_supported(planner, query)
@@ -168,6 +153,8 @@ def compose_recipe(planner: "Planner", decision: IntentDecision, query: str) -> 
         return []
     if job == "research.screen":
         return _compose_screen(planner, query, q_lower)
+    if job == "research.hold_compare":
+        return _hold_compare_steps(planner, query)
     if job == "strategy.meta":
         return _compose_strategy_meta(planner, query, q_lower)
     if job == "backtest.builtin":
@@ -272,6 +259,37 @@ _API_TO_CHANNEL = {
     "get_reference_data": "reference",
     "get_static_data": "static",
 }
+_CHANNEL_SKILL = {
+    "history": "qt.ai.data.history",
+    "reference": "qt.ai.data.reference",
+    "static": "qt.ai.data.static",
+}
+
+
+def env_ready_steps(planner: "Planner") -> List["ToolStep"]:
+    """token 检查，再对四张核心表各查一次 table_info。
+
+    Parameters
+    ----------
+    planner : Planner
+        用来生成步骤。
+
+    Returns
+    -------
+    list of ToolStep
+        第一步是 ``qt.ai.env.check_tushare``。
+    """
+
+    steps = [planner._make_step(step_id="step_1", skill_name="qt.ai.env.check_tushare", inputs={})]
+    for offset, table_name in enumerate(DEFAULT_CORE_TABLES, start=2):
+        steps.append(
+            planner._make_step(
+                step_id=f"step_{offset}",
+                skill_name="qt.ai.datasource.table_info",
+                inputs={"table_name": table_name},
+            )
+        )
+    return steps
 
 
 @lru_cache(maxsize=64)
@@ -310,30 +328,35 @@ def _recommended_channel(dtype_name: str) -> str:
 
 
 def _compose_data_read(planner: "Planner", query: str, flags: Dict[str, Any]) -> List["ToolStep"]:
-    """三入口只读取数。字面非 history 的 channel 保持不动；否则跟 DataType 推荐入口。"""
+    """三入口只读取数。字面非 history 的 channel 保持不动；否则跟数据类型候选。
+
+    数据类型的值留给填槽。图上只先写下行情里已经抽到的标的和日期。
+    """
+
+    from ..slot_graph import dtype_tokens, peek_channel
 
     market = planner._market_inputs(query)
     channel = str(flags.get("channel") or "history").strip().lower() or "history"
-    names = _extract_dtype_names(query)
-    if channel == "history" and names:
-        recommended = _recommended_channel(names)
-        if recommended in {"reference", "static"}:
-            channel = recommended
-    inputs: Dict[str, Any] = {"channel": channel}
-    if market.get("shares"):
-        inputs["shares"] = market["shares"]
-    if market.get("start"):
-        inputs["start"] = market["start"]
-    if market.get("end"):
-        inputs["end"] = market["end"]
-    if market.get("freq"):
-        inputs["freq"] = market["freq"]
-    if names:
-        inputs["names"] = names
+    tokens = dtype_tokens(query)
+    if channel == "history":
+        peeked = peek_channel(tokens)
+        if peeked:
+            channel = peeked
+    skill_name = _CHANNEL_SKILL.get(channel, "qt.ai.data.history")
+    inputs: Dict[str, Any] = {}
+    if channel == "history" and not tokens:
+        inputs["htype_names"] = "close"
+    if channel != "static":
+        if market.get("start"):
+            inputs["start"] = market["start"]
+        if market.get("end"):
+            inputs["end"] = market["end"]
+        if market.get("freq"):
+            inputs["freq"] = market["freq"]
     return [
         planner._make_step(
             step_id="step_1",
-            skill_name="qt.ai.data.read",
+            skill_name=skill_name,
             inputs=inputs,
         )
     ]
@@ -349,8 +372,200 @@ def _extract_dtype_names(query: str) -> str:
     return ""
 
 
+def _hold_compare_steps(planner: "Planner", query: str) -> List["ToolStep"]:
+    """持有对比：一条组合。步骤形状看超额和累计，标的留给填槽。"""
+
+    from ..slot_graph import mentions_cumret, mentions_excess
+
+    excess = mentions_excess(query)
+    cumret = mentions_cumret(query)
+    steps = [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.kline",
+            inputs={},
+            slot_decls={
+                "shares": {"assemble_only": True},
+                "asset_type": {"user_slot": False},
+            },
+        ),
+        planner._make_step(
+            step_id="step_2",
+            skill_name="qt.ai.hp.portfolio",
+            inputs={},
+            depends_on=["step_1"],
+            slot_decls={
+                "holdings": {
+                    "type": "array",
+                    "required": True,
+                    "resolve": "code",
+                    "element": "constituent_code",
+                    "role": "holding",
+                    "min_count": 1,
+                    "cardinality": "many",
+                },
+                "benchmark": {
+                    "type": "object",
+                    "required": False,
+                    "resolve": "code",
+                    "element": "comparison_code",
+                    "role": "benchmark",
+                    "min_count": 0,
+                    "cardinality": "one",
+                },
+            },
+        ),
+    ]
+    if excess and not cumret:
+        steps.append(
+            planner._make_step(
+                step_id="step_3",
+                skill_name="qt.ai.hp.plot",
+                inputs={},
+                depends_on=["step_2"],
+            )
+        )
+        return steps
+    if cumret:
+        transform: Dict[str, Any] = {"method": "simple"}
+        if excess:
+            transform["htypes"] = "excess_close"
+        steps.append(
+            planner._make_step(
+                step_id="step_3",
+                skill_name="qt.ai.hp.cum_return",
+                inputs=transform,
+                depends_on=["step_2"],
+            )
+        )
+        steps.append(
+            planner._make_step(
+                step_id="step_4",
+                skill_name="qt.ai.hp.plot",
+                inputs={},
+                depends_on=["step_3"],
+            )
+        )
+        return steps
+    steps.append(
+        planner._make_step(
+            step_id="step_3",
+            skill_name="qt.ai.hp.normalize",
+            inputs={},
+            depends_on=["step_2"],
+        )
+    )
+    steps.append(
+        planner._make_step(
+            step_id="step_4",
+            skill_name="qt.ai.hp.plot",
+            inputs={},
+            depends_on=["step_3"],
+        )
+    )
+    return steps
+
+
+_RETURN_SKILL = "qt.ai.hp.returns"
+_VOL_SKILL = "qt.ai.hp.volatility"
+_RETURN_CUE = re.compile(
+    r"收益率|简单收益|对数收益|daily\s+return|(?<!累计)收益|\breturns?\b",
+    re.IGNORECASE,
+)
+_SUMMARY_CUES = ("摘要", "summary", "交易天数", "trading day", "n_rows")
+_PLOT_LATIN = ("export", "png", "candle")
+_PLOT_CJK = ("导出", "绘图", "出图", "蜡烛")
+
+
+def _diagnosis_steps(planner: "Planner", query: str, job: str) -> List["ToolStep"]:
+    """快速体检：取行情后按问句挂摘要、一个统计量和出图。
+
+    三片叶子都只依赖取数。``view`` 不写在这里，空着时由填槽补 ``shape``。
+
+    Parameters
+    ----------
+    planner : Planner
+        用来生成步骤和抽取行情窗口。
+    query : str
+        原始问句。跟进时可能已拼上最初那句。
+    job : str
+        ``data.summary`` 或 ``data.export``。只影响「只说了导出」时是否出图。
+
+    Returns
+    -------
+    list of ToolStep
+        保序子集：取数、摘要、统计、出图。
+    """
+
+    market = {
+        key: value
+        for key, value in dict(planner._market_inputs(query) or {}).items()
+        if key != "shares"
+    }
+    text = str(query or "")
+    lower = text.lower()
+    wants_summary = any(item in lower or item in text for item in _SUMMARY_CUES) or _wants_view(text)
+    wants_returns = _RETURN_CUE.search(text) is not None
+    wants_vol = re.search(r"波动|volatility", text, flags=re.IGNORECASE) is not None
+    wants_plot = any(item in lower for item in _PLOT_LATIN) or any(item in text for item in _PLOT_CJK)
+    include_stat = wants_summary or wants_returns or wants_vol
+    include_plot = wants_plot or (job == "data.export" and not wants_summary and not include_stat)
+    forced = str(getattr(planner, "_diagnosis_statistic", "") or "")
+    if forced in {_RETURN_SKILL, _VOL_SKILL}:
+        stat_name = forced
+        include_stat = True
+    else:
+        stat_name = _RETURN_SKILL if wants_returns else _VOL_SKILL
+    steps = [
+        planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.kline",
+            inputs=market,
+            slot_decls={
+                "shares": {
+                    "element": "code",
+                    "role": "",
+                    "min_count": 1,
+                    "cardinality": "many",
+                },
+            },
+        )
+    ]
+    leaves: List[tuple] = []
+    if wants_summary:
+        leaves.append(("qt.ai.hp.describe", {}))
+    if include_stat:
+        leaves.append((stat_name, {}))
+    if include_plot:
+        leaves.append(("qt.ai.hp.plot", {}))
+    for offset, (skill_name, inputs) in enumerate(leaves, start=2):
+        steps.append(
+            planner._make_step(
+                step_id=f"step_{offset}",
+                skill_name=skill_name,
+                inputs=dict(inputs),
+                depends_on=["step_1"],
+            )
+        )
+    return steps
+
+
+def _wants_view(query: str) -> bool:
+    """问句是否在要一种面板视图，而不只是波动或出图。"""
+
+    text = str(query or "")
+    lower = text.lower()
+    if re.search(r"\b(?:head|tail|htypes)\b", lower):
+        return True
+    if any(item in text for item in ("有哪些列", "有哪些标的")):
+        return True
+    return re.search(r"[前后]\s*\d+\s*行", text) is not None
+
+
 def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolStep"]:
-    """选股 Job：Universe + 可选谓词 + 投影。"""
+    """选股 Job：Universe + 可选谓词 + 投影。用户槽留给填槽。"""
+
+    from ..slot_graph import mentions_return
 
     extra = []
     for token in ("市盈率", "市值", "成交量", "换手", "申万", " pe", "pe/", "pb"):
@@ -372,50 +587,20 @@ def _compose_screen(planner: "Planner", query: str, q_lower: str) -> List["ToolS
                 ),
             )
         ]
-    params, missing = planner._extract_screen_params(query=query, q_lower=q_lower)
-    industry = str(params.get("industry") or "").strip()
-    if "industry" in missing and not industry:
-        return [
-            planner._make_step(
-                step_id="step_1",
-                skill_name="qt.ai.system.fallback",
-                inputs=planner._fallback_step_inputs(
-                    query=query,
-                    action="clarify_required",
-                    reason="screen_missing_fields",
-                    hint="Stock screen needs an industry (Tushare short name) and a lookback window.",
-                    missing_info="|".join(missing),
-                    next_step="Example: 过去半年跌幅>20%，行业属于银行.",
-                ),
-            )
-        ]
-    if "lookback" in missing:
-        params["lookback_days"] = 126
-        missing = [item for item in missing if item != "lookback"]
-    universe_inputs: Dict[str, Any] = {"industry": industry}
     steps = [
         planner._make_step(
             step_id="step_1",
             skill_name="qt.ai.research.universe_filter",
-            inputs=universe_inputs,
+            inputs={},
         )
     ]
     last_id = "step_1"
-    if "return_threshold" not in missing:
-        pred_inputs = {
-            "metric": params.get("metric") or "drawdown",
-            "threshold": params.get("threshold"),
-            "lookback_days": params.get("lookback_days") or 126,
-        }
-        if params.get("start"):
-            pred_inputs["start"] = params["start"]
-        if params.get("end"):
-            pred_inputs["end"] = params["end"]
+    if mentions_return(query):
         steps.append(
             planner._make_step(
                 step_id="step_2",
                 skill_name="qt.ai.research.price_predicate",
-                inputs=pred_inputs,
+                inputs={},
                 depends_on=[last_id],
             )
         )

@@ -12,7 +12,7 @@
   ],
   "title": "How qteasy's parts fit together",
   "summary": "Local data, a data panel, strategies run by an Operator, then backtest, optimization, and simulated live trading.",
-  "narrative": "qteasy is one pipeline.\n\nLocal data store (DataSource). Downloads from Tushare or other channels land in local tables. Which channel or table to use is a separate question.\n\nHistoryPanel. This is the in-memory panel for looking at and analyzing that data.\n\nStrategies and Operator. Built-in or custom strategies declare the data they need. An Operator runs them.\n\nBacktest. It evaluates a strategy on historical data and reports the result.\n\nOptimization. It searches parameters of a strategy.\n\nSimulated live. The same strategy logic runs on a live-style schedule. Ask can explain the boundary. It does not start a trader or send orders.\n\nThis card only names the parts. Ask a self-contained question for any one of them, for example how to backtest with qteasy.",
+  "narrative": "qteasy is one pipeline. This card only names the parts. The numbers below name the next windows. A later question may refer to a number; explain that item from its card.\n\n1. Local data. Downloads land in a local store, then become information you can read. History-shaped series can sit in a HistoryPanel.\n2. Strategies and Operator. Built-in or custom strategies declare the data they need. An Operator runs them.\n3. Backtest. It evaluates a strategy on historical data and reports the result.\n4. Optimization. It searches parameters of a strategy.\n5. Simulated live. The same strategy logic runs on a live-style schedule. Ask can explain the boundary. It does not start a trader or send orders.\n\nNaming a module does not download data, run a backtest, or start simulated live trading.",
   "python_code": "import qteasy as qt\nprint(qt.__version__)",
   "risk_notes": "Naming a module does not download data, run a backtest, or start simulated live trading.",
   "type": "concept",
@@ -20,6 +20,11 @@
   "topics": ["overview"],
   "relations": [
     {"rel": "see_also", "to": "what_is_qteasy"},
-    {"rel": "see_also", "to": "qteasy_advantages"}
+    {"rel": "see_also", "to": "qteasy_advantages"},
+    {"rel": "details", "to": "data_intro", "item": 1},
+    {"rel": "details", "to": "strategy_overview", "item": 2},
+    {"rel": "details", "to": "backtest_intro", "item": 3},
+    {"rel": "details", "to": "optimize_intro", "item": 4},
+    {"rel": "details", "to": "live_what", "item": 5}
   ]
 }

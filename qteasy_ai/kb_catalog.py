@@ -120,12 +120,12 @@ def compile_catalog(
     registry = load_topic_registry(map_path.parent / "topic_registry.json")
     registered = {spec.id for spec in registry}
     relation_specs = load_relation_registry(map_path.parent / "relation_registry.json")
-    registered_rels = {spec.id for spec in relation_specs}
+    relation_compose = {spec.id: spec.compose for spec in relation_specs}
 
-    def parse_relations(entry_id: str, payload: Mapping[str, Any]) -> List[Dict[str, str]]:
+    def parse_relations(entry_id: str, payload: Mapping[str, Any]) -> List[Dict[str, Any]]:
         """用当前边注册表解析一条 relations。"""
 
-        return _parse_relations(entry_id, payload, registered_rels)
+        return _parse_relations(entry_id, payload, relation_compose)
 
     entries = _load_json_entries(kb_dir)
     rows = _load_map_rows(map_path)
@@ -287,8 +287,8 @@ def _require_same_relations(
         entry_id: str,
         row: Mapping[str, Any],
         entry: Mapping[str, Any],
-        parse_relations: Callable[[str, Mapping[str, Any]], List[Dict[str, str]]],
-) -> List[Dict[str, str]]:
+        parse_relations: Callable[[str, Mapping[str, Any]], List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
     """地图与 JSON 的 relations 必须相同。"""
 
     map_relations = parse_relations(entry_id, row)
@@ -352,7 +352,10 @@ def _render_catalog_markdown(rows: List[Dict[str, Any]]) -> str:
         if relations:
             lines.append("- relations:")
             for item in relations:
-                lines.append(f"  - {item['rel']} -> {item['to']}")
+                if "item" in item:
+                    lines.append(f"  - {item['rel']} item={item['item']} -> {item['to']}")
+                else:
+                    lines.append(f"  - {item['rel']} -> {item['to']}")
         else:
             lines.append("- relations: []")
         lines.append("- questions:")

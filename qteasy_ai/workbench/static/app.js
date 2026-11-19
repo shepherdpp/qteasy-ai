@@ -42,7 +42,7 @@ const EXAMPLES = [
 ];
 
 let mode = "plan";
-let sessionId = localStorage.getItem(STORAGE_SESSION) || newSessionId();
+let sessionId = localStorage.getItem(STORAGE_SESSION) || "";
 let state = emptyState();
 let transcript = [];
 let openTabs = [];
@@ -61,8 +61,24 @@ let shellReady = false;
 let codeCache = {};
 let filePreview = null;
 let sessions = [];
-/** @type {Record<string, string>} local_only 改名尚未 PATCH 到服务端时暂存 */
-let pendingSessionNames = {};
+/** @type {Record<string, object>} 每条会话一份记录，含正在看的那条。不 abort。 */
+let sessionWatches = {};
+/** 本页正在等待的内核请求所属会话。 */
+let localKernelOwner = "";
+/** 服务端 kernel_busy 标出的会话。刷新后仍在。 */
+let serverKernelOwner = "";
+let followServerKernel = false;
+let sessionLoading = false;
+let kernelPoll = null;
+/** @type {Set<string>} 已结束、用户还没点开的会话。 */
+const unseenDone = new Set();
+/** @type {Promise<string> | null} */
+let creatingSession = null;
+let sendChain = Promise.resolve();
+const WAITING_NOTICE = "This session is still waiting for a reply.";
+const SEND_LOCK_OTHER = "Another session is still replying. Send stays locked until it finishes.";
+const SEND_LOCK_THIS = "This session is still running. Send stays locked until it finishes.";
+const CREATE_FAILED = "Could not create a session.";
 /** 澄清卡本地向导：翻页与草稿不打服务端，签名变了整卡重置 */
 let clarifyWizard = {
   signature: "",
@@ -70,14 +86,22 @@ let clarifyWizard = {
   drafts: {},
   ending: false,
 };
+/** 提交澄清后立刻藏卡，等 /v1/plan 结束再按服务端结果决定是否画出新卡。 */
+let clarifyCardHidden = false;
+/** Confirm / Apply 后立刻藏 Plan ready，请求结束再按服务端结果决定是否画回。 */
+let planCardHidden = false;
 let workspace = { artifacts: [] };
 let railCollapsed = localStorage.getItem(STORAGE_RAIL) === "1";
 let workspaceCollapsed = localStorage.getItem(STORAGE_WORKSPACE) === "1";
 let modeNotice = "";
 let editingUserIndex = -1;
 let providerInfo = null;
+let systemInfo = null;
 let renamingSessionId = "";
+/** 改名框还在时先记下，提交或取消后再补行首标记。 */
+let pendingMarkId = "";
 let openProcessTurns = new Set();
+let openRunDebug = new Set();
 const PENCIL_RESEND = "Edit the blue message (pencil) and send it again.";
 const REWIND_LATER_TURNS = "Later turns will be dropped from this session. Files in ai/runs/ stay on disk; this session will no longer track them.";
 const PROCESS_KINDS = new Set(["executing", "mode_notice", "plan_ready", "clarify", "clarification"]);
@@ -93,10 +117,20 @@ const COPY_ICON_SVG =
 const CHECK_ICON_SVG =
   '<svg class="copy-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-localStorage.setItem(STORAGE_SESSION, sessionId);
-
-function newSessionId() {
-  return `web-${Date.now().toString(36)}`;
+function icon(name) {
+  const paths = {
+    gear: '<path d="M6.30 3.78 L6.63 1.54 L9.37 1.54 L9.70 3.78 L10.80 4.41 L12.90 3.58 L14.28 5.96 L12.51 7.37 L12.51 8.63 L14.28 10.04 L12.90 12.42 L10.80 11.59 L9.70 12.22 L9.37 14.46 L6.63 14.46 L6.30 12.22 L5.20 11.59 L3.10 12.42 L1.72 10.04 L3.49 8.63 L3.49 7.37 L1.72 5.96 L3.10 3.58 L5.20 4.41 Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+    chevronLeft: '<path d="M10 3 L5 8 L10 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    chevronRight: '<path d="M6 3 L11 8 L6 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    chevronDown: '<path d="M3.5 6 L8 10.5 L12.5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    paperclip: '<path d="M6.1 8.7 L10.1 4.7 a2.1 2.1 0 0 1 3 3 L7.1 13.7 a2.9 2.9 0 0 1 -4.1 -4.1 L9.1 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    pencil: '<path d="M10.1 2.3 l3.6 3.6 L6.1 13.5 H2.5 V9.9 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+    trash: '<path d="M3.2 4.6 h9.6 M6.2 4.6 V3.2 h3.6 v1.4 M4.5 4.6 l.6 8.2 h5.8 l.6 -8.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>',
+    plus: '<path d="M8 3.2 v9.6 M3.2 8 h9.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    bubble: '<path d="M3.1 2.6 h9.4 a1.5 1.5 0 0 1 1.5 1.5 v4.8 a1.5 1.5 0 0 1 -1.5 1.5 H6.6 L4.2 13.2 V10.4 H3.1 a1.5 1.5 0 0 1 -1.5 -1.5 V4.1 a1.5 1.5 0 0 1 1.5 -1.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>',
+  };
+  const body = paths[name] || "";
+  return `<svg class="ui-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">${body}</svg>`;
 }
 
 function emptyState() {
@@ -126,6 +160,10 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, "&quot;");
 }
 
 function slotLabel(name) {
@@ -158,18 +196,61 @@ function latestNonUserMessage() {
 }
 
 function liveClarifyMessage() {
-  const last = latestNonUserMessage();
-  if (last && (last.kind === "clarify" || last.kind === "clarification")) return last;
+  const rows = transcript.concat(state.messages || []);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const msg = rows[i];
+    if (!msg || msg.kind === "user_text") continue;
+    if (msg.kind === "mode_notice" && msg.payload && msg.payload.stage_id === "match") continue;
+    if (msg.kind === "clarify" || msg.kind === "clarification") return msg;
+    return null;
+  }
   return null;
 }
 
+function clarifyStatus(msg) {
+  return String((msg && msg.payload && msg.payload.status) || "");
+}
+
+function clarifySettled(msg) {
+  const status = clarifyStatus(msg);
+  return status === "answered" || status === "skipped";
+}
+
+function clarifyReceiptLine(msg) {
+  const payload = (msg && msg.payload) || {};
+  const rows = Array.isArray(payload.answers) ? payload.answers : [];
+  const usable = rows.filter((row) => row && String(row.answer_label || row.answer || "").trim());
+  if (usable.length > 1) {
+    return usable.map((row) => {
+      const shown = String(row.answer_label || row.answer || "").trim();
+      const prompt = String(row.prompt || "").trim();
+      return prompt ? `${prompt}: ${shown}` : shown;
+    }).join("\n");
+  }
+  const one = usable.length === 1 ? usable[0] : null;
+  const label = String((one && one.answer_label) || payload.answer_label || "").trim();
+  const answer = String((one && one.answer) || payload.answer || "").trim();
+  if (label) {
+    const chinese = /[\u4e00-\u9fff]/.test(`${label}\n${msg.text || ""}`);
+    return chinese ? `用户已选 ${label}` : `Selected: ${label}`;
+  }
+  if (answer) return `Answered: ${answer}`;
+  return "";
+}
+
+function clarifyNeedsAnswer(clar) {
+  return clarifyPendingItems(clar).some((item) => {
+    if (typeof item === "string") return Boolean(String(item).trim());
+    return Boolean(item && String(item.name || "").trim());
+  });
+}
+
 function shouldShowLiveClarify() {
-  const missing = (state.sidebar && state.sidebar.missing) || [];
-  if (missing.length) return true;
+  if (clarifyCardHidden) return false;
   const last = liveClarifyMessage();
-  if (!last) return false;
-  const status = String((last.payload && last.payload.status) || "");
-  return status !== "answered" && status !== "skipped";
+  if (last && clarifySettled(last)) return false;
+  if (!last || !clarifyNeedsAnswer(last)) return false;
+  return !clarifySettled(last);
 }
 
 function pendingDecision() {
@@ -238,10 +319,144 @@ function readTranscriptMap() {
   }
 }
 
-function persistTranscript() {
+function persistTranscriptFor(id, rows) {
+  const key = String(id || "").trim();
+  if (!key) return;
   const all = readTranscriptMap();
-  all[sessionId] = transcript;
+  all[key] = rows;
   localStorage.setItem(STORAGE_TRANSCRIPTS, JSON.stringify(all));
+}
+
+function persistTranscript() {
+  persistTranscriptFor(sessionId, transcript);
+}
+
+function viewing(owner) {
+  return !owner || owner === sessionId;
+}
+
+function parkedWatch(id) {
+  return sessionWatches[id] || null;
+}
+
+function sessionIsWaiting(id) {
+  if (id === sessionId) return Boolean(busy || backgrounded);
+  const parked = parkedWatch(id);
+  return Boolean(parked && (parked.busy || parked.backgrounded));
+}
+
+function projectCurrentWatch() {
+  if (!sessionId) return null;
+  const watch = sessionWatches[sessionId] || {
+    busy: false,
+    backgrounded: false,
+    abort: null,
+    startedAt: 0,
+    elapsedS: 0,
+    executeSseOpen: false,
+    transcript: [],
+    state: emptyState(),
+    mode: "plan",
+    livePoll: null,
+    modeNotice: "",
+    sessionAttachments: [],
+  };
+  sessionWatches[sessionId] = watch;
+  watch.busy = busy;
+  watch.backgrounded = backgrounded;
+  watch.abort = runAbort;
+  watch.startedAt = runStartedAt;
+  watch.elapsedS = runElapsedS;
+  watch.executeSseOpen = executeSseOpen;
+  watch.transcript = transcript;
+  watch.state = state;
+  watch.mode = mode;
+  watch.livePoll = livePoll;
+  watch.modeNotice = modeNotice;
+  watch.sessionAttachments = sessionAttachments.slice();
+  return watch;
+}
+
+function parkCurrentSession() {
+  if (!sessionId) return;
+  projectCurrentWatch();
+  runAbort = null;
+  livePoll = null;
+}
+
+function restoreParked(id) {
+  const parked = parkedWatch(id);
+  if (!parked) return false;
+  busy = Boolean(parked.busy);
+  backgrounded = Boolean(parked.backgrounded);
+  runAbort = parked.abort || null;
+  runStartedAt = parked.startedAt || 0;
+  runElapsedS = parked.elapsedS || 0;
+  executeSseOpen = Boolean(parked.executeSseOpen);
+  transcript = parked.transcript || [];
+  state = parked.state || emptyState();
+  mode = parked.mode || "plan";
+  livePoll = parked.livePoll || null;
+  modeNotice = parked.modeNotice || "";
+  sessionAttachments = Array.isArray(parked.sessionAttachments) ? parked.sessionAttachments : [];
+  if ((busy || backgrounded) && runStartedAt) startElapsedClock();
+  else stopElapsedClock();
+  return true;
+}
+
+function rememberExecuteFlag(owner, next) {
+  if (viewing(owner)) executeSseOpen = next;
+  else if (parkedWatch(owner)) parkedWatch(owner).executeSseOpen = next;
+}
+
+function pushTranscriptRow(owner, row) {
+  if (viewing(owner)) {
+    transcript.push(row);
+    persistTranscript();
+    return;
+  }
+  const parked = parkedWatch(owner);
+  if (!parked) return;
+  parked.transcript = parked.transcript || [];
+  parked.transcript.push(row);
+  persistTranscriptFor(owner, parked.transcript);
+}
+
+function setBusyFor(owner, next) {
+  if (viewing(owner)) {
+    setBusy(next);
+    if (owner) {
+      if (!sessionWatches[owner]) projectCurrentWatch();
+      const watch = sessionWatches[owner];
+      if (watch) {
+        watch.busy = busy;
+        watch.backgrounded = backgrounded;
+        watch.abort = runAbort;
+        watch.startedAt = runStartedAt;
+        watch.elapsedS = runElapsedS;
+        watch.executeSseOpen = executeSseOpen;
+        watch.transcript = transcript;
+        watch.state = state;
+      }
+    }
+    return;
+  }
+  const parked = parkedWatch(owner);
+  if (!parked) return;
+  parked.busy = next;
+  if (next) {
+    if (!parked.backgrounded) {
+      if (!parked.abort) parked.abort = new AbortController();
+      if (!parked.startedAt) parked.startedAt = Date.now();
+    }
+    return;
+  }
+  if (!parked.backgrounded) {
+    parked.startedAt = 0;
+    parked.elapsedS = 0;
+    parked.abort = null;
+    parked.executeSseOpen = false;
+  }
 }
 
 function loadTranscriptFor(id) {
@@ -256,13 +471,13 @@ function mountShell() {
       <span class="brand">qteasy-ai Workbench</span>
       <span class="spacer"></span>
       <span class="session-title" id="session-title"></span>
-      <button type="button" class="icon-btn ghost" id="btn-settings" title="Settings">⚙</button>
+      <button type="button" class="icon-btn ghost" id="btn-settings" title="Settings">${icon("gear")}</button>
     </div>
     <div class="layout" id="layout">
       <aside class="rail" id="session-rail">
         <div class="col-head">
           <h2>Sessions</h2>
-          <button type="button" class="icon-btn ghost" id="btn-toggle-rail" title="Collapse session list">«</button>
+          <button type="button" class="icon-btn ghost" id="btn-toggle-rail" title="Collapse session list">${icon("chevronLeft")}</button>
         </div>
         <div class="rail-new" style="padding:6px;">
           <button type="button" class="primary" id="btn-new-session" style="width:100%;">New</button>
@@ -274,9 +489,11 @@ function mountShell() {
         <div class="now-chips" id="now-chips"></div>
         <div class="mode-notice" id="mode-notice" hidden></div>
         <div class="chat-log" id="chat-log"></div>
+        <div id="live-cards" hidden></div>
         <div class="composer" id="composer">
           <div class="attach-chips" id="attach-chips" hidden></div>
           <div class="attach-status err-text" id="attach-status" hidden></div>
+          <div class="send-lock-notice" id="send-lock-notice" hidden></div>
           <textarea id="query-input" placeholder="Ask in natural language · Ctrl/⌘+Enter to send" rows="3"></textarea>
           <input type="file" id="attach-input" multiple hidden
             accept=".txt,.md,.py,.json,.csv,.yaml,.yml,.toml,.ini,.log,.html,.css,.js,.ts,.png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.docx,.xlsx,.pptx">
@@ -297,7 +514,7 @@ function mountShell() {
               </div>
             </div>
             <span class="composer-row-spacer"></span>
-            <button type="button" class="icon-btn ghost attach-btn" id="btn-attach" title="Attach" aria-label="Attach">📎</button>
+            <button type="button" class="icon-btn ghost attach-btn" id="btn-attach" title="Attach" aria-label="Attach">${icon("paperclip")}</button>
             <button type="button" class="send-btn mode-plan" id="btn-send" title="Send" aria-label="Send">↑</button>
           </div>
         </div>
@@ -310,7 +527,7 @@ function mountShell() {
       <aside class="workspace-col" id="sidebar-col">
         <div class="col-head">
           <h2>Workspace</h2>
-          <button type="button" class="icon-btn ghost" id="btn-collapse-workspace" title="Collapse">»</button>
+          <button type="button" class="icon-btn ghost" id="btn-collapse-workspace" title="Collapse">${icon("chevronRight")}</button>
         </div>
         <div class="workspace-body">
           <div class="now-block" id="workspace-now"></div>
@@ -487,6 +704,8 @@ function bindShell() {
     if (workspaceCollapsed) toggleWorkspace();
   });
   $("chat-log").addEventListener("click", onChatClick);
+  const liveCards = $("live-cards");
+  if (liveCards) liveCards.addEventListener("click", onChatClick);
   $("artifact-panel").addEventListener("click", onArtifactClick);
   $("session-list").addEventListener("click", onSessionListClick);
   $("session-list").addEventListener("dblclick", onSessionListDblClick);
@@ -511,9 +730,9 @@ function applyLayoutFlags() {
   rail.classList.toggle("collapsed", railCollapsed);
   const workspaceCol = $("sidebar-col");
   if (workspaceCol) workspaceCol.classList.toggle("collapsed", workspaceCollapsed);
-  $("btn-toggle-rail").textContent = railCollapsed ? "»" : "«";
+  $("btn-toggle-rail").innerHTML = icon(railCollapsed ? "chevronRight" : "chevronLeft");
   const wsBtn = $("btn-collapse-workspace");
-  if (wsBtn) wsBtn.textContent = workspaceCollapsed ? "«" : "»";
+  if (wsBtn) wsBtn.innerHTML = icon(workspaceCollapsed ? "chevronLeft" : "chevronRight");
   applyColumnWidths();
 }
 
@@ -783,15 +1002,18 @@ function planningWait() {
   return busy && !runWatchActive() && !executeSseOpen && mode !== "agent" && mode !== "run";
 }
 
+function busyStatusText() {
+  if (planningWait()) return "Planning";
+  return backgrounded ? formatRunClock("Background") : formatRunClock("Working");
+}
+
+function busyMarkup(label) {
+  return `<span class="busy-dot" id="busy-elapsed"><span id="busy-label">${escapeHtml(label)}</span><span class="busy-ellipsis" aria-hidden="true"><i></i><i></i><i></i></span></span>`;
+}
+
 function updateBusyElapsedDom() {
-  const label = $("busy-elapsed");
-  if (label) {
-    label.textContent = planningWait()
-      ? "Planning…"
-      : backgrounded
-        ? formatRunClock("Background")
-        : formatRunClock("Working");
-  }
+  const label = $("busy-label");
+  if (label) label.textContent = busyStatusText();
   const now = $("now-run-status");
   if (now) now.textContent = backgrounded ? formatRunClock("Background") : formatRunClock("Running");
 }
@@ -828,6 +1050,10 @@ function dropRunWatch() {
     runStartedAt = 0;
     runElapsedS = 0;
   }
+}
+
+function hasSessionSnapshot(dto) {
+  return Boolean(dto && Array.isArray(dto.transcript));
 }
 
 function isDtoRunning(dto) {
@@ -880,31 +1106,55 @@ function isTerminalRun(dto) {
 
 function startLivePoll() {
   if (livePoll) return;
+  const owner = sessionId;
   livePoll = setInterval(async () => {
-    if (executeSseOpen || !sessionId) return;
-    const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
-    if (dto && dto.error) return;
+    const onScreen = owner === sessionId;
+    const parked = sessionWatches[owner];
+    const sseOpen = onScreen ? executeSseOpen : Boolean(parked && parked.executeSseOpen);
+    if (sseOpen || !owner) return;
+    const dto = await api(`/v1/session/${encodeURIComponent(owner)}`);
+    if (!hasSessionSnapshot(dto)) return;
+    const stillHere = owner === sessionId;
+    const base = stillHere ? state : (parked && parked.state) || null;
+    if (!base) return;
     if (isDtoRunning(dto)) {
-      if (dto.execution) state.execution = Object.assign({}, state.execution || {}, dto.execution);
+      if (dto.execution) base.execution = Object.assign({}, base.execution || {}, dto.execution);
       const foreground = dto.execution && dto.execution.blocks_composer !== false && !dto.execution.backgrounded;
       if (dto.plan_card) {
-        state.plan_card = Object.assign({}, state.plan_card || {}, dto.plan_card, foreground ? { confirmable: false } : {});
+        base.plan_card = Object.assign({}, base.plan_card || {}, dto.plan_card, foreground ? { confirmable: false } : {});
       }
-      const elapsed = dto.execution && dto.execution.elapsed_s;
-      if (elapsed != null || isDtoRunning(dto)) noteRunClock(dto);
-      renderNow();
-      renderChat();
+      if (stillHere) {
+        const elapsed = dto.execution && dto.execution.elapsed_s;
+        if (elapsed != null || isDtoRunning(dto)) noteRunClock(dto);
+        renderNow();
+        renderChat();
+      } else if (parked && dto.execution && dto.execution.elapsed_s != null) {
+        parked.elapsedS = Math.max(0, Math.floor(Number(dto.execution.elapsed_s) || 0));
+      }
       return;
     }
     if (!isTerminalRun(dto)) return;
-    backgrounded = false;
-    stopLivePoll();
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    setBusy(false);
-    renderPanes();
-    await refreshWorkspace();
-    await refreshSessions();
+    if (stillHere) {
+      backgrounded = false;
+      stopLivePoll();
+      ingestDto(dto, { appendUser: false, owner });
+      applyServerTranscript(dto, owner);
+      setBusy(false);
+      renderPanes();
+      await refreshWorkspace();
+      await refreshSessions();
+      return;
+    }
+    if (!parked) return;
+    parked.backgrounded = false;
+    parked.busy = false;
+    parked.executeSseOpen = false;
+    if (parked.livePoll) {
+      clearInterval(parked.livePoll);
+      parked.livePoll = null;
+    }
+    ingestDto(dto, { appendUser: false, owner });
+    applyServerTranscript(dto, owner);
   }, 2000);
 }
 
@@ -924,22 +1174,22 @@ async function stopWatchingRun() {
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/cancel-run`, { method: "POST" });
-  if (dto && dto.error) {
-    transcript.push({
-      kind: "error",
-      text: dto.error.message || "Stop did not complete.",
-      payload: dto.error,
-    });
-    persistTranscript();
-    renderChat();
+  if (!hasSessionSnapshot(dto)) {
+    if (dto && dto.error) {
+      transcript.push({
+        kind: "error",
+        text: dto.error.message || "Stop did not complete.",
+        payload: dto.error,
+      });
+      persistTranscript();
+      renderChat();
+    }
     return;
   }
   backgrounded = false;
   dropRunWatch();
-  if (dto && !dto.error) {
-    ingestDto(dto, { appendUser: false });
-    if (dto.transcript) applyServerTranscript(dto);
-  }
+  ingestDto(dto, { appendUser: false });
+  applyServerTranscript(dto);
   renderChat();
   renderNow();
 }
@@ -947,14 +1197,16 @@ async function stopWatchingRun() {
 async function backgroundThisRun() {
   if (!busy || !sessionId) return;
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/background-run`, { method: "POST" });
-  if (dto && dto.error) {
-    transcript.push({
-      kind: "error",
-      text: dto.error.message || "Background did not complete.",
-      payload: dto.error,
-    });
-    persistTranscript();
-    renderChat();
+  if (!hasSessionSnapshot(dto)) {
+    if (dto && dto.error) {
+      transcript.push({
+        kind: "error",
+        text: dto.error.message || "Background did not complete.",
+        payload: dto.error,
+      });
+      persistTranscript();
+      renderChat();
+    }
     return;
   }
   const controller = runAbort;
@@ -975,6 +1227,150 @@ async function backgroundThisRun() {
   renderNow();
 }
 
+function kernelOwnerId() {
+  return localKernelOwner || serverKernelOwner || "";
+}
+
+function sendLocked() {
+  if (busy || backgrounded) return true;
+  if (kernelOwnerId()) return true;
+  if (sessions.some((row) => row && row.running)) return true;
+  return Object.keys(sessionWatches).some((id) => {
+    const watch = sessionWatches[id];
+    return Boolean(watch && (watch.busy || watch.backgrounded));
+  });
+}
+
+function sendLockNotice() {
+  if (busy || !sendLocked()) return "";
+  const owner = kernelOwnerId();
+  const runningRow = sessions.find((row) => row && row.running);
+  const holder = owner || (runningRow && runningRow.session_id) || "";
+  const parked = Object.keys(sessionWatches).find((id) => {
+    const watch = sessionWatches[id];
+    return watch && (watch.busy || watch.backgrounded);
+  });
+  const who = holder || parked || "";
+  if (who && who !== sessionId) return SEND_LOCK_OTHER;
+  return SEND_LOCK_THIS;
+}
+
+function refuseIfSendLocked() {
+  if (!sendLocked()) return false;
+  if (!busy) showStatusNotice(sendLockNotice());
+  return true;
+}
+
+function applyComposerLock() {
+  const send = $("btn-send");
+  const input = $("query-input");
+  if (send) send.disabled = sendLocked();
+  if (input) input.disabled = busy;
+  const note = $("send-lock-notice");
+  if (note) {
+    const text = sendLockNotice();
+    note.hidden = !text;
+    note.textContent = text;
+  }
+  ensureKernelPoll();
+}
+
+function beginKernel(owner) {
+  localKernelOwner = owner || "";
+  applyComposerLock();
+  paintSessionMark(owner);
+}
+
+function finishKernel(owner) {
+  if (!owner || localKernelOwner === owner) localKernelOwner = "";
+  if (owner && serverKernelOwner === owner) serverKernelOwner = "";
+  if (owner && owner !== sessionId) unseenDone.add(owner);
+  applyComposerLock();
+  paintSessionMark(owner);
+}
+
+function settleOwnerReply(owner) {
+  const row = sessions.find((item) => item && item.session_id === owner);
+  if (row) row.kernel_busy = false;
+  setBusyFor(owner, false);
+  finishKernel(owner);
+  paintSessionMark(owner);
+  promoteSessionRow(owner);
+}
+
+function noteServerKernel(rows) {
+  const previous = serverKernelOwner;
+  const row = (rows || []).find((item) => item && item.kernel_busy);
+  serverKernelOwner = row ? String(row.session_id || "") : "";
+  if (serverKernelOwner && serverKernelOwner === sessionId && !localKernelOwner) followServerKernel = true;
+  if (previous && !serverKernelOwner && !localKernelOwner && previous !== sessionId) unseenDone.add(previous);
+  return previous;
+}
+
+function ensureKernelPoll() {
+  const need = Boolean(serverKernelOwner) && !localKernelOwner;
+  if (need && !kernelPoll) kernelPoll = setInterval(() => { refreshSessions(); }, 2000);
+  if (!need && kernelPoll) {
+    clearInterval(kernelPoll);
+    kernelPoll = null;
+  }
+}
+
+function sessionMark(id) {
+  const kernelOwner = kernelOwnerId();
+  const row = sessions.find((item) => item && item.session_id === id);
+  const parked = sessionWatches[id];
+  const pageOwns = Boolean(parked) || kernelOwner === id;
+  const localBusy = kernelOwner === id
+    || Boolean(parked && (parked.busy || parked.backgrounded))
+    || (id === sessionId && (busy || backgrounded));
+  const serverBusy = Boolean(row && (row.kernel_busy || row.running));
+  const spinning = localBusy || (!pageOwns && serverBusy);
+  if (spinning) return `<span class="session-busy-ring" title="Busy" aria-label="Busy"></span>`;
+  if (id !== sessionId && unseenDone.has(id)) {
+    return `<span class="session-unseen-dot" title="Reply ready" aria-label="Reply ready"></span>`;
+  }
+  return `<span class="session-bubble" title="Session" aria-hidden="true">${icon("bubble")}</span>`;
+}
+
+function paintSessionMark(id) {
+  if (!id) return;
+  if (renamingSessionId === id) {
+    pendingMarkId = id;
+    return;
+  }
+  const item = document.querySelector('.session-item[data-session-id="' + String(id).replace(/"/g, "") + '"]');
+  if (!item) return;
+  const row = item.querySelector(".session-title-row");
+  if (!row) return;
+  let slot = row.querySelector(".session-status");
+  if (!slot) {
+    slot = document.createElement("span");
+    slot.className = "session-status";
+    row.insertBefore(slot, row.firstChild);
+  }
+  slot.innerHTML = sessionMark(id);
+}
+
+function promoteSessionRow(id) {
+  const row = sessions.find((item) => item && item.session_id === id);
+  if (!row) return;
+  row.mtime = Date.now() / 1000;
+  sessions = [row].concat(sessions.filter((item) => item && item.session_id !== id));
+  if (renamingSessionId === id) return;
+  const item = document.querySelector('.session-item[data-session-id="' + String(id).replace(/"/g, "") + '"]');
+  if (!item) return;
+  const groups = document.querySelectorAll("#session-list .time-group");
+  let today = null;
+  groups.forEach((group) => {
+    const label = group.querySelector(".time-bucket");
+    if (label && label.textContent === "TODAY") today = group;
+  });
+  if (!today) return;
+  const first = today.querySelector(".session-item");
+  if (first !== item) today.insertBefore(item, first);
+}
+
 function setBusy(next) {
   busy = next;
   if (busy) {
@@ -989,12 +1385,9 @@ function setBusy(next) {
     runElapsedS = 0;
     runAbort = null;
   }
-  const input = $("query-input");
-  const send = $("btn-send");
   const attach = $("btn-attach");
-  if (input) input.disabled = busy;
-  if (send) send.disabled = busy;
   if (attach) attach.disabled = busy;
+  applyComposerLock();
   document.querySelectorAll("#mode-menu button[data-mode]").forEach((btn) => {
     btn.disabled = busy;
   });
@@ -1022,6 +1415,7 @@ function setBusy(next) {
   document.querySelectorAll("input[data-clarify-open]").forEach((el) => {
     el.disabled = busy;
   });
+  projectCurrentWatch();
   renderChat();
   renderNow();
 }
@@ -1039,7 +1433,7 @@ async function api(path, options) {
   const res = await fetch(path, options);
   const ctype = res.headers.get("content-type") || "";
   if (ctype.includes("text/event-stream") && res.body) {
-    return consumeSse(res, options && options.signal);
+    return consumeSse(res, options && options.signal, options && options.owner);
   }
   let data = {};
   try {
@@ -1054,7 +1448,7 @@ async function api(path, options) {
   return data;
 }
 
-async function consumeSse(res, signal) {
+async function consumeSse(res, signal, owner) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -1080,11 +1474,17 @@ async function consumeSse(res, signal) {
         continue;
       }
       const ev = eventMatch ? eventMatch[1].trim() : "";
-      if (ev === "step_status") applyLiveStep(payload);
-      else if (ev === "progress") applyLiveProgress(payload);
+      if (ev === "step_status") applyLiveStep(payload, owner);
+      else if (ev === "progress") applyLiveProgress(payload, owner);
       else if (ev === "heartbeat") {
-        if (payload.elapsed_s != null) runElapsedS = Number(payload.elapsed_s) || runElapsedS;
-        updateBusyElapsedDom();
+        if (payload.elapsed_s != null) {
+          const elapsed = Number(payload.elapsed_s) || 0;
+          if (owner && owner !== sessionId && sessionWatches[owner]) sessionWatches[owner].elapsedS = elapsed;
+          else {
+            runElapsedS = elapsed || runElapsedS;
+            updateBusyElapsedDom();
+          }
+        } else if (!owner || owner === sessionId) updateBusyElapsedDom();
       }
       else if (ev === "state") finalDto = payload;
       else if (ev === "error") sseError = payload;
@@ -1097,8 +1497,16 @@ async function consumeSse(res, signal) {
   return finalDto || errorFromHttp({ error: { message: "Stream ended without a state event." } });
 }
 
-function applyLiveStep(event) {
-  const steps = Array.isArray(state.execution && state.execution.steps) ? state.execution.steps.slice() : [];
+function liveState(owner) {
+  if (!owner || owner === sessionId) return state;
+  const parked = sessionWatches[owner];
+  return parked ? parked.state : null;
+}
+
+function applyLiveStep(event, owner) {
+  const target = liveState(owner);
+  if (!target) return;
+  const steps = Array.isArray(target.execution && target.execution.steps) ? target.execution.steps.slice() : [];
   const row = {
     step_id: event.step_id,
     skill_name: event.skill_name,
@@ -1114,122 +1522,199 @@ function applyLiveStep(event) {
     if (event.total != null) patch.step_total = Number(event.total) || 0;
     patch.progress = null;
   }
-  state.execution = Object.assign({}, state.execution || {}, patch);
-  renderChat();
-  renderNow();
+  target.execution = Object.assign({}, target.execution || {}, patch);
+  if (!owner || owner === sessionId) {
+    renderChat();
+    renderNow();
+  }
 }
 
-function applyLiveProgress(event) {
+function applyLiveProgress(event, owner) {
+  const target = liveState(owner);
+  if (!target) return;
   const done = Number(event.done) || 0;
   const total = Number(event.total) || 0;
   const label = event.label || "";
-  state.execution = Object.assign({}, state.execution || {}, {
+  target.execution = Object.assign({}, target.execution || {}, {
     status: "running",
     progress: total > 0 ? { done, total, label } : null,
   });
-  renderChat();
-  renderNow();
+  if (!owner || owner === sessionId) {
+    renderChat();
+    renderNow();
+  }
 }
 
-function ingestDto(dto, { appendUser } = {}) {
-  const prevCard = state.plan_card;
-  state = Object.assign(emptyState(), dto || {});
-  if (!state.session_id) state.session_id = sessionId;
-  const incoming = Array.isArray(state.messages) ? state.messages : [];
-  if (appendUser) {
-    const last = transcript[transcript.length - 1];
+function ingestDto(dto, options) {
+  const opts = options || {};
+  const targetOwner = opts.owner || sessionId;
+  const onScreen = !targetOwner || targetOwner === sessionId;
+  const parked = targetOwner ? sessionWatches[targetOwner] : null;
+  const base = onScreen ? state : parked && parked.state;
+  if (!onScreen && !base) return;
+  const prevCard = base && base.plan_card;
+  const next = Object.assign(emptyState(), dto || {});
+  next.session_id = targetOwner || next.session_id || sessionId;
+  const incoming = Array.isArray(next.messages) ? next.messages : [];
+  let rows = (onScreen ? transcript : (parked && parked.transcript) || []).slice();
+  if (opts.appendUser) {
+    const last = rows[rows.length - 1];
     for (const msg of incoming) {
       if (msg.kind === "user_text" && last && last.kind === "user_text" && last.text === msg.text) continue;
-      transcript.push(msg);
+      rows.push(msg);
     }
-  } else if (!transcript.length) {
-    transcript = incoming.slice();
+  } else if (!rows.length) {
+    rows = incoming.slice();
   }
-  if (prevCard && prevCard.plan_id !== (state.plan_card && state.plan_card.plan_id)) {
-    editingParams = false;
+  if (onScreen) {
+    state = next;
+    transcript = rows;
+    if (prevCard && prevCard.plan_id !== (state.plan_card && state.plan_card.plan_id)) editingParams = false;
+    absorbPlanArtifacts(state.artifacts);
+    persistTranscript();
+    return;
   }
-  absorbPlanArtifacts(state.artifacts);
-  persistTranscript();
+  parked.state = next;
+  parked.transcript = rows;
+  persistTranscriptFor(targetOwner, rows);
 }
 
-async function sendQuery(query, { keepDraft } = {}) {
+async function sendQuery(query, options) {
   const text = String(query || "").trim();
-  if (!text || busy) return;
-  dismissModeNotice();
+  if (!text) return;
+  if (refuseIfSendLocked()) return;
+  const job = sendChain.then(() => sendQueryBody(text, options || {}));
+  sendChain = job.catch(() => {});
+  return job;
+}
+
+async function sendQueryBody(text, options) {
+  const keepDraft = Boolean(options && options.keepDraft);
+  if (!text || refuseIfSendLocked()) return;
   const input = $("query-input");
+  const requestMode = mode;
+  if (!sessionId) {
+    const created = await ensureSession();
+    if (!created || busy) return;
+    if (mode !== requestMode) setMode(requestMode);
+  }
+  dismissModeNotice();
   if (!keepDraft && input) input.value = "";
+  const owner = sessionId;
   transcript.push({ kind: "user_text", text });
   persistTranscript();
   renderChat();
+  beginKernel(owner);
   const keepWatch = backgrounded;
   setBusy(true);
-  if (mode === "agent" && !backgrounded) executeSseOpen = true;
+  if (requestMode === "plan") startBusyTranscriptPoll(owner);
+  if (requestMode === "agent" && !backgrounded) executeSseOpen = true;
+  const signal = backgrounded ? undefined : (runAbort ? runAbort.signal : undefined);
   try {
-    const body = JSON.stringify({ query: text, session_id: sessionId });
-    const path = mode === "ask" ? "/v1/ask" : mode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
+    const body = JSON.stringify({ query: text, session_id: owner });
+    const path = requestMode === "ask" ? "/v1/ask" : requestMode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
     const headers = { "Content-Type": "application/json" };
-    if (mode === "agent") headers.Accept = "text/event-stream";
+    if (requestMode === "agent") headers.Accept = "text/event-stream";
     const dto = await api(path, {
       method: "POST",
       headers,
       body,
-      signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
+      signal,
+      owner,
     });
-    if (!adoptServerResult(dto)) {
-      renderChat();
-    } else {
+    if (requestMode === "plan") stopBusyTranscriptPoll();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) {
       filePreview = null;
       renderPanes();
-      await refreshSessions();
       await refreshWorkspace();
     }
   } catch (exc) {
     if (!isAbortError(exc)) {
-      transcript.push({
+      pushTranscriptRow(owner, {
         kind: "error",
         text: "Network error. Check that the workbench server is running.",
         payload: { next_action: PENCIL_RESEND },
       });
-      persistTranscript();
-      renderChat();
+      if (viewing(owner)) renderChat();
     }
   } finally {
-    if (!keepWatch) executeSseOpen = false;
-    setBusy(false);
+    if (requestMode === "plan") stopBusyTranscriptPoll();
+    if (!keepWatch) rememberExecuteFlag(owner, false);
+    settleOwnerReply(owner);
   }
 }
 
 async function sendControlPatches(patches) {
-  if (busy) return;
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   setBusy(true);
+  startBusyTranscriptPoll(owner);
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, patches }),
+      body: JSON.stringify({ session_id: owner, patches }),
+      owner,
     });
-    if (!adoptServerResult(dto)) renderChat();
-    else renderPanes();
+    stopBusyTranscriptPoll();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
-    setBusy(false);
+    stopBusyTranscriptPoll();
+    settleOwnerReply(owner);
+  }
+}
+
+async function sendControlAnswers(answers) {
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
+  setBusy(true);
+  startBusyTranscriptPoll(owner);
+  try {
+    const dto = await api("/v1/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: owner, answers }),
+      owner,
+    });
+    stopBusyTranscriptPoll();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
+    return dto;
+  } finally {
+    stopBusyTranscriptPoll();
+    settleOwnerReply(owner);
   }
 }
 
 async function sendControlSkip() {
-  if (busy) return;
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   setBusy(true);
+  startBusyTranscriptPoll(owner);
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, skip: true }),
+      body: JSON.stringify({ session_id: owner, skip: true }),
+      owner,
     });
-    if (!adoptServerResult(dto)) renderChat();
-    else renderPanes();
+    stopBusyTranscriptPoll();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
     return dto;
   } finally {
-    setBusy(false);
+    stopBusyTranscriptPoll();
+    settleOwnerReply(owner);
   }
 }
 
@@ -1240,52 +1725,72 @@ function isDeferredNotice(dto) {
 
 async function confirmPlan() {
   const planId = state.plan_card && state.plan_card.plan_id;
-  if (!planId || (state.plan_card && state.plan_card.confirmable === false) || busy) return;
+  if (!planId || (state.plan_card && state.plan_card.confirmable === false)) return;
+  if (refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   const keepWatch = backgrounded;
+  planCardHidden = true;
+  const signal = backgrounded ? undefined : (runAbort ? runAbort.signal : undefined);
   if (!backgrounded) {
     setBusy(true);
     executeSseOpen = true;
   }
+  renderChat();
   try {
     const dto = await api("/v1/run-plan?stream=1", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ plan_id: planId, session_id: sessionId }),
-      signal: backgrounded ? undefined : (runAbort ? runAbort.signal : undefined),
+      body: JSON.stringify({ plan_id: planId, session_id: owner }),
+      signal,
+      owner,
     });
     if (keepWatch && isDeferredNotice(dto)) {
-      if (dto && Array.isArray(dto.transcript)) applyServerTranscript(dto);
-      renderChat();
-      renderNow();
+      if (dto && Array.isArray(dto.transcript)) applyServerTranscript(dto, owner);
+      if (viewing(owner)) {
+        renderChat();
+        renderNow();
+      }
       return;
     }
-    if (!adoptServerResult(dto)) {
-      renderChat();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
       return;
     }
+    if (!viewing(owner)) return;
     closePlanTabsForRun(state.run_id);
     renderPanes();
     await refreshWorkspace();
   } catch (exc) {
     if (!isAbortError(exc)) {
-      transcript.push({
+      pushTranscriptRow(owner, {
         kind: "error",
         text: "Network error. Confirm did not complete.",
         payload: { next_action: PENCIL_RESEND },
       });
-      persistTranscript();
-      renderChat();
+      if (viewing(owner)) renderChat();
     }
   } finally {
+    if (viewing(owner)) planCardHidden = false;
     if (!keepWatch) {
-      executeSseOpen = false;
-      setBusy(false);
+      rememberExecuteFlag(owner, false);
+      settleOwnerReply(owner);
+    } else {
+      finishKernel(owner);
     }
+    if (viewing(owner)) renderChat();
   }
 }
 
 async function cancelPlan() {
   if (busy) return;
+  if (sessionId) {
+    try {
+      await api("/v1/session/" + encodeURIComponent(sessionId) + "/cancel-plan", { method: "POST" });
+    } catch (exc) {
+      transcript.push({ kind: "error", text: (exc && exc.message) || "Could not cancel the plan." });
+    }
+  }
   transcript.push({
     kind: "mode_notice",
     text: "Plan card dismissed. Type freely; Confirm remains optional.",
@@ -1303,35 +1808,46 @@ function identityActions(msg) {
 }
 
 async function confirmIdentityWrite(confirm) {
-  if (busy || !sessionId) return;
+  if (!sessionId || refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   setBusy(true);
   try {
     const body = confirm
-      ? { session_id: sessionId, confirm: true }
-      : { session_id: sessionId, dismiss: true };
+      ? { session_id: owner, confirm: true }
+      : { session_id: owner, dismiss: true };
     const dto = await api("/v1/kb/write", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      owner,
     });
-    if (!adoptServerResult(dto)) renderChat();
-    else renderPanes();
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) renderPanes();
   } catch (exc) {
-    transcript.push({
+    pushTranscriptRow(owner, {
       kind: "error",
       text: "Network error. The name was not saved.",
       payload: { next_action: PENCIL_RESEND },
     });
-    persistTranscript();
-    renderChat();
+    if (viewing(owner)) renderChat();
   } finally {
-    setBusy(false);
+    settleOwnerReply(owner);
   }
 }
 
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof Element)) return;
+  const debugBtn = t.closest("button.run-debug-toggle");
+  if (debugBtn) {
+    const key = Number(debugBtn.getAttribute("data-run-debug"));
+    if (openRunDebug.has(key)) openRunDebug.delete(key);
+    else openRunDebug.add(key);
+    renderChat();
+    return;
+  }
   const foldBtn = t.closest("button.process-toggle");
   if (foldBtn) {
     const key = Number(foldBtn.getAttribute("data-process-turn"));
@@ -1376,7 +1892,16 @@ function onChatClick(ev) {
     return;
   }
   if (t.id === "btn-clarify-end-confirm") {
-    sendControlSkip();
+    if (busy) return;
+    clarifyCardHidden = true;
+    sealLocalClarify("", "", "skipped");
+    clarifyCardHidden = false;
+    const done = sendControlSkip();
+    renderChat();
+    Promise.resolve(done).finally(() => {
+      clarifyCardHidden = false;
+      renderChat();
+    });
     return;
   }
   if (t.id === "btn-clarify-prev") {
@@ -1389,9 +1914,8 @@ function onChatClick(ev) {
   }
   if (t.id === "btn-clarify-next") {
     const pending = clarifyPendingItems(liveClarifyMessage() || latestClarify());
-    const cur = pending[clarifyWizard.step - 1];
-    const name = cur && (cur.name || cur);
-    if (name && clarifyDraftValue(String(name)) && clarifyWizard.step < pending.length) {
+    const index = clarifyWizard.step - 1;
+    if (clarifyDraftValue(index) && clarifyWizard.step < pending.length) {
       clarifyWizard.step += 1;
       clarifyWizard.ending = false;
       renderChat();
@@ -1406,10 +1930,10 @@ function onChatClick(ev) {
   }
   const optionEl = t.closest("[data-clarify-option]");
   if (optionEl) {
-    const slot = String(optionEl.getAttribute("data-clarify-slot") || "").trim();
+    const index = String(optionEl.getAttribute("data-clarify-index") ?? "").trim();
     const oid = String(optionEl.getAttribute("data-clarify-option") || "").trim();
-    if (slot && oid) {
-      clarifyWizard.drafts[slot] = { kind: "chip", value: oid };
+    if (index !== "" && oid) {
+      clarifyWizard.drafts[index] = { kind: "chip", value: oid };
       clarifyWizard.ending = false;
       renderChat();
     }
@@ -1462,6 +1986,7 @@ function onChatClick(ev) {
     return;
   }
   if (t.dataset.example) {
+    if (refuseIfSendLocked()) return;
     const ex = EXAMPLES[Number(t.dataset.example)];
     if (ex) {
       setMode(ex.mode);
@@ -1477,9 +2002,12 @@ function clarifyPendingItems(clar) {
 
 function clarifySignature(clar) {
   const pending = clarifyPendingItems(clar);
-  const names = pending.map((item) => String((item && item.name) || item || "")).join(",");
+  const prompts = pending.map((item, index) => {
+    if (item && typeof item === "object") return String(item.prompt || item.label || index);
+    return String(item || index);
+  }).join("\n");
   const text = clar ? String(clar.text || "") : "";
-  return `${names}|${text}`;
+  return `${pending.length}|${prompts}|${text}`;
 }
 
 function ensureClarifyWizard(clar) {
@@ -1493,33 +2021,72 @@ function ensureClarifyWizard(clar) {
   if (clarifyWizard.step > n) clarifyWizard.step = n;
 }
 
-function clarifyDraftValue(slotName) {
-  const draft = clarifyWizard.drafts[slotName];
+function optionLabelFor(row, value) {
+  const chosen = String(value == null ? "" : value).trim();
+  if (!chosen) return "";
+  const options = (row && row.options) || [];
+  const hit = options.find((opt) => opt && String(opt.id || "") === chosen);
+  return hit ? String(hit.label || chosen) : chosen;
+}
+
+function sealLocalClarify(answer, label, status, answers) {
+  const clar = liveClarifyMessage();
+  if (!clar || clarifySettled(clar)) return;
+  const payload = Object.assign({}, clar.payload || {});
+  const rows = Array.isArray(answers) ? answers : [];
+  if (rows.length) {
+    payload.answers = rows;
+    if (rows.length === 1) {
+      const text = String(rows[0].answer || "").trim();
+      const shown = String(rows[0].answer_label || "").trim();
+      if (text) payload.answer = text;
+      if (shown) payload.answer_label = shown;
+    }
+  } else {
+    const text = String(answer || "").trim();
+    const shown = String(label || "").trim();
+    if (text) payload.answer = text;
+    if (shown) payload.answer_label = shown;
+  }
+  payload.status = status || "answered";
+  clar.payload = payload;
+  persistTranscript();
+}
+
+function clarifyDraftValue(index) {
+  const draft = clarifyWizard.drafts[String(index)];
   if (!draft) return "";
   return String(draft.value || "").trim();
 }
 
 function clarifyAllDraftsReady(pending) {
   if (!pending.length) return false;
-  return pending.every((item) => {
-    const name = String((item && item.name) || item || "").trim();
-    return Boolean(name && clarifyDraftValue(name));
-  });
+  return pending.every((item, index) => Boolean(clarifyDraftValue(index)));
 }
 
 function submitClarification() {
+  if (busy) return;
   const clar = liveClarifyMessage() || latestClarify();
   ensureClarifyWizard(clar);
   const pending = clarifyPendingItems(clar);
   if (!clarifyAllDraftsReady(pending)) return;
-  const patches = {};
-  pending.forEach((item) => {
-    const name = String((item && item.name) || item || "").trim();
-    const value = clarifyDraftValue(name);
-    if (name && value) patches[name] = value;
+  const answers = pending.map((item, index) => clarifyDraftValue(index));
+  if (answers.some((value) => !value)) return;
+  const receipt = pending.map((item, index) => {
+    const row = item && typeof item === "object" ? item : {};
+    const value = answers[index];
+    const prompt = String(row.prompt || row.label || "");
+    return { prompt, answer: value, answer_label: optionLabelFor(row, value) };
   });
-  if (!Object.keys(patches).length) return;
-  sendControlPatches(patches);
+  clarifyCardHidden = true;
+  sealLocalClarify("", "", "answered", receipt);
+  clarifyCardHidden = false;
+  const done = sendControlAnswers(answers);
+  renderChat();
+  Promise.resolve(done).finally(() => {
+    clarifyCardHidden = false;
+    renderChat();
+  });
 }
 
 function syncClarifyWizardControls() {
@@ -1529,9 +2096,8 @@ function syncClarifyWizardControls() {
   const pending = clarifyPendingItems(clar);
   const n = pending.length || 1;
   const step = clarifyWizard.step;
-  const cur = pending[step - 1];
-  const slotName = cur ? String(cur.name || cur || "") : "";
-  const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
+  const index = step - 1;
+  const hasDraft = Boolean(clarifyDraftValue(index));
   const allReady = clarifyAllDraftsReady(pending);
   const prev = $("btn-clarify-prev");
   const next = $("btn-clarify-next");
@@ -1539,13 +2105,13 @@ function syncClarifyWizardControls() {
   if (prev) prev.disabled = busy || n <= 1 || step <= 1;
   if (next) next.disabled = busy || n <= 1 || step >= n || !hasDraft;
   if (submit) submit.disabled = busy || !allReady;
-  const open = document.querySelector("#chat-log input[data-clarify-open]");
+  const open = document.querySelector("#live-cards input[data-clarify-open], #chat-log input[data-clarify-open]");
   if (open) open.disabled = busy;
 }
 
 async function submitParamEdits() {
   const patches = {};
-  Array.from(document.querySelectorAll("#chat-log input[data-edit-slot], #workspace-now input[data-now-slot]")).forEach((el) => {
+  Array.from(document.querySelectorAll("#live-cards input[data-edit-slot], #chat-log input[data-edit-slot], #workspace-now input[data-now-slot]")).forEach((el) => {
     const name = el.getAttribute("data-edit-slot") || el.getAttribute("data-now-slot");
     const value = String(el.value || "").trim();
     if (!name || !value) return;
@@ -1558,33 +2124,38 @@ async function submitParamEdits() {
     renderNow();
     return;
   }
-  if (busy) return;
+  if (refuseIfSendLocked()) return;
   dismissModeNotice();
+  const owner = sessionId;
+  beginKernel(owner);
+  planCardHidden = true;
   setBusy(true);
+  renderChat();
   try {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, patches }),
+      body: JSON.stringify({ session_id: owner, patches }),
+      owner,
     });
-    if (!adoptServerResult(dto)) {
-      renderChat();
-    } else {
+    if (!adoptServerResult(dto, owner)) {
+      if (viewing(owner)) renderChat();
+    } else if (viewing(owner)) {
       filePreview = null;
       renderPanes();
-      await refreshSessions();
       await refreshWorkspace();
     }
   } catch (exc) {
-    transcript.push({
+    pushTranscriptRow(owner, {
       kind: "error",
       text: "Network error. Parameter update did not complete.",
       payload: { next_action: "Press Apply again. You do not need to start over." },
     });
-    persistTranscript();
-    renderChat();
+    if (viewing(owner)) renderChat();
   } finally {
-    setBusy(false);
+    if (viewing(owner)) planCardHidden = false;
+    settleOwnerReply(owner);
+    if (viewing(owner)) renderChat();
   }
 }
 
@@ -1664,7 +2235,7 @@ async function submitProviderChange() {
 
 function onNowClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
   const toggle = t.closest("[data-tree-toggle]");
   if (toggle) {
     const key = toggle.getAttribute("data-tree-toggle") || "";
@@ -1764,7 +2335,11 @@ function onArtifactClick(ev) {
 }
 
 function sessionDisplayName(row) {
-  return String((row && (row.name || row.title)) || (row && row.session_id) || "").trim();
+  const id = String((row && row.session_id) || "").trim();
+  const name = String((row && (row.name || row.title)) || "").trim();
+  const last = String((row && row.last_user) || "").trim();
+  if (!last && (!name || name === id)) return "New session";
+  return name || id;
 }
 
 function onSessionListDblClick(ev) {
@@ -1775,7 +2350,7 @@ function onSessionListDblClick(ev) {
 
 function onSessionListClick(ev) {
   const t = ev.target;
-  if (!(t instanceof HTMLElement)) return;
+  if (!(t instanceof Element)) return;
   const toggle = t.closest("[data-tree-toggle]");
   if (toggle) {
     ev.stopPropagation();
@@ -1806,7 +2381,11 @@ function onSessionListClick(ev) {
 }
 
 function beginRenameSession(id) {
-  if (!id || busy) return;
+  if (!id) return;
+  if (sessionIsWaiting(id)) {
+    showStatusNotice(WAITING_NOTICE);
+    return;
+  }
   renamingSessionId = id;
   renderSessionList();
   const box = document.querySelector(".session-rename");
@@ -1816,51 +2395,64 @@ function beginRenameSession(id) {
   }
 }
 
-async function flushPendingSessionName(id) {
-  const key = String(id || "").trim();
-  const name = pendingSessionNames[key];
-  if (!key || !name) return false;
-  const dto = await api(`/v1/session/${encodeURIComponent(key)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (dto && dto.error) return false;
-  delete pendingSessionNames[key];
-  return true;
-}
-
 async function commitRenameSession(id, raw) {
-  const name = String(raw || "").trim();
+  const typed = String(raw || "").trim();
   renamingSessionId = "";
-  const local = sessions.find((row) => row.session_id === id);
-  const persisted = Boolean(local && !local.local_only);
-  if (!persisted) {
-    const label = name || "New session";
-    if (local) {
-      local.name = label;
-      local.title = label;
-    }
-    if (label === "New session") delete pendingSessionNames[id];
-    else pendingSessionNames[id] = label;
-    renderSessionList();
-    return;
-  }
+  const name = !typed || typed === "New session" ? "" : typed;
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
   if (dto && dto.error) {
+    showStatusNotice((dto.error && dto.error.message) || "Could not rename this session.");
+    pendingMarkId = "";
     renderSessionList();
     return;
   }
-  delete pendingSessionNames[id];
   await refreshSessions();
+  pendingMarkId = "";
+}
+
+function clearVisibleSession() {
+  sessionId = "";
+  localStorage.removeItem(STORAGE_SESSION);
+  busy = false;
+  backgrounded = false;
+  runAbort = null;
+  runStartedAt = 0;
+  runElapsedS = 0;
+  executeSseOpen = false;
+  stopElapsedClock();
+  transcript = [];
+  state = emptyState();
+  clearOpenTabs();
+  treeCollapsed = new Set();
+  openProcessTurns = new Set();
+  editingParams = false;
+  editingNowSlot = "";
+  editingUserIndex = -1;
+  filePreview = null;
+  workspace = { artifacts: [] };
+  modeNotice = "";
+  mode = "plan";
+  sessionAttachments = [];
+  renderAttachChips();
+  setAttachStatus("");
+  const input = $("query-input");
+  const send = $("btn-send");
+  const attach = $("btn-attach");
+  if (input) input.disabled = false;
+  if (send) send.disabled = false;
+  if (attach) attach.disabled = false;
 }
 
 async function deleteSession(id) {
-  if (!id || busy) return;
+  if (!id) return;
+  if (sessionIsWaiting(id)) {
+    showStatusNotice(WAITING_NOTICE);
+    return;
+  }
   const row = sessions.find((item) => item.session_id === id);
   const label = sessionDisplayName(row) || id;
   if (
@@ -1868,15 +2460,6 @@ async function deleteSession(id) {
       `Delete session "${label}"? This also deletes its plans, runs, and artifacts. This cannot be undone.`
     )
   ) {
-    return;
-  }
-  if (row && row.local_only) {
-    delete pendingSessionNames[id];
-    if (id === sessionId) createSession();
-    else {
-      sessions = sessions.filter((item) => item.session_id !== id);
-      renderSessionList();
-    }
     return;
   }
   const dto = await api(`/v1/session/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -1887,9 +2470,15 @@ async function deleteSession(id) {
     window.alert(String(msg));
     return;
   }
-  delete pendingSessionNames[id];
+  delete sessionWatches[id];
   if (id === sessionId) {
-    await createSession();
+    clearVisibleSession();
+    await refreshSessions();
+    if (sessions[0]) await switchSession(sessions[0].session_id);
+    else {
+      renderPanes();
+      focusComposer();
+    }
     return;
   }
   await refreshSessions();
@@ -1897,7 +2486,9 @@ async function deleteSession(id) {
 
 async function rewindUserMessage(index, text, confirmDiscard) {
   const query = String(text || "").trim();
-  if (!query || busy || index < 0) return;
+  if (!query || index < 0 || refuseIfSendLocked()) return;
+  const owner = sessionId;
+  beginKernel(owner);
   const snapshot = transcript.slice();
   const savedCard = state.plan_card;
   const savedExec = state.execution;
@@ -1914,7 +2505,7 @@ async function rewindUserMessage(index, text, confirmDiscard) {
   let retryDiscard = false;
   let restore = false;
   try {
-    const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}/rewind`, {
+    const dto = await api(`/v1/session/${encodeURIComponent(owner)}/rewind`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1923,6 +2514,7 @@ async function rewindUserMessage(index, text, confirmDiscard) {
         mode,
         confirm_discard: Boolean(confirmDiscard),
       }),
+      owner,
     });
     if (dto && dto.needs_confirm) {
       if (confirmDiscard) return;
@@ -1934,22 +2526,23 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       return;
     }
     if (dto && dto.error && !dto.transcript) {
-      transcript.push({
+      pushTranscriptRow(owner, {
         kind: "error",
         text: (dto.error && dto.error.message) || "Rewind failed.",
         payload: dto.error || {},
       });
-      renderChat();
+      if (viewing(owner)) renderChat();
       return;
     }
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
-    filePreview = null;
-    renderPanes();
-    await refreshSessions();
-    await refreshWorkspace();
+    ingestDto(dto, { appendUser: false, owner });
+    applyServerTranscript(dto, owner);
+    if (viewing(owner)) {
+      filePreview = null;
+      renderPanes();
+      await refreshWorkspace();
+    }
   } finally {
-    if (restore) {
+    if (restore && viewing(owner)) {
       transcript = snapshot;
       persistTranscript();
       state.plan_card = savedCard;
@@ -1957,37 +2550,123 @@ async function rewindUserMessage(index, text, confirmDiscard) {
       state.run_id = savedRun;
       editingUserIndex = index;
     }
-    setBusy(false);
-    if (!retryDiscard && !restore) focusComposer();
+    settleOwnerReply(owner);
+    if (viewing(owner) && !retryDiscard && !restore) focusComposer();
   }
   if (retryDiscard) await rewindUserMessage(index, query, true);
 }
 
-function appendDtoError(dto) {
-  const err = (dto && dto.error) || { message: "Request failed." };
-  transcript.push({
-    kind: "error",
-    text: err.message || "Request failed.",
-    payload: err,
-  });
-  persistTranscript();
-}
-
-function adoptServerResult(dto) {
+function adoptServerResult(dto, owner) {
+  const targetOwner = owner || sessionId;
   if (dto && Array.isArray(dto.transcript)) {
-    ingestDto(dto, { appendUser: false });
-    applyServerTranscript(dto);
+    ingestDto(dto, { appendUser: false, owner: targetOwner });
+    applyServerTranscript(dto, targetOwner);
     return true;
   }
-  if (dto && dto.error) appendDtoError(dto);
+  if (dto && dto.error) {
+    const err = dto.error || { message: "Request failed." };
+    pushTranscriptRow(targetOwner, {
+      kind: "error",
+      text: err.message || "Request failed.",
+      payload: err,
+    });
+  }
   return false;
 }
 
-function applyServerTranscript(dto) {
+let busyTranscriptGen = 0;
+let busyTranscriptPoll = null;
+
+function transcriptRowsFor(owner) {
+  if (!owner || owner === sessionId) return transcript;
+  const parked = sessionWatches[owner];
+  return (parked && parked.transcript) || [];
+}
+
+function setTranscriptRows(owner, rows) {
+  if (!owner || owner === sessionId) {
+    transcript = rows;
+    persistTranscript();
+    const watch = sessionWatches[owner || sessionId];
+    if (watch) watch.transcript = transcript;
+    return;
+  }
+  const parked = sessionWatches[owner];
+  if (!parked) return;
+  parked.transcript = rows;
+  persistTranscriptFor(owner, parked.transcript);
+}
+
+function serverClarifyBehindLocal(localRows, serverRows) {
+  for (let i = localRows.length - 1; i >= 0; i -= 1) {
+    const local = localRows[i];
+    if (!local || (local.kind !== "clarify" && local.kind !== "clarification") || !clarifySettled(local)) continue;
+    const server = serverRows.find(
+      (row) => row && row.kind === local.kind && String(row.text || "") === String(local.text || "")
+    );
+    return Boolean(server && !clarifySettled(server));
+  }
+  return false;
+}
+
+function mergeBusyTranscript(dto, owner) {
   if (!dto || !Array.isArray(dto.transcript)) return;
-  const server = dto.transcript;
-  transcript = server.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
-  persistTranscript();
+  const server = dto.transcript.filter((row) => row && row.kind !== "plan_card" && row.kind !== "step_status");
+  const local = transcriptRowsFor(owner);
+  if (serverClarifyBehindLocal(local, server)) return;
+  if (server.length < local.length) return;
+  if (server.length === local.length) {
+    const settledAhead = server.some((row, idx) => {
+      if (!row || (row.kind !== "clarify" && row.kind !== "clarification") || !clarifySettled(row)) return false;
+      const prev = local[idx];
+      return !prev || !clarifySettled(prev);
+    });
+    if (!settledAhead) return;
+  }
+  setTranscriptRows(owner, server.slice());
+}
+
+function startBusyTranscriptPoll(owner) {
+  stopBusyTranscriptPoll();
+  const gen = busyTranscriptGen;
+  busyTranscriptPoll = setInterval(() => {
+    pullBusyTranscript(owner, gen);
+  }, 500);
+  pullBusyTranscript(owner, gen);
+}
+
+function stopBusyTranscriptPoll() {
+  busyTranscriptGen += 1;
+  if (busyTranscriptPoll) {
+    clearInterval(busyTranscriptPoll);
+    busyTranscriptPoll = null;
+  }
+}
+
+async function pullBusyTranscript(owner, gen) {
+  if (!owner || gen !== busyTranscriptGen) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(owner)}`);
+  if (gen !== busyTranscriptGen) return;
+  mergeBusyTranscript(dto, owner);
+  if (gen !== busyTranscriptGen || !viewing(owner)) return;
+  renderChat();
+}
+
+function applyServerTranscript(dto, owner) {
+  const targetOwner = owner || sessionId;
+  if (!dto || !Array.isArray(dto.transcript)) return;
+  const server = dto.transcript.filter((m) => m && m.kind !== "plan_card" && m.kind !== "step_status");
+  if (!targetOwner || targetOwner === sessionId) {
+    transcript = server;
+    persistTranscript();
+    const watch = sessionWatches[targetOwner || sessionId];
+    if (watch) watch.transcript = transcript;
+    return;
+  }
+  const parked = sessionWatches[targetOwner];
+  if (!parked) return;
+  parked.transcript = server;
+  persistTranscriptFor(targetOwner, server);
 }
 
 function mergeArtifactLists(left, right) {
@@ -2168,17 +2847,16 @@ async function refreshAttachments() {
   renderAttachChips();
 }
 
-async function ensureSessionForAttach() {
-  if (!sessionId) {
-    sessionId = newSessionId();
-    localStorage.setItem(STORAGE_SESSION, sessionId);
-  }
-  return sessionId;
+async function ensureSession() {
+  if (sessionId) return sessionId;
+  const created = await createSession();
+  return created || "";
 }
 
 async function uploadAttachmentFile(file) {
   if (!file) return;
-  await ensureSessionForAttach();
+  const id = await ensureSession();
+  if (!id) return;
   const form = new FormData();
   form.append("file", file, file.name || "paste.png");
   const res = await fetch(`/v1/session/${encodeURIComponent(sessionId)}/attachments`, {
@@ -2306,14 +2984,40 @@ function bindComposerAttachments() {
 }
 
 async function createSession() {
-  stopLivePoll();
-  dropRunWatch();
-  persistTranscript();
-  sessionId = newSessionId();
+  if (creatingSession) return creatingSession;
+  creatingSession = openNewSession().finally(() => {
+    creatingSession = null;
+  });
+  return creatingSession;
+}
+
+async function openNewSession() {
+  const previous = sessionId;
+  parkCurrentSession();
+  const dto = await api("/v1/sessions", { method: "POST" });
+  if (!dto || dto.error || !dto.session_id) {
+    if (previous) {
+      sessionId = previous;
+      restoreParked(previous);
+      setBusy(busy);
+    }
+    showStatusNotice((dto && dto.error && dto.error.message) || CREATE_FAILED);
+    renderPanes();
+    return "";
+  }
+  sessionId = String(dto.session_id);
   localStorage.setItem(STORAGE_SESSION, sessionId);
+  planCardHidden = false;
+  clarifyCardHidden = false;
+  busy = false;
+  backgrounded = false;
+  runAbort = null;
+  runStartedAt = 0;
+  runElapsedS = 0;
+  executeSseOpen = false;
+  stopElapsedClock();
   state = emptyState();
   transcript = [];
-  persistTranscript();
   clearOpenTabs();
   treeCollapsed = new Set();
   openProcessTurns = new Set();
@@ -2329,22 +3033,85 @@ async function createSession() {
   sessionAttachments = [];
   renderAttachChips();
   setAttachStatus("");
-  renderPanes();
+  const attach = $("btn-attach");
+  if (attach) attach.disabled = false;
+  applyComposerLock();
   await refreshSessions();
+  projectCurrentWatch();
+  renderPanes();
   focusComposer();
+  return sessionId;
+}
+
+async function revalidateWaitingSession(id) {
+  const watch = sessionWatches[id];
+  if (!watch || (!watch.busy && !watch.backgrounded)) return;
+  if (watch.backgrounded || watch.executeSseOpen) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
+  if (!dto || !hasSessionSnapshot(dto)) return;
+  if (dto.kernel_busy || isDtoRunning(dto)) {
+    mergeBusyTranscript(dto, id);
+    if (id === sessionId) renderChat();
+    return;
+  }
+  const localRows = id === sessionId ? transcript : (watch.transcript || []);
+  const server = Array.isArray(dto.transcript) ? dto.transcript : [];
+  const visible = server.filter((row) => row && row.kind !== "plan_card" && row.kind !== "step_status");
+  if (visible.length <= localRows.length) return;
+  ingestDto(dto, { appendUser: false, owner: id });
+  applyServerTranscript(dto, id);
+  settleOwnerReply(id);
+  if (id === sessionId) renderPanes();
 }
 
 async function switchSession(id) {
   if (!id || id === sessionId) return;
-  persistTranscript();
-  dropRunWatch();
+  unseenDone.delete(id);
+  followServerKernel = false;
+  parkCurrentSession();
   sessionId = id;
   localStorage.setItem(STORAGE_SESSION, sessionId);
+  planCardHidden = false;
+  clarifyCardHidden = false;
+  const parked = sessionWatches[id];
+  renderSessionList();
+  if (parked) {
+    restoreParked(id);
+    setBusy(busy);
+    renderAttachChips();
+    renderPanes();
+    focusComposer();
+    if (busy || backgrounded) await revalidateWaitingSession(id);
+    await refreshWorkspace();
+    renderPanes();
+    focusComposer();
+    return;
+  }
+  busy = false;
+  backgrounded = false;
+  runStartedAt = 0;
+  runElapsedS = 0;
+  executeSseOpen = false;
+  stopElapsedClock();
   transcript = [];
-  const dto = await api(`/v1/session/${encodeURIComponent(id)}`);
-  ingestDto(dto);
-  applySessionMode(dto);
-  applyServerTranscript(dto);
+  state = emptyState();
+  sessionLoading = true;
+  applyComposerLock();
+  renderPanes();
+  let dto = null;
+  try {
+    dto = await api(`/v1/session/${encodeURIComponent(id)}`);
+  } finally {
+    sessionLoading = false;
+  }
+  if (hasSessionSnapshot(dto)) {
+    ingestDto(dto);
+    applySessionMode(dto);
+    applyServerTranscript(dto);
+  } else {
+    transcript = [];
+    showStatusNotice((dto && dto.error && dto.error.message) || "Session not found.");
+  }
   clearOpenTabs();
   treeCollapsed = new Set();
   openProcessTurns = new Set();
@@ -2354,31 +3121,38 @@ async function switchSession(id) {
   await refreshWorkspace();
   await refreshProvider();
   await refreshAttachments();
+  setBusy(false);
+  if (dto && dto.kernel_busy && !isDtoRunning(dto)) {
+    serverKernelOwner = id;
+    followServerKernel = true;
+    setBusy(true);
+  }
   renderPanes();
-  applyRunningWatch(dto);
+  if (hasSessionSnapshot(dto)) applyRunningWatch(dto);
+  if (dto && dto.kernel_busy && !isDtoRunning(dto) && !busy) setBusy(true);
+  applyComposerLock();
   focusComposer();
 }
 
 async function refreshSessions() {
   const data = await api("/v1/sessions");
-  sessions = data.sessions || [];
-  const onServer = new Set(sessions.map((row) => row.session_id));
-  let flushed = false;
-  for (const id of Object.keys(pendingSessionNames)) {
-    if (onServer.has(id) && (await flushPendingSessionName(id))) flushed = true;
-  }
-  if (flushed) {
-    const again = await api("/v1/sessions");
-    sessions = again.sessions || [];
-  }
-  if (sessionId && !sessions.some((row) => row.session_id === sessionId)) {
-    const label = pendingSessionNames[sessionId] || "New session";
-    sessions = [
-      { session_id: sessionId, name: label, title: label, last_user: "", job: "", local_only: true },
-      ...sessions,
-    ];
-  }
+  const previous = noteServerKernel((data && data.sessions) || []);
+  sessions = (data && data.sessions) || [];
+  const finishedHere = Boolean(
+    followServerKernel && previous && previous === sessionId && !serverKernelOwner && !localKernelOwner
+  );
+  if (finishedHere) followServerKernel = false;
   renderSessionList();
+  renderNow();
+  applyComposerLock();
+  if (!finishedHere) return;
+  const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
+  if (hasSessionSnapshot(dto)) {
+    ingestDto(dto);
+    applyServerTranscript(dto);
+  }
+  setBusy(false);
+  renderPanes();
 }
 
 async function refreshWorkspace() {
@@ -2401,6 +3175,12 @@ async function refreshProvider() {
   renderNow();
   renderProviderBadge();
   renderStatusbar();
+}
+
+async function refreshSystem() {
+  const data = await api("/v1/system");
+  if (data && !data.error) systemInfo = data;
+  if (openTabs.some((tab) => tab.type === "settings")) renderArtifacts();
 }
 
 function timeBucketLabel(mtimeSeconds, nowMs) {
@@ -2433,7 +3213,7 @@ function bucketedNodes(nodes, nowMs) {
 }
 
 function renderTimeGroupHead(key, label, open) {
-  const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+  const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}" aria-label="${escapeHtml(label)}">${icon(open ? "chevronDown" : "chevronRight")}</button>`;
   return `<div class="time-group-head">${twist}<span class="time-bucket">${escapeHtml(label)}</span></div>`;
 }
 
@@ -2456,11 +3236,12 @@ function renderSessionList() {
             : `<span class="sid">${escapeHtml(name)}</span>`;
           const meta = last && last !== name ? `<span class="meta">${escapeHtml(last)}</span>` : "";
           const runTag = row.running ? `<span class="meta running-tag">Running</span>` : "";
+          const mark = `<span class="session-status">${sessionMark(row.session_id)}</span>`;
           return `<div class="session-item ${active}" data-session-id="${escapeHtml(row.session_id)}">
-        <div class="session-main">${nameBlock}${meta}${runTag}</div>
+        <div class="session-main"><div class="session-title-row">${mark}${nameBlock}</div>${meta}${runTag}</div>
         <div class="session-actions">
-          <button type="button" class="icon-btn ghost" data-session-rename title="Rename">✎</button>
-          <button type="button" class="icon-btn ghost" data-session-delete title="Delete">🗑</button>
+          <button type="button" class="icon-btn ghost" data-session-rename title="Rename">${icon("pencil")}</button>
+          <button type="button" class="icon-btn ghost" data-session-delete title="Delete">${icon("trash")}</button>
         </div>
       </div>`;
         })
@@ -2481,6 +3262,7 @@ function renderSessionList() {
       }
       if (ev.key === "Escape") {
         renamingSessionId = "";
+        pendingMarkId = "";
         renderSessionList();
       }
     });
@@ -2566,7 +3348,12 @@ function lastClarifyIndex() {
 function transcriptRowHidden(msg, index) {
   if (!msg) return true;
   if (msg.kind === "plan_card" || msg.kind === "step_status" || msg.kind === "design_card" || msg.kind === "kb_write") return true;
-  if ((msg.kind === "clarification" || msg.kind === "clarify") && shouldShowLiveClarify() && index === lastClarifyIndex()) {
+  if (
+    (msg.kind === "clarification" || msg.kind === "clarify") &&
+    !clarifySettled(msg) &&
+    shouldShowLiveClarify() &&
+    index === lastClarifyIndex()
+  ) {
     return true;
   }
   if (
@@ -2615,19 +3402,41 @@ function renderProcessGroup(html, foldable, turnKey) {
   if (!foldable) return html;
   const open = openProcessTurns.has(turnKey);
   const label = open ? "Hide process" : "Show process";
-  const arrow = open ? "▾" : "▸";
+  const arrow = icon(open ? "chevronDown" : "chevronRight");
   const body = open ? `<div class="process-body">${html}</div>` : "";
   return `<div class="process-fold" data-testid="process-fold"><button type="button" class="ghost process-toggle" data-process-turn="${turnKey}" aria-expanded="${open ? "true" : "false"}">${arrow} ${label}</button>${body}</div>`;
 }
 
+function clarifyReceiptHtml(msg) {
+  const line = clarifyReceiptLine(msg);
+  const answered = line
+    ? line.split("\n").filter(Boolean).map((row) => `<div class="answered">${escapeHtml(row)}</div>`).join("")
+    : "";
+  return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
+}
+
+function trailingStageNotice() {
+  for (let i = transcript.length - 1; i >= 0; i -= 1) {
+    const msg = transcript[i];
+    if (!msg) continue;
+    if (msg.kind === "user_text") return null;
+    if (msg.kind === "mode_notice" && msg.payload && msg.payload.stage_id) return msg;
+    if (msg.kind === "result" || msg.kind === "error" || msg.kind === "plan_ready" || msg.kind === "clarify" || msg.kind === "clarification") {
+      return null;
+    }
+  }
+  return null;
+}
+
 function renderProcessMessage(msg, stepsHtml) {
   if (msg.kind === "clarification" || msg.kind === "clarify") {
-    const answer = msg.payload && msg.payload.answer ? String(msg.payload.answer) : "";
-    const answered = answer ? `<div class="answered">Answered: ${escapeHtml(answer)}</div>` : "";
-    return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
+    return clarifyReceiptHtml(msg);
   }
   if (msg.kind === "mode_notice") {
-    return `<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}</div></div>`;
+    const stage = trailingStageNotice();
+    const spinning = planningWait() && stage && msg.payload && msg.payload.stage_id && stage.payload.stage_id === msg.payload.stage_id && stage.text === msg.text;
+    const extra = spinning ? busyMarkup("") : "";
+    return `<div class="msg"><div class="msg-role">Notice</div><div class="bubble warn">${escapeHtml(msg.text || "")}${extra}</div></div>`;
   }
   if (msg.kind === "executing") {
     const steps = stepsHtml ? `<div class="running-steps">${stepsHtml}</div>` : "";
@@ -2659,6 +3468,33 @@ function resultArtifactButtons(msg) {
   return `<div class="actions result-artifacts">${buttons}</div>`;
 }
 
+function renderRunSteps(msg) {
+  const steps = (msg.payload && msg.payload.steps) || [];
+  if (!steps.length) return "";
+  const rows = steps.map((step) => {
+    const error = step.error ? `<div>Error: ${escapeHtml(step.error)}</div>` : "";
+    const arts = (step.artifacts || []).map((art) => {
+      const title = String(art.title || art.type || "artifact");
+      return `<button type="button" class="ghost" data-open-artifact="${escapeHtml(art.type || "")}" data-open-artifact-run="${escapeHtml(art.run_id || "")}" data-open-artifact-title="${escapeHtml(art.title || "")}">${escapeHtml(title)}</button>`;
+    }).join("");
+    const artRow = arts ? `<div class="actions">${arts}</div>` : "";
+    return `<li>Step ${escapeHtml(step.step_id || "")} ${escapeHtml(step.skill_name || "")}: ok=${escapeHtml(String(step.ok))}<div>inputs: ${escapeHtml(step.input_summary || "(none)")}</div>${error}${artRow}</li>`;
+  }).join("");
+  return `<ol class="step-list" data-testid="run-steps">${rows}</ol>`;
+}
+
+function renderRunDebug(msg, index) {
+  const view = msg.payload && msg.payload.run_view;
+  if (!view) return "";
+  const open = openRunDebug.has(index);
+  const label = open ? "Hide debug" : "Debug";
+  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${index}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
+  if (!open) return `<div class="actions">${button}</div>`;
+  const fills = (view.fill_output || []).map((item) => `<pre>${escapeHtml(item)}</pre>`).join("");
+  const rejects = (view.validation_rejects || []).map((item) => `<div>${escapeHtml(item)}</div>`).join("");
+  return `<div class="actions">${button}</div><div class="process-body" data-testid="run-debug"><div>Classify protocol:</div><pre>${escapeHtml(view.classify_protocol || "")}</pre><div>Fill output:</div>${fills}<div>Validation rejects:</div>${rejects}</div>`;
+}
+
 function renderVisibleMessage(msg, index) {
   if (msg.kind === "user_text") {
     if (editingUserIndex === index) {
@@ -2682,10 +3518,10 @@ function renderVisibleMessage(msg, index) {
           </div>
         </div>`;
     }
-    return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">✎</button></div></div>`;
+    return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">${icon("pencil")}</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderRunSteps(msg)}${renderRunDebug(msg, index)}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);
@@ -2719,6 +3555,11 @@ function renderTurn(range, isLatest) {
   for (let i = range.start; i < range.end; i += 1) {
     const msg = transcript[i];
     if (transcriptRowHidden(msg, i)) continue;
+    if (msg.kind === "mode_notice" && msg.payload && msg.payload.stage_id === "match") {
+      flush();
+      parts.push(renderProcessMessage(msg, ""));
+      continue;
+    }
     if (PROCESS_KINDS.has(msg.kind)) {
       pending.push(renderProcessMessage(msg, i === execAt ? stepsHtml : ""));
       continue;
@@ -2740,11 +3581,14 @@ function renderChat() {
   if (!host) return;
   const stick = host.scrollHeight - host.scrollTop - host.clientHeight < 48;
   const parts = [];
-  if (!transcript.length) {
+  if (sessionLoading && !transcript.length) {
+    parts.push(`<div class="empty-hint"><p>Loading…</p></div>`);
+  } else if (!transcript.length) {
+    const exampleDisabled = sendLocked() ? "disabled" : "";
     parts.push(`<div class="empty-hint">
       <p>This session is empty. Try a beginner step:</p>
       <div class="examples">${EXAMPLES.map(
-        (ex, i) => `<button type="button" class="example" data-example="${i}">${escapeHtml(ex.mode.toUpperCase())}: ${escapeHtml(ex.text)}</button>`
+        (ex, i) => `<button type="button" class="example" data-example="${i}" ${exampleDisabled}>${escapeHtml(ex.mode.toUpperCase())}: ${escapeHtml(ex.text)}</button>`
       ).join("")}</div>
     </div>`);
   }
@@ -2762,19 +3606,26 @@ function renderChat() {
   }
   if (busy || backgrounded) {
     if (planningWait()) {
-      parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">Planning…</span></div></div>`);
+      if (!trailingStageNotice()) {
+        parts.push(`<div class="msg" id="busy-msg" data-testid="planning-wait"><div class="msg-role">Assistant</div><div class="bubble busy-bubble">${busyMarkup("Planning")}</div></div>`);
+      }
     } else {
       const skill = runningSkillName();
       const skillLine = skill ? `<div class="busy-skill">${escapeHtml(skill)}</div>` : "";
       const backgroundBtn = backgrounded
         ? ""
         : `<button type="button" class="ghost" id="btn-background-run">Background</button>`;
-      parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble"><span class="busy-dot" id="busy-elapsed">${formatRunClock(backgrounded ? "Background" : "Working")}</span>${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
+      const label = formatRunClock(backgrounded ? "Background" : "Working");
+      parts.push(`<div class="msg" id="busy-msg"><div class="msg-role">Assistant</div><div class="bubble busy-bubble">${busyMarkup(label)}${skillLine}${progressBarHtml()}<div class="actions">${backgroundBtn}<button type="button" class="ghost" id="btn-stop-watch">Stop</button></div></div></div>`);
     }
   }
-  parts.push(renderClarification());
-  parts.push(renderPlanCard());
   host.innerHTML = parts.join("");
+  const cards = $("live-cards");
+  const cardHtml = `${renderClarification()}${renderPlanCard()}`;
+  if (cards) {
+    cards.innerHTML = cardHtml;
+    cards.hidden = !cardHtml;
+  }
   decorateCodeBlocks(host);
   ensureOutputAgeTimer();
   const rewind = $("rewind-text");
@@ -2790,7 +3641,7 @@ function renderChat() {
     rewind.focus();
     rewind.setSelectionRange(rewind.value.length, rewind.value.length);
   }
-  const clarifyOpen = host.querySelector("input[data-clarify-open]");
+  const clarifyOpen = (cards || host).querySelector("input[data-clarify-open]");
   if (clarifyOpen) {
     clarifyOpen.addEventListener("input", () => {
       const slot = String(clarifyOpen.getAttribute("data-clarify-open") || "").trim();
@@ -2837,9 +3688,10 @@ function clarifyLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
-function renderClarifyStepOptions(row, slotName, lock) {
+function renderClarifyStepOptions(row, index, lock) {
   const raw = (row && row.options) || [];
-  const draft = clarifyWizard.drafts[slotName];
+  const key = String(index);
+  const draft = clarifyWizard.drafts[key];
   const chipSelected = draft && draft.kind === "chip" ? String(draft.value || "") : "";
   const openSelected = draft && draft.kind === "open";
   const openValue = openSelected ? String(draft.value || "") : "";
@@ -2854,34 +3706,62 @@ function renderClarifyStepOptions(row, slotName, lock) {
   const rows = items
     .map((item, index) => {
       const active = chipSelected && chipSelected === item.id ? " selected" : "";
-      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-slot="${escapeHtml(slotName)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
+      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-index="${escapeHtml(key)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
     })
     .join("");
+  const openSpec = row && row.open && typeof row.open === "object" ? row.open : null;
+  const openLabel = openSpec ? String(openSpec.label || "").trim() : "";
   const openLetter = clarifyLetter(items.length);
   const openActive = openSelected ? " selected" : "";
-  const openRow = slotName
-    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(slotName)}" value="${escapeHtml(openValue)}" placeholder="请输入 / Please input..." ${lock} /></div>`
+  const openRow = openSpec && key !== ""
+    ? `<div class="clarify-option clarify-option-open${openActive}" data-testid="clarify-open-row"><span class="clarify-letter">${openLetter}</span><input data-clarify-open="${escapeHtml(key)}" value="${escapeHtml(openValue)}" placeholder="${escapeAttr(openLabel)}" ${lock} /></div>`
     : "";
-  return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}</div>`;
+  const fieldPlaceholder = exampleFromRow(row) || "请输入 / Please input...";
+  const fieldRow = !items.length && !openSpec && key !== ""
+    ? `<input data-clarify-open="${escapeHtml(key)}" value="${escapeHtml(openValue)}" placeholder="${escapeHtml(fieldPlaceholder)}" ${lock} />`
+    : "";
+  return `<div class="clarify-options" data-testid="clarify-options">${rows}${openRow}${fieldRow}</div>`;
+}
+
+function exampleFromRow(row) {
+  if (!row || typeof row !== "object") return "";
+  return String(row.example || row.format || "").trim();
 }
 
 function renderClarification() {
-  const missing = (state.sidebar && state.sidebar.missing) || [];
   const live = liveClarifyMessage();
-  const clar = live || (missing.length ? latestClarify() : null);
+  const clar = live;
   if (!shouldShowLiveClarify()) return "";
-  if (!clar && !missing.length) return "";
+  if (!clar) return "";
   ensureClarifyWizard(clar);
-  let pendingItems = clarifyPendingItems(clar);
-  if (!pendingItems.length && missing.length) {
-    pendingItems = missing.map((name) => ({ name: String(name) }));
+  const pendingItems = clarifyPendingItems(clar);
+  if (!pendingItems.length) {
+    const cardText = clar ? String(clar.text || "") : "";
+    const lock = busy ? "disabled" : "";
+    const prompt = cardText ? `<p>${escapeHtml(cardText)}</p>` : "";
+    let foot = "";
+    if (clarifyWizard.ending) {
+      foot = `<div class="ix-card-foot" data-testid="clarify-end-confirm">
+      <button type="button" class="ix-text-btn" id="btn-clarify-end-back" ${lock}>Back</button>
+      <button type="button" class="primary" id="btn-clarify-end-confirm" title="Confirm end" ${lock}>Confirm</button>
+    </div>`;
+    } else {
+      foot = `<div class="ix-card-foot">
+      <button type="button" class="ix-text-btn" id="btn-clarify-end" title="End this request" ${lock}>End</button>
+    </div>`;
+    }
+    return `<div class="ix-card" data-testid="clarification-form">
+    <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3></div>
+    <div class="ix-card-body">${prompt}</div>
+    ${foot}
+  </div>`;
   }
   const n = pendingItems.length || 1;
   const step = Math.min(Math.max(clarifyWizard.step, 1), n);
   clarifyWizard.step = step;
   const row = pendingItems[step - 1] || null;
-  const slotName = row ? String(row.name || row || "") : "";
-  const hasDraft = Boolean(slotName && clarifyDraftValue(slotName));
+  const index = step - 1;
+  const hasDraft = Boolean(clarifyDraftValue(index));
   const allReady = clarifyAllDraftsReady(pendingItems);
   const lock = busy ? "disabled" : "";
   const prevDisabled = busy || n <= 1 || step <= 1 ? "disabled" : "";
@@ -2889,9 +3769,17 @@ function renderClarification() {
   const submitDisabled = busy || !allReady ? "disabled" : "";
   const hint = row && typeof row === "object" ? String(row.hint || "") : "";
   const error = row && typeof row === "object" ? String(row.error || "") : "";
-  const hintHtml = hint ? `<span class="slot-hint ix-card-meta">${escapeHtml(hint)}</span>` : "";
+  const format = row && typeof row === "object" ? String(row.format || "") : "";
+  const example = row && typeof row === "object" ? String(row.example || "") : "";
+  const constraint = row && typeof row === "object" ? String(row.constraint || "") : "";
+  const promptText = row && typeof row === "object" ? String(row.prompt || "") : "";
+  const hintHtml = hint ? `<span class="slot-hint ix-card-meta" data-testid="clarify-hint">${escapeHtml(hint)}</span>` : "";
+  const formatHtml = format ? `<span class="slot-format ix-card-meta" data-testid="clarify-format">${escapeHtml(format)}</span>` : "";
+  const exampleHtml = example ? `<span class="slot-example ix-card-meta" data-testid="clarify-example">${escapeHtml(example)}</span>` : "";
+  const constraintHtml = constraint ? `<p class="clarify-constraint" data-testid="clarify-constraint">${escapeHtml(constraint)}</p>` : "";
+  const questionHtml = promptText ? `<p class="clarify-question" data-testid="clarify-question">${escapeHtml(promptText)}</p>` : "";
   const errorHtml = error ? `<span class="slot-error ix-card-meta">${escapeHtml(error)}</span>` : "";
-  const optionRows = renderClarifyStepOptions(row, slotName, lock);
+  const optionRows = renderClarifyStepOptions(row, index, lock);
   const pager = `<div class="ix-card-pager" data-testid="clarify-nav">
       <button type="button" class="ghost" id="btn-clarify-prev" ${prevDisabled}>&lt;</button>
       <span class="clarify-step" data-testid="clarify-step">${step} of ${n}</span>
@@ -2909,17 +3797,23 @@ function renderClarification() {
       <button type="button" class="primary" id="btn-clarify" ${submitDisabled}>Submit</button>
     </div>`;
   }
-  const prompt = clar
-    ? `<p>${escapeHtml(clar.text || "")}</p>`
-    : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
+  const cardText = clar ? String(clar.text || "") : "";
+  const sameLine = Boolean(promptText.trim()) && cardText.trim() === promptText.trim();
+  const showCardText = Boolean(cardText) && (cardText.includes("Last chance") || !sameLine);
+  const prompt = showCardText && cardText
+    ? `<p>${escapeHtml(cardText)}</p>`
+    : clar
+      ? ""
+      : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
   return `<div class="ix-card" data-testid="clarification-form">
     <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3>${pager}</div>
-    <div class="ix-card-body">${prompt}${hintHtml}${errorHtml}${optionRows}</div>
+    <div class="ix-card-body">${prompt}${constraintHtml}${questionHtml}${hintHtml}${formatHtml}${exampleHtml}${errorHtml}${optionRows}</div>
     ${foot}
   </div>`;
 }
 
 function renderPlanCard() {
+  if (planCardHidden) return "";
   const card = state.plan_card;
   const missing = (state.sidebar && state.sidebar.missing) || [];
   if (!card || !card.confirmable || mode === "ask" || missing.length) return "";
@@ -3293,7 +4187,7 @@ function renderProviderForm() {
     const detail = row.builtin ? "built-in" : (row.api_key_present ? "key set" : "no key");
     const active = row.id === activeId;
     const tools = !row.builtin
-      ? `<div class="provider-actions"><button type="button" class="icon-btn ghost" data-provider-edit="${escapeHtml(row.id)}" title="Edit">✎</button><button type="button" class="icon-btn ghost provider-delete" data-provider-delete="${escapeHtml(row.id)}" title="Delete">🗑</button></div>`
+      ? `<div class="provider-actions"><button type="button" class="icon-btn ghost" data-provider-edit="${escapeHtml(row.id)}" title="Edit">${icon("pencil")}</button><button type="button" class="icon-btn ghost provider-delete" data-provider-delete="${escapeHtml(row.id)}" title="Delete">${icon("trash")}</button></div>`
       : "";
     const meta = `${model ? `${escapeHtml(model)} · ` : ""}${detail}`;
     return `<div class="provider-row${active ? " is-active" : ""}" data-provider-id="${escapeHtml(row.id)}">
@@ -3304,21 +4198,44 @@ function renderProviderForm() {
       ${tools}
     </div>`;
   }).join("");
-  return `<div class="provider-list">${list}</div><div class="settings-add-row"><button type="button" class="icon-btn ghost" id="btn-prov-add" title="Add provider" aria-label="Add provider">+</button></div>`;
+  return `<div class="provider-list">${list}</div><div class="settings-add-row"><button type="button" class="icon-btn ghost" id="btn-prov-add" title="Add provider" aria-label="Add provider">${icon("plus")}</button></div>`;
+}
+
+function versionSentence(version, released) {
+  const ver = version == null || String(version).trim() === "" ? "" : String(version).trim();
+  const day = released == null ? "" : String(released).trim();
+  if (!ver) return "—";
+  if (!day) return `Version ${ver}`;
+  return `Version ${ver}, released on ${day}`;
+}
+
+function settingsStack(title, contentHtml) {
+  return `<p class="settings-item-title">${escapeHtml(title)}</p>
+      <div class="settings-quit-row"><span class="settings-quit-hint">${contentHtml}</span></div>`;
+}
+
+function dataSourceLine() {
+  const ds = (systemInfo && systemInfo.datasource) || {};
+  const status = ds.status ? String(ds.status) : "not connected";
+  const source = ds.source == null || String(ds.source).trim() === "" ? "—" : String(ds.source);
+  return escapeHtml(`status: ${status}, source: ${source}`);
 }
 
 function renderSettingsBody() {
   const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-  const serverOpen = !treeCollapsed.has("settings:server");
+  const systemOpen = !treeCollapsed.has("settings:system");
   const appearanceOpen = !treeCollapsed.has("settings:appearance");
   const providersOpen = !treeCollapsed.has("settings:providers");
-  const serverBody = serverOpen
+  const aboutOpen = !treeCollapsed.has("settings:about");
+  const systemBody = systemOpen
     ? `<div class="settings-group-body">
       <p class="settings-item-title">Workbench</p>
       <div class="settings-quit-row">
         <button type="button" class="danger" id="btn-quit-server" title="Stops this workbench process and frees its port.">Quit</button>
         <span class="settings-quit-hint">Stops this workbench process and frees its port.</span>
       </div>
+      <p class="settings-item-title">DataSource</p>
+      <div class="settings-quit-row"><span class="settings-quit-hint">${dataSourceLine()}</span></div>
     </div>`
     : "";
   const appearanceBody = appearanceOpen
@@ -3336,11 +4253,22 @@ function renderSettingsBody() {
     </div></div>`
     : "";
   const providersBody = providersOpen ? `<div class="settings-group-body">${renderProviderForm()}</div>` : "";
+  const docUrl = "https://qteasy.readthedocs.io/zh-cn/latest/";
+  const aboutBody = aboutOpen
+    ? `<div class="settings-group-body">
+      ${settingsStack("SYSTEM (QTEASY)", escapeHtml(versionSentence(systemInfo && systemInfo.qteasy, systemInfo && systemInfo.qteasy_released)))}
+      ${settingsStack("Agent (QTEASY-AI)", escapeHtml(versionSentence(systemInfo && systemInfo.qteasy_ai, systemInfo && systemInfo.qteasy_ai_released)))}
+      ${settingsStack("Author", escapeHtml("Jackie PENG, jackie_pengzhao@163.com"))}
+      ${settingsStack("LICENSE", escapeHtml("BSD 3-Clause License. Redistribution is allowed when the copyright notice and disclaimer are kept."))}
+      ${settingsStack("DOCUMENTS", `<a class="settings-doc-link" href="${docUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(docUrl)}</a>`)}
+    </div>`
+    : "";
   return `<div class="settings-panel">
     <h3>Settings</h3>
-    <div class="time-group">${renderTimeGroupHead("settings:server", "SERVER", serverOpen)}${serverBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:system", "SYSTEM", systemOpen)}${systemBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:appearance", "APPEARANCE", appearanceOpen)}${appearanceBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:providers", "PROVIDERS", providersOpen)}${providersBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:about", "ABOUT", aboutOpen)}${aboutBody}</div>
   </div>`;
 }
 
@@ -3522,11 +4450,34 @@ function slotTone(slot) {
   return "unconfirmed";
 }
 
+function formatSessionUpdated(mtimeSeconds) {
+  const mtime = Number(mtimeSeconds);
+  if (!Number.isFinite(mtime) || mtime <= 0) return "—";
+  const then = new Date(mtime * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${then.getFullYear()}-${pad(then.getMonth() + 1)}-${pad(then.getDate())} ${pad(then.getHours())}:${pad(then.getMinutes())}`;
+}
+
+function nowClipLine(label, value, clip) {
+  const shown = value == null || String(value).trim() === "" ? "—" : String(value);
+  const text = `${label}: ${shown}`;
+  const useClip = clip !== false;
+  const cls = useClip ? "now-line clip" : "now-line";
+  const title = useClip ? ` title="${escapeAttr(text)}"` : "";
+  return `<p class="${cls}"${title}><span class="now-label">${escapeHtml(label)}:</span> ${escapeHtml(shown)}</p>`;
+}
+
 function renderNow() {
   const host = $("workspace-now");
   if (!host) return;
   const bar = state.sidebar || {};
   const job = (bar.active_intent && bar.active_intent.job) || "—";
+  const currentSession = sessions.find((row) => row.session_id === sessionId);
+  const sessionLines = [
+    nowClipLine("Session ID", sessionId || "—"),
+    nowClipLine("Session Name", sessionDisplayName(currentSession) || sessionId || "—"),
+    nowClipLine("Last Update", formatSessionUpdated(currentSession && currentSession.mtime)),
+  ].join("");
   const missing = bar.missing || [];
   const slots = bar.slots || [];
   const slotRows = slots
@@ -3554,15 +4505,16 @@ function renderNow() {
   const nowOpen = !treeCollapsed.has("workspace:now");
   const auditOpen = !treeCollapsed.has("workspace:audit");
   const nowBody = nowOpen
-    ? `<div class="now-job"><p class="now-v">Job: ${escapeHtml(job)}</p>
+    ? `<div class="now-job">${sessionLines}
+    ${nowClipLine("Job", job, false)}
     ${runLine}
     ${pipe}</div>
     ${missingLine}
     ${slotBlock}`
     : "";
   const auditBody = auditOpen
-    ? `<p>Plan: ${escapeHtml(bar.current_plan_id || "—")}</p>
-      <p>Run: ${escapeHtml(state.run_id || "—")}</p>`
+    ? `${nowClipLine("Plan", bar.current_plan_id || "—", false)}
+      ${nowClipLine("Run", state.run_id || "—", false)}`
     : "";
   host.innerHTML = `<div class="time-group">${renderTimeGroupHead("workspace:now", "NOW", nowOpen)}${nowBody}</div>
     <div class="time-group">${renderTimeGroupHead("workspace:audit", "AUDIT", auditOpen)}${auditBody}</div>`;
@@ -3729,7 +4681,7 @@ function renderWorkspace() {
         .map((node) => {
           const key = `${node.kind}::${node.run_id || ""}`;
           const open = !treeCollapsed.has(key);
-          const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>`;
+          const twist = `<button type="button" class="tree-twist" data-tree-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}" aria-label="${escapeHtml(node.label || "Toggle")}">${icon(open ? "chevronDown" : "chevronRight")}</button>`;
           const head = node.kind === "plan"
             ? `<button type="button" class="${workspaceTreeClass(arts[node.art_index])}" data-art-index="${node.art_index}">${escapeHtml(node.label || "plan")}</button>`
             : `<span class="dir-name">${escapeHtml(node.label || "Run")}</span>`;
@@ -3771,19 +4723,58 @@ mountShell();
 renderMode();
 
 async function restoreCurrentSession() {
+  const requestedFor = String(sessionId || "");
+  const data = await api("/v1/sessions");
+  sessions = (data && data.sessions) || [];
+  noteServerKernel(sessions);
+  const current = String(sessionId || "").trim();
+  if (current && current !== requestedFor) {
+    localStorage.setItem(STORAGE_SESSION, current);
+    const knownNow = sessions.some((row) => row && row.session_id === current);
+    if (!knownNow) await refreshSessions();
+    else renderPanes();
+    await refreshProvider();
+    await refreshSystem();
+    applyComposerLock();
+    projectCurrentWatch();
+    return;
+  }
+  const saved = current;
+  const known = sessions.some((row) => row.session_id === saved);
+  if (known) sessionId = saved;
+  else if (sessions.length) sessionId = String(sessions[0].session_id || "");
+  else sessionId = "";
+  if (sessionId) localStorage.setItem(STORAGE_SESSION, sessionId);
+  else localStorage.removeItem(STORAGE_SESSION);
+  if (!sessionId) {
+    transcript = [];
+    state = emptyState();
+    renderPanes();
+    await refreshProvider();
+    await refreshSystem();
+    return;
+  }
   const dto = await api(`/v1/session/${encodeURIComponent(sessionId)}`);
-  if (dto && !dto.error) {
+  if (hasSessionSnapshot(dto)) {
     ingestDto(dto);
     applySessionMode(dto);
     applyServerTranscript(dto);
   } else {
     transcript = [];
   }
-  await refreshSessions();
   await refreshWorkspace();
   await refreshProvider();
+  await refreshSystem();
   await refreshAttachments();
   renderPanes();
+  if (hasSessionSnapshot(dto)) applyRunningWatch(dto);
+  if (dto && dto.kernel_busy && !isDtoRunning(dto) && !busy) {
+    serverKernelOwner = sessionId;
+    followServerKernel = true;
+    setBusy(true);
+  }
+  applyComposerLock();
+  projectCurrentWatch();
 }
 
 restoreCurrentSession();

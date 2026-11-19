@@ -130,15 +130,20 @@ class TestAiA0Refactor(unittest.TestCase):
         """验证 Planner 三段式输出包含 planner_trace。"""
 
         registry = SkillRegistry()
-        metadata = SkillMetadata(
-            name="qt.ai.data.summary_kline",
-            version="0.1.0",
-            summary="summary",
-            inputs_schema={},
-            outputs_schema={},
-            side_effects=SkillSideEffects(),
-        )
-        registry.register(metadata, lambda **_: {"ok": True})
+        for name in (
+            "qt.ai.data.kline",
+            "qt.ai.hp.volatility",
+            "qt.ai.hp.describe",
+        ):
+            metadata = SkillMetadata(
+                name=name,
+                version="0.1.0",
+                summary=name,
+                inputs_schema={},
+                outputs_schema={},
+                side_effects=SkillSideEffects(),
+            )
+            registry.register(metadata, lambda **_: {"ok": True})
         planner = Planner(registry=registry)
         plan = planner.build_plan("show summary of 000001")
 

@@ -1,0 +1,23 @@
+{
+  "id": "process_data",
+  "tags": ["process", "proc", "realize", "cash", "holdings"],
+  "keywords": [
+    "过程数据是什么",
+    "proc.own_cash",
+    "策略里怎么读持仓和现金",
+    "proc.own_amounts",
+    "process data"
+  ],
+  "title": "Process data: cash and holdings inside realize()",
+  "summary": "proc.* is runtime account state—cash, holdings, and completed fills—read with get_data. Do not declare it in data_types. The current step cannot see its own fills.",
+  "narrative": "Process data is account state that changes as a backtest or simulated-live run proceeds: cash, holdings, and completed fills. It is not a table you download and not a DataType you declare in data_types.\n\nInside realize(), read it with get_data('proc.<field>'), for example proc.own_cash or proc.own_amounts. The engine injects only what is already known at the start of the current step. The strategy cannot see this step's fills while it is still deciding the signal. The same get_data call is what backtest and simulated live both provide.\n\nThe design note keeps the field list and the static-versus-dynamic branch. This card does not enumerate every proc.* name and does not describe engine internals.",
+  "python_code": "class _Sketch:\n    def realize(self):\n        cash = self.get_data('proc.own_cash')\n        holdings = self.get_data('proc.own_amounts')\n        return cash, holdings",
+  "risk_notes": "Ask only explains the contract. Reading proc.* does not start a backtest or a trader.",
+  "type": "concept",
+  "manual_anchor": "docs/source/design/09-process-data-and-dynamic-backtest.md",
+  "topics": ["strategy"],
+  "relations": [
+    {"rel": "see_also", "to": "strategy_realize"},
+    {"rel": "see_also", "to": "lookahead_isolation"}
+  ]
+}

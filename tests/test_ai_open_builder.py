@@ -17,13 +17,6 @@ from qteasy_ai.planner import Planner
 
 
 GOLDEN_D1 = "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测"
-_BUILDER_SKILLS = [
-    "qt.ai.strategy.spec_from_nl",
-    "qt.ai.strategy.codegen_hybrid",
-    "qt.ai.strategy.sanity_check",
-    "qt.ai.operator.build_from_spec",
-    "qt.ai.backtest.run_builtin",
-]
 
 
 class TestAiOpenBuilder(unittest.TestCase):
@@ -65,7 +58,8 @@ class TestAiOpenBuilder(unittest.TestCase):
         print(" skills:", names)
         print(" design_loop:", (plan.assumptions or {}).get("design_loop"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "strategy.builder")
-        self.assertEqual(names, _BUILDER_SKILLS)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "query|strategy_id")
         self.assertFalse((plan.assumptions or {}).get("design_loop"))
 
 

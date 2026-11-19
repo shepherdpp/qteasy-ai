@@ -22,13 +22,12 @@
       "mode": "plan",
       "query": "帮我看 Tushare 是否配好、本地缺哪些表",
       "expected_job": "env.ready",
-      "expected_skills": [
-        "qt.ai.env.check_tushare",
-        "qt.ai.env.overview_tables"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "table_name",
       "tutorial": "docs/source/getting_started.md",
-      "run_policy": "plan_only",
-      "notes": "gold E1"
+      "run_policy": "clarify",
+      "notes": "表名是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-REFILL",
@@ -49,7 +48,7 @@
       "expected_job": "data.refill",
       "expected_skills": ["qt.ai.system.fallback"],
       "expected_fallback_action": "clarify_required",
-      "expected_missing_info": "date_range",
+      "expected_missing_info": "start|end",
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "clarify",
       "notes": "E-REFILL-C"
@@ -60,7 +59,7 @@
       "mode": "plan",
       "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skills": ["qt.ai.data.history"],
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "plan_only",
       "notes": "gold E-READ-H；channel=history"
@@ -71,7 +70,7 @@
       "mode": "plan",
       "query": "get_reference_data cn_gdp from 20240101 to 20240131",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skills": ["qt.ai.data.reference"],
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "plan_only",
       "notes": "gold E-READ-R；channel=reference"
@@ -82,7 +81,7 @@
       "mode": "plan",
       "query": "get_static_data industry for 000001.SZ",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.read"],
+      "expected_skills": ["qt.ai.data.static"],
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
       "run_policy": "plan_only",
       "notes": "gold E-READ-S；channel=static"
@@ -93,7 +92,7 @@
       "mode": "plan",
       "query": "kline summary of 000300.SH",
       "expected_job": "data.summary",
-      "expected_skills": ["qt.ai.data.summary_kline"],
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
       "tutorial": "docs/source/tutorials/2.4-historypanel-basics.md",
       "run_policy": "plan_only",
       "notes": "gold B2"
@@ -104,7 +103,7 @@
       "mode": "plan",
       "query": "export kline of 000300.SH to png",
       "expected_job": "data.export",
-      "expected_skills": ["qt.ai.visual.export_kline"],
+      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.plot"],
       "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
       "run_policy": "plan_only",
       "notes": "gold C1"
@@ -133,7 +132,7 @@
       "expected_job": "research.factor_ic",
       "expected_skills": ["qt.ai.system.fallback"],
       "expected_fallback_action": "clarify_required",
-      "expected_missing_info": "shares|start|end|factor_htype|return_htype",
+      "expected_missing_info": "factor_htype|return_htype|shares|start|end",
       "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
       "run_policy": "clarify",
       "notes": "gold R1；裸句缺代码、日期与列名时 clarify，槽齐后才出 factor_ic_summary"
@@ -155,10 +154,12 @@
       "mode": "plan",
       "query": "show me macd strategy parameters",
       "expected_job": "strategy.meta",
-      "expected_skills": ["qt.ai.strategy_meta.get"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "strategy_id",
       "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
-      "run_policy": "plan_only",
-      "notes": "gold A2"
+      "run_policy": "clarify",
+      "notes": "策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-BT",
@@ -166,13 +167,12 @@
       "mode": "plan",
       "query": "用 macd 在沪深300上跑 2018–2023 回测，给我看年化与最大回撤",
       "expected_job": "backtest.builtin",
-      "expected_skills": [
-        "qt.ai.backtest.run_builtin",
-        "qt.ai.insight.summarize_backtest"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "strategy_id",
       "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
-      "run_policy": "plan_only",
-      "notes": "gold B-P0-dash"
+      "run_policy": "clarify",
+      "notes": "策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-SB",
@@ -180,16 +180,12 @@
       "mode": "plan",
       "query": "帮我写一个基于 20/60 日均线金叉死叉的择时策略，并用 2015–2020 年沪深300做回测",
       "expected_job": "strategy.builder",
-      "expected_skills": [
-        "qt.ai.strategy.spec_from_nl",
-        "qt.ai.strategy.codegen_hybrid",
-        "qt.ai.strategy.sanity_check",
-        "qt.ai.operator.build_from_spec",
-        "qt.ai.backtest.run_builtin"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "query|strategy_id",
       "tutorial": "docs/source/tutorials/5-first-self-defined-strategy.md",
-      "run_policy": "plan_only",
-      "notes": "gold D1"
+      "run_policy": "clarify",
+      "notes": "问句和策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-OPT",
@@ -197,10 +193,12 @@
       "mode": "plan",
       "query": "optimize DMA parameters",
       "expected_job": "optimize.builtin",
-      "expected_skills": ["qt.ai.optimize.run_builtin"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "strategy_id",
       "tutorial": "docs/source/tutorials/Tutorial 06 - 交易策略的优化.md",
-      "run_policy": "plan_only",
-      "notes": "gold B-F3"
+      "run_policy": "clarify",
+      "notes": "策略编号是必填预写，填槽时清掉后没有解释者写回"
     },
     {
       "id": "BJ-INS",
