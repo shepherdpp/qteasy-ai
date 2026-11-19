@@ -24,6 +24,19 @@ _FIXTURE = Path(__file__).resolve().parent / "ai_corpus" / "workbench_ui_states.
 _TYPES = Path(__file__).resolve().parents[1] / "web" / "src" / "types.ts"
 
 
+def _css_rule_body(css: str, selector: str) -> str:
+    """返回选择器列表中含有 ``selector`` 的那条规则正文。
+
+    一条规则可以同时写给 NOW 和设置页，选择器之间用逗号分开。
+    """
+
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        selectors = [part.strip() for part in match.group(1).split(",")]
+        if selector in selectors:
+            return match.group(2)
+    raise AssertionError(f"missing css rule {selector}")
+
+
 def _extract_js_function(src: str, name: str) -> str:
     """按花括号配对抽出 ``function name`` 源码。"""
 
@@ -411,9 +424,9 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" rename refreshes sessions:", "refreshSessions()" in rename_fn)
             self.assertIn("renderNow()", refresh_fn)
             self.assertIn("refreshSessions()", rename_fn)
-            line_css = css.text.split(".now-block .now-line {", 1)[1].split("}", 1)[0]
-            label_css = css.text.split(".now-block .now-line .now-label {", 1)[1].split("}", 1)[0]
-            clip_css = css.text.split(".now-block .now-line.clip {", 1)[1].split("}", 1)[0]
+            line_css = _css_rule_body(css.text, ".now-block .now-line")
+            label_css = _css_rule_body(css.text, ".now-block .now-line .now-label")
+            clip_css = _css_rule_body(css.text, ".now-block .now-line.clip")
             print(" now line css:", line_css.strip(), "label:", label_css.strip(), "clip:", clip_css.strip())
             self.assertIn("font-size: 12px", line_css)
             self.assertIn("font-weight: 400", line_css)
