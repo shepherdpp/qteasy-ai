@@ -1793,7 +1793,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(body.get("qteasy_ai"), ai_version)
             self.assertEqual(body.get("qteasy"), qteasy.__version__)
             self.assertEqual(body.get("qteasy_released"), "Oct 3, 2026")
-            self.assertEqual(body.get("qteasy_ai_released"), "Oct 31, 2026")
+            self.assertEqual(body.get("qteasy_ai_released"), "Nov 19, 2026")
             self.assertEqual((body.get("datasource") or {}).get("status"), "connected")
             self.assertEqual(source, qteasy.QT_DATA_SOURCE.connection_type)
 
