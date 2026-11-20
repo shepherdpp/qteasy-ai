@@ -1163,8 +1163,14 @@ def _fill_graph(
         if any(str(slot.get("name") or "") == name for slot in projected):
             continue
         _write_empty(planner, steps, name, raw)
+    model_revision = (
+        getattr(planner, "provider", None) is not None
+        and (kept_steps is not None or carry_steps is not None)
+    )
     if kept_steps is not None or carry_steps is not None:
-        _apply_sentence_values(planner, steps, projected, query)
+        # 有模型时这一句交给协议，启发式不先解析。
+        if not model_revision:
+            _apply_sentence_values(planner, steps, projected, query)
         if carry_steps is not None:
             carry_confirmed_inputs(planner, carry_steps, steps, session)
             if recipe_htype and not dtype_tokens(query):
@@ -1189,39 +1195,40 @@ def _fill_graph(
     covered = set(answered) | item_names
     submitted: Dict[str, Any] = {}
     ambiguous: List[str] = []
-    # 卡片、窗口说法、市场日期的一端、别名，都先放进 mentioned，才能进第一次协议。
-    # 协议省略之后：窗口说法的日期留下，只被别名点到的槽从 mentioned 拿掉。
+    # 无模型时，窗口说法、市场日期和别名先放进点到集合。
+    # 有模型的修改句不预填。点到与否只看协议：缺键留下，null 或收不下才点到。
     mentioned: Set[str] = set(covered)
-    window_mentioned: Set[str] = set()
-    if window_phrase(query):
-        for slot in projected:
-            name = str(slot.get("name") or "")
-            if (
-                name
-                and str(slot.get("format") or "") == "YYYYMMDD"
-                and not slot.get("filled")
-            ):
-                window_mentioned.add(name)
-    mentioned.update(window_mentioned)
-    if hasattr(planner, "_market_inputs"):
-        market = planner._market_inputs(query)
-        if isinstance(market, dict):
-            for key in ("start", "end"):
-                if market.get(key) not in (None, ""):
-                    mentioned.add(key)
-    alias_mentioned = _alias_mentioned(projected, query)
-    mentioned.update(alias_mentioned)
-    mentioned.update(_element_mentioned(projected, query))
-    mentioned.update(_screen_mentioned(projected, query))
-    mentioned.update(_diagnosis_mentioned(projected, query))
-    mentioned.update(_weight_mentioned(projected, query))
-    weight_names = {
-        str(slot.get("name") or "")
-        for slot in projected
-        if str(slot.get("resolve") or "") == "weights"
-    }
-    # 清掉的权重预写还要交给解释者。其它预写清掉即可，不扩大协议。
-    mentioned.update(name for name in cleared_prewrite if name in weight_names)
+    if not model_revision:
+        window_mentioned: Set[str] = set()
+        if window_phrase(query):
+            for slot in projected:
+                name = str(slot.get("name") or "")
+                if (
+                    name
+                    and str(slot.get("format") or "") == "YYYYMMDD"
+                    and not slot.get("filled")
+                ):
+                    window_mentioned.add(name)
+        mentioned.update(window_mentioned)
+        if hasattr(planner, "_market_inputs"):
+            market = planner._market_inputs(query)
+            if isinstance(market, dict):
+                for key in ("start", "end"):
+                    if market.get(key) not in (None, ""):
+                        mentioned.add(key)
+        alias_mentioned = _alias_mentioned(projected, query)
+        mentioned.update(alias_mentioned)
+        mentioned.update(_element_mentioned(projected, query))
+        mentioned.update(_screen_mentioned(projected, query))
+        mentioned.update(_diagnosis_mentioned(projected, query))
+        mentioned.update(_weight_mentioned(projected, query))
+        weight_names = {
+            str(slot.get("name") or "")
+            for slot in projected
+            if str(slot.get("resolve") or "") == "weights"
+        }
+        # 清掉的权重预写还要交给解释者。其它预写清掉即可，不扩大协议。
+        mentioned.update(name for name in cleared_prewrite if name in weight_names)
     illegal_mentioned = {"lookback_days"} if _bad_lookback(query) else set()
     blocked: Dict[str, str] = {}
     first_report = _inspect_slots(
@@ -1233,7 +1240,14 @@ def _fill_graph(
         slot for slot in open_slots if str(slot.get("name") or "") in gap_names
     ]
     provider = getattr(planner, "provider", None)
-    if gap_names and provider is not None and read_slots:
+    if model_revision:
+        revision_submitted, revision_touched = _read_model_revision(
+            planner, steps, projected, query
+        )
+        submitted.update(revision_submitted)
+        mentioned |= revision_touched
+        _sync_projected(planner, steps, projected)
+    elif gap_names and provider is not None and read_slots:
         # 有卡片时只读这张卡盖住的空缺。没有卡片时，空缺名单里的槽都进协议。
         model_slots = [
             slot
@@ -1317,7 +1331,12 @@ def _fill_graph(
     for name, items in (card_items or {}).items():
         if str(name or "") and items not in (None, "", []):
             submitted[str(name)] = items
-    if not covered and "mode" not in submitted and "weights" not in answered:
+    if (
+        not model_revision
+        and not covered
+        and "mode" not in submitted
+        and "weights" not in answered
+    ):
         if _affirms_equal(query):
             submitted["mode"] = "equal"
         else:
@@ -2186,10 +2205,12 @@ def _fill_prompt(
     slots: Sequence[Dict[str, Any]],
     query: str,
     card_text: Optional[Dict[str, str]] = None,
+    include_current: bool = False,
 ) -> str:
-    """一次协议列出还开着的投影槽和 schema 合同。例子不是提交值。
+    """一次协议列出投影槽和 schema 合同。例子不是提交值。
 
     ``card_text`` 里的槽只放该槽原文，任务原句不同时当作这些槽的提交来源。
+    ``include_current`` 为真时，已经填上的值一并写进协议，供修改句阅读。
     """
 
     lines = [_FILL_PREFIX]
@@ -2209,6 +2230,10 @@ def _fill_prompt(
             bits.append(f"example={slot.get('example')} (not a value)")
         if slot.get("constraint"):
             bits.append(f"constraint={slot.get('constraint')}")
+        if include_current and slot.get("value") not in (None, "", []):
+            bits.append(
+                "current=" + json.dumps(slot.get("value"), ensure_ascii=False, default=str)
+            )
         lines.append(" ".join(bits))
     if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
         lines.append("mode is submitted with weights. It is not a separate slot.")
@@ -2253,6 +2278,59 @@ def _parse_model_slots(raw: str, names: Sequence[str]) -> Optional[Dict[str, Any
     if not found:
         return None
     return found
+
+
+def _read_model_revision(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    query: str,
+) -> Tuple[Dict[str, Any], Set[str]]:
+    """有模型的修改句。启发式不解析。协议给出缺键、null、有值。
+
+    缺键不改已确认的值。null 或校验收不下的值清掉该格并记为点到。
+    收得下的值交给后续写入。已经填上的槽也在协议里。
+
+    Parameters
+    ----------
+    planner : planner
+        带语言模型的规划器。
+    steps : sequence
+        当前步骤。只在收不下时清掉对应输入。
+    projected : sequence of dict
+        当前图上的投影槽，含已经填上的。
+    query : str
+        这一句原文，不拼任务原句。
+
+    Returns
+    -------
+    submitted : dict
+        收得下的槽值。
+    touched : set of str
+        点到了但没有合法值的槽名。
+    """
+
+    slots = [slot for slot in projected if str(slot.get("name") or "")]
+    raw = planner.provider.chat(
+        _fill_prompt(planner, slots, query, None, include_current=True)
+    )
+    _remember_fill_output(planner, raw)
+    parsed = _parse_model_slots(raw, [str(slot.get("name") or "") for slot in slots]) or {}
+    submitted: Dict[str, Any] = {}
+    touched: Set[str] = set()
+    for slot in slots:
+        name = str(slot.get("name") or "")
+        if name not in parsed:
+            continue
+        value = parsed.get(name)
+        if value is None or not _submitted_legal(slot, value, query):
+            _clear_slot(planner, steps, name)
+            touched.add(name)
+            continue
+        submitted[name] = value
+    if parsed.get("mode") not in (None, ""):
+        submitted["mode"] = parsed.get("mode")
+    return submitted, touched
 
 
 def _parse_json(text: str) -> Optional[Dict[str, Any]]:
@@ -2438,24 +2516,109 @@ def _unresolved_optional_defaults(projected: Sequence[Dict[str, Any]], mentioned
     return found
 
 
+def _source_names_date(digits: str, source: str) -> bool:
+    """对照文本里有没有能收成这同一个八位日期的写法。
+
+    八位本身、去掉分隔符后仍是这八位、``YYYY年M月D日``，以及年份边界
+    （某年到某年的两端、``今年`` 的两端、``到某年`` 的年末、单独某年的两端）
+    算收得成。``过去两年`` 这类说法不算。
+
+    Parameters
+    ----------
+    digits : str
+        已经通过日历检查的八位。
+    source : str
+        对照文本。第四 B 步复查时是步骤上已经写下的那八位，不是用户原句。
+
+    Returns
+    -------
+    bool
+        收得成这同一个日期时为 True。
+    """
+
+    text = str(source or "")
+    if len(digits) != 8 or not text:
+        return False
+    if re.search(rf"(?<!\d){re.escape(digits)}(?!\d)", text):
+        return True
+    for match in re.finditer(r"(20\d{2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})", text):
+        formed = f"{int(match.group(1)):04d}{int(match.group(2)):02d}{int(match.group(3)):02d}"
+        if formed == digits:
+            return True
+    for match in re.finditer(r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", text):
+        formed = f"{int(match.group(1)):04d}{int(match.group(2)):02d}{int(match.group(3)):02d}"
+        if formed == digits:
+            return True
+    return digits in _named_year_bounds(text)
+
+
+def _named_year_bounds(text: str) -> Set[str]:
+    """对照文本里，年份边界已经会写出的八位日期。
+
+    跟市场日期抽取同一套先后：年份区间、``今年``、``到某年`` 只给年末、
+    单独某年给两端。``某年某月`` 不按整年收。
+
+    Parameters
+    ----------
+    text : str
+        对照文本。
+
+    Returns
+    -------
+    set of str
+        这些写法对应的八位。没有则为空集。
+    """
+
+    year_range = re.search(
+        r"(20\d{2})\s*年?\s*(?:[~\-–—]|至|到|to)\s*(20\d{2})\s*年?",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if year_range:
+        first = int(year_range.group(1))
+        second = int(year_range.group(2))
+        if first <= second:
+            return {f"{first:04d}0101", f"{second:04d}1231"}
+        return set()
+    if "今年" in text:
+        year = datetime.date.today().year
+        return {f"{year:04d}0101", f"{year:04d}1231"}
+    end_bound = re.search(
+        r"(?:到|至|until|\bto\b)\s*(20\d{2})\s*年?",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if end_bound is not None and not re.match(r"\s*\d{1,2}\s*月", text[end_bound.end():]):
+        year = int(end_bound.group(1))
+        bare = re.search(r"(20\d{2})\s*年", text)
+        if bare is None or bare.group(1) == end_bound.group(1):
+            return {f"{year:04d}1231"}
+    bare = re.search(r"(20\d{2})\s*年(?!\s*\d{1,2}\s*月)", text)
+    if bare is not None:
+        year = int(bare.group(1))
+        return {f"{year:04d}0101", f"{year:04d}1231"}
+    return set()
+
+
 def accept_yyyymmdd(value: Any, example: str, source: str) -> Optional[str]:
     """日期槽的唯一校验。收下则返回 ``YYYYMMDD``。
 
-    整段去掉非数字后不是八位时，收下原文里第一段独立的八位日期。
+    八位且日历合法之后，对照文本里还要收得成这同一个日期。
+    收不成则 ``None``。第四 B 步复查时对照的是已经写下的那八位。
 
     Parameters
     ----------
     value : any
         解释者交出的值，或这一题的原文。
     example : str
-        卡片上的例子。空串表示没有例子。
+        卡片上的例子。例子本身不是值；原文写得出这个日期才收下。
     source : str
-        对照例子用的原文。例子只有不在这段原文里才拒绝。
+        对照文本。用户原句、卡片原文，或步骤上已经写下的八位。
 
     Returns
     -------
     str or None
-        合法的八位日期，否则 ``None``。
+        合法且原文收得成的八位日期，否则 ``None``。
     """
 
     raw = "" if value is None else str(value)
@@ -2469,8 +2632,7 @@ def accept_yyyymmdd(value: Any, example: str, source: str) -> Optional[str]:
         datetime.datetime.strptime(digits, "%Y%m%d")
     except ValueError:
         return None
-    shown = str(example or "")
-    if shown and digits == shown and shown not in str(source or ""):
+    if not _source_names_date(digits, str(source or "")):
         return None
     return digits
 
@@ -5022,8 +5184,13 @@ def _drop_card_examples(
                 continue
             example = str(date_bound_presentation(name).get("example") or "")
             source = answered[name] if name in answered else query
-            if accept_yyyymmdd(current, example, source) is None:
+            # 这一句没再提到的日期留着。只丢掉不是日期的值，以及原文里没有的卡片例子。
+            if accept_yyyymmdd(current, "", current) is None:
                 inputs.pop(name, None)
+                continue
+            if example and current == example and example not in str(source or ""):
+                if accept_yyyymmdd(current, example, source) is None:
+                    inputs.pop(name, None)
 
 
 def _held_codes(steps: Sequence[Any]) -> List[str]:
@@ -5150,6 +5317,15 @@ def _inspect_slots(
             continue
         if name in fresh_names:
             source = answered.get(name, query) if name in answered else query
+            # 修改句把已确认项和新增项一起交回时，已确认代码仍算原文里有过。
+            if slot.get("element") and name not in answered and kept_steps is not None:
+                kept_text = " ".join(
+                    _kept_element_source(item)
+                    for item in (kept_values.get(name) or [])
+                    if _kept_element_source(item)
+                )
+                if kept_text:
+                    source = f"{source} {kept_text}".strip()
         elif slot.get("element") and not answered:
             # 没有卡片时，已确认不能跳过「原文里有没有这只代码」。
             # 上一份计划里的同值用它自己的代码当原文，跟进句没再提到也不清。
