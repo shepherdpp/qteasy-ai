@@ -1888,6 +1888,7 @@ class QteasyAssistant:
             )
             card_text, card_items = _take_card_payload(pending, structured)
             slot_revision = dict(card_text)
+            kept_steps = self._kept_plan_steps(state)
             answer = next((str(value) for value in structured.values() if value not in (None, "")), "")
             skip_classify = bool(state.task and state.task.job)
             keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""

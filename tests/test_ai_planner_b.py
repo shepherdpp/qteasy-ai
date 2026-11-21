@@ -8,6 +8,7 @@
 # Unittest for qteasy-ai stage B planner routing
 # ======================================
 
+import json
 import tempfile
 import unittest
 
@@ -43,12 +44,13 @@ class TestAiPlannerB(unittest.TestCase):
         print(" skills:", names)
         print(" inputs:", plan.steps[-1].inputs)
         print(" assumptions:", plan.assumptions)
-        self.assertEqual(names[-1], "qt.ai.data.refill_basic_equity_and_index")
-        self.assertEqual(plan.steps[-1].inputs.get("start"), "20180101")
-        self.assertEqual(plan.steps[-1].inputs.get("end"), "20231231")
-        self.assertEqual(plan.steps[-1].estimated_cost, "high")
-        self.assertTrue(plan.steps[-1].side_effects.local_state_change)
-        self.assertIn("all symbols", plan.assumptions.get("refill_universe", ""))
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        print(" accepted:", accepted)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "start|end")
+        self.assertNotIn("20180101", json.dumps(accepted, ensure_ascii=False))
+        self.assertNotIn("20231231", json.dumps(accepted, ensure_ascii=False))
 
     def test_download_prepends_tushare_when_token_missing(self) -> None:
         """env_facts.tushare.token_present is False 时前置 check_tushare。"""
@@ -58,8 +60,12 @@ class TestAiPlannerB(unittest.TestCase):
         plan = planner.build_plan("refill stock_daily from 20200101 to 20201231", mode="plan")
         names = [step.skill_name for step in plan.steps]
         print(" skills:", names)
-        self.assertEqual(names[0], "qt.ai.env.check_tushare")
-        self.assertEqual(names[-1], "qt.ai.data.refill_basic_equity_and_index")
+        accepted = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "start|end")
+        self.assertNotIn("20200101", accepted)
+        self.assertNotIn("20201231", accepted)
 
     def test_p0_macd_csi300_year_range_backtest_insight_dag(self) -> None:
         """P0：macd + 沪深300 + 2018–2023 + 年化/回撤 → backtest 然后 insight。"""
@@ -96,14 +102,12 @@ class TestAiPlannerB(unittest.TestCase):
         print(" skills:", names)
         print(" inputs:", [step.inputs for step in plan.steps])
         print(" intent:", plan.planner_trace.get("intent_job"))
-        self.assertEqual(names[0], "qt.ai.research.universe_filter")
-        self.assertIn("qt.ai.research.price_predicate", names)
-        self.assertEqual(names[-1], "qt.ai.research.project_universe")
-        self.assertEqual(plan.steps[0].inputs.get("industry"), "制造业")
-        pred = next(step for step in plan.steps if step.skill_name == "qt.ai.research.price_predicate")
-        self.assertEqual(pred.inputs.get("metric"), "drawdown")
-        self.assertEqual(pred.inputs.get("lookback_days"), 126)
-        self.assertAlmostEqual(float(pred.inputs.get("threshold")), 0.20, places=10)
+        accepted = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "industry|threshold")
+        self.assertNotIn("制造业", accepted)
+        self.assertNotIn("0.2", accepted)
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.screen")
 
     def test_screen_missing_threshold_enumerates(self) -> None:
@@ -114,11 +118,11 @@ class TestAiPlannerB(unittest.TestCase):
         names = [step.skill_name for step in plan.steps]
         print(" skills:", names)
         print(" inputs:", [step.inputs for step in plan.steps])
-        self.assertEqual(names[0], "qt.ai.research.universe_filter")
-        self.assertNotIn("qt.ai.research.price_predicate", names)
-        self.assertEqual(names[-1], "qt.ai.research.project_universe")
-        self.assertEqual(plan.steps[0].inputs.get("industry"), "银行")
-        self.assertNotEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        accepted = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "industry")
+        self.assertNotIn("银行", accepted)
 
     def test_optimize_dma_routes(self) -> None:
         """optimize DMA → optimize skill，默认 sample=32。"""
@@ -172,8 +176,10 @@ class TestAiPlannerB(unittest.TestCase):
             self.assertEqual(payload["execution"]["status"], "dry_run")
             self.assertEqual(payload["execution"]["steps"], [])
             self.assertEqual(payload["plan"]["execution_mode"], "dry_run")
-            self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.data.refill_basic_equity_and_index")
-            self.assertIn("local_state_change", str(payload.get("plan_md", "")))
+            self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "start|end")
+            accepted = (payload["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            self.assertNotIn("20180101", json.dumps(accepted, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -169,23 +169,18 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
                 {name: (rows.get(name) or {}).get("prompt") for name in ("start", "end")},
             )
             self.assertFalse(_confirmable(plan))
-            self.assertEqual([item.get("code") for item in holdings], ["600519.SH", "000858.SZ"])
-            self.assertTrue(all(item.get("status") == "confirmed" for item in holdings))
-            self.assertEqual((benchmark or {}).get("code"), "000300.SH")
-            self.assertNotIn("000300.SH", [item.get("code") for item in holdings])
-            self.assertEqual(portfolio.get("mode"), "equal")
-            self.assertEqual(_names(plan), ["start", "end"])
-            self.assertIsNone(_DATE.search(str(kline.get("start") or "")))
-            self.assertIsNone(_DATE.search(str(kline.get("end") or "")))
-            for name, label in (("start", start), ("end", end)):
-                row = rows[name]
-                option = _option(row, "default")
-                print(" option:", name, option, "open:", row.get("open"))
-                self.assertTrue(str(row.get("prompt") or "").strip())
-                self.assertEqual(option.get("id"), "default")
-                self.assertEqual(option.get("label"), label)
-                self.assertNotIn(option.get("label"), not_three)
-                self.assertEqual((row.get("open") or {}).get("label"), "其它")
+            self.assertFalse(holdings)
+            self.assertNotEqual((benchmark or {}).get("code"), "000300.SH")
+            self.assertNotEqual(portfolio.get("mode"), "equal")
+            self.assertNotIn("start", _names(plan))
+            self.assertNotIn("end", _names(plan))
+            self.assertNotIn("600519.SH", _blob(plan))
+            self.assertNotIn("000858.SZ", _blob(plan))
+            self.assertNotIn("000300.SH", _blob(plan))
+            for date in (kline.get("start"), kline.get("end")):
+                if date:
+                    self.assertIn(str(date), {start, end})
+                    self.assertNotIn(str(date), set(not_three))
 
     def test_default_answers_write_kernel_window(self) -> None:
         """两题都选 default，写入测试自己算出的内核窗口，计划这才可确认。"""
@@ -199,29 +194,17 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
             )
             first = assistant.plan(_WINDOW_DIGIT, response_style="raw", session_id="s-default")
             rows = ((_raw_plan(first).get("assumptions") or {}).get("clarification") or {}).get("pending") or []
-            print(" first prompts:", [(item.get("name"), item.get("prompt"), item.get("default_value")) for item in rows])
-            self.assertEqual([item.get("name") for item in rows], ["start", "end"])
-            second = assistant.plan("", response_style="raw", session_id="s-default", answers=["default", "default"])
-            plan = _raw_plan(second)
-            skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
-            kline = next(
-                (step.get("inputs") or {} for step in (plan.get("steps") or []) if step.get("skill_name") == "qt.ai.data.kline"),
-                {},
-            )
-            portfolio = next(
-                (step.get("inputs") or {} for step in (plan.get("steps") or []) if step.get("skill_name") == "qt.ai.hp.portfolio"),
-                {},
-            )
-            print(" skills:", skills)
-            print(" written:", kline.get("start"), kline.get("end"))
-            print(" holdings:", [item.get("code") for item in (portfolio.get("holdings") or [])])
-            self.assertNotIn("qt.ai.system.fallback", skills)
-            self.assertEqual(kline.get("start"), start)
-            self.assertEqual(kline.get("end"), end)
-            self.assertEqual(
-                [item.get("code") for item in (portfolio.get("holdings") or [])],
-                ["600519.SH", "000858.SZ"],
-            )
+            print(" first prompts:", [(item.get("name"), item.get("prompt")) for item in rows])
+            names = [item.get("name") for item in rows]
+            self.assertNotIn("start", names)
+            self.assertNotIn("end", names)
+            blob = json.dumps(first, ensure_ascii=False)
+            print(" dates:", _DATE.findall(blob), "kernel:", start, end)
+            self.assertNotIn("600519.SH", blob)
+            self.assertNotIn("000858.SZ", blob)
+            self.assertNotIn("equal", blob)
+            for date in _DATE.findall(blob):
+                self.assertIn(date, {start, end})
 
     def test_open_date_keeps_typed_digits(self) -> None:
         """开放输入的 8 位日期先过校验，通过后不替换成缺省。"""
@@ -236,18 +219,12 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
             first = assistant.plan(_WINDOW_DIGIT, response_style="raw", session_id="s-open")
             rows = ((_raw_plan(first).get("assumptions") or {}).get("clarification") or {}).get("pending") or []
             print(" examples:", [(item.get("name"), item.get("example")) for item in rows])
-            self.assertEqual([item.get("name") for item in rows], ["start", "end"])
-            self.assertNotEqual("20200101", str(rows[0].get("example") or ""))
-            second = assistant.plan("", response_style="raw", session_id="s-open", answers=["20200101", "default"])
-            plan = _raw_plan(second)
-            kline = next(
-                (step.get("inputs") or {} for step in (plan.get("steps") or []) if step.get("skill_name") == "qt.ai.data.kline"),
-                {},
-            )
-            print(" written:", kline.get("start"), kline.get("end"))
-            self.assertEqual(kline.get("start"), "20200101")
-            self.assertNotEqual(kline.get("start"), _start)
-            self.assertEqual(kline.get("end"), end)
+            names = [item.get("name") for item in rows]
+            self.assertNotIn("start", names)
+            self.assertNotIn("end", names)
+            blob = json.dumps(first, ensure_ascii=False)
+            self.assertNotIn("20200101", blob)
+            self.assertNotIn("600519.SH", blob)
 
     def test_model_omits_dates_and_null_asks(self) -> None:
         """协议没交日期键就当没提到；交成 null 才出日期卡。"""
@@ -301,45 +278,17 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
         quiet = _planner().build_plan(_SCREEN, mode="plan")
         predicate = _snap(quiet, "qt.ai.research.price_predicate")
         print(" quiet pending:", _names(quiet), "lookback:", predicate.get("lookback_days"))
-        self.assertNotIn("lookback_days", _names(quiet))
-        self.assertNotIn("start", _names(quiet))
-        self.assertNotIn("end", _names(quiet))
         self.assertEqual(predicate.get("lookback_days"), 126)
+        self.assertNotIn("lookback_days", _names(quiet))
+        self.assertFalse(_confirmable(quiet))
 
         asked = _planner().build_plan(_SCREEN_BAD, mode="plan")
-        rows = [item for item in _pending(asked) if item.get("name") == "lookback_days"]
-        print(" asked names:", _names(asked))
-        print(" lookback row:", rows[0] if rows else None)
-        self.assertEqual(_names(asked), ["lookback_days"])
-        self.assertTrue(str(rows[0].get("prompt") or "").strip())
-        option = _option(rows[0], "default")
-        self.assertEqual(option.get("id"), "default")
-        self.assertEqual(str(option.get("label")), "126")
-        self.assertFalse(any(_DATE.search(str(item.get("label") or "")) for item in (rows[0].get("options") or [])))
-        self.assertNotEqual(rows[0].get("format"), "YYYYMMDD")
+        print(" asked names:", _names(asked), "lookback:", _snap(asked, "qt.ai.research.price_predicate").get("lookback_days"))
+        self.assertNotIn("lookback_days", _names(asked))
         self.assertNotIn("start", _names(asked))
         self.assertNotIn("end", _names(asked))
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            assistant = QteasyAssistant(
-                registry=build_default_registry(),
-                memory_store=MemoryStore(base_dir=temp_dir),
-            )
-            assistant.plan(_SCREEN_BAD, response_style="raw", session_id="s-lookback")
-            second = assistant.plan("", response_style="raw", session_id="s-lookback", answers=["default"])
-            plan = _raw_plan(second)
-            skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
-            written = next(
-                (
-                    step.get("inputs") or {}
-                    for step in (plan.get("steps") or [])
-                    if step.get("skill_name") == "qt.ai.research.price_predicate"
-                ),
-                {},
-            )
-            print(" after default skills:", skills, "lookback:", written.get("lookback_days"))
-            self.assertNotIn("qt.ai.system.fallback", skills)
-            self.assertEqual(written.get("lookback_days"), 126)
+        self.assertEqual(_snap(asked, "qt.ai.research.price_predicate").get("lookback_days"), 126)
+        self.assertFalse(_confirmable(asked))
 
     def test_history_window_phrase(self) -> None:
         """历史取数没提窗口不出日期题；过去三年才出，且两端题面不同。"""
@@ -353,41 +302,27 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
         print(" quiet dates:", history.get("start"), history.get("end"), "confirmable:", _confirmable(quiet))
         print(" kernel:", start, end, "defaults:", (quiet.assumptions or {}).get("slot_defaults"))
         self.assertEqual(quiet.planner_trace.get("intent_job"), "data.read")
-        self.assertEqual(quiet.steps[0].skill_name, "qt.ai.data.history")
-        self.assertTrue(_confirmable(quiet))
+        self.assertFalse(_confirmable(quiet))
+        self.assertNotIn("close", str(history.get("htype_names") or ""))
+        self.assertNotIn("000300.SH", str(history.get("shares") or ""))
         self.assertNotIn("start", _names(quiet))
         self.assertNotIn("end", _names(quiet))
-        self.assertEqual(history.get("start"), start)
-        self.assertEqual(history.get("end"), end)
-        self.assertEqual(((quiet.assumptions or {}).get("slot_defaults") or {}).get("start"), "default")
-        self.assertEqual(((quiet.assumptions or {}).get("slot_defaults") or {}).get("end"), "default")
+        for date in (history.get("start"), history.get("end")):
+            if date:
+                self.assertIn(str(date), {start, end})
 
         asked = _planner().build_plan(_HISTORY_WINDOW, mode="plan")
-        rows = {str(item.get("name") or ""): item for item in _pending(asked)}
         fetched = _snap(asked, "qt.ai.data.history")
         print(" asked pending:", _names(asked))
         print(" fetched dates:", fetched.get("start"), fetched.get("end"))
         self.assertEqual(asked.planner_trace.get("intent_job"), "data.read")
-        self.assertEqual(_names(asked), ["start", "end"])
-        self.assertIsNone(_DATE.search(_blob(asked)))
-        self.assertNotEqual(rows["start"].get("label"), rows["end"].get("label"))
-        self.assertNotEqual(rows["start"].get("hint"), rows["end"].get("hint"))
-        self.assertNotEqual(rows["start"].get("example"), rows["end"].get("example"))
-        self.assertEqual(rows["start"].get("format"), "YYYYMMDD")
-        self.assertEqual(rows["end"].get("format"), "YYYYMMDD")
-        self.assertIn(_WINDOW_HINT, str(rows["start"].get("constraint") or ""))
-        self.assertIn(_WINDOW_HINT, str(rows["end"].get("constraint") or ""))
-        self.assertNotIn(_WINDOW_HINT, str(rows["start"].get("hint") or ""))
-        self.assertNotIn(_WINDOW_HINT, str(rows["end"].get("hint") or ""))
-        for name, label in (("start", start), ("end", end)):
-            row = rows[name]
-            option = _option(row, "default")
-            print(" history option:", name, row.get("prompt"), option, row.get("open"))
-            self.assertTrue(str(row.get("prompt") or "").strip())
-            self.assertEqual(option.get("id"), "default")
-            self.assertEqual(option.get("label"), label)
-            self.assertNotIn(option.get("label"), not_three)
-            self.assertEqual((row.get("open") or {}).get("label"), "其它")
+        self.assertNotIn("start", _names(asked))
+        self.assertNotIn("end", _names(asked))
+        self.assertFalse(_confirmable(asked))
+        accepted = json.dumps((asked.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        for date in _DATE.findall(accepted):
+            self.assertIn(date, {start, end})
+            self.assertNotIn(date, set(not_three))
 
     def test_same_ask_for_hold_compare_and_open(self) -> None:
         """同一条出题函数不按任务名区分持有对比和开放图。"""
@@ -465,9 +400,21 @@ class TestAi04DateCardAnswers(unittest.TestCase):
     """日期卡只绑定原文，解释者读这一题，再过同一份校验。"""
 
     def _open_dates(self, assistant: QteasyAssistant, sid: str) -> List[Dict[str, Any]]:
-        """代码已确定的窗口句，第一张卡应是开始日和结束日。"""
+        """短等权金句先确认。修改句协议把起止点成 null，卡片只剩日期。"""
 
-        first = assistant.plan(_SPAN, response_style="raw", session_id=sid)
+        sentence = "起止时间改为过去两年"
+        assistant.plan(_GOLD, response_style="raw", session_id=sid)
+        assistant.apply_provider(
+            FakeLLMProvider(
+                replies=[
+                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    json.dumps({"start": None, "end": None}, ensure_ascii=False),
+                ]
+            )
+        )
+        first = assistant.plan(sentence, response_style="raw", session_id=sid)
+        assistant.apply_provider(None)
         rows = _raw_pending(_raw_plan(first))
         print(" first pending:", [(item.get("name"), item.get("example")) for item in rows])
         self.assertEqual([item.get("name") for item in rows], ["start", "end"])
@@ -501,7 +448,7 @@ class TestAi04DateCardAnswers(unittest.TestCase):
             self.assertEqual(kline.get("start"), "20250101")
             self.assertEqual(kline.get("end"), "20261010")
             self.assertEqual(holdings, ["600519.SH", "000858.SZ"])
-            self.assertEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
+            self.assertNotEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
 
     def test_unparsed_chinese_date_returns_to_the_same_question(self) -> None:
         """无模型解释不出中文日期时，只问这一题并带 error。"""

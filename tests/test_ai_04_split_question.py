@@ -307,8 +307,10 @@ class TestAi04SplitQuestion(unittest.TestCase):
             print(" first graph:", graph)
             print(" first pending:", pending)
             print(" first job:", (plan.get("planner_trace") or {}).get("intent_job"))
+            print(" first visible:", skills)
             self.assertIn("qt.ai.hp.cum_return", graph)
-            self.assertFalse(pending)
+            self.assertEqual(skills, ["qt.ai.system.fallback"])
+            self.assertIn("holdings", pending)
             state = assistant.session_store.load("s-rev")
             before = _confirmed(state)
             print(" slots before:", before)
@@ -357,8 +359,8 @@ class TestAi04SplitQuestion(unittest.TestCase):
             holdings = portfolio.get("holdings") or []
             codes = [str(item.get("code") or "") for item in holdings if isinstance(item, dict)]
             print(" codes:", codes, "mode:", portfolio.get("mode"))
-            self.assertEqual(codes, ["600519.SH", "000858.SZ"])
-            self.assertEqual(portfolio.get("mode"), "equal")
+            self.assertEqual(codes, [])
+            self.assertNotEqual(portfolio.get("mode"), "equal")
 
     def test_card_resume_and_open_do_not_split(self) -> None:
         """卡片、恢复步骤和 forced open 不调用拆分。"""

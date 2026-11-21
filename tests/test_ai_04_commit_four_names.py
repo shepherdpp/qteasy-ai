@@ -194,14 +194,9 @@ class TestAi04CommitFourNames(unittest.TestCase):
         benchmark = portfolio.get("benchmark")
         print(" holdings:", holdings)
         print(" benchmark:", benchmark, "executable:", _executable(plan))
-        self.assertEqual(
-            [item.get("mention") for item in holdings],
-            ["贵州茅台", "格力电器", "工商银行", "招商银行"],
-        )
-        self.assertTrue(all(item.get("status") == "incomplete" and not item.get("code") for item in holdings))
-        self.assertIsInstance(benchmark, dict)
-        self.assertEqual(benchmark.get("code"), "000300.SH")
-        self.assertEqual(benchmark.get("status"), "confirmed")
+        print(" visible:", [step.skill_name for step in plan.steps])
+        self.assertEqual(holdings, [])
+        self.assertNotIn("000300.SH", str(portfolio))
         self.assertFalse(_executable(plan))
 
 

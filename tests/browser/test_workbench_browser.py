@@ -53,10 +53,11 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
 
         self.page.wait_for_function(
             """() => {
-              const confirm = document.querySelector('#btn-confirm');
-              if (!confirm) return false;
               const elapsed = document.querySelector('#busy-elapsed');
               if (elapsed && elapsed.textContent.includes('Planning')) return false;
+              const clarify = document.querySelector('[data-testid="clarification-form"]');
+              if (!clarify) return false;
+              if (document.querySelector('#btn-confirm')) return false;
               const nodes = [...document.querySelectorAll('.bubble-text')].map((n) => n.textContent || '');
               return nodes.some((t) => t.includes('000300.SH')) && !nodes.some((t) => t.includes('list built-in'));
             }""",
@@ -235,7 +236,8 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" dialogs:", self.dialogs)
         print(" bubbles:", self.page.locator(".bubble-text").all_inner_texts())
         self.assertEqual(self.dialogs, [])
-        self.assertTrue(self.page.locator("#btn-confirm").is_visible())
+        self.assertTrue(self.page.locator('[data-testid="clarification-form"]').is_visible())
+        self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
 
     def test_edit_cancel_keeps_original_text(self) -> None:
         """改字后点 Cancel，气泡仍是原句。"""
@@ -276,7 +278,9 @@ class TestWorkbenchBrowser(WorkbenchBrowserCase):
         print(" dialogs:", self.dialogs)
         print(" chat head:", chat[:300])
         self.assertEqual(self.dialogs, [])
-        self.assertIn("Plan ready", chat)
+        self.assertTrue(self.page.locator('[data-testid="clarification-form"]').is_visible())
+        self.assertNotIn("Plan ready", chat)
+        self.assertEqual(self.page.locator("#btn-confirm").count(), 0)
         self.assertNotIn("list built-in strategies", chat)
 
     def test_cancel_plan_does_not_run(self) -> None:

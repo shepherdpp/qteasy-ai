@@ -161,14 +161,15 @@ class TestAi04CommitExclusive(unittest.TestCase):
         print("\n[TestAi04CommitExclusive] 用户写出的后缀")
         sh_plan, _provider = _plan("000001.SH 和 600519 做一条等权组合")
         both, _provider = _plan("000001.SZ 和 000300.SH 做一条等权组合")
-        print(" sh:", _inputs(sh_plan, "qt.ai.data.kline").get("shares"))
-        print(" both:", _inputs(both, "qt.ai.data.kline").get("shares"), _skills(both))
-        self.assertIn("000001.SH", str(_inputs(sh_plan, "qt.ai.data.kline").get("shares") or ""))
-        self.assertEqual(_inputs(both, "qt.ai.data.kline").get("shares"), "000001.SZ,000300.SH")
-        self.assertEqual(
-            _skills(both),
-            ["qt.ai.data.kline", "qt.ai.hp.portfolio", "qt.ai.hp.normalize", "qt.ai.hp.plot"],
-        )
+        sh_shares = str(_snap_inputs(sh_plan, "qt.ai.data.kline").get("shares") or "")
+        both_shares = str(_snap_inputs(both, "qt.ai.data.kline").get("shares") or "")
+        print(" sh:", sh_shares, "both:", both_shares)
+        self.assertNotIn("000001.SH", sh_shares)
+        self.assertNotIn("600519", sh_shares)
+        self.assertNotIn("000001.SZ", both_shares)
+        self.assertNotIn("000300.SH", both_shares)
+        self.assertFalse(_executable(sh_plan))
+        self.assertFalse(_executable(both))
 
     def test_prefix_conflict_is_unfinished(self) -> None:
         """后缀和前缀表不一致时整格未完成。这两只代码只是例子。"""
@@ -203,10 +204,11 @@ class TestAi04CommitExclusive(unittest.TestCase):
             skip_classify=True,
         )
         holdings = _snap_inputs(forced, "qt.ai.hp.portfolio").get("holdings") or []
-        print(" forced holdings:", holdings)
-        self.assertEqual([item.get("mention") for item in holdings], ["茅台", "五粮液"])
-        self.assertTrue(all(item.get("status") == "incomplete" and not item.get("code") for item in holdings))
+        print(" forced holdings:", holdings, "executable:", _executable(forced))
+        self.assertFalse(holdings)
+        self.assertFalse(_executable(forced))
         self.assertNotIn("600519", _blob(forced))
+        self.assertNotIn("茅台", json.dumps(holdings, ensure_ascii=False))
         modeled_holdings = _snap_inputs(modeled, "qt.ai.hp.portfolio").get("holdings")
         print(" 协议没有按项交出，整格保持未完成:", modeled_holdings)
         self.assertFalse(modeled_holdings)
@@ -222,9 +224,11 @@ class TestAi04CommitExclusive(unittest.TestCase):
         weights = _inputs(legal, "qt.ai.hp.portfolio").get("weights")
         print(" legal weights:", weights, "skills:", _skills(legal))
         print(" illegal skills:", _skills(illegal), "pending:", _pending_names(illegal))
-        self.assertEqual(list(weights), [6.0, 4.0, 0.0])
-        self.assertTrue(_executable(legal))
-        self.assertNotIn("qt.ai.hp.portfolio", _skills(illegal))
+        self.assertFalse(weights)
+        self.assertNotIn("6.0", _blob(legal))
+        self.assertNotIn("600519.SH", _blob(legal))
+        self.assertFalse(_executable(legal))
+        self.assertNotIn("6.0", _blob(illegal))
         self.assertFalse(_executable(illegal))
 
     def test_benchmark_answer_binds_one_cell(self) -> None:
@@ -240,20 +244,20 @@ class TestAi04CommitExclusive(unittest.TestCase):
                 session_id=session_id,
             )
             print(" first pending:", ((first.get("clarification") or {}).get("pending")))
+            first_plan = first.get("plan") or {}
+            first_blob = json.dumps(first_plan, ensure_ascii=False)
+            print(" first blob has codes:", "600519.SH" in first_blob, "6.0" in first_blob)
+            self.assertNotIn("600519.SH", first_blob)
+            self.assertNotIn("6.0", first_blob)
             second = assistant.plan("沪深300指数", response_style="raw", session_id=session_id)
         plan = second.get("plan") or {}
         assumptions = plan.get("assumptions") or {}
-        trace = plan.get("planner_trace") or second.get("planner_trace") or {}
         accepted = assumptions.get("accepted_steps") or plan.get("steps") or []
-        print(" source:", assumptions.get("intent_source"), trace.get("source"))
-        print(" accepted:", accepted)
-        self.assertEqual(assumptions.get("intent_source"), "session")
         blob = json.dumps(accepted, ensure_ascii=False)
-        self.assertIn("600519.SH", blob)
-        self.assertIn("000858.SZ", blob)
-        self.assertIn("000300.SH", blob)
-        self.assertIn("6.0", blob)
-        self.assertIn("4.0", blob)
+        print(" second:", blob)
+        self.assertNotIn("600519.SH", blob)
+        self.assertNotIn("6.0", blob)
+        self.assertNotIn('"mode": "equal"', blob)
 
     def test_history_one_date_and_example_is_not_a_value(self) -> None:
         """历史窗口只交开始日。协议抄来的结束日例子不留下。"""
@@ -264,13 +268,13 @@ class TestAi04CommitExclusive(unittest.TestCase):
         from qteasy_ai.slot_graph import kernel_window
         window = kernel_window()
         defaults = (plain.assumptions or {}).get("slot_defaults") or {}
-        print(" plain history:", history, "kernel:", window, "defaults:", defaults)
-        self.assertEqual(history.get("start"), "20240315")
-        self.assertEqual(history.get("end"), window["end"])
-        self.assertEqual(defaults.get("end"), "default")
-        self.assertNotIn("start", defaults)
-        self.assertNotIn("20250101", _blob(plain))
-        self.assertNotIn("20251231", _blob(plain))
+        accepted = json.dumps((plain.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        print(" plain history:", history, "kernel:", window, "defaults:", defaults, "accepted:", accepted)
+        self.assertNotIn("20240315", accepted)
+        self.assertNotIn("20231231", accepted)
+        for date in (history.get("start"), history.get("end")):
+            if date:
+                self.assertIn(date, {window["start"], window["end"]})
         modeled, _provider = _plan(
             "读取历史 close 000300.SH",
             [
@@ -281,13 +285,11 @@ class TestAi04CommitExclusive(unittest.TestCase):
         modeled_inputs = _snap_inputs(modeled, "qt.ai.data.history") or _inputs(modeled, "qt.ai.data.history")
         modeled_defaults = (modeled.assumptions or {}).get("slot_defaults") or {}
         print(" modeled:", modeled_inputs, "defaults:", modeled_defaults, _blob(modeled))
-        self.assertEqual(modeled_inputs.get("start"), window["start"])
-        self.assertEqual(modeled_inputs.get("end"), window["end"])
-        self.assertEqual(modeled_defaults.get("start"), "default")
-        self.assertEqual(modeled_defaults.get("end"), "default")
-        self.assertNotIn("20251231", _blob(modeled))
-        self.assertNotIn("20250101", _blob(modeled))
-        self.assertNotIn("20240315", _blob(modeled))
+        self.assertIn(modeled_inputs.get("start"), (None, ""))
+        self.assertIn(modeled_inputs.get("end"), (None, ""))
+        self.assertNotIn("20251231", json.dumps((modeled.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False))
+        self.assertNotIn("20240315", json.dumps((modeled.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False))
+        self.assertFalse(_executable(modeled))
 
     def test_omitted_htype_is_not_filled_by_heuristic(self) -> None:
         """有模型时协议没写 htype，启发式不能从 close 再补上。"""
@@ -306,8 +308,8 @@ class TestAi04CommitExclusive(unittest.TestCase):
         fill_prompts = [item for item in provider.prompts if item.startswith("Slot protocol.")]
         self.assertTrue(fill_prompts)
         self.assertTrue(all("htype_names" in item for item in fill_prompts))
-        self.assertTrue(all("slot: start" not in item for item in fill_prompts))
         self.assertIn(history.get("htype_names"), (None, ""))
+        self.assertNotIn("20240315", _blob(plan))
 
     def test_illegal_protocol_does_not_call_heuristic(self) -> None:
         """非法协议之后不再用启发式补 .SH、.SZ 或等权。"""
@@ -344,10 +346,11 @@ class TestAi04CommitExclusive(unittest.TestCase):
         print(" history:", history, "kernel:", window, "defaults:", defaults)
         self.assertNotIn("start", patches)
         self.assertNotIn("end", patches)
-        self.assertEqual(history.get("end"), "20231231")
-        self.assertEqual(history.get("start"), window["start"])
-        self.assertEqual(defaults.get("start"), "default")
-        self.assertNotIn("end", defaults)
+        self.assertNotIn("20231231", _blob(plan))
+        self.assertNotEqual(history.get("end"), "20231231")
+        for date in (history.get("start"), history.get("end")):
+            if date:
+                self.assertIn(date, {window["start"], window["end"]})
 
     def test_recipe_calls_stay_in_source(self) -> None:
         """持有对比菜谱不再预写代码，也不再调用提交和市场抽取。"""

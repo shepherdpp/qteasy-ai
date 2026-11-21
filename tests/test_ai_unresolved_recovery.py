@@ -479,7 +479,13 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             self.assertEqual(pending.get("resume_job"), "open")
             self.assertFalse(str(held.task.job or ""))
             catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
-            fake.replies.extend(["polish placeholder", "polish placeholder", "polish placeholder", decoy])
+            fake.replies.extend([
+                json.dumps({"htype_names": "close"}),
+                "polish placeholder",
+                "polish placeholder",
+                "polish placeholder",
+                decoy,
+            ])
             second = asst.plan(
                 "",
                 response_style="raw",

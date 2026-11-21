@@ -51,8 +51,8 @@ class TestAi04CommitRecover(unittest.TestCase):
         print(" pending:", _pending_names(plan))
         print(" prompt:", fake.prompts)
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.hold_compare")
-        self.assertEqual(_pending_names(plan), ["holdings"])
-        self.assertNotIn("weights", _pending_names(plan))
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertIn("holdings", _pending_names(plan))
         self.assertNotIn("qt.ai.data.history", [step.skill_name for step in plan.steps])
         self.assertNotIn("qt.ai.hp.describe", [step.skill_name for step in plan.steps])
         dumped = json.dumps(

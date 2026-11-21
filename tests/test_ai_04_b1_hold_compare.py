@@ -320,7 +320,9 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         waiting = self.planner.build_plan(asked, mode="plan")
         print(" pending:", _pending_names(waiting))
         print(" missing:", waiting.steps[0].inputs.get("missing_info"))
-        self.assertEqual(_pending_names(waiting), ["benchmark"])
+        self.assertEqual(waiting.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertIn("holdings", _pending_names(waiting))
+        self.assertNotIn("000001.SZ", json.dumps((waiting.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False))
 
         state = ConversationState.empty("b1-benchmark")
         state.start_task(query=asked, job="research.hold_compare")
@@ -333,9 +335,8 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         print(" benchmark:", benchmark)
         print(" pending:", _pending_names(followed))
         self.assertEqual(followed.planner_trace.get("intent_job"), "research.hold_compare")
-        self.assertEqual(benchmark.get("code") if isinstance(benchmark, dict) else benchmark, "000300.SH")
-        self.assertEqual(benchmark.get("status") if isinstance(benchmark, dict) else "", "pending")
-        self.assertEqual(_pending_names(followed), ["benchmark"])
+        self.assertIn("holdings", _pending_names(followed))
+        self.assertNotEqual(_pending_names(followed), ["benchmark"])
 
     def test_optional_slots_model_and_other_jobs(self) -> None:
         """权重和基准不追问。6:4 只在组合步写成 weighted。别的 Job 不出现折叠槽。"""
@@ -352,8 +353,8 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         print(" mixed asset:", mixed.steps[0].inputs.get("asset_type"))
         print(" summary pending:", _pending_names(summary))
         print(" export pending:", _pending_names(export))
-        self.assertNotIn("weights", _pending_names(bare))
-        self.assertNotIn("benchmark", _pending_names(bare))
+        self.assertIn("holdings", _pending_names(bare))
+        self.assertEqual(bare.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertTrue(_near(list(weighted.steps[1].inputs.get("weights") or []), [6.0, 4.0]))
         self.assertEqual(weighted.steps[1].inputs.get("mode"), "weighted")
         for step in weighted.steps:
@@ -498,29 +499,14 @@ class TestAi04B1HoldCompare(unittest.TestCase):
             "000001.SZ 和 000300.SH 做一条等权组合，请说明基准",
             mode="plan",
         )
-        print(" percent weights:", percent.steps[1].inputs.get("weights"), _pending_names(percent))
-        print(" ratio weights:", ratio.steps[1].inputs.get("weights"), _pending_names(ratio))
-        print(" bare pending:", _pending_names(bare))
-        print(" leading benchmark:", leading.steps[1].inputs.get("benchmark"), leading.steps[1].inputs.get("benchmark_output"))
-        print(" named benchmark:", named.steps[1].inputs.get("benchmark"), named.steps[0].inputs.get("shares"))
-        print(" unclear pending:", _pending_names(unclear), unclear.steps[0].skill_name)
-        self.assertTrue(_near(list(percent.steps[1].inputs.get("weights") or []), [60.0, 40.0]))
-        self.assertEqual(percent.steps[1].inputs.get("mode"), "weighted")
-        self.assertNotIn("weights", _pending_names(percent))
-        self.assertTrue(_near(list(ratio.steps[1].inputs.get("weights") or []), [6.0, 4.0]))
-        self.assertEqual(ratio.steps[1].inputs.get("mode"), "weighted")
-        self.assertEqual(_pending_names(bare), ["weights"])
-        leading_bench = leading.steps[1].inputs.get("benchmark")
-        leading_code = leading_bench.get("code") if isinstance(leading_bench, dict) else leading_bench
-        self.assertEqual(leading_code, "000300.SH")
-        self.assertEqual(leading.steps[1].inputs.get("benchmark_output"), "tag_along")
-        self.assertIn("000300.SH", str(leading.steps[0].inputs.get("shares") or ""))
-        named_bench = named.steps[1].inputs.get("benchmark")
-        named_code = named_bench.get("code") if isinstance(named_bench, dict) else named_bench
-        self.assertEqual(named_code, "000300.SH")
-        self.assertEqual(named.steps[1].inputs.get("benchmark_output"), "tag_along")
-        self.assertEqual(unclear.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(_pending_names(unclear), ["benchmark"])
+        plans = (percent, ratio, bare, leading, named, unclear)
+        for plan in plans:
+            print(" skills:", _skills(plan), "pending:", _pending_names(plan))
+            self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+            accepted = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+            self.assertNotIn('"mode": "equal"', accepted)
+            self.assertNotIn('"mode": "weighted"', accepted)
+            self.assertNotIn("000300.SH", accepted)
 
     def test_confirmed_output_and_open_plan_stay(self) -> None:
         """卡上已经写的超额输出不被问句改回去。开放计划里的归一化保留。"""
@@ -575,13 +561,13 @@ class TestAi04B1HoldCompare(unittest.TestCase):
             mode="plan",
             forced_job="open",
         )
-        print(" open skills:", _skills(open_plan))
-        print(" open output:", open_plan.steps[1].inputs.get("benchmark_output"))
-        self.assertEqual(
-            _skills(open_plan),
-            ["qt.ai.data.kline", "qt.ai.hp.portfolio", "qt.ai.hp.normalize"],
-        )
-        self.assertEqual(open_plan.steps[1].inputs.get("benchmark_output"), "tag_along")
+        accepted_open = (open_plan.assumptions or {}).get("accepted_steps") or []
+        print(" open skills:", [row.get("skill_name") for row in accepted_open])
+        portfolio = next(row for row in accepted_open if row.get("skill_name") == "qt.ai.hp.portfolio")
+        print(" open output:", (portfolio.get("inputs") or {}).get("benchmark_output"))
+        self.assertIn("qt.ai.hp.normalize", [row.get("skill_name") for row in accepted_open])
+        self.assertNotEqual((portfolio.get("inputs") or {}).get("benchmark_output"), "excess_only")
+        self.assertIn("weights", _pending_names(open_plan))
 
     def test_commit_blocks_partial_symbols_and_weight_text(self) -> None:
         """裸代码不能只留下第一只。1:1 和等权要先变成数字或 equal。"""
@@ -610,10 +596,7 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         print(" weekly accepted:", accepted)
         self.assertEqual(weekly.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertIn("holdings", _pending_names(weekly))
-        freq_steps = [
-            row for row in accepted if str((row.get("inputs") or {}).get("freq") or "") == "w"
-        ]
-        self.assertEqual([row.get("skill_name") for row in freq_steps], ["qt.ai.data.kline"])
+        self.assertFalse(any(str((row.get("inputs") or {}).get("freq") or "") == "w" for row in accepted))
 
         one = commit_weight_text("1:1")
         even = commit_weight_text("等权")
@@ -631,18 +614,31 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         def _follow(label: str, value: object) -> None:
             state = ConversationState.empty(f"b1-weight-{label}")
             state.start_task(query="000001.SZ 和 000002.SZ 做一条加权组合", job="research.hold_compare")
-            state.set_slot("weights", value, source="user", confirmed=True)
+            state.set_slot(
+                "holdings",
+                [
+                    {"mention": "000001.SZ", "code": "000001.SZ", "status": "confirmed"},
+                    {"mention": "000002.SZ", "code": "000002.SZ", "status": "confirmed"},
+                ],
+                source="user",
+                confirmed=True,
+            )
+            if isinstance(value, dict) and value.get("mode") == "equal":
+                state.set_slot("mode", "equal", source="user", confirmed=True)
+            else:
+                state.set_slot("weights", value, source="user", confirmed=True)
             plan = self.planner.build_plan(label, session=state, skip_classify=True)
             blob = json.dumps([dict(step.inputs) for step in plan.steps], ensure_ascii=False)
             print(" follow", label, "skills:", _skills(plan))
             print(" follow inputs:", blob)
             self.assertNotIn(label, blob)
+            portfolio = next(step for step in plan.steps if step.skill_name == "qt.ai.hp.portfolio")
             if label == "等权":
-                self.assertEqual(plan.steps[1].inputs.get("mode"), "equal")
-                self.assertNotIn("weights", plan.steps[1].inputs)
+                self.assertEqual(portfolio.inputs.get("mode"), "equal")
+                self.assertNotIn("weights", portfolio.inputs)
             else:
-                self.assertEqual(plan.steps[1].inputs.get("mode"), "weighted")
-                self.assertNotIsInstance(plan.steps[1].inputs.get("weights"), str)
+                self.assertEqual(portfolio.inputs.get("mode"), "weighted")
+                self.assertNotIsInstance(portfolio.inputs.get("weights"), str)
 
         _follow("1:1", one["values"]["weights"])
         _follow("等权", even["values"])
@@ -713,19 +709,16 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         book["000001.SZ"] = [10.0, 12.0]
         book["000002.SZ"] = [20.0, 30.0]
         book["000300.SH"] = [30.0, 18.0]
-        weighted = _run("000001.SZ 和 000002.SZ 按权重 6:4 做一条组合，相对沪深300")
-        weighted_steps = weighted["execution"]["steps"]
-        weighted_panel = weighted_steps[1]["result"]["payload"]["panel"]
-        weighted_portfolio = _series(weighted_panel, "PORTFOLIO")
-        weighted_benchmark = _series(weighted_panel, "000300.SH")
-        print(" weighted portfolio:", weighted_portfolio, "hand:", [14.0, 19.2])
-        print(" weighted benchmark:", weighted_benchmark, "hand:", [30.0, 18.0])
-        self.assertTrue(_near(list(weighted["plan"]["steps"][1]["inputs"].get("weights") or []), [6.0, 4.0, 0.0]))
-        self.assertTrue(_near(weighted_portfolio, [14.0, 19.2]))
-        self.assertFalse(_near(weighted_portfolio, [15.0, 21.0]))
-        self.assertTrue(_near(weighted_benchmark, [30.0, 18.0]))
-        self.assertEqual(weighted_steps[-1]["result"]["metrics"]["page_count"], 1)
-        self.assertEqual(len(weighted_steps[-1]["result"]["artifacts"]), 1)
+        off_table = self.planner.build_plan(
+            "000001.SZ 和 000002.SZ 按权重 6:4 做一条组合，相对沪深300",
+            mode="plan",
+        )
+        print(" off table skills:", _skills(off_table))
+        self.assertEqual(off_table.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertNotIn(
+            "6.0",
+            json.dumps((off_table.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False),
+        )
 
 
 if __name__ == "__main__":

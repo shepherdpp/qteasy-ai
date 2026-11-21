@@ -452,6 +452,9 @@ class Planner:
             candidate_source = "session"
             downgrade_reason = ""
             steps = compose_recipe(self, decision, query)
+            if kept_rows:
+                overlay_kept_inputs(steps, kept_rows)
+                fill_kept = kept_rows
         else:
             if clause is not None and (clause.status != "marked" or not clause.task):
                 decision = IntentDecision(

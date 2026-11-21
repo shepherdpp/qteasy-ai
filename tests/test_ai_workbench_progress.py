@@ -175,8 +175,8 @@ class TestAiWorkbenchProgress(unittest.TestCase):
             print(" execution:", dumped["execution"]["status"])
             print(" needs_confirm:", (dumped["plan_card"] or {}).get("needs_confirm"))
             self.assertEqual(dumped["execution"]["status"], "dry_run")
-            self.assertIn("qt.ai.data.refill_basic_equity_and_index", skills)
-            self.assertTrue(dumped["plan_card"]["needs_confirm"])
+            self.assertEqual(skills, ["qt.ai.system.fallback"])
+            self.assertNotIn("qt.ai.data.refill_basic_equity_and_index", skills)
             self.assertTrue(step_needs_confirm("qt.ai.data.refill_basic_equity_and_index"))
             runs = [p for p in store.list_runs()]
             print(" run files:", runs)

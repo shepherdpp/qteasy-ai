@@ -99,19 +99,21 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print(" missing_info:", inputs.get("missing_info"))
         self.assertEqual(names, ["qt.ai.system.fallback"])
         self.assertEqual(inputs.get("fallback_action"), "clarify_required")
-        self.assertEqual(inputs.get("missing_info"), "return_htype")
+        self.assertEqual(inputs.get("missing_info"), "factor_htype|return_htype|shares|start|end")
         clar = (plan.assumptions or {}).get("clarification") or {}
         pending = [item for item in (clar.get("pending") or []) if isinstance(item, dict)]
         names_pending = [str(item.get("name") or "") for item in pending]
         print(" pending:", names_pending)
         print(" errors:", [item.get("error") for item in pending])
-        self.assertEqual(names_pending, ["return_htype"])
+        self.assertEqual(names_pending, ["factor_htype", "return_htype", "shares", "start", "end"])
         accepted = (plan.assumptions or {}).get("accepted_steps") or []
         written = (accepted[0].get("inputs") or {}) if accepted else {}
         print(" accepted inputs:", written)
-        self.assertEqual(written.get("factor_htype"), "close")
-        self.assertNotEqual(written.get("return_htype"), "pct_chg")
-        self.assertNotIn("two local history columns", str(clar.get("confirm_prompt") or ""))
+        self.assertIn(written.get("factor_htype"), (None, ""))
+        self.assertIn(written.get("return_htype"), (None, ""))
+        self.assertIn(written.get("shares"), (None, ""))
+        self.assertIn(written.get("start"), (None, ""))
+        self.assertIn(written.get("end"), (None, ""))
         self.assertNotIn("qt.ai.research.factor_ic_summary", names)
 
     def test_factor_ic_known_columns_keep_all_symbols(self) -> None:

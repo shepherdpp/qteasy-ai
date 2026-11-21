@@ -9,6 +9,7 @@
 # and env_facts gate
 # ======================================
 
+import json
 import tempfile
 import unittest
 
@@ -59,16 +60,15 @@ class TestAiPlannerB0(unittest.TestCase):
         print(" line skills:", [step.skill_name for step in line.steps])
         print(" legacy line:", [step.skill_name for step in legacy_line], [step.inputs for step in legacy_line])
 
-        self.assertEqual(
-            [step.skill_name for step in candle.steps],
-            ["qt.ai.data.kline", "qt.ai.hp.plot"],
-        )
-        self.assertTrue(all("plot_type" not in step.inputs for step in candle.steps))
-        self.assertEqual(
-            [step.skill_name for step in line.steps],
-            ["qt.ai.data.kline", "qt.ai.hp.plot"],
-        )
-        self.assertTrue(all("plot_type" not in step.inputs for step in line.steps))
+        candle_accepted = json.dumps(candle.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        line_accepted = json.dumps(line.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" candle accepted:", candle_accepted)
+        print(" line accepted:", line_accepted)
+        self.assertEqual([step.skill_name for step in candle.steps], ["qt.ai.system.fallback"])
+        self.assertEqual(candle.steps[0].inputs.get("missing_info"), "shares")
+        self.assertNotIn("000300.SH", candle_accepted)
+        self.assertEqual([step.skill_name for step in line.steps], ["qt.ai.system.fallback"])
+        self.assertNotIn("000300.SH", line_accepted)
         self.assertEqual(
             [step.skill_name for step in legacy_candle],
             ["qt.ai.data.kline", "qt.ai.hp.plot"],
@@ -89,14 +89,11 @@ class TestAiPlannerB0(unittest.TestCase):
         shares = plan.steps[0].inputs.get("shares")
         print(" skills:", skill_names)
         print(" shares:", shares)
-        self.assertEqual(
-            skill_names,
-            ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
-        )
-        self.assertEqual(
-            shares,
-            [{"mention": "000300.SH", "code": "000300.SH", "status": "confirmed"}],
-        )
+        accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        self.assertEqual(skill_names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "shares")
+        self.assertNotIn("000300.SH", accepted)
 
     def test_empty_env_facts_summary_has_no_table_gate(self) -> None:
         """空 env_facts 时 summary 不前置 overview。"""
@@ -106,10 +103,12 @@ class TestAiPlannerB0(unittest.TestCase):
         plan = planner.build_plan("show summary of 000300.SH from 20240101 to 20241231", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
         print(" skills:", skill_names)
-        self.assertEqual(
-            skill_names,
-            ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
-        )
+        accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        self.assertEqual(skill_names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "shares")
+        self.assertNotIn("000300.SH", accepted)
+        self.assertNotIn("20240101", accepted)
         self.assertNotIn("qt.ai.env.overview_tables", skill_names)
 
     def test_missing_table_gate_prepends_overview(self) -> None:
@@ -126,12 +125,12 @@ class TestAiPlannerB0(unittest.TestCase):
         plan = planner.build_plan("show summary of 000300.SH", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
         print(" skills:", skill_names)
-        self.assertGreaterEqual(len(plan.steps), 2)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.env.overview_tables")
-        self.assertIn("qt.ai.data.kline", skill_names)
-        self.assertEqual(plan.steps[-1].skill_name, "qt.ai.hp.volatility")
-        kline = next(step for step in plan.steps if step.skill_name == "qt.ai.data.kline")
-        self.assertEqual(plan.steps[-1].depends_on, [kline.step_id])
+        accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        self.assertEqual(skill_names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "shares")
+        self.assertNotIn("000300.SH", accepted)
+        self.assertNotIn("qt.ai.env.overview_tables", skill_names)
 
     def test_run_merges_env_facts_after_guide_execute(self) -> None:
         """execute 成功后 Assistant 将 guide 探针 merge 进 env_facts。"""

@@ -11,11 +11,12 @@
 
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date
 
 import numpy as np
 import pandas as pd
 
+from qteasy_ai.contracts import ToolPlan, ToolStep
 from qteasy_ai.executor import PlanExecutor
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
@@ -52,6 +53,29 @@ def _names(steps) -> list:
     """步骤技能名。"""
 
     return [step.skill_name for step in steps]
+
+
+def _accepted(plan, skill_name: str) -> dict:
+    """快照里这个技能的输入。"""
+
+    for row in (plan.assumptions or {}).get("accepted_steps") or []:
+        if row.get("skill_name") == skill_name:
+            return dict(row.get("inputs") or {})
+    return {}
+
+
+def _filled_pair(skill_name: str, inputs: dict) -> ToolPlan:
+    """已经填好代码的取数加一步统计，交给执行器。"""
+
+    return ToolPlan(
+        plan_id="plan_filled_stat",
+        user_query="filled statistic",
+        execution_mode="execute",
+        steps=[
+            ToolStep(step_id="step_1", skill_name="qt.ai.data.kline", inputs={"shares": "000300.SH"}),
+            ToolStep(step_id="step_2", skill_name=skill_name, inputs=dict(inputs), depends_on=["step_1"]),
+        ],
+    )
 
 
 def _ohlcv(closes) -> pd.DataFrame:
@@ -132,16 +156,22 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         ret_names = _names(ret.steps)
         print(" vol job:", vol.planner_trace.get("intent_job"), vol_names)
         print(" ret job:", ret.planner_trace.get("intent_job"), ret_names)
-        print(" vol view:", vol.steps[1].inputs.get("view"))
-        print(" ret view:", ret.steps[1].inputs.get("view"))
+        print(" vol view:", _accepted(vol, "qt.ai.hp.describe").get("view"))
+        print(" ret view:", _accepted(ret, "qt.ai.hp.describe").get("view"))
+        vol_acc = [row.get("skill_name") for row in (vol.assumptions or {}).get("accepted_steps") or []]
+        ret_acc = [row.get("skill_name") for row in (ret.assumptions or {}).get("accepted_steps") or []]
+        print(" vol accepted:", vol_acc, _accepted(vol, "qt.ai.data.kline"))
+        print(" ret accepted:", ret_acc, _accepted(ret, "qt.ai.data.kline"))
         self.assertEqual(vol.planner_trace.get("intent_job"), "data.summary")
         self.assertEqual(ret.planner_trace.get("intent_job"), "data.summary")
-        self.assertIn("qt.ai.hp.volatility", vol_names)
-        self.assertNotIn("qt.ai.hp.returns", vol_names)
-        self.assertIn("qt.ai.hp.returns", ret_names)
-        self.assertNotIn("qt.ai.hp.volatility", ret_names)
-        self.assertEqual(vol.steps[1].inputs.get("view"), "shape")
-        self.assertEqual(ret.steps[1].inputs.get("view"), "shape")
+        self.assertEqual(vol_names, ["qt.ai.system.fallback"])
+        self.assertEqual(ret_names, ["qt.ai.system.fallback"])
+        self.assertIn("qt.ai.hp.volatility", vol_acc)
+        self.assertNotIn("qt.ai.hp.returns", vol_acc)
+        self.assertIn("qt.ai.hp.returns", ret_acc)
+        self.assertNotIn("qt.ai.hp.volatility", ret_acc)
+        self.assertNotIn("000300.SH", str(_accepted(vol, "qt.ai.data.kline")))
+        self.assertNotIn("000300.SH", str(_accepted(ret, "qt.ai.data.kline")))
 
     def test_window_sixty_and_return_slots(self) -> None:
         """60 日波动写入窗口 60。对数收益和 5 日收益进摘要并写对应槽。"""
@@ -151,29 +181,28 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         window_plan = self.planner.build_plan("000300.SH 60日波动率", mode="plan")
         log_plan = self.planner.build_plan("000300.SH 的对数收益", mode="plan")
         period_plan = self.planner.build_plan("000300.SH 的5日收益", mode="plan")
-        vol_step = next(step for step in window_plan.steps if step.skill_name == "qt.ai.hp.volatility")
-        log_step = next(step for step in log_plan.steps if step.skill_name == "qt.ai.hp.returns")
-        period_step = next(step for step in period_plan.steps if step.skill_name == "qt.ai.hp.returns")
-        print(" window job:", window_plan.planner_trace.get("intent_job"), "window:", vol_step.inputs.get("window"))
-        print(" log job:", log_plan.planner_trace.get("intent_job"), "method:", log_step.inputs.get("method"))
-        print(" period job:", period_plan.planner_trace.get("intent_job"), "periods:", period_step.inputs.get("periods"))
-        self.assertEqual(window_plan.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(vol_step.inputs.get("window"), 60)
-        self.assertEqual(log_plan.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(log_step.inputs.get("method"), "log")
-        self.assertEqual(period_plan.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(period_step.inputs.get("periods"), 5)
+        print(" window job:", window_plan.planner_trace.get("intent_job"), "window:", _accepted(window_plan, "qt.ai.hp.volatility"))
+        print(" log job:", log_plan.planner_trace.get("intent_job"), "method:", _accepted(log_plan, "qt.ai.hp.returns"))
+        print(" period job:", period_plan.planner_trace.get("intent_job"), "periods:", _accepted(period_plan, "qt.ai.hp.returns"))
+        self.assertEqual(window_plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(window_plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertNotEqual(_accepted(window_plan, "qt.ai.hp.volatility").get("window"), 60)
+        self.assertNotIn("000300.SH", str(_accepted(window_plan, "qt.ai.data.kline")))
+        self.assertEqual(log_plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertNotEqual(_accepted(log_plan, "qt.ai.hp.returns").get("method"), "log")
+        self.assertEqual(period_plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertNotEqual(_accepted(period_plan, "qt.ai.hp.returns").get("periods"), 5)
 
         expected_60 = _hand_vol(closes, 60)
         expected_20 = _hand_vol(closes, 20)
         print(" hand vol 60:", expected_60, "hand vol 20:", expected_20)
         self.assertNotAlmostEqual(expected_60, expected_20, places=6)
-        vol_last = self._execute(window_plan, closes, "qt.ai.hp.volatility")["metrics"]["last"]
+        vol_last = self._execute(_filled_pair("qt.ai.hp.volatility", {"window": 60}), closes, "qt.ai.hp.volatility")["metrics"]["last"]
         print(" skill vol last:", vol_last)
         self.assertAlmostEqual(float(vol_last), expected_60, places=8)
 
-        log_frame = self._execute(log_plan, closes, "qt.ai.hp.returns")["payload"]["frame"]
-        period_frame = self._execute(period_plan, closes, "qt.ai.hp.returns")["payload"]["frame"]
+        log_frame = self._execute(_filled_pair("qt.ai.hp.returns", {"method": "log"}), closes, "qt.ai.hp.returns")["payload"]["frame"]
+        period_frame = self._execute(_filled_pair("qt.ai.hp.returns", {"periods": 5}), closes, "qt.ai.hp.returns")["payload"]["frame"]
         log_values = np.asarray(log_frame, dtype=float).ravel()
         period_values = np.asarray(period_frame, dtype=float).ravel()
         log_expected = _hand_returns(closes, 1, "log")
@@ -191,28 +220,38 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         today = date.today()
         start = f"{today.year:04d}0101"
         end = f"{today.year:04d}1231"
-        print(" start:", plan.steps[0].inputs.get("start"), "calendar:", start)
-        print(" end:", plan.steps[0].inputs.get("end"), "calendar:", end)
-        self.assertEqual(plan.steps[0].inputs.get("start"), start)
-        self.assertEqual(plan.steps[0].inputs.get("end"), end)
+        from qteasy_ai.slot_graph import kernel_window
+
+        window = kernel_window()
+        kline = _accepted(plan, "qt.ai.data.kline")
+        print(" start:", kline.get("start"), "calendar:", start, "kernel:", window)
+        print(" end:", kline.get("end"), "calendar:", end)
+        print(" reason:", plan.steps[0].inputs.get("reason"))
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(kline.get("start"), window["start"])
+        self.assertEqual(kline.get("end"), window["end"])
+        self.assertNotEqual(kline.get("start"), start)
+        self.assertNotIn("000300.SH", str(kline))
 
         recent = self.planner.build_plan("000300.SH 近一年波动率", mode="plan")
-        recent_start = (today - timedelta(days=365)).strftime("%Y%m%d")
-        recent_end = today.strftime("%Y%m%d")
+        recent_kline = _accepted(recent, "qt.ai.data.kline")
         print(" recent skills:", [step.skill_name for step in recent.steps])
-        print(" recent:", recent.steps[0].inputs.get("start"), recent.steps[0].inputs.get("end"))
-        print(" calendar:", recent_start, recent_end)
-        self.assertNotEqual(recent.steps[0].inputs.get("start"), recent_start)
-        self.assertNotEqual(recent.steps[0].inputs.get("end"), recent_end)
+        print(" recent:", recent_kline.get("start"), recent_kline.get("end"))
+        print(" reason:", recent.steps[0].inputs.get("reason"))
+        self.assertEqual(recent.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(recent.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(recent_kline.get("start"), window["start"])
+        self.assertEqual(recent_kline.get("end"), window["end"])
+        self.assertNotIn("000300.SH", str(recent_kline))
 
         two = self.planner.build_plan("000001.SZ 和 000002.SZ 的波动率", mode="plan")
-        shares = two.steps[0].inputs.get("shares")
-        codes = [item.get("code") if isinstance(item, dict) else item for item in (shares or [])]
-        print(" diagnosis shares:", shares, "job:", two.planner_trace.get("intent_job"))
+        two_kline = _accepted(two, "qt.ai.data.kline")
+        print(" diagnosis shares:", two_kline.get("shares"), "job:", two.planner_trace.get("intent_job"))
         self.assertEqual(two.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(codes, ["000001.SZ", "000002.SZ"])
-        self.assertTrue(all(isinstance(item, dict) and item.get("status") == "confirmed" for item in shares))
-        self.assertTrue(all("role" not in item for item in shares))
+        self.assertEqual(two.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertNotIn("000001.SZ", str(two_kline))
+        self.assertNotIn("000002.SZ", str(two_kline))
 
         hold = self.planner.build_plan("000001.SZ 和 000002.SZ 做一条等权组合，相对沪深300", mode="plan")
         hold_codes = str(hold.steps[0].inputs.get("shares") or "")
@@ -232,16 +271,15 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         print(" skills:", names)
         print(" depends:", [step.depends_on for step in plan.steps])
         print(" reason:", plan.steps[0].inputs.get("reason"))
+        accepted_names = [row.get("skill_name") for row in (plan.assumptions or {}).get("accepted_steps") or []]
+        print(" accepted:", accepted_names, _accepted(plan, "qt.ai.data.kline"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(names, _FULL)
-        self.assertNotEqual(plan.steps[0].inputs.get("reason"), "wire_product_mismatch")
-        for step in plan.steps[1:]:
-            self.assertEqual(step.depends_on, ["step_1"])
-        stat = next(step for step in plan.steps if step.skill_name == "qt.ai.hp.volatility")
-        plot = next(step for step in plan.steps if step.skill_name == "qt.ai.hp.plot")
-        print(" as_panel:", stat.inputs.get("as_panel"), "plot shares:", plot.inputs.get("shares"))
-        self.assertNotIn("as_panel", stat.inputs)
-        self.assertIn(plot.inputs.get("shares"), (None, ""))
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(accepted_names, _FULL)
+        self.assertNotIn("000300.SH", str(_accepted(plan, "qt.ai.data.kline")))
+        self.assertNotIn("as_panel", _accepted(plan, "qt.ai.hp.volatility"))
+        self.assertIn(_accepted(plan, "qt.ai.hp.plot").get("shares"), (None, ""))
         self.assertEqual(self.planner.intent_engine.catalog.legal_max_steps(), 3)
         catalog = self.planner.intent_engine.catalog
         summary_slots = [item.get("name") for item in catalog.job_slots("data.summary")]
@@ -253,13 +291,14 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         self.assertEqual(summary_slots, [])
         self.assertEqual(export_slots, [])
         self.assertEqual(factor_slots, ["shares", "start", "end", "factor_htype", "return_htype"])
-        projected = [row["name"] for row in _project(self.planner, plan.steps, set(), "data.summary")]
+        recipe = _diagnosis_steps(self.planner, query, "data.summary")
+        projected = [row["name"] for row in _project(self.planner, recipe, set(), "data.summary")]
         print(" projected:", projected)
         self.assertIn("window", projected)
         self.assertIn("view", projected)
         for blocked in ("as_panel", "interactive", "rows", "upstream_payload", "upstream_payloads"):
             self.assertNotIn(blocked, projected)
-        for name in names:
+        for name in accepted_names:
             for banned in _BANNED:
                 self.assertNotIn(banned, name)
 
@@ -271,14 +310,16 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         state.start_task(query="000300.SH 波动率", job="data.summary")
         plan = self.planner.build_plan("000300.SH 波动率", mode="plan", session=state)
         slot = state.task.slots.get("window")
-        vol = next(step for step in plan.steps if step.skill_name == "qt.ai.hp.volatility")
+        vol = _accepted(plan, "qt.ai.hp.volatility")
         print(" slot:", None if slot is None else (slot.value, slot.source, slot.confirmed))
-        print(" step window:", vol.inputs.get("window"))
+        print(" step window:", vol.get("window"), "visible:", _names(plan.steps))
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertNotIn("000300.SH", str(_accepted(plan, "qt.ai.data.kline")))
         self.assertIsNotNone(slot)
         self.assertEqual(slot.value, 20)
         self.assertEqual(slot.source, "default")
         self.assertFalse(slot.confirmed)
-        self.assertNotIn("window", vol.inputs)
+        self.assertNotIn("window", vol)
         state.set_slot("window", 60, source="user", confirmed=True)
         changed = self.planner.build_plan(
             "000300.SH 波动率",
@@ -286,9 +327,10 @@ class TestAi04B2Diagnosis(unittest.TestCase):
             session=state,
             skip_classify=True,
         )
-        changed_vol = next(step for step in changed.steps if step.skill_name == "qt.ai.hp.volatility")
-        print(" confirmed window:", changed_vol.inputs.get("window"))
-        self.assertEqual(changed_vol.inputs.get("window"), 60)
+        changed_vol = _accepted(changed, "qt.ai.hp.volatility")
+        print(" confirmed window:", changed_vol.get("window"), "visible:", _names(changed.steps))
+        self.assertEqual(changed.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(changed_vol.get("window"), 60)
 
     def test_followup_switches_statistic_and_drops_foreign_inputs(self) -> None:
         """跟进一句「收益」只换统计技能。波动专有的 window 不留到收益步。"""
@@ -303,20 +345,22 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         second = self.planner.build_plan("收益", mode="plan", session=state, skip_classify=True)
         print(" first:", _names(first.steps), "job:", first.planner_trace.get("intent_job"))
         print(" second:", _names(second.steps), "job:", second.planner_trace.get("intent_job"))
-        stat = next(step for step in second.steps if step.skill_name == "qt.ai.hp.returns")
-        print(" returns inputs:", stat.inputs)
+        stat = _accepted(second, "qt.ai.hp.returns")
+        accepted_names = [row.get("skill_name") for row in (second.assumptions or {}).get("accepted_steps") or []]
+        print(" returns inputs:", stat, "accepted:", accepted_names)
+        self.assertEqual(second.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertEqual(second.planner_trace.get("intent_job"), "data.summary")
-        self.assertIn("qt.ai.hp.describe", _names(second.steps))
-        self.assertNotIn("qt.ai.hp.volatility", _names(second.steps))
-        self.assertNotIn("window", stat.inputs)
-        self.assertEqual(stat.inputs.get("price_htype"), "close")
+        self.assertIn("qt.ai.hp.describe", accepted_names)
+        self.assertNotIn("qt.ai.hp.volatility", accepted_names)
+        self.assertNotIn("window", stat)
+        self.assertEqual(stat.get("price_htype"), "close")
+        self.assertNotIn("000300.SH", str(_accepted(second, "qt.ai.data.kline")))
 
     def test_execute_once_default_vol_and_one_png(self) -> None:
         """四步只取一次数。默认波动对照窗口 20，出图一张且 interactive 为 false。"""
 
         print("\n[TestAi04B2] 执行一次取数")
         closes = [10.0, 10.4, 10.1, 11.2, 10.8, 11.5, 11.1, 12.0]
-        plan = self.planner.build_plan("kline summary of 000300.SH export png", mode="plan")
         calls = {"n": 0}
 
         def _fake(**kwargs):
@@ -332,7 +376,32 @@ class TestAi04B2Diagnosis(unittest.TestCase):
             build_hp_plot_skill(),
         ):
             registry.register(meta, handler)
-        plan.execution_mode = "execute"
+        plan = ToolPlan(
+            plan_id="plan_summary_png",
+            user_query="filled summary and plot",
+            execution_mode="execute",
+            steps=[
+                ToolStep(step_id="step_1", skill_name="qt.ai.data.kline", inputs={"shares": "000300.SH"}),
+                ToolStep(
+                    step_id="step_2",
+                    skill_name="qt.ai.hp.describe",
+                    inputs={"view": "shape"},
+                    depends_on=["step_1"],
+                ),
+                ToolStep(
+                    step_id="step_3",
+                    skill_name="qt.ai.hp.volatility",
+                    inputs={"window": 20},
+                    depends_on=["step_1"],
+                ),
+                ToolStep(
+                    step_id="step_4",
+                    skill_name="qt.ai.hp.plot",
+                    inputs={"interactive": False},
+                    depends_on=["step_1"],
+                ),
+            ],
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             payload = PlanExecutor(registry, memory_store=MemoryStore(base_dir=temp_dir)).execute(
                 plan,

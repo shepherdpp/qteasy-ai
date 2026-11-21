@@ -122,10 +122,12 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             body = res.json()
             print(" execution:", body.get("execution"))
             print(" error:", body.get("error"))
+            skills = [step.get("skill_name") for step in ((body.get("plan") or {}).get("steps") or [])]
+            print(" skills:", skills)
             self.assertEqual((body.get("execution") or {}).get("status"), "dry_run")
-            err = body.get("error") or {}
-            self.assertEqual(err.get("code"), "ALLOW_GATE_BLOCKED")
-            self.assertRegex(str(err.get("message") or ""), r"[A-Za-z]")
+            self.assertEqual((body.get("execution") or {}).get("steps") or [], [])
+            self.assertNotIn("qt.ai.data.refill_basic_equity_and_index", skills)
+            self.assertIsNone(body.get("error"))
 
     def test_missing_and_unknown_plan_id(self) -> None:
         """缺 plan_id / 未知 id → 4xx 英文，不改走 query run。"""
@@ -1078,7 +1080,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(patched.status_code, 200)
             self.assertEqual((body2.get("plan_card") or {}).get("plan_id"), plan_id)
             self.assertEqual(len(users_after), len(users_before))
-            self.assertEqual(len(readies), 1)
+            self.assertEqual(len(readies), 0)
             self.assertEqual(str(start), "20200101")
             self.assertTrue(any("Plan revised" in str(row.get("text") or "") for row in notices))
             self.assertTrue(any((row.get("payload") or {}).get("patches") for row in notices))

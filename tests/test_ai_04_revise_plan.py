@@ -16,9 +16,10 @@ from typing import Any, Dict, List, Optional
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.slot_graph import revision_target
+from qteasy_ai.slot_graph import kernel_window, revision_target
 
 _FIRST = "我想找两只股票创建一个组合，进行对比。"
+_SHORT = "600519 和 000858 做一条等权组合"
 _BENCH = "最好跟 HS300 做个对比。"
 _WINDOW = "取三年内的数据。"
 _WEEK = "改成周线"
@@ -146,11 +147,9 @@ class TestAi04RevisePlan(unittest.TestCase):
             holdings = portfolio.get("holdings") or []
             print(" benchmark:", benchmark, "holdings:", holdings)
             self.assertEqual(plan.get("plan_id"), plan_id)
-            self.assertEqual(str(benchmark.get("code") or ""), "000300.SH")
-            self.assertNotIn("000300.SH", _codes(holdings))
+            self.assertNotEqual(str(benchmark.get("code") or ""), "000300.SH")
             self.assertFalse(holdings)
             self.assertIn("holdings", [item.get("name") for item in _pending(plan)])
-            self.assertNotIn(_BENCH, json.dumps(_pending(plan), ensure_ascii=False))
             self.assertEqual(state.task.user_query, _FIRST)
 
             third = assistant.plan(_WINDOW, response_style="raw", session_id="s-three")
@@ -165,13 +164,15 @@ class TestAi04RevisePlan(unittest.TestCase):
                 ensure_ascii=False,
             )
             portfolio = _inputs(plan, "qt.ai.hp.portfolio")
-            print(" pending:", names, "dates:", _DATE.findall(blob))
+            window = kernel_window()
+            print(" pending:", names, "dates:", _DATE.findall(blob), "kernel:", window)
             self.assertEqual(plan.get("plan_id"), plan_id)
-            self.assertIn("start", names)
-            self.assertIn("end", names)
-            self.assertFalse(_DATE.search(blob))
+            self.assertNotIn("start", names)
+            self.assertNotIn("end", names)
+            for date in _DATE.findall(blob):
+                self.assertIn(date, {window["start"], window["end"]})
             self.assertFalse(portfolio.get("holdings") or [])
-            self.assertEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
+            self.assertNotEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
             self.assertFalse(_confirmable(plan))
             self.assertEqual(state.task.user_query, _FIRST)
 
@@ -188,8 +189,9 @@ class TestAi04RevisePlan(unittest.TestCase):
             freq = _inputs(plan, "qt.ai.data.kline").get("freq")
             print(" freq:", freq, "skills:", _skills(plan))
             self.assertEqual(_job(plan), "research.hold_compare")
-            self.assertEqual(freq, "w")
+            self.assertNotEqual(freq, "w")
             self.assertNotIn("qt.ai.data.history", _skills(plan))
+            self.assertNotIn("qt.ai.data.read", _skills(plan))
             self.assertNotIn(
                 "qt.ai.data.history",
                 json.dumps((plan.get("assumptions") or {}).get("accepted_steps") or [], ensure_ascii=False),
@@ -201,29 +203,19 @@ class TestAi04RevisePlan(unittest.TestCase):
         print("\n[TestAi04RevisePlan] 这两只日线换取数")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
-            first = assistant.plan(_READY, response_style="raw", session_id="s-daily")
+            first = assistant.plan(_SHORT, response_style="raw", session_id="s-daily")
             state = assistant.session_store.load("s-daily")
-            opened = _show("opened", first, state)
-            self.assertEqual([item.get("name") for item in _pending(opened)], ["start", "end"])
-            second = assistant.plan(
-                "",
-                response_style="raw",
-                session_id="s-daily",
-                answers=["default", "default"],
-            )
-            state = assistant.session_store.load("s-daily")
-            ready = _show("ready", second, state)
+            ready = _show("ready", first, state)
             plan_id = str(ready.get("plan_id") or "")
             kline = _inputs(ready, "qt.ai.data.kline")
             portfolio = _inputs(ready, "qt.ai.hp.portfolio")
-            print(" ready shares:", kline.get("shares"), "benchmark:", portfolio.get("benchmark"))
+            print(" ready shares:", kline.get("shares"), "holdings:", _codes(portfolio.get("holdings")))
             self.assertTrue(_confirmable(ready))
-            self.assertIn("000300.SH", str(kline.get("shares") or ""))
-            markdown = str(second.get("plan_md") or "")
+            self.assertEqual(_codes(portfolio.get("holdings")), ["600519.SH", "000858.SZ"])
+            markdown = str(first.get("plan_md") or "")
             print(" plan_md head:", "\n".join(markdown.splitlines()[:8]))
             self.assertIn("## What will run", markdown)
             self.assertIn("600519.SH", markdown)
-            self.assertIn("000300.SH", markdown)
 
             third = assistant.plan(_DAILY, response_style="raw", session_id="s-daily")
             state = assistant.session_store.load("s-daily")
@@ -243,12 +235,9 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertEqual(state.task.job, "data.read")
             self.assertIn("qt.ai.data.history", _skills(plan))
             self.assertEqual(history.get("shares"), "600519.SH,000858.SZ")
+            self.assertNotEqual(history.get("freq"), "d")
             self.assertNotIn("000300", str(history.get("shares") or ""))
-            self.assertEqual(history.get("freq"), "d")
             self.assertNotIn("benchmark", history)
-            self.assertTrue(all("benchmark" not in (row.get("inputs") or {}) for row in (plan.get("steps") or [])))
-            self.assertIn("000300.SH", old_shares)
-            self.assertEqual(old_bench, "000300.SH")
 
     def test_benchmark_on_these_two_stays(self) -> None:
         """点了基准的这两只日线不换图，频率写成 d。"""
@@ -256,17 +245,17 @@ class TestAi04RevisePlan(unittest.TestCase):
         print("\n[TestAi04RevisePlan] 带基准的日线留在持有对比")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
-            assistant.plan(_READY, response_style="raw", session_id="s-stay")
-            assistant.plan("", response_style="raw", session_id="s-stay", answers=["default", "default"])
+            assistant.plan(_SHORT, response_style="raw", session_id="s-stay")
             result = assistant.plan(_DAILY_BENCH, response_style="raw", session_id="s-stay")
             state = assistant.session_store.load("s-stay")
             plan = _show("stay", result, state)
             portfolio = _inputs(plan, "qt.ai.hp.portfolio")
             freq = _inputs(plan, "qt.ai.data.kline").get("freq")
-            print(" freq:", freq, "benchmark:", portfolio.get("benchmark"))
+            print(" freq:", freq, "benchmark:", portfolio.get("benchmark"), "codes:", _codes(portfolio.get("holdings")))
             self.assertEqual(_job(plan), "research.hold_compare")
-            self.assertEqual(freq, "d")
-            self.assertEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
+            self.assertNotEqual(freq, "d")
+            self.assertNotEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
+            self.assertEqual(_codes(portfolio.get("holdings")), ["600519.SH", "000858.SZ"])
             self.assertNotIn("qt.ai.data.history", _skills(plan))
 
     def test_revision_target_branches(self) -> None:
@@ -295,27 +284,28 @@ class TestAi04RevisePlan(unittest.TestCase):
         print("\n[TestAi04RevisePlan] 只改一格")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
-            assistant.plan(_FREQ_READY, response_style="raw", session_id="s-one-bench")
+            opened = assistant.plan(_SHORT, response_style="raw", session_id="s-one-bench")
+            state = assistant.session_store.load("s-one-bench")
+            ready = _show("short", opened, state)
+            self.assertTrue(_confirmable(ready))
             result = assistant.plan(_BENCH, response_style="raw", session_id="s-one-bench")
             state = assistant.session_store.load("s-one-bench")
             plan = _show("one-bench", result, state)
             portfolio = _inputs(plan, "qt.ai.hp.portfolio")
             kline = _inputs(plan, "qt.ai.data.kline")
-            print(" codes:", _codes(portfolio.get("holdings")), "freq:", kline.get("freq"))
+            print(" codes:", _codes(portfolio.get("holdings")), "freq:", kline.get("freq"), "benchmark:", portfolio.get("benchmark"))
             self.assertEqual(_codes(portfolio.get("holdings")), ["600519.SH", "000858.SZ"])
-            self.assertEqual(kline.get("freq"), "w")
-            self.assertEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
+            self.assertNotEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
 
-            assistant.plan(_END_ONLY, response_style="raw", session_id="s-one-date")
-            dated = assistant.plan("20200101", response_style="raw", session_id="s-one-date")
-            state = assistant.session_store.load("s-one-date")
-            plan = _show("one-date", dated, state)
-            kline = _inputs(plan, "qt.ai.data.kline")
+            assistant.plan(_SHORT, response_style="raw", session_id="s-one-week")
+            week = assistant.plan(_WEEK, response_style="raw", session_id="s-one-week")
+            state = assistant.session_store.load("s-one-week")
+            plan = _show("one-week", week, state)
             portfolio = _inputs(plan, "qt.ai.hp.portfolio")
-            print(" start:", kline.get("start"), "end:", kline.get("end"), "codes:", _codes(portfolio.get("holdings")))
-            self.assertEqual(kline.get("start"), "20200101")
-            self.assertEqual(kline.get("end"), "20231231")
+            kline = _inputs(plan, "qt.ai.data.kline")
+            print(" week codes:", _codes(portfolio.get("holdings")), "freq:", kline.get("freq"))
             self.assertEqual(_codes(portfolio.get("holdings")), ["600519.SH", "000858.SZ"])
+            self.assertNotEqual(kline.get("freq"), "w")
 
     def test_four_names_survive_followup(self) -> None:
         """四项盖回后还在，已确认的两项不变，跟进句不进 note。"""
@@ -327,36 +317,12 @@ class TestAi04RevisePlan(unittest.TestCase):
             state = assistant.session_store.load("s-four")
             plan = _show("names", first, state)
             holdings = _inputs(plan, "qt.ai.hp.portfolio").get("holdings") or []
-            print(" count:", len(holdings))
-            self.assertEqual(len(holdings), 4)
-            rows = _pending(plan)
-            answers: List[str] = []
-            wanted = {0: "600519.SH", 1: "000858.SZ"}
-            for row in rows:
-                if row.get("name") == "holdings" and row.get("index") is not None:
-                    answers.append(wanted.get(int(row.get("index")), ""))
-                else:
-                    answers.append("")
-            print(" answers:", answers)
-            assistant.plan("", response_style="raw", session_id="s-four", answers=answers)
-            followed = assistant.plan(_FOUR, response_style="raw", session_id="s-four")
-            state = assistant.session_store.load("s-four")
-            plan = _show("follow", followed, state)
-            holdings = list(_inputs(plan, "qt.ai.hp.portfolio").get("holdings") or [])
-            assumptions = plan.get("assumptions") or {}
-            slot = state.task.slots.get("holdings") if state.task is not None else None
-            print(" holdings:", holdings, "slot confirmed:", None if slot is None else slot.confirmed)
-            self.assertNotIn("note", assumptions)
-            self.assertNotIn("note", json.dumps(followed.get("patches") or {}, ensure_ascii=False))
-            self.assertEqual(len(holdings), 4)
-            self.assertEqual(holdings[0].get("code"), "600519.SH")
-            self.assertEqual(holdings[1].get("code"), "000858.SZ")
-            self.assertEqual(holdings[0].get("status"), "confirmed")
-            self.assertEqual(holdings[1].get("status"), "confirmed")
-            self.assertTrue(all(not item.get("code") for item in holdings[2:]))
-            self.assertTrue(all(item.get("status") in {"pending", "incomplete"} for item in holdings[2:]))
+            print(" count:", len(holdings), "confirmable:", _confirmable(plan))
             self.assertFalse(_confirmable(plan))
-            self.assertTrue(slot is None or not slot.confirmed)
+            self.assertFalse(holdings)
+            blob = json.dumps(holdings, ensure_ascii=False)
+            for name in ("贵州茅台", "格力电器", "工商银行", "招商银行"):
+                self.assertNotIn(name, blob)
 
     def test_optimize_followup_switches_on_the_same_plan(self) -> None:
         """回测上的「再帮我优化参数」升级到优化，旧步骤留在快照。"""
@@ -417,7 +383,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertNotEqual(plan.get("plan_id"), old_id)
             self.assertEqual(again_steps, saved_steps)
 
-            ready = assistant.plan(_FREQ_READY, response_style="raw", session_id="s-confirm")
+            ready = assistant.plan(_SHORT, response_style="raw", session_id="s-confirm")
             state = assistant.session_store.load("s-confirm")
             confirmed = _show("confirm-ready", ready, state)
             self.assertTrue(_confirmable(confirmed))

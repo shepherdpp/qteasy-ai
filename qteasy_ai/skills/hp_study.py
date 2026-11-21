@@ -438,7 +438,12 @@ def build_hp_portfolio_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         "groups": {"type": "object", "required": False},
         "benchmark": code_spec(required=False),
         "holdings": {"type": "array", "required": False},
-        "benchmark_output": {"type": "string", "required": False},
+        "benchmark_output": {
+            "type": "string",
+            "required": False,
+            "enum": ["tag_along", "excess_only", "none"],
+            "enum_strict": True,
+        },
         "new_share_name": {"type": "string", "required": False},
         "normalize_weights": {"type": "boolean", "required": False},
         "allow_ungrouped": {"type": "string", "required": False},

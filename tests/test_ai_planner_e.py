@@ -103,10 +103,16 @@ class TestAiPlannerE(unittest.TestCase):
         )
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         print(" intent:", plan.planner_trace.get("intent_job"))
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        print(" accepted:", accepted)
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.static")
-        self.assertEqual(plan.steps[0].inputs.get("names"), "industry")
-        self.assertEqual(plan.steps[0].inputs.get("shares"), "000001.SZ")
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "names|shares")
+        blob = str(accepted)
+        self.assertNotIn("industry", blob)
+        self.assertNotIn("000001.SZ", blob)
+        self.assertEqual([row.get("skill_name") for row in accepted], ["qt.ai.data.static"])
 
     def test_inverted_dates_clarify(self) -> None:
         """倒置日期区间 → clarify，不得落到 summary 执行失败。"""
@@ -116,9 +122,15 @@ class TestAiPlannerE(unittest.TestCase):
             "summary 000300.SH from 20241231 to 20240101", mode="plan"
         )
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        print(" accepted:", accepted)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertEqual(plan.steps[0].inputs.get("fallback_action"), "clarify_required")
-        self.assertEqual(plan.steps[0].inputs.get("reason"), "invalid_date_range")
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        blob = str(accepted)
+        self.assertNotIn("20241231", blob)
+        self.assertNotIn("20240101", blob)
+        self.assertNotIn("000300.SH", blob)
 
     def test_invalid_freq_clarify(self) -> None:
         """非法 freq → clarify。"""
@@ -128,8 +140,13 @@ class TestAiPlannerE(unittest.TestCase):
             "summary freq=not_a_freq 000300.SH", mode="plan"
         )
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        print(" accepted:", accepted)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
-        self.assertEqual(plan.steps[0].inputs.get("reason"), "invalid_frequency_expression")
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        blob = str(accepted)
+        self.assertNotIn("not_a_freq", blob)
+        self.assertNotIn("000300.SH", blob)
 
     def test_mode_r_reference_gold_keeps_channel(self) -> None:
         """Mode-R gold 句 cn_gdp 仍是 reference，不打进 history。"""
@@ -142,8 +159,14 @@ class TestAiPlannerE(unittest.TestCase):
         inputs = plan.steps[0].inputs
         print(" skill:", plan.steps[0].skill_name)
         print(" inputs:", inputs)
-        self.assertEqual(plan.steps[0].skill_name, "qt.ai.data.reference")
-        self.assertEqual(inputs.get("names"), "cn_gdp")
+        accepted = (plan.assumptions or {}).get("accepted_steps") or []
+        print(" accepted:", accepted)
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "names")
+        self.assertEqual([row.get("skill_name") for row in accepted], ["qt.ai.data.reference"])
+        written = (accepted[0].get("inputs") or {}) if accepted else {}
+        self.assertNotIn("cn_gdp", str(written.get("names") or ""))
 
     def test_provider_dtype_channel_persists_on_task(self) -> None:
         """有 Provider 时按 DataType 定 channel，并写入 task.flags，跟进不退回 history。"""

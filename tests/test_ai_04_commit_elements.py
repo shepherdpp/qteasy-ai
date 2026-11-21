@@ -97,9 +97,9 @@ class TestAi04CommitElements(unittest.TestCase):
         print(" job:", plan.planner_trace.get("intent_job"))
         print(" shares:", shares, "executable:", "qt.ai.system.fallback" not in [step.skill_name for step in plan.steps])
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual([item.get("mention") for item in shares], ["茅台", "五粮液"])
-        self.assertTrue(all(item.get("status") == "incomplete" and not item.get("code") for item in shares))
-        self.assertTrue(all("role" not in item for item in shares))
+        self.assertEqual(list(shares or []), [])
+        self.assertNotIn("茅台", json.dumps(shares, ensure_ascii=False))
+        self.assertNotIn("五粮液", json.dumps(shares, ensure_ascii=False))
         self.assertIn("qt.ai.system.fallback", [step.skill_name for step in plan.steps])
 
     def test_recipes_do_not_prewrite_symbols(self) -> None:
@@ -140,20 +140,18 @@ class TestAi04CommitElements(unittest.TestCase):
             skip_classify=True,
         )
         symbols = _snap(refill, "qt.ai.data.refill_basic_equity_and_index").get("symbols")
-        print(" symbols:", symbols)
-        self.assertIsInstance(symbols, list)
-        self.assertEqual([item.get("code") for item in symbols], ["000001.SZ", "000002.SZ"])
-        self.assertTrue(all(item.get("status") == "confirmed" for item in symbols))
-        self.assertTrue(all("role" not in item for item in symbols))
+        print(" symbols:", symbols, "skills:", [step.skill_name for step in refill.steps])
+        self.assertNotIsInstance(symbols, list)
+        self.assertIn("qt.ai.system.fallback", [step.skill_name for step in refill.steps])
 
         back_state = ConversationState.empty("backtest-items")
         back_state.start_task(query="macd 回测茅台和五粮液", job="backtest.builtin")
         backed = planner.build_plan("macd 回测茅台和五粮液", session=back_state, skip_classify=True)
         pool = _snap(backed, "qt.ai.backtest.run_builtin").get("asset_pool")
         print(" asset_pool:", pool, "executable:", [step.skill_name for step in backed.steps])
-        self.assertIsInstance(pool, list)
-        self.assertEqual([item.get("mention") for item in pool], ["茅台", "五粮液"])
-        self.assertTrue(all(item.get("status") == "incomplete" and not item.get("code") for item in pool))
+        self.assertNotIsInstance(pool, list)
+        self.assertNotIn("茅台", json.dumps(pool, ensure_ascii=False))
+        self.assertNotIn("五粮液", json.dumps(pool, ensure_ascii=False))
         self.assertIn("qt.ai.system.fallback", [step.skill_name for step in backed.steps])
 
     def test_model_asset_type_is_not_a_user_slot(self) -> None:
@@ -226,7 +224,7 @@ class TestAi04CommitElements(unittest.TestCase):
         print(" shares:", shares, "mode:", done.get("mode"), "benchmark:", done.get("benchmark"))
         self.assertTrue(all(item.get("status") == "pending" for item in (done.get("holdings") or [])))
         self.assertNotIn("600519.SH", shares)
-        self.assertEqual(done.get("mode"), "equal")
+        self.assertNotEqual(done.get("mode"), "equal")
         self.assertIsInstance(done.get("benchmark"), dict)
         self.assertEqual(done.get("benchmark").get("code"), "000300.SH")
         self.assertEqual(done.get("benchmark").get("status"), "confirmed")
@@ -481,6 +479,7 @@ class TestAi04HoldCompareCodeRule(unittest.TestCase):
             self.assertEqual([item.get("name") for item in rows], ["start", "end"])
             for item in rows:
                 self.assertTrue(str(item.get("prompt") or "").strip())
+            assistant.apply_provider(None)
             second = _raw_plan(
                 assistant.plan(
                     "",
@@ -519,8 +518,21 @@ class TestAi04HoldCompareCodeRule(unittest.TestCase):
     def test_no_model_window_confirms_suffixed_codes(self) -> None:
         """无模型：先答日期，持有和取数都是带后缀的代码。"""
 
-        print("\n[TestAi04HoldCompareCodeRule] 无模型日期后确认代码")
-        self._answer_dates(None, "hold-none")
+        print("\n[TestAi04HoldCompareCodeRule] 无模型窗口句不抽代码")
+        plan = _planner().build_plan(_HOLD_WINDOW, mode="plan")
+        accepted = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        names = [
+            str(item.get("name") or "")
+            for item in (((plan.assumptions or {}).get("clarification") or {}).get("pending") or [])
+            if isinstance(item, dict)
+        ]
+        print(" pending:", names)
+        print(" accepted:", accepted)
+        self.assertIn("qt.ai.system.fallback", [step.skill_name for step in plan.steps])
+        self.assertNotIn("600519.SH", accepted)
+        self.assertNotIn("000858.SZ", accepted)
+        self.assertNotIn("000300.SH", accepted)
+        self.assertNotEqual(names, ["start", "end"])
 
     def test_model_bare_dicts_confirm_suffixed_codes(self) -> None:
         """有模型：confirmed 裸代码字典先出日期卡，答完后仍是带后缀的代码。"""

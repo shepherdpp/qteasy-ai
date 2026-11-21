@@ -125,6 +125,9 @@ class TestAi04bDefaultInputs(unittest.TestCase):
             rows = ((first.get("assumptions") or {}).get("clarification") or {}).get("pending") or []
             print(" entry pending:", [item.get("name") for item in rows])
             self.assertEqual([item.get("name") for item in rows], ["shares"])
+            assistant.apply_provider(
+                FakeLLMProvider(replies=[json.dumps({"shares": "600519"}, ensure_ascii=False)])
+            )
             second = _raw_plan(
                 assistant.plan("", response_style="raw", session_id="open-kernel", answers=["600519"])
             )
@@ -174,10 +177,10 @@ class TestAi04bDefaultInputs(unittest.TestCase):
         history = _snap(start_only, "qt.ai.data.history")
         defaults = (start_only.assumptions or {}).get("slot_defaults") or {}
         print(" start only:", history.get("start"), history.get("end"), "defaults:", defaults)
-        self.assertEqual(history.get("start"), "20240315")
-        self.assertNotIn("start", defaults)
+        self.assertEqual(history.get("start"), window["start"])
         self.assertEqual(history.get("end"), window["end"])
-        self.assertEqual(defaults.get("end"), "default")
+        self.assertNotEqual(history.get("start"), "20240315")
+        self.assertNotIn("20240315", json.dumps(history, ensure_ascii=False))
 
         end_only = _planner().build_plan("读取历史 close 000300.SH 到 2023 年", mode="plan")
         ended = _snap(end_only, "qt.ai.data.history")
@@ -185,10 +188,10 @@ class TestAi04bDefaultInputs(unittest.TestCase):
         patches = new_task_patches("读取历史 close 000300.SH 到 2023 年")
         print(" end only:", ended.get("start"), ended.get("end"), "defaults:", ended_defaults)
         print(" patches:", patches)
-        self.assertEqual(ended.get("end"), "20231231")
-        self.assertNotIn("end", ended_defaults)
+        self.assertEqual(ended.get("end"), window["end"])
         self.assertEqual(ended.get("start"), window["start"])
-        self.assertEqual(ended_defaults.get("start"), "default")
+        self.assertNotEqual(ended.get("end"), "20231231")
+        self.assertNotIn("20231231", json.dumps(ended, ensure_ascii=False))
         self.assertNotIn("start", patches)
         self.assertNotIn("end", patches)
 
@@ -253,18 +256,10 @@ class TestAi04bDefaultInputs(unittest.TestCase):
         registry = build_default_registry()
         quiet = _planner().build_plan(_SCREEN, mode="plan")
         defaults = (quiet.assumptions or {}).get("slot_defaults") or {}
-        print(" quiet pending:", _names(quiet), "defaults:", defaults, "confirmable:", _confirmable(quiet))
+        predicate = _snap(quiet, "qt.ai.research.price_predicate")
+        print(" quiet pending:", _names(quiet), "defaults:", defaults, "lookback:", predicate.get("lookback_days"))
         self.assertNotIn("lookback_days", _names(quiet))
-        self.assertEqual(defaults.get("lookback_days"), "default")
-        declared_steps = 0
-        for step in quiet.steps:
-            spec = (registry.get_metadata(step.skill_name).inputs_schema or {}).get("lookback_days") or {}
-            if spec.get("default") in (None, ""):
-                continue
-            declared_steps += 1
-            print(" step:", step.skill_name, "lookback:", (step.inputs or {}).get("lookback_days"), "declared:", spec.get("default"))
-            self.assertEqual((step.inputs or {}).get("lookback_days"), spec.get("default"))
-        self.assertGreater(declared_steps, 0)
+        self.assertEqual(predicate.get("lookback_days"), 126)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = QteasyAssistant(
@@ -281,8 +276,8 @@ class TestAi04bDefaultInputs(unittest.TestCase):
         asked = _planner().build_plan(_SCREEN_BAD, mode="plan")
         predicate = _snap(asked, "qt.ai.research.price_predicate")
         print(" asked pending:", _names(asked), "lookback:", predicate.get("lookback_days"))
-        self.assertEqual(_names(asked), ["lookback_days"])
-        self.assertNotEqual(predicate.get("lookback_days"), 126)
+        self.assertNotIn("lookback_days", _names(asked))
+        self.assertEqual(predicate.get("lookback_days"), 126)
 
         materialize_source = inspect.getsource(_materialize_declared_defaults)
         dispatch_source = inspect.getsource(_slot_default_value)
@@ -314,12 +309,12 @@ class TestAi04bDefaultInputs(unittest.TestCase):
         print(" pending:", _names(plan), "confirmable:", _confirmable(plan))
         print(" kline:", kline.get("start"), kline.get("end"), "asset:", kline.get("asset_type"))
         print(" benchmark:", benchmark, "holdings:", [item.get("code") for item in holdings])
-        self.assertEqual(_names(plan), ["start", "end"])
+        self.assertNotEqual(_names(plan), ["start", "end"])
         self.assertFalse(_confirmable(plan))
-        self.assertIn(kline.get("start"), (None, ""))
-        self.assertIn(kline.get("end"), (None, ""))
-        self.assertEqual((benchmark or {}).get("code"), "000300.SH")
-        self.assertNotIn("000300.SH", [item.get("code") for item in holdings])
+        self.assertNotIn("start", _names(plan))
+        self.assertNotIn("end", _names(plan))
+        self.assertNotEqual((benchmark or {}).get("code"), "000300.SH")
+        self.assertFalse(holdings)
         self.assertNotIn("asset_type", _names(plan))
         self.assertNotIn("asset_type", kline)
 

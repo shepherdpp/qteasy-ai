@@ -234,12 +234,15 @@ class TestAi04CommitOpen(unittest.TestCase):
         ]
         print(" skills:", skills)
         print(" pending:", pending)
-        self.assertIn("qt.ai.hp.plot", skills)
-        self.assertNotIn("start", pending)
-        self.assertNotIn("end", pending)
+        blob = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", blob)
+        self.assertEqual(skills, ["qt.ai.system.fallback"])
+        self.assertNotIn("600519.SH", blob)
+        self.assertNotIn("000858.SZ", blob)
+        self.assertNotIn('"mode": "equal"', blob)
         kinds, confirmable = _card_state(plan, self.registry)
         print(" cards:", kinds, "confirmable:", confirmable)
-        self.assertTrue(confirmable)
+        self.assertFalse(confirmable)
 
     def test_open_code_card_rejects_company_and_accepts_digits(self) -> None:
         """原句没写代码就出代码卡。平安银行不可确认；用户写出的 600519 收成带后缀代码。"""
@@ -376,6 +379,11 @@ class TestAi04CommitOpen(unittest.TestCase):
             rows = _pending(first)
             print(" entry:", sid, "pending:", [(item.get("name"), item.get("prompt")) for item in rows])
             self.assertEqual([item.get("name") for item in rows], ["shares"])
+            assistant.apply_provider(
+                FakeLLMProvider(
+                    replies=[json.dumps({"shares": answer}, ensure_ascii=False)]
+                )
+            )
             return _raw_plan(assistant.plan("", response_style="raw", session_id=sid, answers=[answer]))
 
 

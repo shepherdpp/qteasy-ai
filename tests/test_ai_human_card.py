@@ -788,9 +788,11 @@ class TestAiHumanCardClarify(unittest.TestCase):
             steps = (follow.get("plan") or {}).get("steps") or []
             inputs = steps[0].get("inputs") if steps else {}
             print(" follow skill:", steps[0].get("skill_name") if steps else None, "inputs:", inputs)
-            self.assertEqual(steps[0].get("skill_name"), "qt.ai.data.refill_basic_equity_and_index")
-            self.assertEqual(str((inputs or {}).get("start") or ""), "20240101")
-            self.assertEqual(str((inputs or {}).get("end") or ""), "20241231")
+            accepted = ((follow.get("plan") or {}).get("assumptions") or {}).get("accepted_steps") or []
+            print(" follow accepted:", accepted)
+            self.assertEqual(steps[0].get("skill_name"), "qt.ai.system.fallback")
+            self.assertNotIn("20240101", json.dumps(accepted, ensure_ascii=False))
+            self.assertNotIn("20241231", json.dumps(accepted, ensure_ascii=False))
 
     def test_run_plan_does_not_replay_user_query(self) -> None:
         """run_plan 不把 plan.user_query 再写成 user_text。"""
@@ -843,9 +845,12 @@ class TestAiHumanCardClarify(unittest.TestCase):
             print(" clarify:", None if clarify is None else clarify.get("text"))
             self.assertFalse(hasattr(session, "awaiting_abandon"))
             self.assertEqual(str((payload.get("plan") or {}).get("plan_id") or ""), first_id)
+            accepted = ((payload.get("plan") or {}).get("assumptions") or {}).get("accepted_steps") or []
+            print(" accepted:", accepted)
             self.assertEqual(session.task.job, "data.refill")
-            self.assertEqual(session.task.status, "ready")
-            self.assertIsNone(clarify)
+            self.assertEqual(session.task.status, "clarifying")
+            self.assertIsNotNone(clarify)
+            self.assertNotIn("20180101", json.dumps(accepted, ensure_ascii=False))
             self.assertEqual(len(notices), 1)
             self.assertEqual((notices[0].get("payload") or {}).get("stage_id"), "match")
             self.assertEqual(notices[0].get("text"), render_match_notice(trace, chinese=False))

@@ -35,10 +35,12 @@
       "mode": "plan",
       "query": "download daily data from 20180101 to 20231231",
       "expected_job": "data.refill",
-      "expected_skills": ["qt.ai.data.refill_basic_equity_and_index"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "start|end",
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
-      "run_policy": "plan_only",
-      "notes": "gold B-F1；禁止无界 run"
+      "run_policy": "clarify",
+      "notes": "日期不在金句表上，停在澄清"
     },
     {
       "id": "BJ-REFILL-C",
@@ -59,10 +61,12 @@
       "mode": "plan",
       "query": "get_history_data close for 000300.SH from 20240101 to 20240131",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.history"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "htype_names|shares",
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
-      "run_policy": "plan_only",
-      "notes": "gold E-READ-H；channel=history"
+      "run_policy": "clarify",
+      "notes": "代码和列名不在金句表上，停在澄清"
     },
     {
       "id": "BJ-READ-R",
@@ -70,10 +74,12 @@
       "mode": "plan",
       "query": "get_reference_data cn_gdp from 20240101 to 20240131",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.reference"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "names",
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
-      "run_policy": "plan_only",
-      "notes": "gold E-READ-R；channel=reference"
+      "run_policy": "clarify",
+      "notes": "参考数据名不在金句表上，停在澄清"
     },
     {
       "id": "BJ-READ-S",
@@ -81,10 +87,12 @@
       "mode": "plan",
       "query": "get_static_data industry for 000001.SZ",
       "expected_job": "data.read",
-      "expected_skills": ["qt.ai.data.static"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "names|shares",
       "tutorial": "docs/source/tutorials/2.0-get-data.md",
-      "run_policy": "plan_only",
-      "notes": "gold E-READ-S；channel=static"
+      "run_policy": "clarify",
+      "notes": "行业和代码不在金句表上，停在澄清"
     },
     {
       "id": "BJ-SUM",
@@ -92,10 +100,12 @@
       "mode": "plan",
       "query": "kline summary of 000300.SH",
       "expected_job": "data.summary",
-      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.describe", "qt.ai.hp.volatility"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "shares",
       "tutorial": "docs/source/tutorials/2.4-historypanel-basics.md",
-      "run_policy": "plan_only",
-      "notes": "gold B2"
+      "run_policy": "clarify",
+      "notes": "摘要句不在金句表上，停在澄清"
     },
     {
       "id": "BJ-EXP",
@@ -103,10 +113,12 @@
       "mode": "plan",
       "query": "export kline of 000300.SH to png",
       "expected_job": "data.export",
-      "expected_skills": ["qt.ai.data.kline", "qt.ai.hp.plot"],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "shares",
       "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
-      "run_policy": "plan_only",
-      "notes": "gold C1"
+      "run_policy": "clarify",
+      "notes": "导出句不在金句表上，停在澄清"
     },
     {
       "id": "BJ-SCR",
@@ -114,15 +126,13 @@
       "mode": "plan",
       "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
       "expected_job": "research.screen",
-      "expected_skills": [
-        "qt.ai.research.universe_filter",
-        "qt.ai.research.price_predicate",
-        "qt.ai.research.project_universe"
-      ],
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expected_fallback_action": "clarify_required",
+      "expected_missing_info": "industry|threshold",
       "forbidden_skills": ["qt.ai.research.screen_stocks"],
       "tutorial": "docs/source/tutorials/2.5-historypanel-data-analysis.md",
-      "run_policy": "plan_only",
-      "notes": "gold B4"
+      "run_policy": "clarify",
+      "notes": "筛股句不在金句表上，行业和阈值不写入快照"
     },
     {
       "id": "BJ-IC",

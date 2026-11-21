@@ -20,6 +20,7 @@ import pandas as pd
 
 from qteasy.history import HistoryPanel
 from qteasy_ai.app import build_default_registry
+from qteasy_ai.contracts import ToolPlan, ToolStep
 from qteasy_ai.executor import PlanExecutor
 from qteasy_ai.memory_store import MemoryStore, _json_safe
 from qteasy_ai.planner import Planner
@@ -119,19 +120,15 @@ class TestAi04A0Recipes(unittest.TestCase):
         print(" skills:", names)
         print(" legacy:", _names(legacy))
         print(" depends:", [step.depends_on for step in plan.steps])
-        shares = plan.steps[0].inputs.get("shares")
-        print(" describe inputs:", plan.steps[1].inputs)
-        print(" shares:", shares)
+        print(" reason:", plan.steps[0].inputs.get("reason"), plan.steps[0].inputs.get("missing_info"))
+        accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
         self.assertEqual(plan.planner_trace.get("intent_job"), "data.summary")
-        self.assertEqual(names, _SUMMARY)
+        self.assertEqual(names, ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "shares")
+        self.assertNotIn("000300.SH", accepted)
         self.assertEqual(_names(legacy), _SUMMARY)
-        self.assertEqual(
-            shares,
-            [{"mention": "000300.SH", "code": "000300.SH", "status": "confirmed"}],
-        )
-        self.assertEqual(plan.steps[1].depends_on, ["step_1"])
-        self.assertEqual(plan.steps[2].depends_on, ["step_1"])
-        self.assertEqual(plan.steps[1].inputs.get("view"), "shape")
         self.assertNotIn("qt.ai.data.summary_kline", names)
         self.assertNotIn("plot_type", plan.steps[0].inputs)
 
@@ -147,14 +144,17 @@ class TestAi04A0Recipes(unittest.TestCase):
         print(" candle:", _names(candle_plan.steps), candle_plan.steps[0].inputs)
         print(" curve job:", curve_plan.planner_trace.get("intent_job"), _names(curve_plan.steps))
         print(" legacy:", _names(legacy), [step.inputs for step in legacy])
+        candle_accepted = json.dumps(candle_plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        curve_accepted = json.dumps(curve_plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" candle accepted:", candle_accepted)
+        print(" curve accepted:", curve_accepted)
         self.assertEqual(candle_plan.planner_trace.get("intent_job"), "data.export")
-        self.assertEqual(_names(candle_plan.steps), _EXPORT)
-        self.assertEqual(candle_plan.steps[1].depends_on, ["step_1"])
-        self.assertNotIn("plot_type", candle_plan.steps[0].inputs)
-        self.assertNotIn("plot_type", candle_plan.steps[1].inputs)
+        self.assertEqual(_names(candle_plan.steps), ["qt.ai.system.fallback"])
+        self.assertEqual(candle_plan.steps[0].inputs.get("reason"), "missing_required_slots")
+        self.assertNotIn("000300.SH", candle_accepted)
         self.assertEqual(curve_plan.planner_trace.get("intent_job"), "data.export")
-        self.assertEqual(_names(curve_plan.steps), _EXPORT)
-        self.assertTrue(all("plot_type" not in step.inputs for step in curve_plan.steps))
+        self.assertEqual(_names(curve_plan.steps), ["qt.ai.system.fallback"])
+        self.assertNotIn("000300.SH", curve_accepted)
         self.assertEqual(_names(legacy), _EXPORT)
         self.assertTrue(all("plot_type" not in step.inputs for step in legacy))
         self.assertNotIn("qt.ai.visual.export_kline", _names(candle_plan.steps))
@@ -172,13 +172,21 @@ class TestAi04A0Recipes(unittest.TestCase):
         print(" skills:", _names(plan.steps))
         print(" legacy:", _names(legacy))
         print(" bare:", _names(bare_plan.steps), _names(bare_legacy))
+        accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        bare_accepted = json.dumps(bare_plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
+        print(" accepted:", accepted)
+        print(" bare accepted:", bare_accepted)
         self.assertEqual(plan.planner_trace.get("intent_job"), "research.screen")
-        self.assertEqual(_names(plan.steps), _SCREEN)
+        self.assertEqual(_names(plan.steps), ["qt.ai.system.fallback"])
+        self.assertEqual(plan.steps[0].inputs.get("missing_info"), "industry|threshold")
+        self.assertNotIn("制造业", accepted)
+        self.assertNotIn("0.2", accepted)
         self.assertEqual(_names(legacy), _SCREEN)
         self.assertNotIn("qt.ai.research.screen_stocks", _names(plan.steps) + _names(legacy))
-        self.assertEqual(_names(bare_plan.steps), _SCREEN_ENUM)
+        self.assertEqual(_names(bare_plan.steps), ["qt.ai.system.fallback"])
+        self.assertEqual(bare_plan.steps[0].inputs.get("missing_info"), "industry")
+        self.assertNotIn("银行", bare_accepted)
         self.assertEqual(_names(bare_legacy), _SCREEN_ENUM)
-        self.assertNotIn("qt.ai.research.price_predicate", _names(bare_plan.steps))
 
     def test_summary_chain_fetches_once_and_drops_panel_on_save(self) -> None:
         """三步执行只取一次数。落盘文件里没有整块面板的文本转储。"""
@@ -199,9 +207,30 @@ class TestAi04A0Recipes(unittest.TestCase):
             build_hp_describe_skill(),
         ):
             registry.register(meta, handler)
-        planner = Planner(registry, env_facts={})
-        plan = planner.build_plan("kline summary of 000300.SH", mode="plan")
-        plan.execution_mode = "execute"
+        plan = ToolPlan(
+            plan_id="plan_summary_chain",
+            user_query="filled summary chain",
+            execution_mode="execute",
+            steps=[
+                ToolStep(
+                    step_id="step_1",
+                    skill_name="qt.ai.data.kline",
+                    inputs={"shares": "000300.SH"},
+                ),
+                ToolStep(
+                    step_id="step_2",
+                    skill_name="qt.ai.hp.describe",
+                    inputs={"view": "shape"},
+                    depends_on=["step_1"],
+                ),
+                ToolStep(
+                    step_id="step_3",
+                    skill_name="qt.ai.hp.volatility",
+                    inputs={},
+                    depends_on=["step_1"],
+                ),
+            ],
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             executor = PlanExecutor(registry, memory_store=MemoryStore(base_dir=temp_dir))
             payload = executor.execute(plan, confirm=True)

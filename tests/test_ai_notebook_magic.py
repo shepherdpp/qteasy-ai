@@ -8,6 +8,7 @@
 # Unittest for qteasy ai notebook magic
 # ======================================
 
+import json
 import tempfile
 import unittest
 
@@ -158,11 +159,12 @@ class TestAiNotebookMagic(unittest.TestCase):
             inputs = payload["plan"]["steps"][0]["inputs"]
             print(" skills:", names, "source:", payload["plan"]["planner_trace"].get("source"))
             print(" dates:", inputs.get("start"), inputs.get("end"))
-            self.assertEqual(names, ["qt.ai.data.refill_basic_equity_and_index"])
-            self.assertEqual(str(inputs.get("start") or ""), "20240101")
-            self.assertEqual(str(inputs.get("end") or ""), "20241231")
-            self.assertNotEqual(inputs.get("missing_info"), "20240101 到 20241231")
-            self.assertEqual(payload["plan"]["planner_trace"].get("source"), "session")
+            accepted = (payload["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            print(" accepted:", accepted)
+            self.assertEqual(names, ["qt.ai.system.fallback"])
+            self.assertEqual(inputs.get("reason"), "missing_required_slots")
+            self.assertNotIn("20240101", json.dumps(accepted, ensure_ascii=False))
+            self.assertNotIn("20241231", json.dumps(accepted, ensure_ascii=False))
             self.assertEqual(payload["plan"]["planner_trace"].get("intent_job"), "data.refill")
 
     def test_notebook_ask_session_zero_skill(self) -> None:

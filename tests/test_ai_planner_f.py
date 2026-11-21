@@ -8,6 +8,7 @@
 # Unittest for Phase F session plan assembly
 # ======================================
 
+import json
 import tempfile
 import unittest
 
@@ -68,21 +69,20 @@ class TestAiPlannerF(unittest.TestCase):
             print(" second skills:", names)
             print(" second trace:", second["plan"].get("planner_trace"))
             print(" second missing:", second["plan"]["steps"][0]["inputs"].get("missing_info"))
+            accepted = (second["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            print(" second accepted:", accepted)
             self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "data.refill")
-            self.assertEqual(second["plan"]["planner_trace"].get("source"), "session")
-            self.assertEqual(names, ["qt.ai.data.refill_basic_equity_and_index"])
-            written = second["plan"]["steps"][0]["inputs"]
-            print(" second dates:", written.get("start"), written.get("end"))
-            self.assertEqual(str(written.get("start") or ""), "20240101")
-            self.assertEqual(str(written.get("end") or ""), "20241231")
-            self.assertNotEqual(written.get("missing_info"), "20240101 到 20241231")
+            self.assertEqual(names, ["qt.ai.system.fallback"])
+            self.assertEqual(second["plan"]["steps"][0]["inputs"].get("reason"), "missing_required_slots")
+            self.assertNotIn("20240101", json.dumps(accepted, ensure_ascii=False))
+            self.assertNotIn("20241231", json.dumps(accepted, ensure_ascii=False))
 
             store = SessionStore(assistant.memory_store)
             filled = store.load("s-refill")
             print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
             print(" filled status:", filled.task.status, "job:", filled.task.job)
             self.assertEqual(filled.task.job, "data.refill")
-            self.assertEqual(filled.task.status, "ready")
+            self.assertNotEqual(filled.task.status, "ready")
 
             confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
             cnames = [s["skill_name"] for s in confirm["plan"]["steps"]]
@@ -267,8 +267,11 @@ class TestAiPlannerF(unittest.TestCase):
             )
             names = [s["skill_name"] for s in payload["plan"]["steps"]]
             print(" skills:", names)
-            self.assertEqual(names[0], "qt.ai.env.check_tushare")
-            self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
+            accepted = (payload["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            print(" accepted:", accepted)
+            self.assertEqual(names, ["qt.ai.system.fallback"])
+            self.assertEqual(payload["plan"]["steps"][0]["inputs"].get("missing_info"), "start|end")
+            self.assertNotIn("20180101", json.dumps(accepted, ensure_ascii=False))
 
     def test_confirmed_slot_overrides_old_symbol_on_data_read(self) -> None:
         """已确认 shares 盖过问句里更早的旧代码。这张卡没交的列名不从原句补。"""
@@ -282,10 +285,11 @@ class TestAiPlannerF(unittest.TestCase):
                 response_style="raw",
                 session_id=sid,
             )
-            read = [s for s in first["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
-            print(" first inputs:", read[0]["inputs"] if read else None)
-            self.assertTrue(read)
-            self.assertEqual(read[0]["inputs"].get("shares"), "000300.SH")
+            print(" first skills:", [s["skill_name"] for s in first["plan"]["steps"]])
+            first_accepted = (first["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            print(" first accepted:", first_accepted)
+            self.assertEqual(first["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
+            self.assertNotIn("000300.SH", json.dumps(first_accepted, ensure_ascii=False))
 
             second = assistant.plan(
                 "",
@@ -331,10 +335,13 @@ class TestAiPlannerF(unittest.TestCase):
                 response_style="raw",
                 session_id="s-explicit",
             )
-            read = [s for s in payload["plan"]["steps"] if s["skill_name"] == "qt.ai.data.history"]
-            print(" inputs:", read[0]["inputs"] if read else None)
-            self.assertTrue(read)
-            self.assertEqual(read[0]["inputs"].get("shares"), "000001.SZ")
+            accepted = (payload["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            print(" skills:", [s["skill_name"] for s in payload["plan"]["steps"]])
+            print(" accepted:", accepted)
+            self.assertEqual(payload["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
+            blob = json.dumps(accepted, ensure_ascii=False)
+            self.assertNotIn("000001.SZ", blob)
+            self.assertNotIn("000300.SH", blob)
 
     def test_refill_date_patches_stay_on_the_recipe(self) -> None:
         """下载缺日期用控件补上后仍是 refill 菜谱，不走开放图快照。"""

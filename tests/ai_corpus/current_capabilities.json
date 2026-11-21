@@ -20,21 +20,24 @@
       "query": "show summary of 000300.SH from 20240101 to 20241231",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.kline"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "B2",
       "query": "kline summary of 000300.SH",
       "mode": "plan",
       "expected_job": "data.summary",
-      "expected_skill": "qt.ai.data.kline"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "C1",
       "query": "export kline of 000300.SH to png",
       "mode": "plan",
       "expected_job": "data.export",
-      "expected_skill": "qt.ai.data.kline"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "D1",
@@ -65,7 +68,8 @@
       "query": "download daily data from 20180101 to 20231231",
       "mode": "plan",
       "expected_job": "data.refill",
-      "expected_skill": "qt.ai.data.refill_basic_equity_and_index"
+      "expected_skill": "qt.ai.system.fallback",
+      "expect_plan_md": false
     },
     {
       "id": "B-F2",
@@ -97,12 +101,9 @@
       "query": "请搜索过去半年内所有跌幅>20%，且行业属于制造业的股票。",
       "mode": "plan",
       "expected_job": "research.screen",
-      "expected_skill": "qt.ai.research.universe_filter",
-      "expected_skills": [
-        "qt.ai.research.universe_filter",
-        "qt.ai.research.price_predicate",
-        "qt.ai.research.project_universe"
-      ]
+      "expected_skill": "qt.ai.system.fallback",
+      "expected_skills": ["qt.ai.system.fallback"],
+      "expect_plan_md": false
     },
     {
       "id": "D1",

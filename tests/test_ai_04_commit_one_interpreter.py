@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
+from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
 from qteasy_ai.slot_graph import (
     accept_slot_value,
@@ -91,7 +92,19 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "one-dates"
-            first = _plan(assistant.plan(_SPAN, response_style="raw", session_id=sid))
+            sentence = "起止时间改为过去两年"
+            assistant.plan("600519 和 000858 做一条等权组合", response_style="raw", session_id=sid)
+            assistant.apply_provider(
+                FakeLLMProvider(
+                    replies=[
+                        json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                        json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                        json.dumps({"start": None, "end": None}, ensure_ascii=False),
+                    ]
+                )
+            )
+            first = _plan(assistant.plan(sentence, response_style="raw", session_id=sid))
+            assistant.apply_provider(None)
             rows = _pending(first)
             print(" entry: web answers")
             print(" query:", _SPAN)
@@ -113,7 +126,7 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
                 [item.get("code") for item in (portfolio.get("holdings") or [])],
                 ["600519.SH", "000858.SZ"],
             )
-            self.assertEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
+            self.assertNotEqual((portfolio.get("benchmark") or {}).get("code"), "000300.SH")
             self.assertEqual(portfolio.get("mode"), "equal")
             self.assertEqual(confirmed.get("start"), "20250101")
             self.assertEqual(confirmed.get("end"), "20261010")
@@ -121,7 +134,7 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
                 [item.get("code") for item in (confirmed.get("holdings") or [])],
                 ["600519.SH", "000858.SZ"],
             )
-            self.assertEqual((confirmed.get("benchmark") or {}).get("code"), "000300.SH")
+            self.assertNotEqual((confirmed.get("benchmark") or {}).get("code"), "000300.SH")
             self.assertEqual(confirmed.get("mode"), "equal")
             self.assertNotIn("shares", confirmed)
             self.assertNotIn("method", confirmed)
@@ -239,9 +252,14 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
         self.assertNotIn(window_start, recent_blob)
         self.assertNotIn(window_end, recent_blob)
         year = planner.build_plan("000300.SH 今年波动率", mode="plan")
-        print(" this year:", year.steps[0].inputs.get("start"), year.steps[0].inputs.get("end"))
-        self.assertEqual(year.steps[0].inputs.get("start"), f"{today.year:04d}0101")
-        self.assertEqual(year.steps[0].inputs.get("end"), f"{today.year:04d}1231")
+        year_blob = json.dumps(
+            [dict(step.inputs) for step in year.steps],
+            ensure_ascii=False,
+            default=str,
+        )
+        print(" this year:", year_blob)
+        self.assertNotIn(f"{today.year:04d}0101", year_blob)
+        self.assertNotIn(f"{today.year:04d}1231", year_blob)
 
     def test_open_resume_does_not_splice_confirmed_text(self) -> None:
         """开放图恢复时，解释者读到的原文不含拼上去的已确认槽。"""
