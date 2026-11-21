@@ -300,7 +300,10 @@ def _json_object(raw: str) -> Optional[Dict[str, Any]]:
 
 @dataclass(frozen=True)
 class AskHistoryCard:
-    """成功 Ask 的一张卡片。点卡和作家只在指代或 prior 时看到滚动提纲。"""
+    """一轮会话里的一张卡：成功 Ask，或一张计划卡。
+
+    点卡和作家只在指代或 prior 时看到滚动提纲。
+    """
 
     turn: int
     kind: str
@@ -311,47 +314,48 @@ class AskHistoryCard:
     answer_text: str
 
 
-def build_ask_history_index(
+def _user_text_spans(
         messages: Sequence[Mapping[str, Any]],
-        knowledge_base: KnowledgeBase,
-) -> List[AskHistoryCard]:
-    """从 ``messages[]`` 现算成功 Ask 的一句话索引。
+) -> List[Tuple[str, List[Mapping[str, Any]]]]:
+    """按 ``user_text`` 切开。没有用户句的前导碎片不进入任何区间。"""
 
-    只看 ``kind=ask`` 且 ``sources`` 非空的卡。失败的 NOT_FOUND、
-    ``plan_ready`` / ``clarify`` / ``result`` 不占轮次。库里已经没有的 id 跳过。
-    不读 session 对象。
-
-    Parameters
-    ----------
-    messages : sequence of mapping
-        会话消息。当前这句若还没有 Ask 卡，不会进入索引。
-    knowledge_base : KnowledgeBase
-        用来取标题和 ``summary``。
-
-    Returns
-    -------
-    list of AskHistoryCard
-        轮次从 1 编号。同一轮多张卡共用用户原话和当时的答文。
-    """
-
-    cards: List[AskHistoryCard] = []
-    turn = 0
-    last_user = ""
+    spans: List[Tuple[str, List[Mapping[str, Any]]]] = []
+    user_text: Optional[str] = None
+    bucket: List[Mapping[str, Any]] = []
     for row in messages or []:
         if not isinstance(row, Mapping):
             continue
-        kind = str(row.get("kind") or "")
-        if kind == "user_text":
-            last_user = str(row.get("text") or "")
+        if str(row.get("kind") or "") == "user_text":
+            if user_text is not None:
+                spans.append((user_text, bucket))
+            user_text = str(row.get("text") or "")
+            bucket = []
             continue
-        if kind != "ask":
+        if user_text is None:
+            continue
+        bucket.append(row)
+    if user_text is not None:
+        spans.append((user_text, bucket))
+    return spans
+
+
+def _ask_cards_in_span(
+        rows: Sequence[Mapping[str, Any]],
+        knowledge_base: KnowledgeBase,
+        user_text: str,
+) -> List[AskHistoryCard]:
+    """区间里能查到库的 Ask 卡。失败 Ask 和已经不在库里的 id 跳过。"""
+
+    found: List[AskHistoryCard] = []
+    for row in rows:
+        if str(row.get("kind") or "") != "ask":
             continue
         payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
         sources = payload.get("sources") if isinstance(payload, Mapping) else None
         if not isinstance(sources, list):
             continue
-        rows_for_turn: List[AskHistoryCard] = []
         seen_ids = set()
+        answer = str(row.get("text") or "")
         for raw_id in sources:
             card_id = str(raw_id or "").strip()
             if not card_id or card_id in seen_ids:
@@ -360,31 +364,91 @@ def build_ask_history_index(
             if entry is None:
                 continue
             seen_ids.add(card_id)
-            rows_for_turn.append(
+            found.append(
                 AskHistoryCard(
                     turn=0,
                     kind="ask",
                     card_id=card_id,
                     title=entry.title,
                     summary=entry.summary,
-                    user_text=last_user,
-                    answer_text=str(row.get("text") or ""),
+                    user_text=user_text,
+                    answer_text=answer,
                 )
             )
-        if not rows_for_turn:
+    return found
+
+
+def _last_visible_text(rows: Sequence[Mapping[str, Any]], kind: str) -> Optional[str]:
+    """区间里该种类最后一张卡的正文。没有这种卡时返回 None。"""
+
+    text: Optional[str] = None
+    for row in rows:
+        if str(row.get("kind") or "") != kind:
+            continue
+        text = str(row.get("text") or "")
+    return text
+
+
+def build_ask_history_index(
+        messages: Sequence[Mapping[str, Any]],
+        knowledge_base: KnowledgeBase,
+) -> List[AskHistoryCard]:
+    """从 ``messages[]`` 现算一轮一条用户句的索引。
+
+    每个 ``user_text`` 区间只决定一次。能查到库的 Ask 占一轮，同一轮可以有多张卡。
+    没有成功 Ask 时，最后一张 ``plan_ready`` 成一张计划卡；再没有时，最后一张
+    ``clarify`` 成一张计划卡。没有用户句的碎片、失败 Ask、``result``、
+    ``error``、``executing``、``mode_notice`` 不占轮次。不按 ``plan_id`` 合并，
+    不读 ``payload``。不读 session 对象。
+
+    Parameters
+    ----------
+    messages : sequence of mapping
+        会话消息。当前这句若还没有回复卡，不会进入索引。
+    knowledge_base : KnowledgeBase
+        用来取成功 Ask 的标题和 ``summary``。计划卡不查库。
+
+    Returns
+    -------
+    list of AskHistoryCard
+        轮次从 1 编号。成功 Ask 的同一轮多张卡共用用户原话和当时的答文。
+    """
+
+    cards: List[AskHistoryCard] = []
+    turn = 0
+    for user_text, rows in _user_text_spans(messages):
+        ask_cards = _ask_cards_in_span(rows, knowledge_base, user_text)
+        if ask_cards:
+            turn += 1
+            cards.extend(
+                AskHistoryCard(
+                    turn=turn,
+                    kind=card.kind,
+                    card_id=card.card_id,
+                    title=card.title,
+                    summary=card.summary,
+                    user_text=card.user_text,
+                    answer_text=card.answer_text,
+                )
+                for card in ask_cards
+            )
+            continue
+        answer = _last_visible_text(rows, "plan_ready")
+        if answer is None:
+            answer = _last_visible_text(rows, "clarify")
+        if answer is None:
             continue
         turn += 1
-        cards.extend(
+        cards.append(
             AskHistoryCard(
                 turn=turn,
-                kind=card.kind,
-                card_id=card.card_id,
-                title=card.title,
-                summary=card.summary,
-                user_text=card.user_text,
-                answer_text=card.answer_text,
+                kind="plan",
+                card_id="",
+                title="",
+                summary="",
+                user_text=user_text,
+                answer_text=answer,
             )
-            for card in rows_for_turn
         )
     return cards
 
@@ -469,7 +533,7 @@ def render_session_outline(
     Parameters
     ----------
     cards : sequence of AskHistoryCard
-        成功 Ask 索引。同一轮多张卡只渲染一次。
+        成功 Ask 与计划轮次。同一轮多张卡只渲染一次。
     fidelity : {'topic', 'context'}
         定主题用 topic，点卡和作家用 context。
     promoted_turns : sequence of int, optional
@@ -917,8 +981,10 @@ class AskEngine:
         if history:
             lines.append("Ask history index:")
             for card in history:
+                if not str(card.card_id or "").strip():
+                    continue
                 lines.append(
-                    f"- turn {card.turn} kind=ask id={card.card_id} "
+                    f"- turn {card.turn} kind={card.kind} id={card.card_id} "
                     f"title={card.title} summary={card.summary}"
                 )
             lines.append(render_session_outline(history, fidelity="topic").rstrip("\n"))

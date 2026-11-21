@@ -487,12 +487,12 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertNotIn("strategy_meta", generic_payload["sources"])
 
     def test_history_index_lists_successful_ask_cards_only(self) -> None:
-        """索引只收成功 Ask 卡：失败卡、计划卡、澄清卡和结果卡都不占轮次。"""
+        """只有 Ask 时轮次与现在一致；未写完的澄清占一轮，结果卡不占轮次。"""
 
-        print("\n[TestAiAskEngine] 成功 Ask 卡才进索引")
-        from qteasy_ai.ask_engine import build_ask_history_index
+        print("\n[TestAiAskEngine] 成功 Ask 与未写完的计划轮次")
+        from qteasy_ai.ask_engine import build_ask_history_index, render_session_outline
 
-        messages = [
+        ask_only = [
             {"kind": "user_text", "text": "停牌", "payload": {}},
             {
                 "kind": "ask",
@@ -506,9 +506,6 @@ class TestAiAskEngine(unittest.TestCase):
                 "text": _OFFLINE_NOT_FOUND_MESSAGE,
                 "payload": {"code": "NOT_FOUND"},
             },
-            {"kind": "plan_ready", "text": _PLAN_READY_BODY, "payload": {"plan_id": "p1"}},
-            {"kind": "clarify", "text": _CLARIFY_BODY, "payload": {}},
-            {"kind": "result", "text": _RESULT_BODY, "payload": {}},
             {"kind": "user_text", "text": "三入口", "payload": {}},
             {
                 "kind": "ask",
@@ -522,9 +519,8 @@ class TestAiAskEngine(unittest.TestCase):
                 },
             },
         ]
-        index = build_ask_history_index(messages, self.kb)
-        print(" turns:", [(card.turn, card.card_id) for card in index])
-        print(" users:", [card.user_text for card in index])
+        index = build_ask_history_index(ask_only, self.kb)
+        print(" ask-only turns:", [(card.turn, card.card_id, card.user_text) for card in index])
         self.assertEqual(
             [(card.turn, card.kind, card.card_id, card.title, card.summary) for card in index],
             [
@@ -540,12 +536,194 @@ class TestAiAskEngine(unittest.TestCase):
         self.assertEqual(index[2].user_text, "三入口")
         self.assertEqual(index[2].answer_text, _DATA_ANSWER)
         blob = " ".join(card.user_text + card.answer_text + card.card_id for card in index)
-        print(" withheld from index rows:", blob)
-        self.assertNotIn(_PLAN_READY_BODY, blob)
-        self.assertNotIn(_CLARIFY_BODY, blob)
-        self.assertNotIn(_RESULT_BODY, blob)
+        print(" withheld from ask-only rows:", blob)
         self.assertNotIn("这句失败了", blob)
         self.assertNotIn("missing_card", blob)
+        topic_outline = render_session_outline(index, fidelity="topic")
+        context_outline = render_session_outline(index, fidelity="context")
+        print(" topic outline:\n", topic_outline)
+        print(" context outline:\n", context_outline)
+        self.assertEqual(
+            topic_outline,
+            "Session outline:\nturn 1\nUser: 停牌\nturn 2\nUser: 三入口\n\n",
+        )
+        self.assertEqual(
+            context_outline,
+            (
+                "Session outline:\n"
+                "turn 1\n"
+                "User: 停牌\n"
+                "Answer shown: NAN-ANSWER-MARKER\n"
+                "turn 2\n"
+                "User: 三入口\n"
+                "Answer shown: DATA-ANSWER-MARKER\n\n"
+            ),
+        )
+
+        with_clarify = ask_only[:5] + [
+            {"kind": "user_text", "text": "回测茅台但日期还没说", "payload": {}},
+            {"kind": "clarify", "text": _CLARIFY_BODY, "payload": {}},
+            {"kind": "result", "text": _RESULT_BODY, "payload": {}},
+        ] + ask_only[5:]
+        mixed = build_ask_history_index(with_clarify, self.kb)
+        print(
+            " mixed turns:",
+            [(card.turn, card.kind, card.user_text, card.answer_text) for card in mixed],
+        )
+        self.assertEqual(
+            [(card.turn, card.kind, card.card_id, card.user_text, card.answer_text) for card in mixed],
+            [
+                (1, "ask", "common_errors_nan", "停牌", _NAN_ANSWER),
+                (1, "ask", "backtest_intro", "停牌", _NAN_ANSWER),
+                (2, "plan", "", "回测茅台但日期还没说", _CLARIFY_BODY),
+                (3, "ask", "data_three_entries", "三入口", _DATA_ANSWER),
+            ],
+        )
+        self.assertEqual(mixed[2].title, "")
+        self.assertEqual(mixed[2].summary, "")
+        mixed_blob = " ".join(card.user_text + card.answer_text + card.card_id for card in mixed)
+        print(" withheld from mixed rows:", mixed_blob)
+        self.assertNotIn(_RESULT_BODY, mixed_blob)
+        self.assertNotIn("这句失败了", mixed_blob)
+        self.assertNotIn("missing_card", mixed_blob)
+
+    def test_one_user_span_keeps_one_plan_turn(self) -> None:
+        """同一条用户句后面的连续澄清和计划卡折成一张计划卡。"""
+
+        print("\n[TestAiAskEngine] 控件交卷同一用户句只占一轮")
+        from qteasy_ai.ask_engine import build_ask_history_index
+
+        ready = [
+            {"kind": "user_text", "text": "回测茅台但日期还没说", "payload": {}},
+            {"kind": "clarify", "text": _CLARIFY_BODY, "payload": {}},
+            {"kind": "plan_ready", "text": _PLAN_READY_BODY, "payload": {"plan_id": "p1"}},
+        ]
+        ready_index = build_ask_history_index(ready, self.kb)
+        ready_blob = " ".join(
+            card.user_text + card.answer_text + card.card_id for card in ready_index
+        )
+        print(" ready index:", [(card.turn, card.kind, card.answer_text) for card in ready_index])
+        print(" ready blob:", ready_blob)
+        self.assertEqual(len(ready_index), 1)
+        self.assertEqual(ready_index[0].kind, "plan")
+        self.assertEqual(ready_index[0].card_id, "")
+        self.assertEqual(ready_index[0].user_text, "回测茅台但日期还没说")
+        self.assertEqual(ready_index[0].answer_text, _PLAN_READY_BODY)
+        self.assertNotIn(_CLARIFY_BODY, ready_blob)
+
+        clarified = [
+            {"kind": "user_text", "text": "回测茅台但日期还没说", "payload": {}},
+            {"kind": "clarify", "text": "CLARIFY-FIRST", "payload": {}},
+            {"kind": "clarify", "text": "CLARIFY-SECOND", "payload": {}},
+        ]
+        clarify_index = build_ask_history_index(clarified, self.kb)
+        clarify_blob = " ".join(
+            card.user_text + card.answer_text + card.card_id for card in clarify_index
+        )
+        print(
+            " clarify index:",
+            [(card.turn, card.kind, card.answer_text) for card in clarify_index],
+        )
+        print(" clarify blob:", clarify_blob)
+        self.assertEqual(len(clarify_index), 1)
+        self.assertEqual(clarify_index[0].kind, "plan")
+        self.assertEqual(clarify_index[0].card_id, "")
+        self.assertEqual(clarify_index[0].answer_text, "CLARIFY-SECOND")
+        self.assertNotIn("CLARIFY-FIRST", clarify_blob)
+
+    def test_same_plan_id_stays_one_turn_after_replace(self) -> None:
+        """同一 plan_id 就地替换后仍是一轮；不同 plan_id 各带自己的用户句才是两轮。"""
+
+        print("\n[TestAiAskEngine] 同一 plan_id 替换不另成一轮")
+        from qteasy_ai.ask_engine import build_ask_history_index
+        from qteasy_ai.session import ConversationState
+
+        replaced = ConversationState.empty("plan-replace")
+        replaced.append_messages([
+            {"kind": "user_text", "text": "回测茅台", "payload": {}},
+            {"kind": "plan_ready", "text": "PLAN-FIRST", "payload": {"plan_id": "p1"}},
+        ])
+        replaced.append_messages([
+            {"kind": "user_text", "text": "把窗口改成三年", "payload": {}},
+            {"kind": "plan_ready", "text": "PLAN-SECOND", "payload": {"plan_id": "p1"}},
+        ])
+        replaced_index = build_ask_history_index(replaced.messages, self.kb)
+        print(
+            " replaced messages:",
+            [(row.get("kind"), row.get("text")) for row in replaced.messages],
+        )
+        print(
+            " replaced index:",
+            [(card.user_text, card.answer_text) for card in replaced_index],
+        )
+        self.assertEqual(len(replaced_index), 1)
+        self.assertEqual(replaced_index[0].answer_text, "PLAN-SECOND")
+        self.assertEqual(replaced_index[0].user_text, "回测茅台")
+        self.assertNotEqual(replaced_index[0].user_text, "把窗口改成三年")
+
+        distinct = ConversationState.empty("plan-two")
+        distinct.append_messages([
+            {"kind": "user_text", "text": "回测茅台", "payload": {}},
+            {"kind": "plan_ready", "text": "PLAN-P1", "payload": {"plan_id": "p1"}},
+            {"kind": "user_text", "text": "对比两只", "payload": {}},
+            {"kind": "plan_ready", "text": "PLAN-P2", "payload": {"plan_id": "p2"}},
+        ])
+        distinct_index = build_ask_history_index(distinct.messages, self.kb)
+        print(
+            " distinct index:",
+            [(card.turn, card.user_text, card.answer_text) for card in distinct_index],
+        )
+        self.assertEqual(
+            [(card.turn, card.user_text, card.answer_text) for card in distinct_index],
+            [
+                (1, "回测茅台", "PLAN-P1"),
+                (2, "对比两只", "PLAN-P2"),
+            ],
+        )
+
+    def test_plan_turns_share_ask_outline(self) -> None:
+        """计划轮次走同一套近详远略：最近全文，远处一行，点名后再升全文。"""
+
+        print("\n[TestAiAskEngine] 计划轮次共用提纲裁剪")
+        from qteasy_ai.ask_engine import build_ask_history_index, render_session_outline
+
+        messages = []
+        for number in range(1, 7):
+            messages.append({
+                "kind": "user_text",
+                "text": f"USER-{number}-" + ("甲" * 100),
+                "payload": {},
+            })
+            messages.append({
+                "kind": "plan_ready",
+                "text": f"PLAN-{number}-HEAD" + ("乙" * 280) + f"PLAN-{number}-TAIL",
+                "payload": {"plan_id": f"p{number}"},
+            })
+        index = build_ask_history_index(messages, self.kb)
+        print(" turns:", [(card.turn, card.kind) for card in index])
+        self.assertEqual([(card.turn, card.kind) for card in index], [(n, "plan") for n in range(1, 7)])
+        context = render_session_outline(index, fidelity="context")
+        print(" context outline:\n", context)
+        self.assertIn("USER-6-" + ("甲" * 100), context)
+        self.assertIn("Answer shown: PLAN-6-HEAD" + ("乙" * 280) + "PLAN-6-TAIL", context)
+        self.assertIn("PLAN-6-TAIL", context)
+        self.assertNotIn("PLAN-2-TAIL", context)
+        self.assertIn(
+            "turn 2 | User: " + ("USER-2-" + ("甲" * 100))[:40] + " | Lead: ",
+            context,
+        )
+        promoted = render_session_outline(index, fidelity="context", promoted_turns=[2])
+        print(" promoted outline has turn 2 tail:", "PLAN-2-TAIL" in promoted)
+        print(" promoted outline has turn 6 tail:", "PLAN-6-TAIL" in promoted)
+        self.assertIn("Answer shown: PLAN-2-HEAD" + ("乙" * 280) + "PLAN-2-TAIL", promoted)
+        self.assertIn("PLAN-6-TAIL", promoted)
+        topic = render_session_outline(index, fidelity="topic")
+        print(" topic outline:\n", topic)
+        self.assertNotIn("Answer shown:", topic)
+        self.assertNotIn("PLAN-1-TAIL", topic)
+        self.assertNotIn("PLAN-6-TAIL", topic)
+        self.assertIn("User: " + ("USER-6-" + ("甲" * 100))[:40], topic)
+        self.assertNotIn("甲" * 100, topic)
 
     def test_prior_excerpt_menu_stays_in_named_topic(self) -> None:
         """指代前文时，点卡才看到被点名轮次；菜单不并入 session 里的其它主题。"""
@@ -922,10 +1100,10 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertIn(_NAN_ANSWER, writer_prompt)
             self.assertEqual(second.get("sources"), ["backtest_intro", "backtest_result"])
 
-    def test_plan_ready_text_stays_out_of_ask_prompts(self) -> None:
-        """定主题提示不读 plan_ready、clarify 或 result 的正文。"""
+    def test_topic_outline_names_plan_user_without_card_body(self) -> None:
+        """非指代时，定主题提纲带上计划轮的用户句，不带无编号的卡片正文。"""
 
-        print("\n[TestAiAskEngine] 不读计划卡和结果卡")
+        print("\n[TestAiAskEngine] 定主题提纲只点出计划轮用户句")
         from qteasy_ai.app import QteasyAssistant
         from qteasy_ai.memory_store import MemoryStore
         from qteasy_ai.provider import FakeLLMProvider
@@ -948,26 +1126,94 @@ class TestAiAskEngine(unittest.TestCase):
             self.assertEqual(first.get("sources"), ["common_errors_nan"])
             state = assistant.session_store.load("a7-kinds")
             state.append_messages([
+                {"kind": "user_text", "text": "回测这份计划用最近三年", "payload": {}},
                 {"kind": "plan_ready", "text": _PLAN_READY_BODY, "payload": {"plan_id": "p-a7"}},
-                {"kind": "clarify", "text": _CLARIFY_BODY, "payload": {}},
-                {"kind": "result", "text": _RESULT_BODY, "payload": {}},
             ])
             assistant.session_store.save(state)
             before = len(fake.prompts)
             second = assistant.ask("如何用qteasy回测", response_style="raw", session_id="a7-kinds")
             topic_prompt = fake.prompts[before]
+            index_lines = [
+                line for line in topic_prompt.splitlines() if line.startswith("- turn ")
+            ]
+            print(" index lines:", index_lines)
+            print(" topic prompt has plan user:", "回测这份计划用最近三年" in topic_prompt)
             print(" topic prompt has plan body:", _PLAN_READY_BODY in topic_prompt)
             print(" sources:", second.get("sources"))
-            self.assertIn(
-                _ask_index_line(1, "common_errors_nan", _NAN_TITLE, _NAN_SUMMARY),
-                topic_prompt,
+            self.assertEqual(
+                index_lines,
+                [_ask_index_line(1, "common_errors_nan", _NAN_TITLE, _NAN_SUMMARY)],
             )
+            self.assertNotIn(" id= ", topic_prompt)
+            self.assertIn("turn 2", topic_prompt)
+            self.assertIn("User: 回测这份计划用最近三年", topic_prompt)
             self.assertNotIn(_PLAN_READY_BODY, topic_prompt)
-            self.assertNotIn(_CLARIFY_BODY, topic_prompt)
-            self.assertNotIn(_RESULT_BODY, topic_prompt)
             self.assertNotIn(_PLAN_READY_BODY, fake.prompts[before + 1])
             self.assertNotIn(_PLAN_READY_BODY, fake.prompts[before + 2])
             self.assertEqual(second.get("sources"), ["backtest_intro"])
+
+    def test_referential_ask_shows_recent_plan_in_full(self) -> None:
+        """指代前文时，点卡和作家看到最近计划轮的全文，菜单仍听主题。"""
+
+        print("\n[TestAiAskEngine] 指代时展开最近的计划轮")
+        from qteasy_ai.app import QteasyAssistant
+        from qteasy_ai.memory_store import MemoryStore
+        from qteasy_ai.provider import FakeLLMProvider
+
+        fake = FakeLLMProvider(replies=[
+            '{"topics":["backtest"]}',
+            '{"ids":["common_errors_nan"]}',
+            _NAN_ANSWER,
+            '{"topics":["backtest"]}',
+            '{"ids":["backtest_intro"]}',
+            "WRITER-PLAN-REF",
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = QteasyAssistant(
+                memory_store=MemoryStore(base_dir=temp_dir),
+                provider=fake,
+            )
+            first = assistant.ask("停牌", response_style="raw", session_id="a7-plan-ref")
+            print(" first sources:", first.get("sources"))
+            self.assertEqual(first.get("sources"), ["common_errors_nan"])
+            state = assistant.session_store.load("a7-plan-ref")
+            state.append_messages([
+                {"kind": "user_text", "text": "回测这份计划用最近三年", "payload": {}},
+                {"kind": "plan_ready", "text": _PLAN_READY_BODY, "payload": {"plan_id": "p-ref"}},
+            ])
+            assistant.session_store.save(state)
+            before = len(fake.prompts)
+            third = assistant.ask(
+                "刚才那份计划里的限制",
+                response_style="raw",
+                session_id="a7-plan-ref",
+            )
+            card_prompt = fake.prompts[before + 1]
+            writer_prompt = fake.prompts[before + 2]
+            menu_ids = set(_menu_line_ids(card_prompt))
+            print(" menu ids:", sorted(menu_ids))
+            print(" card has plan body:", _PLAN_READY_BODY in card_prompt)
+            print(" writer has plan body:", _PLAN_READY_BODY in writer_prompt)
+            print(" sources:", third.get("sources"))
+            self._assert_no_plan_execution(third)
+            self.assertIn(f"Answer shown: {_PLAN_READY_BODY}", card_prompt)
+            self.assertIn("User: 回测这份计划用最近三年", card_prompt)
+            self.assertIn(f"Answer shown: {_PLAN_READY_BODY}", writer_prompt)
+            self.assertIn("User: 回测这份计划用最近三年", writer_prompt)
+            self.assertEqual(
+                menu_ids,
+                {
+                    "backtest_intro",
+                    "backtest_config",
+                    "backtest_result",
+                    "backtest_trade_log",
+                    "backtest_engine",
+                    "common_errors_nan",
+                },
+            )
+            self.assertNotIn("data_three_entries", card_prompt)
+            self.assertEqual(third.get("sources"), ["backtest_intro"])
+            self.assertNotIn("plan_id", third.get("answer") or "")
 
     def test_second_item_follows_model_json(self) -> None:
         """「第二项」菜单仍听模型 JSON；sources 带上该条的 details 子卡。"""
