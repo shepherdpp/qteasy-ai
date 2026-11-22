@@ -567,7 +567,11 @@ class TestAi04B1HoldCompare(unittest.TestCase):
         print(" open output:", (portfolio.get("inputs") or {}).get("benchmark_output"))
         self.assertIn("qt.ai.hp.normalize", [row.get("skill_name") for row in accepted_open])
         self.assertNotEqual((portfolio.get("inputs") or {}).get("benchmark_output"), "excess_only")
-        self.assertIn("weights", _pending_names(open_plan))
+        print(" open pending:", _pending_names(open_plan))
+        print(" open missing:", open_plan.steps[0].inputs.get("missing_info"))
+        self.assertEqual(_pending_names(open_plan), [])
+        self.assertEqual(open_plan.steps[0].skill_name, "qt.ai.system.fallback")
+        self.assertIn("weights", str(open_plan.steps[0].inputs.get("missing_info") or ""))
 
     def test_commit_blocks_partial_symbols_and_weight_text(self) -> None:
         """裸代码不能只留下第一只。1:1 和等权要先变成数字或 equal。"""

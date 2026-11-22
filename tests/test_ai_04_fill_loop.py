@@ -15,6 +15,7 @@ import unittest
 from typing import Any, Dict, List
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
+from qteasy_ai.human_card import project_human_cards
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
@@ -529,9 +530,9 @@ class TestAi04FillLoop(unittest.TestCase):
             self.assertNotIn("dumb_card", debug[0])
 
     def test_unreadable_card_keeps_the_reject_reason(self) -> None:
-        """出卡不是 JSON 时只叫一次，确认句是质检拒因。"""
+        """出卡不是 JSON 时只叫一次。计划不可确认，确认句不拼拒因。"""
 
-        print("\n[TestAi04FillLoop] 读不成问句停在拒因")
+        print("\n[TestAi04FillLoop] 读不成问句仍停在澄清")
         sentence = "macd 回测 000001.SZ 和 000002.SZ"
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(
@@ -553,22 +554,102 @@ class TestAi04FillLoop(unittest.TestCase):
             ]
             debug = (plan.get("planner_trace") or {}).get("fill_debug") or []
             steps = plan.get("steps") or []
+            info = str((steps[0].get("inputs") or {}).get("missing_info") or "")
+            reasons = (debug[0].get("reasons") or {}) if debug else {}
+            cards = project_human_cards(
+                {"plan": plan, "execution": {"status": "dry_run", "steps": []}},
+                requested_mode="plan",
+                query=sentence,
+                include_user_text=False,
+            )
+            kinds = [str(card.get("kind") or "") for card in cards]
             print(" card prompts:", len(prompts))
             print(" pending:", clar.get("pending"))
             print(" confirm:", clar.get("confirm_prompt"))
-            print(" skills:", [step.get("skill_name") for step in steps])
-            print(" debug keys:", sorted(debug[0]) if debug else [])
+            print(" missing:", info)
+            print(" reasons:", reasons)
+            print(" kinds:", kinds)
             self.assertEqual(len(prompts), 1)
             self.assertEqual(clar.get("pending"), [])
-            self.assertTrue(clar.get("confirm_prompt"))
+            self.assertFalse(clar.get("confirm_prompt"))
             self.assertNotIn("Which built-in strategy?", str(clar.get("confirm_prompt")))
+            for name, reason in reasons.items():
+                self.assertNotIn(f"{name}: {reason}", str(clar.get("confirm_prompt") or ""))
+                self.assertIn(str(name), info.split("|"))
             self.assertTrue(clar.get("fill_authored"))
             self.assertEqual([step.get("skill_name") for step in steps], ["qt.ai.system.fallback"])
-            self.assertEqual((steps[0].get("inputs") or {}).get("missing_info"), "none")
+            self.assertNotEqual(info, "none")
             self.assertTrue(debug)
             self.assertTrue(debug[0].get("card_protocol"))
             self.assertNotIn("dumb_card", debug[0])
             self.assertNotIn("card_protocol_retry", debug[0])
+            self.assertNotIn("plan_ready", kinds)
+            self.assertIn("error", kinds)
+
+    def test_partial_card_keeps_written_questions(self) -> None:
+        """三个被拒槽里只写了一格，卡片只留这一格。"""
+
+        print("\n[TestAi04FillLoop] 没盖住的槽不另开分支")
+        sentence = f"{_MARK} 600519 和 000858 做一条等权组合"
+        explanation = "开始日不是真实日期，请给一个八位日期"
+        fill = json.dumps({"start": "20251340"})
+        card = json.dumps({
+            "questions": [
+                {
+                    "name": "start",
+                    "explanation": explanation,
+                    "options": [],
+                    "open": {"label": "其它"},
+                }
+            ]
+        }, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(
+                temp_dir,
+                [
+                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    fill,
+                    card,
+                ],
+            )
+            result = assistant.plan(sentence, response_style="raw", session_id="s-part", debug=True)
+            plan = _plan(result)
+            rows = _pending(plan)
+            names = [str(row.get("name") or "") for row in rows]
+            kept = {
+                str(item.get("name") or "")
+                for item in ((plan.get("assumptions") or {}).get("fill_record") or {}).get("slots") or []
+            }
+            prompts = [
+                text for text in assistant.planner.provider.prompts
+                if text.startswith("Clarification protocol.")
+            ]
+            steps = plan.get("steps") or []
+            cards = project_human_cards(
+                {"plan": plan, "execution": {"status": "dry_run", "steps": []}},
+                requested_mode="plan",
+                query=sentence,
+                include_user_text=False,
+            )
+            kinds = [str(card.get("kind") or "") for card in cards]
+            print(" prompts:", len(prompts))
+            print(" pending:", names)
+            print(" prompt:", rows[0].get("prompt") if rows else "")
+            print(" kept:", sorted(kept))
+            print(" kinds:", kinds)
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(names, ["start"])
+            self.assertEqual(rows[0].get("prompt"), explanation)
+            self.assertNotIn("weights", names)
+            self.assertNotIn("holdings", names)
+            self.assertNotIn("start", kept)
+            self.assertNotIn("weights", kept)
+            self.assertNotIn("holdings", kept)
+            self.assertEqual([step.get("skill_name") for step in steps], ["qt.ai.system.fallback"])
+            self.assertNotIn("plan_ready", kinds)
+            self.assertIn("clarify", kinds)
 
     def test_history_carries_the_reject_reason(self) -> None:
         """交卷后历次澄清带上拒因，下一圈填槽提示词看得到。"""

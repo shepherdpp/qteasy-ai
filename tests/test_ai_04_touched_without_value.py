@@ -148,17 +148,17 @@ class TestAi04TouchedWithoutValue(unittest.TestCase):
             print(" confirmable:", _confirmable(plan))
             print(" pending:", [(item.get("name"), item.get("prompt")) for item in pending])
             self.assertIn(sentence, fill)
-            self.assertIn("Task sentence:\n" + _READY, fill)
-            self.assertIn("Revision:\n" + sentence, fill)
+            self.assertIn("Task sentence: the original request. It does not change.\n" + _READY, fill)
+            self.assertIn("Revision: the change in this turn, when present.\n" + sentence, fill)
             self.assertNotIn(revised.get("start"), ("20240507", window["start"]))
             self.assertNotIn(revised.get("end"), ("20260507", window["end"]))
             self.assertIn(revised.get("start"), (None, ""))
             self.assertIn(revised.get("end"), (None, ""))
             self.assertFalse(_confirmable(plan))
-            self.assertEqual([item.get("name") for item in pending], ["start", "end"])
+            self.assertEqual([item.get("name") for item in pending], [])
 
     def test_null_dates_ask_and_keep_kernel_off_the_steps(self) -> None:
-        """协议对起止交回 null：出日期卡，缺省是选项，内核窗口不写回。"""
+        """协议对起止交回 null：不写回内核窗口。模型没写题，卡片上就没有选项。"""
 
         print("\n[TestAi04TouchedWithoutValue] 日期 null")
         sentence = _PAST
@@ -185,18 +185,14 @@ class TestAi04TouchedWithoutValue(unittest.TestCase):
                 ],
             )
             self.assertIn(sentence, fill)
-            self.assertIn("Task sentence:\n" + _READY, fill)
-            self.assertIn("Revision:\n" + sentence, fill)
+            self.assertIn("Task sentence: the original request. It does not change.\n" + _READY, fill)
+            self.assertIn("Revision: the change in this turn, when present.\n" + sentence, fill)
             self.assertIn(kline.get("start"), (None, ""))
             self.assertIn(kline.get("end"), (None, ""))
             self.assertNotEqual(kline.get("start"), window["start"])
             self.assertNotEqual(kline.get("end"), window["end"])
             self.assertFalse(_confirmable(plan))
-            self.assertEqual([item.get("name") for item in pending], ["start", "end"])
-            for item in pending:
-                options = item.get("options") or []
-                print(" options:", item.get("name"), options)
-                self.assertTrue(any(str(option.get("id")) == "default" for option in options))
+            self.assertEqual([item.get("name") for item in pending], [])
 
     def test_extra_holding_without_code_is_the_only_question(self) -> None:
         """原来两项仍已确认。多出来的没有代码的一项单独出卡。"""
@@ -231,8 +227,8 @@ class TestAi04TouchedWithoutValue(unittest.TestCase):
                 ],
             )
             self.assertIn(sentence, fill)
-            self.assertIn("Task sentence:\n" + _READY, fill)
-            self.assertIn("Revision:\n" + sentence, fill)
+            self.assertIn("Task sentence: the original request. It does not change.\n" + _READY, fill)
+            self.assertIn("Revision: the change in this turn, when present.\n" + sentence, fill)
             self.assertEqual([item.get("code") for item in holdings[:2]], ["600519.SH", "000858.SZ"])
             self.assertTrue(all(item.get("status") == "confirmed" for item in holdings[:2]))
             self.assertEqual(holdings[2].get("mention"), "兴业银行")

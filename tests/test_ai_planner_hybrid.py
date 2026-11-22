@@ -71,7 +71,7 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertNotEqual(plan.planner_trace.get("intent_job"), "data.summary")
 
     def test_gold_refill_without_dates_still_clarify(self) -> None:
-        """下载缺日期仍 clarify，pending 是 start 与 end。"""
+        """下载缺日期仍 clarify。模型没写题时 pending 为空，missing_info 仍是两端。"""
 
         print("\n[TestAiPlannerHybrid] refill missing dates")
         query = "download A-share daily data to local datasource"
@@ -92,7 +92,9 @@ class TestAiPlannerHybrid(unittest.TestCase):
             for item in ((plan.assumptions.get("clarification") or {}).get("pending") or [])
             if isinstance(item, dict)
         ]
-        self.assertEqual(pending, ["start", "end"])
+        print(" pending:", pending)
+        self.assertEqual(pending, [])
+        self.assertTrue((plan.assumptions.get("clarification") or {}).get("fill_authored"))
         self.assertNotEqual(step.inputs.get("missing_info"), "date_range")
         self.assertTrue(fake.prompts)
 

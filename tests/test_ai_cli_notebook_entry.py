@@ -268,7 +268,7 @@ class TestAiCliNotebookEntry(unittest.TestCase):
         self.assertIn("plan_id", payload["error"]["message"].lower())
 
     def test_cli_same_session_id_fills_slots(self) -> None:
-        """同一 --session-id 的跟进句升级日期，不把整句塞进当前题。"""
+        """同一 --session-id 的跟进句不抽日期，也不把整句塞进当前题。"""
 
         print("\n[TestAiCliNotebookEntry] cli session-id follow-up")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -310,9 +310,11 @@ class TestAiCliNotebookEntry(unittest.TestCase):
             )
             print(" second skills:", names, "source:", p2["plan"]["planner_trace"].get("source"))
             print(" second dates:", "20240101" in blob, "20241231" in blob)
+            print(" missing:", p2["plan"]["steps"][0]["inputs"].get("missing_info"))
             self.assertEqual(p2["plan"]["plan_id"], p1["plan"]["plan_id"])
-            self.assertIn("20240101", blob)
-            self.assertIn("20241231", blob)
+            self.assertNotIn("20240101", blob)
+            self.assertNotIn("20241231", blob)
+            self.assertEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "start|end")
             self.assertNotEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "20240101 到 20241231")
             self.assertEqual(p2["plan"]["planner_trace"].get("source"), "session")
             self.assertEqual(p2["plan"]["planner_trace"].get("intent_job"), "data.refill")

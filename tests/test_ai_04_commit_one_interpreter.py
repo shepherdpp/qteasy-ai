@@ -100,6 +100,17 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
                         json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
                         json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
                         json.dumps({"start": None, "end": None}, ensure_ascii=False),
+                        json.dumps({
+                            "questions": [
+                                {
+                                    "name": name,
+                                    "explanation": "请给出" + name,
+                                    "options": [{"id": "default", "label": "默认窗口"}],
+                                    "open": {"label": "其它"},
+                                }
+                                for name in ("start", "end")
+                            ]
+                        }, ensure_ascii=False),
                     ]
                 )
             )

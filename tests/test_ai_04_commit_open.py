@@ -371,6 +371,16 @@ class TestAi04CommitOpen(unittest.TestCase):
                         job,
                         json.dumps(compose, ensure_ascii=False),
                         json.dumps({"freq": "d"}, ensure_ascii=False),
+                        json.dumps({
+                            "questions": [
+                                {
+                                    "name": "shares",
+                                    "explanation": "请给出证券代码",
+                                    "options": [],
+                                    "open": {"label": "其它"},
+                                }
+                            ]
+                        }, ensure_ascii=False),
                     ]
                 ),
                 memory_store=MemoryStore(base_dir=temp_dir),
@@ -381,7 +391,19 @@ class TestAi04CommitOpen(unittest.TestCase):
             self.assertEqual([item.get("name") for item in rows], ["shares"])
             assistant.apply_provider(
                 FakeLLMProvider(
-                    replies=[json.dumps({"shares": answer}, ensure_ascii=False)]
+                    replies=[
+                        json.dumps({"shares": answer}, ensure_ascii=False),
+                        json.dumps({
+                            "questions": [
+                                {
+                                    "name": "shares",
+                                    "explanation": "请给出证券代码",
+                                    "options": [],
+                                    "open": {"label": "其它"},
+                                }
+                            ]
+                        }, ensure_ascii=False),
+                    ]
                 )
             )
             return _raw_plan(assistant.plan("", response_style="raw", session_id=sid, answers=[answer]))

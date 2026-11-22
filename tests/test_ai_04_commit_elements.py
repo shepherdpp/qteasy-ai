@@ -553,6 +553,17 @@ class TestAi04HoldCompareCodeRule(unittest.TestCase):
                 job,
                 job,
                 json.dumps(protocol),
+                json.dumps({
+                    "questions": [
+                        {
+                            "name": name,
+                            "explanation": "请给出" + name,
+                            "options": [{"id": "default", "label": "默认窗口"}],
+                            "open": {"label": "其它"},
+                        }
+                        for name in ("start", "end")
+                    ]
+                }, ensure_ascii=False),
             ]
         )
         self._answer_dates(provider, "hold-model")

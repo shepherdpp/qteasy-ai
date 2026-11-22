@@ -1496,18 +1496,18 @@ def _card_prompt(
 def _parse_card_questions(
     raw: str,
     rejected: Mapping[str, str],
-) -> Optional[List[Dict[str, Any]]]:
-    """出卡协议是 JSON 且盖住全部被拒槽时，抄下模型写的题。
+) -> List[Dict[str, Any]]:
+    """抄下协议里已经写到的被拒槽。没写到的不补行。
 
-    对不上时返回 ``None``。不补说明、选项或开放输入。
+    不是 JSON，或没有一题对上被拒槽时，返回空列表。
     """
 
     if not raw or "[fake-llm]" in raw:
-        return None
+        return []
     payload = _parse_json(raw)
     questions = payload.get("questions") if isinstance(payload, dict) else None
     if not isinstance(questions, list):
-        return None
+        return []
     by_q: Dict[str, Dict[str, Any]] = {}
     for item in questions:
         if not isinstance(item, dict):
@@ -1515,11 +1515,11 @@ def _parse_card_questions(
         name = str(item.get("name") or "")
         if name in rejected and name not in by_q:
             by_q[name] = item
-    if set(by_q) != {str(name) for name in rejected}:
-        return None
     rows: List[Dict[str, Any]] = []
     for name, reason in rejected.items():
-        item = by_q[str(name)]
+        item = by_q.get(str(name))
+        if not isinstance(item, dict):
+            continue
         choices = item.get("options") if isinstance(item.get("options"), list) else []
         opened = item.get("open") if isinstance(item.get("open"), dict) else None
         row: Dict[str, Any] = {
@@ -1542,7 +1542,7 @@ def _model_clarification(
     accepted: Mapping[str, Any],
     rejected: Mapping[str, str],
 ) -> List[Dict[str, Any]]:
-    """有模型时只出一次引导问句。协议对不上就交回空列表。"""
+    """有模型时只出一次引导问句。写到的被拒槽留下，没写到的不补。"""
 
     if not rejected:
         return []
@@ -1797,45 +1797,14 @@ def _fill_graph(
             report.get("accepted") or {},
             rejected,
         )
-        if getattr(planner, "provider", None) is not None and rejected and not pending:
-            reason_text = "\n".join(
-                f"{name}: {reason}" for name, reason in rejected.items()
-            )
-            _remember_fill_record(planner, "clarify", report, history, [])
-            extras["accepted_steps"] = _accepted_snapshot(steps)
-            extras["clarification"] = {
-                "restatement": f"You asked: {sentence}",
-                "pending": [],
-                "confirm_prompt": reason_text,
-                "fill_authored": True,
-            }
-            replaced = [
-                planner._make_step(
-                    step_id="step_1",
-                    skill_name="qt.ai.system.fallback",
-                    inputs=planner._fallback_step_inputs(
-                        query="",
-                        action="clarify_required",
-                        reason="missing_required_slots",
-                        hint=reason_text,
-                        missing_info="none",
-                        next_step="Fill the fields on the card.",
-                        details={
-                            "slot_pending": [],
-                            "accepted_steps": list(extras["accepted_steps"]),
-                            "fill_authored": True,
-                        },
-                    ),
-                )
-            ]
-            return replaced, extras
-        seen = {str(item.get("name") or "") + ":" + str(item.get("index") or "") for item in pending}
-        for row in item_rows:
-            key = str(row.get("name") or "") + ":" + str(row.get("index") or "")
-            if key not in seen:
-                pending.append(row)
+        if getattr(planner, "provider", None) is None or not rejected:
+            seen = {str(item.get("name") or "") + ":" + str(item.get("index") or "") for item in pending}
+            for row in item_rows:
+                key = str(row.get("name") or "") + ":" + str(row.get("index") or "")
+                if key not in seen:
+                    pending.append(row)
         _remember_fill_record(planner, "clarify", report, history, pending)
-        if not pending:
+        if not pending and not rejected:
             return steps, extras
         extras["accepted_steps"] = _accepted_snapshot(steps)
         names = []
@@ -1843,13 +1812,17 @@ def _fill_graph(
             slot_name = str(item.get("name") or "")
             if slot_name and slot_name not in names:
                 names.append(slot_name)
-        lead = pending[0]
-        label = str(lead.get("label") or "")
-        detail = str(lead.get("constraint") or lead.get("hint") or "")
-        pieces = [label] if label else []
-        if detail and detail != label:
-            pieces.append(detail)
-        hint = "\n".join(pieces)
+        if pending:
+            lead = pending[0]
+            label = str(lead.get("label") or "")
+            detail = str(lead.get("constraint") or lead.get("hint") or "")
+            pieces = [label] if label else []
+            if detail and detail != label:
+                pieces.append(detail)
+            hint = "\n".join(pieces)
+        else:
+            names = [str(name) for name in rejected]
+            hint = ""
         replaced = [
             planner._make_step(
                 step_id="step_1",

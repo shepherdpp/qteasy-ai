@@ -227,7 +227,7 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
             self.assertNotIn("600519.SH", blob)
 
     def test_model_omits_dates_and_null_asks(self) -> None:
-        """协议没交日期键就当没提到；交成 null 才出日期卡。"""
+        """协议没交日期键就当没提到。交成 null 时计划不可确认，模型没写题就没有日期卡。"""
 
         print("\n[TestAi04OptionalDefaults] 协议缺键与 null")
         holdings = [
@@ -263,13 +263,14 @@ class TestAi04CommitOptionalDefaults(unittest.TestCase):
             ]
         ).build_plan(_WINDOW_DIGIT, mode="plan")
         kline = _snap(nulled, "qt.ai.data.kline")
-        rows = {str(item.get("name") or ""): item for item in _pending(nulled)}
+        info = str((nulled.steps[0].inputs or {}).get("missing_info") or "")
         print(" null pending:", _names(nulled), "dates:", kline.get("start"), kline.get("end"))
-        self.assertEqual(_names(nulled), ["start", "end"])
+        print(" null missing:", info)
+        self.assertEqual(_names(nulled), [])
         self.assertFalse(_confirmable(nulled))
+        self.assertIn("start", info.split("|"))
+        self.assertIn("end", info.split("|"))
         self.assertIsNone(_DATE.search(_blob(nulled)))
-        self.assertEqual(_option(rows["start"], "default").get("id"), "default")
-        self.assertEqual(_option(rows["end"], "default").get("id"), "default")
 
     def test_lookback_sentinel(self) -> None:
         """没提回看就写入 126；回看 abc 只出回看题，缺省选项是 126。"""
@@ -387,6 +388,22 @@ def _raw_pending(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [item for item in (blob.get("pending") or []) if isinstance(item, dict)]
 
 
+def _date_card() -> str:
+    """模型写出的开始日和结束日。"""
+
+    return json.dumps({
+        "questions": [
+            {
+                "name": name,
+                "explanation": "请给出" + name,
+                "options": [{"id": "default", "label": "默认窗口"}],
+                "open": {"label": "其它"},
+            }
+            for name in ("start", "end")
+        ]
+    }, ensure_ascii=False)
+
+
 def _func_body(name: str) -> str:
     """从 slot_graph 源码里切出一个顶层函数。"""
 
@@ -410,6 +427,7 @@ class TestAi04DateCardAnswers(unittest.TestCase):
                     json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
                     json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
                     json.dumps({"start": None, "end": None}, ensure_ascii=False),
+                    _date_card(),
                 ]
             )
         )

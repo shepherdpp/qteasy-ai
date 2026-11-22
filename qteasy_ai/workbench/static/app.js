@@ -104,7 +104,6 @@ let renamingSessionId = "";
 /** 改名框还在时先记下，提交或取消后再补行首标记。 */
 let pendingMarkId = "";
 let openProcessTurns = new Set();
-let openRunDebug = new Set();
 const PENCIL_RESEND = "Edit the blue message (pencil) and send it again.";
 const REWIND_LATER_TURNS = "Later turns will be dropped from this session. Files in ai/runs/ stay on disk; this session will no longer track them.";
 const PROCESS_KINDS = new Set(["executing", "mode_notice", "plan_ready", "clarify", "clarification"]);
@@ -1845,14 +1844,6 @@ async function confirmIdentityWrite(confirm) {
 function onChatClick(ev) {
   const t = ev.target;
   if (!(t instanceof Element)) return;
-  const debugBtn = t.closest("button.run-debug-toggle");
-  if (debugBtn) {
-    const key = String(debugBtn.getAttribute("data-run-debug") || "");
-    if (openRunDebug.has(key)) openRunDebug.delete(key);
-    else openRunDebug.add(key);
-    renderChat();
-    return;
-  }
   const foldBtn = t.closest("button.process-toggle");
   if (foldBtn) {
     const key = Number(foldBtn.getAttribute("data-process-turn"));
@@ -3440,8 +3431,7 @@ function trailingStageNotice() {
 
 function renderProcessMessage(msg, stepsHtml, index) {
   if (msg.kind === "clarification" || msg.kind === "clarify") {
-    const debug = fillDebugDisclosure((msg.payload && msg.payload.fill_debug) || [], `msg-${index}`);
-    return clarifyReceiptHtml(msg, debug);
+    return clarifyReceiptHtml(msg, "");
   }
   if (msg.kind === "mode_notice") {
     const stage = trailingStageNotice();
@@ -3458,8 +3448,7 @@ function renderProcessMessage(msg, stepsHtml, index) {
     const openBtn = rid
       ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button></div>`
       : "";
-    const debug = fillDebugDisclosure((msg.payload && msg.payload.fill_debug) || [], `msg-${index}`);
-    return `<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}${debug}</div></div>`;
+    return `<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}</div></div>`;
   }
   return "";
 }
@@ -3505,45 +3494,6 @@ function planJson(fields) {
   return JSON.stringify(body);
 }
 
-function fillDebugBlocks(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) return "";
-  return list.map((item, i) => {
-    const row = item && typeof item === "object" ? item : {};
-    const index = row.index == null ? i : row.index;
-    const candidates = row.candidates == null ? "" : JSON.stringify(row.candidates, null, 2);
-    const reasons = row.reasons == null ? "" : JSON.stringify(row.reasons, null, 2);
-    const protocol = String(row.card_protocol || "").trim()
-      ? `<div>Card protocol:</div><pre>${escapeHtml(String(row.card_protocol))}</pre>`
-      : "";
-    const dumb = row.dumb_card ? `<div>Dumb card</div>` : "";
-    return `<div class="fill-debug-cycle"><div>Cycle ${escapeHtml(String(index))}</div><div>Fill source:</div><pre>${escapeHtml(String(row.fill_source || ""))}</pre><div>Fill protocol:</div><pre>${escapeHtml(String(row.protocol || ""))}</pre><div>Candidates:</div><pre>${escapeHtml(candidates)}</pre><div>Reject reasons:</div><pre>${escapeHtml(reasons)}</pre>${protocol}${dumb}</div>`;
-  }).join("");
-}
-
-function fillDebugDisclosure(rows, key) {
-  const blocks = fillDebugBlocks(rows);
-  if (!blocks) return "";
-  const id = String(key);
-  const open = openRunDebug.has(id);
-  const label = open ? "Hide debug" : "Debug";
-  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${escapeHtml(id)}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
-  const body = open ? `<div class="process-body" data-testid="run-debug">${blocks}</div>` : "";
-  return `<div class="actions">${button}</div>${body}`;
-}
-
-function renderRunDebug(msg, index) {
-  const view = msg.payload && msg.payload.run_view;
-  if (!view) return "";
-  const key = String(index);
-  const open = openRunDebug.has(key);
-  const label = open ? "Hide debug" : "Debug";
-  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
-  if (!open) return `<div class="actions">${button}</div>`;
-  const cycles = fillDebugBlocks(view.fill_debug);
-  return `<div class="actions">${button}</div><div class="process-body" data-testid="run-debug"><div>Classify protocol:</div><pre>${escapeHtml(view.classify_protocol || "")}</pre>${cycles}</div>`;
-}
-
 function renderVisibleMessage(msg, index) {
   if (msg.kind === "user_text") {
     if (editingUserIndex === index) {
@@ -3570,7 +3520,7 @@ function renderVisibleMessage(msg, index) {
     return `<div class="msg user"><div class="msg-role">You</div><div class="bubble"><span class="bubble-text">${escapeHtml(msg.text)}</span><button type="button" class="icon-btn ghost bubble-edit" data-edit-user="${index}" title="Edit">${icon("pencil")}</button></div></div>`;
   }
   if (msg.kind === "result") {
-    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderRunSteps(msg)}${renderRunDebug(msg, index)}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
+    return `<div class="msg prose"><div class="msg-role">Result</div><div class="bubble flat">${renderChatMarkdown(msg.text || "")}${renderRunSteps(msg)}${renderOutputMeta(msg, index)}${resultArtifactButtons(msg)}</div></div>`;
   }
   if (msg.kind === "error") {
     const next = errorGuidance(msg.payload && msg.payload.next_action);
@@ -3799,10 +3749,9 @@ function renderClarification() {
       <button type="button" class="ix-text-btn" id="btn-clarify-end" title="End this request" ${lock}>End</button>
     </div>`;
     }
-    const debug = fillDebugDisclosure((clar.payload && clar.payload.fill_debug) || [], "clarify-live");
     return `<div class="ix-card" data-testid="clarification-form">
     <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3></div>
-    <div class="ix-card-body">${prompt}${debug}</div>
+    <div class="ix-card-body">${prompt}</div>
     ${foot}
   </div>`;
   }
@@ -3855,10 +3804,9 @@ function renderClarification() {
     : clar
       ? ""
       : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
-  const debug = fillDebugDisclosure((clar.payload && clar.payload.fill_debug) || [], "clarify-live");
   return `<div class="ix-card" data-testid="clarification-form">
     <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3>${pager}</div>
-    <div class="ix-card-body">${prompt}${constraintHtml}${questionHtml}${hintHtml}${formatHtml}${exampleHtml}${errorHtml}${optionRows}${debug}</div>
+    <div class="ix-card-body">${prompt}${constraintHtml}${questionHtml}${hintHtml}${formatHtml}${exampleHtml}${errorHtml}${optionRows}</div>
     ${foot}
   </div>`;
 }
@@ -3893,11 +3841,9 @@ function renderPlanCard() {
     const viewBtn = rid
       ? `<button type="button" class="ix-text-btn" data-open-plan="${escapeHtml(rid)}" title="View Plan">View</button>`
       : "";
-    const ready = latestMessage("plan_ready");
-    const debug = fillDebugDisclosure((ready && ready.payload && ready.payload.fill_debug) || [], "plan-live");
     body = `${jobLine}
     <p class="warn">Plan ${escapeHtml(card.plan_id)}</p>
-    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>${debug}`;
+    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>`;
     foot = `<div class="ix-card-foot">
       ${viewBtn}
       <button type="button" class="ix-text-btn" id="btn-edit" title="Change params" ${lock}>Change</button>

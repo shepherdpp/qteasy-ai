@@ -454,6 +454,16 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 _job({"job": "open"}),
                 json.dumps({"steps": rough}),
                 json.dumps({"shares": "000300.SH", "freq": "d", "asset_type": "IDX"}),
+                json.dumps({
+                    "questions": [
+                        {
+                            "name": "htype_names",
+                            "explanation": "请给出数据类型",
+                            "options": [],
+                            "open": {"label": "其它"},
+                        }
+                    ]
+                }, ensure_ascii=False),
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:

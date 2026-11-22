@@ -118,6 +118,16 @@ class TestAi04bDefaultInputs(unittest.TestCase):
                         job,
                         json.dumps(compose, ensure_ascii=False),
                         json.dumps({"freq": "d"}, ensure_ascii=False),
+                        json.dumps({
+                            "questions": [
+                                {
+                                    "name": "shares",
+                                    "explanation": "请给出证券代码",
+                                    "options": [],
+                                    "open": {"label": "其它"},
+                                }
+                            ]
+                        }, ensure_ascii=False),
                     ]
                 ),
                 memory_store=MemoryStore(base_dir=temp_dir),
