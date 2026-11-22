@@ -604,12 +604,16 @@ class Planner:
             shown = user_query
             if clause is not None and clause.status == "marked" and clause.task:
                 shown = query or user_query
-            assumptions["clarification"] = finalize_clarification_for_emit(
-                self._factor_ic_clarification(
-                    self._session_clarification(shown, missing),
-                    steps,
+            existing = assumptions.get("clarification")
+            if isinstance(existing, dict) and existing.get("fill_authored"):
+                assumptions["clarification"] = finalize_clarification_for_emit(existing)
+            else:
+                assumptions["clarification"] = finalize_clarification_for_emit(
+                    self._factor_ic_clarification(
+                        self._session_clarification(shown, missing),
+                        steps,
+                    )
                 )
-            )
             assumptions["session_missing"] = missing
         elif isinstance(assumptions.get("clarification"), dict):
             assumptions["clarification"] = finalize_clarification_for_emit(assumptions["clarification"])

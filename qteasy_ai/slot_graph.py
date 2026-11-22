@@ -1433,42 +1433,74 @@ def _card_prompt(
     rejected: Mapping[str, str],
     projected: Sequence[Dict[str, Any]],
 ) -> str:
-    """出卡提示词。合同选项 id 写在 contract 里，供对协议。"""
+    """出卡提示词。先写目标和字段含义，再列出被拒槽的材料。"""
 
     by_name = {str(slot.get("name") or ""): slot for slot in projected}
     lines = [
         "Clarification protocol.",
-        "Task sentence:",
+        "Write the questions the user will see. Do not fill slots and do not choose the answer.",
+        (
+            "For every rejected slot, write one question in the user's language. "
+            "explanation says why you ask, what was unclear, and what a clear answer looks like. "
+            "options are likely choices: id from the legal ids below, label in the user's language. "
+            "open is the label of a free-text answer. Do not ask about Accepted slots."
+        ),
+        "reason: why this round was refused. Explain it. The card shows this text separately.",
+        (
+            "contract, enum: legal ids you may offer. "
+            "If contract is empty, offer choices that fit format and constraint."
+        ),
+        "format, constraint: the rule to explain.",
+        "example: an illustration to mention, not a preselected answer.",
+        "default: the declared default. Offer it when the user has not given a value.",
+        "Task sentence: the original request. It does not change.",
         str(sentence or ""),
-        "Clarification history:",
+        (
+            "Clarification history: earlier questions and the user's answers. "
+            "error is why that answer was refused."
+        ),
     ]
     lines.extend(_history_lines(history))
-    lines.append("Accepted:")
+    lines.append("Accepted: values already kept. Do not ask about these.")
     shown = {}
     for name, item in accepted.items():
         if isinstance(item, dict):
             shown[name] = item.get("value")
     lines.extend(_accepted_lines(shown))
-    lines.append("Rejected:")
+    lines.append("Rejected: slots that failed this round. Write one question for each.")
     for name, reason in rejected.items():
         slot = by_name.get(str(name)) or {"name": str(name)}
         ids = [str(item.get("id")) for item in _options_for(str(name), slot)]
         lines.append(f"name={name}")
         lines.append(f"reason={reason}")
         lines.append("contract=" + ",".join(ids))
+        if slot.get("format"):
+            lines.append(f"format={slot.get('format')}")
+        if slot.get("example"):
+            lines.append(f"example={slot.get('example')}")
+        if slot.get("constraint"):
+            lines.append(f"constraint={slot.get('constraint')}")
+        if slot.get("enum"):
+            lines.append("enum=" + ",".join(str(item) for item in slot.get("enum") or []))
+        if _has_declared_default(slot):
+            lines.append(f"default={_default_label(slot)}")
+    lines.append("Reply with one question object per rejected slot:")
     lines.append(
-        'Reply with JSON {"questions":[{"name":"","explanation":"",'
-        '"options":[{"id":"","label":""}],"open":{"label":"Other"}}]}'
+        '{"questions":[{"name":"<slot>","explanation":"...","options":'
+        '[{"id":"...","label":"..."}],"open":{"label":"..."}}]}'
     )
+    lines.append("name must be the rejected slot name.")
     return "\n".join(lines)
 
 
 def _parse_card_questions(
     raw: str,
     rejected: Mapping[str, str],
-    projected: Sequence[Dict[str, Any]],
 ) -> Optional[List[Dict[str, Any]]]:
-    """出卡协议对不上时返回 None，调用方整张改弱智卡。"""
+    """出卡协议是 JSON 且盖住全部被拒槽时，抄下模型写的题。
+
+    对不上时返回 ``None``。不补说明、选项或开放输入。
+    """
 
     if not raw or "[fake-llm]" in raw:
         return None
@@ -1485,32 +1517,44 @@ def _parse_card_questions(
             by_q[name] = item
     if set(by_q) != {str(name) for name in rejected}:
         return None
-    by_slot = {str(slot.get("name") or ""): slot for slot in projected}
     rows: List[Dict[str, Any]] = []
     for name, reason in rejected.items():
         item = by_q[str(name)]
-        explanation = str(item.get("explanation") or "").strip()
         choices = item.get("options") if isinstance(item.get("options"), list) else []
         opened = item.get("open") if isinstance(item.get("open"), dict) else None
-        usable = [opt for opt in choices if isinstance(opt, dict)]
-        if not explanation or len(usable) < 2 or not opened:
-            return None
-        slot = by_slot.get(str(name)) or {"name": str(name)}
-        needed = {str(opt.get("id")) for opt in _options_for(str(name), slot)}
-        got = {str(opt.get("id")) for opt in usable if opt.get("id") is not None}
-        if not needed <= got:
-            return None
-        if reason == _NOT_GIVEN and _has_declared_default(slot):
-            first = usable[0]
-            if str(first.get("id") or "") != "default":
-                return None
-        row = _pending_row(slot, reason, explanation, lead_default=False)
-        row["prompt"] = explanation
-        row["error"] = reason
-        row["options"] = [dict(opt) for opt in usable]
-        row["open"] = dict(opened)
+        row: Dict[str, Any] = {
+            "name": str(name),
+            "prompt": str(item.get("explanation") or "").strip(),
+            "error": reason,
+            "options": [dict(opt) for opt in choices if isinstance(opt, dict)],
+        }
+        if opened:
+            row["open"] = dict(opened)
         rows.append(row)
     return rows
+
+
+def _model_clarification(
+    planner: Any,
+    projected: Sequence[Dict[str, Any]],
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+    accepted: Mapping[str, Any],
+    rejected: Mapping[str, str],
+) -> List[Dict[str, Any]]:
+    """有模型时只出一次引导问句。协议对不上就交回空列表。"""
+
+    if not rejected:
+        return []
+    debug = getattr(planner, "_fill_debug_entry", None)
+    if not isinstance(debug, dict):
+        debug = {}
+        planner._fill_debug_entry = debug
+    raw = planner.provider.chat(
+        _card_prompt(sentence, history, accepted, rejected, projected)
+    )
+    debug["card_protocol"] = str(raw or "")
+    return _parse_card_questions(raw, rejected) or []
 
 
 def _author_clarification(
@@ -1521,23 +1565,21 @@ def _author_clarification(
     accepted: Mapping[str, Any],
     rejected: Mapping[str, str],
 ) -> List[Dict[str, Any]]:
-    """有拒绝才出卡。协议对不上就出弱智卡，不再叫第三次模型。不写槽。"""
+    """有拒绝才出卡。没有模型时出弱智卡。有模型时只叫一次出卡。不写槽。"""
 
     debug = getattr(planner, "_fill_debug_entry", None)
     if not isinstance(debug, dict):
         debug = {}
         planner._fill_debug_entry = debug
     provider = getattr(planner, "provider", None)
-    if provider is None or not rejected:
+    if provider is None:
+        if not rejected:
+            return []
         debug["dumb_card"] = True
         return _dumb_rows(projected, rejected, sentence)
-    raw = provider.chat(_card_prompt(sentence, history, accepted, rejected, projected))
-    parsed = _parse_card_questions(raw, rejected, projected)
-    debug["card_protocol"] = str(raw or "")
-    if parsed is None:
-        debug["dumb_card"] = True
-        return _dumb_rows(projected, rejected, sentence)
-    return parsed
+    return _model_clarification(
+        planner, projected, sentence, history, accepted, rejected
+    )
 
 
 def _remember_fill_record(
@@ -1755,6 +1797,38 @@ def _fill_graph(
             report.get("accepted") or {},
             rejected,
         )
+        if getattr(planner, "provider", None) is not None and rejected and not pending:
+            reason_text = "\n".join(
+                f"{name}: {reason}" for name, reason in rejected.items()
+            )
+            _remember_fill_record(planner, "clarify", report, history, [])
+            extras["accepted_steps"] = _accepted_snapshot(steps)
+            extras["clarification"] = {
+                "restatement": f"You asked: {sentence}",
+                "pending": [],
+                "confirm_prompt": reason_text,
+                "fill_authored": True,
+            }
+            replaced = [
+                planner._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=planner._fallback_step_inputs(
+                        query="",
+                        action="clarify_required",
+                        reason="missing_required_slots",
+                        hint=reason_text,
+                        missing_info="none",
+                        next_step="Fill the fields on the card.",
+                        details={
+                            "slot_pending": [],
+                            "accepted_steps": list(extras["accepted_steps"]),
+                            "fill_authored": True,
+                        },
+                    ),
+                )
+            ]
+            return replaced, extras
         seen = {str(item.get("name") or "") + ":" + str(item.get("index") or "") for item in pending}
         for row in item_rows:
             key = str(row.get("name") or "") + ":" + str(row.get("index") or "")
@@ -2395,6 +2469,7 @@ def _history_lines(history: Optional[Sequence[Dict[str, Any]]]) -> List[str]:
             lines.append(
                 "answer=" + json.dumps(row.get("answer"), ensure_ascii=False, default=str)
             )
+            lines.append(f"error={row.get('error') or ''}")
     return lines
 
 
@@ -2429,12 +2504,25 @@ def _fill_prompt(
     revision_query: str = "",
     accepted: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """一次协议列出投影槽。槽清单之后是办事原文、历次澄清和已收下的值。
+    """一次协议列出投影槽。开头写明目标和字段含义，再给办事原文和历次澄清。
 
     不再按卡片盖住的槽省略办事原文。修改句另起一行，不写进 ``fill_source``。
     """
 
-    lines = [_FILL_PREFIX]
+    lines = [
+        _FILL_PREFIX,
+        "Extract only values the user actually named. Do not ask questions. Do not invent or repair a value.",
+        (
+            "Submit a value only when it appears in the task sentence, the revision, "
+            "or a clarification answer. Otherwise submit null. Null means the user did not give one. "
+            "Leave out a slot that is already under Accepted unless the user changed it."
+        ),
+        "enum: legal values. Do not pick one the user did not say.",
+        "aliases: use the mapped value only when the user used that word.",
+        "format, constraint: what a clear value looks like. Not a value to submit.",
+        "example: an illustration. Not a value.",
+        "resolve: how the value is stored, such as an exchange code or weights.",
+    ]
     for slot in slots:
         bits = [f"slot: {slot['name']}", f"type={slot.get('type') or 'string'}"]
         if slot.get("required"):
@@ -2454,16 +2542,23 @@ def _fill_prompt(
         lines.append(" ".join(bits))
     if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
         lines.append("mode is submitted with weights. It is not a separate slot.")
-    lines.append("Task sentence:")
+    lines.append("Task sentence: the original request. It does not change.")
     lines.append(str(query or ""))
     if str(revision_query or "").strip():
-        lines.append("Revision:")
+        lines.append("Revision: the change in this turn, when present.")
         lines.append(str(revision_query))
-    lines.append("Clarification history:")
+    lines.append(
+        "Clarification history: earlier questions and the user's answers. "
+        "error is why that answer was refused. Submit the answer as given. "
+        "Do not replace it with a legal value."
+    )
     lines.extend(_history_lines(history))
-    lines.append("Accepted:")
+    lines.append("Accepted: values already kept.")
     lines.extend(_accepted_lines(accepted))
-    lines.append("Reply with a JSON object. Keys must be the slot names above.")
+    lines.append(
+        "Reply with a JSON object whose keys are the slot names above. "
+        "Use null for a slot the user did not name."
+    )
     return "\n".join(lines)
 
 

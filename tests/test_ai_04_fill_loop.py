@@ -20,8 +20,11 @@ from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.slot_graph import (
     _author_clarification,
+    _dumb_rows,
     _fill_cycle,
+    _fill_graph,
     _judge_slots,
+    _model_clarification,
     _reject_reason,
     kernel_window,
 )
@@ -83,8 +86,6 @@ class TestAi04FillLoop(unittest.TestCase):
             skill_name="qt.ai.data.kline",
             inputs={"start": "20251340"},
         )
-        from qteasy_ai.slot_graph import _fill_graph
-
         steps, _extras = _fill_graph(planner, [step], _GOLD, None, "")
         visible = [item.skill_name for item in steps]
         pending = (_extras.get("clarification") or {}).get("pending") or []
@@ -104,12 +105,15 @@ class TestAi04FillLoop(unittest.TestCase):
         sentence = f"{_MARK} 600519 和 000858 做一条等权组合"
         fill = json.dumps({"start": "20251340"})
         card = json.dumps({
-            "questions": [{
-                "name": "start",
-                "explanation": "20251340 is not a date.",
-                "options": [{"id": "a", "label": "a"}, {"id": "b", "label": "b"}],
-                "open": {"label": "其它"},
-            }]
+            "questions": [
+                {
+                    "name": name,
+                    "explanation": "20251340 is not a date." if name == "start" else f"Need {name}.",
+                    "options": [{"id": "a", "label": "a"}, {"id": "b", "label": "b"}],
+                    "open": {"label": "其它"},
+                }
+                for name in ("start", "weights", "holdings")
+            ]
         })
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(
@@ -400,15 +404,18 @@ class TestAi04FillLoop(unittest.TestCase):
         sentence = "算因子 IC"
         bad = json.dumps({"shares": "平安银行"}, ensure_ascii=False)
         card = json.dumps({
-            "questions": [{
-                "name": "shares",
-                "explanation": "'平安银行' is not an exchange code.",
-                "options": [
-                    {"id": "000001.SZ", "label": "000001.SZ"},
-                    {"id": "000002.SZ", "label": "000002.SZ"},
-                ],
-                "open": {"label": "Other"},
-            }]
+            "questions": [
+                {
+                    "name": name,
+                    "explanation": "'平安银行' is not an exchange code." if name == "shares" else f"Need {name}.",
+                    "options": [
+                        {"id": "000001.SZ", "label": "000001.SZ"},
+                        {"id": "000002.SZ", "label": "000002.SZ"},
+                    ],
+                    "open": {"label": "Other"},
+                }
+                for name in ("factor_htype", "return_htype", "shares", "start", "end")
+            ]
         }, ensure_ascii=False)
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(
@@ -467,6 +474,180 @@ class TestAi04FillLoop(unittest.TestCase):
             self.assertGreaterEqual(len(task.fill_debug or []), 2)
             self.assertIn("平安银行", json.dumps(task.fill_debug[0], ensure_ascii=False))
 
+    def test_empty_options_stay_on_one_card(self) -> None:
+        """空选项协议只出一次卡，题干是模型的说明。"""
+
+        print("\n[TestAi04FillLoop] 空选项只出一次卡")
+        sentence = "算因子 IC"
+        explanation = "请明确要使用的内置策略名称"
+        bad = json.dumps({"shares": "平安银行"}, ensure_ascii=False)
+        names = ("factor_htype", "return_htype", "shares", "start", "end")
+        card = json.dumps({
+            "questions": [
+                {
+                    "name": name,
+                    "explanation": explanation,
+                    "options": [],
+                    "open": {"label": "Other"},
+                }
+                for name in names
+            ]
+        }, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(
+                temp_dir,
+                [
+                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+                    bad,
+                    card,
+                ],
+            )
+            result = assistant.plan(sentence, response_style="raw", session_id="s-empty", debug=True)
+            plan = _plan(result)
+            rows = _pending(plan)
+            prompts = [
+                text for text in assistant.planner.provider.prompts
+                if text.startswith("Clarification protocol.")
+            ]
+            debug = (plan.get("planner_trace") or {}).get("fill_debug") or []
+            print(" prompts:", len(prompts))
+            print(" prompts text:", [row.get("prompt") for row in rows])
+            print(" options:", [row.get("options") for row in rows])
+            print(" dumb:", [item.get("dumb_card") for item in debug])
+            self.assertEqual(len(prompts), 1)
+            self.assertIn("Write the questions the user will see.", prompts[0])
+            self.assertNotIn('"explanation":""', prompts[0])
+            self.assertTrue(rows)
+            self.assertTrue(all(row.get("prompt") == explanation for row in rows))
+            self.assertTrue(all(not row.get("options") for row in rows))
+            self.assertTrue(all(row.get("error") for row in rows))
+            self.assertNotIn(explanation, " ".join(str(row.get("error") or "") for row in rows))
+            self.assertTrue(debug)
+            self.assertTrue(debug[0].get("card_protocol"))
+            self.assertNotIn("dumb_card", debug[0])
+
+    def test_unreadable_card_keeps_the_reject_reason(self) -> None:
+        """出卡不是 JSON 时只叫一次，确认句是质检拒因。"""
+
+        print("\n[TestAi04FillLoop] 读不成问句停在拒因")
+        sentence = "macd 回测 000001.SZ 和 000002.SZ"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(
+                temp_dir,
+                [
+                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "backtest.builtin"}, ensure_ascii=False),
+                    json.dumps({"job": "backtest.builtin"}, ensure_ascii=False),
+                    json.dumps({}),
+                    "not-json",
+                ],
+            )
+            result = assistant.plan(sentence, response_style="raw", session_id="s-bad", debug=True)
+            plan = _plan(result)
+            clar = (plan.get("assumptions") or {}).get("clarification") or {}
+            prompts = [
+                text for text in assistant.planner.provider.prompts
+                if text.startswith("Clarification protocol.")
+            ]
+            debug = (plan.get("planner_trace") or {}).get("fill_debug") or []
+            steps = plan.get("steps") or []
+            print(" card prompts:", len(prompts))
+            print(" pending:", clar.get("pending"))
+            print(" confirm:", clar.get("confirm_prompt"))
+            print(" skills:", [step.get("skill_name") for step in steps])
+            print(" debug keys:", sorted(debug[0]) if debug else [])
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(clar.get("pending"), [])
+            self.assertTrue(clar.get("confirm_prompt"))
+            self.assertNotIn("Which built-in strategy?", str(clar.get("confirm_prompt")))
+            self.assertTrue(clar.get("fill_authored"))
+            self.assertEqual([step.get("skill_name") for step in steps], ["qt.ai.system.fallback"])
+            self.assertEqual((steps[0].get("inputs") or {}).get("missing_info"), "none")
+            self.assertTrue(debug)
+            self.assertTrue(debug[0].get("card_protocol"))
+            self.assertNotIn("dumb_card", debug[0])
+            self.assertNotIn("card_protocol_retry", debug[0])
+
+    def test_history_carries_the_reject_reason(self) -> None:
+        """交卷后历次澄清带上拒因，下一圈填槽提示词看得到。"""
+
+        print("\n[TestAi04FillLoop] 历次澄清带拒因")
+        sentence = f"{_MARK} 600519 和 000858 做一条等权组合"
+        reason = "20251340 is not a date."
+        fill = json.dumps({"start": "20251340"})
+        card = json.dumps({
+            "questions": [
+                {
+                    "name": name,
+                    "explanation": reason if name == "start" else f"Need {name}.",
+                    "options": [{"id": "a", "label": "a"}, {"id": "b", "label": "b"}],
+                    "open": {"label": "其它"},
+                }
+                for name in ("start", "weights", "holdings")
+            ]
+        })
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(
+                temp_dir,
+                [
+                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    fill,
+                    card,
+                ],
+            )
+            first = assistant.plan(sentence, response_style="raw", session_id="s-hist", debug=True)
+            shown = next(item for item in _pending(_plan(first)) if item.get("name") == "start")
+            print(" first error:", shown.get("error"))
+            self.assertTrue(shown.get("error"))
+            assistant.apply_provider(FakeLLMProvider(replies=[json.dumps({"mode": "equal"})]))
+            assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-hist",
+                patches={"start": "20250405"},
+                debug=True,
+            )
+            task = assistant.session_store.load("s-hist").task
+            history = task.clarify_history or []
+            slot = (history[0].get("slots") or [{}])[0] if history else {}
+            prompt = assistant.planner.provider.prompts[0] if assistant.planner.provider.prompts else ""
+            print(" history error:", slot.get("error"))
+            print(" prompt has error:", slot.get("error") in prompt)
+            self.assertEqual(slot.get("error"), shown.get("error"))
+            self.assertIn(f"error={shown.get('error')}", prompt)
+
+    def test_null_freq_is_not_written(self) -> None:
+        """用户没给出的频率交 null，步骤上不写 d。"""
+
+        print("\n[TestAi04FillLoop] null 不写成 d")
+        planner = _planner([json.dumps({"freq": None})])
+        step = planner._make_step(
+            step_id="step_1",
+            skill_name="qt.ai.data.kline",
+            inputs={},
+        )
+        steps, extras = _fill_graph(planner, [step], "看 000001.SZ 的行情", None, "")
+        prompt = planner.provider.prompts[0]
+        blob = json.dumps(
+            [dict(item.inputs or {}) for item in steps],
+            ensure_ascii=False,
+        )
+        snapshot = json.dumps((extras.get("accepted_steps") or []), ensure_ascii=False)
+        print(" prompt extracts only named values:", "Extract only values the user actually named." in prompt)
+        print(" prompt uses null:", "Use null for a slot the user did not name." in prompt)
+        print(" steps:", blob)
+        print(" snapshot:", snapshot)
+        self.assertIn("Extract only values the user actually named.", prompt)
+        self.assertIn("Do not invent or repair a value.", prompt)
+        self.assertIn("Use null for a slot the user did not name.", prompt)
+        self.assertIn("Do not pick one the user did not say.", prompt)
+        self.assertNotIn('"freq": "d"', blob)
+        self.assertNotIn('"freq": "d"', snapshot)
+
     def test_cycle_source_has_no_job_branch(self) -> None:
         """循环和质检源码里没有按任务名分叉，报告也不带建议值。"""
 
@@ -485,6 +666,15 @@ class TestAi04FillLoop(unittest.TestCase):
         self.assertNotIn("_finish_portfolio_graph", judge)
         self.assertNotIn("_bake_describe_view", cycle)
         self.assertIn("def _author_clarification", author)
+        model = inspect.getsource(_model_clarification)
+        dumb = inspect.getsource(_dumb_rows)
+        print(" model chat count:", model.count("provider.chat"))
+        print(" model has dumb:", "_dumb_rows" in model)
+        self.assertEqual(model.count("provider.chat"), 1)
+        self.assertNotIn("_dumb_rows", model)
+        self.assertNotIn("_pending_row", model)
+        self.assertNotIn("_open_label", model)
+        self.assertNotIn("provider.chat", dumb)
 
 
 if __name__ == "__main__":

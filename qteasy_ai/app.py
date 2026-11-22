@@ -266,6 +266,7 @@ def _append_clarify_history(
                 "prompt": str(row.get("prompt") or ""),
                 "options": [dict(item) for item in (row.get("options") or []) if isinstance(item, dict)],
                 "answer": answer,
+                "error": str(row.get("error") or ""),
             }
         )
     if not slots:

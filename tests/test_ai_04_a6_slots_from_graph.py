@@ -120,20 +120,6 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertEqual(plan.steps[1].inputs.get("metric"), "drawdown")
 
         bare = "筛股 20d 10% 银行业"
-        good_polish = {
-            "confirm_prompt": "请选择涨跌方向。",
-            "pending": [
-                {
-                    "name": "metric",
-                    "label": "方向",
-                    "hint": "选择回撤或上涨。",
-                    "options": [
-                        {"id": "drawdown", "label": "回撤"},
-                        {"id": "gain", "label": "上涨"},
-                    ],
-                }
-            ],
-        }
         bad_polish = {
             "confirm_prompt": "请选择涨跌方向。",
             "pending": [
@@ -153,7 +139,17 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
                 _clause(bare),
                 _job("research.screen"),
                 json.dumps({"industry": "银行业", "lookback_days": 20, "threshold": 0.1}, ensure_ascii=False),
-                json.dumps(good_polish, ensure_ascii=False),
+                json.dumps({
+                    "questions": [{
+                        "name": "metric",
+                        "explanation": "Choose a direction.",
+                        "options": [
+                            {"id": "drawdown", "label": "drawdown"},
+                            {"id": "gain", "label": "gain"},
+                        ],
+                        "open": {"label": "Other"},
+                    }]
+                }, ensure_ascii=False),
             ]
         )
         chinese_plan = Planner(self.registry, provider=chinese, env_facts={}).build_plan(bare, mode="plan")
@@ -459,6 +455,14 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
                 _job("open"),
                 json.dumps({"steps": rough}, ensure_ascii=False),
                 json.dumps({"shares": "000300.SH", "freq": "d"}),
+                json.dumps({
+                    "questions": [{
+                        "name": "htype_names",
+                        "explanation": "Which column?",
+                        "options": [{"id": "close", "label": "close"}],
+                        "open": {"label": "Other"},
+                    }]
+                }, ensure_ascii=False),
             ]
         )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(asked, mode="plan")
