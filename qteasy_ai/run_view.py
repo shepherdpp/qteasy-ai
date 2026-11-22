@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 _EXECUTED = frozenset({"success", "partial_failed", "failed"})
@@ -29,7 +30,7 @@ def project_run_view(run: Mapping[str, Any]) -> Dict[str, Any]:
     Returns
     -------
     dict
-        ``steps`` 以及 ``classify_protocol``、``fill_output``、``validation_rejects``。
+        ``steps`` 以及 ``classify_protocol``。trace 里有 ``fill_debug`` 才放进视图。
     """
 
     plan = run.get("plan") if isinstance(run.get("plan"), Mapping) else {}
@@ -53,14 +54,14 @@ def project_run_view(run: Mapping[str, Any]) -> Dict[str, Any]:
             }
         )
     trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), Mapping) else {}
-    fills = trace.get("fill_output")
-    rejects = trace.get("validation_rejects")
-    return {
+    view: Dict[str, Any] = {
         "steps": steps,
         "classify_protocol": str(trace.get("classify_protocol") or ""),
-        "fill_output": [str(item) for item in fills] if isinstance(fills, list) else [],
-        "validation_rejects": [str(item) for item in rejects] if isinstance(rejects, list) else [],
     }
+    fills = trace.get("fill_debug")
+    if isinstance(fills, list):
+        view["fill_debug"] = [dict(item) for item in fills if isinstance(item, Mapping)]
+    return view
 
 
 def render_run_view(view: Mapping[str, Any], *, debug: bool = False) -> str:
@@ -94,12 +95,11 @@ def render_run_view(view: Mapping[str, Any], *, debug: bool = False) -> str:
     body = "\n".join(lines)
     if not debug:
         return body
-    extra = ["Classify protocol:", str(view.get("classify_protocol") or ""), "Fill output:"]
-    fills = view.get("fill_output") if isinstance(view.get("fill_output"), list) else []
-    extra.extend(str(item) for item in fills)
-    extra.append("Validation rejects:")
-    rejects = view.get("validation_rejects") if isinstance(view.get("validation_rejects"), list) else []
-    extra.extend(str(item) for item in rejects)
+    extra = ["Classify protocol:", str(view.get("classify_protocol") or "")]
+    fills = view.get("fill_debug") if isinstance(view.get("fill_debug"), list) else []
+    if fills:
+        extra.append("Fill debug:")
+        extra.append(json.dumps(fills, ensure_ascii=False))
     tail = "\n".join(extra)
     if body:
         return body + "\n" + tail

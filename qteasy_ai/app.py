@@ -238,68 +238,53 @@ def _take_card_payload(
     return found, items
 
 
-def _accepted_card_slots(
-    plan: Any,
+def _append_clarify_history(
+    task: Any,
+    pending: Any,
     card_text: Dict[str, str],
-    card_items: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """只确认这张卡上通过校验、且下一张卡不再问的槽。
+    card_items: Dict[str, Any],
+) -> None:
+    """把这一次已经回答的格子追加进历次澄清。新出的卡先不写进去。"""
 
-    同一次构图从任务原句写上的其他值不在这里确认。持仓项以项上的
-    ``status`` 为准：还有未确认项时不把整格标成已确认。
-
-    Parameters
-    ----------
-    plan : ToolPlan
-        本轮计划。
-    card_text : dict
-        这张卡上的字符串原文。
-    card_items : dict, optional
-        这张卡上的项列表。
-
-    Returns
-    -------
-    dict
-        可以确认的槽名到已经校验过的值。
-    """
-
-    card = (getattr(plan, "assumptions", None) or {}).get("clarification")
-    rows = card.get("pending") if isinstance(card, dict) else None
-    still = {
-        str(row.get("name") or "")
-        for row in rows or []
-        if isinstance(row, dict)
-    }
-    assumptions = getattr(plan, "assumptions", None) or {}
-    snapshot = assumptions.get("accepted_steps")
-    steps = list(getattr(plan, "steps", None) or [])
-    if isinstance(snapshot, list):
-        steps.extend(snapshot)
-    found: Dict[str, Any] = {}
-    for name in card_text:
-        if name in still:
+    rows = pending.get("pending") if isinstance(pending, dict) else None
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for row in rows or []:
+        if isinstance(row, dict) and str(row.get("name") or ""):
+            by_name.setdefault(str(row.get("name")), row)
+    slots: List[Dict[str, Any]] = []
+    answers: Dict[str, Any] = {}
+    answers.update(card_text or {})
+    answers.update(card_items or {})
+    for name, answer in answers.items():
+        key = str(name or "")
+        if not key or answer in (None, "", []):
             continue
-        for step in steps:
-            inputs = step.get("inputs") if isinstance(step, dict) else getattr(step, "inputs", None)
-            value = (inputs or {}).get(name)
-            if value not in (None, "", []):
-                found[name] = value
-                break
-    for name in card_items or {}:
-        if name in still:
-            continue
-        for step in steps:
-            inputs = step.get("inputs") if isinstance(step, dict) else getattr(step, "inputs", None)
-            value = (inputs or {}).get(name)
-            if isinstance(value, list) and value and all(
-                isinstance(item, dict) and str(item.get("status") or "") == "confirmed" for item in value
-            ):
-                found[name] = value
-                break
-            if isinstance(value, dict) and str(value.get("status") or "") == "confirmed":
-                found[name] = value
-                break
-    return found
+        row = by_name.get(key) or {}
+        slots.append(
+            {
+                "name": key,
+                "prompt": str(row.get("prompt") or ""),
+                "options": [dict(item) for item in (row.get("options") or []) if isinstance(item, dict)],
+                "answer": answer,
+            }
+        )
+    if not slots:
+        return
+    history = [dict(item) for item in (getattr(task, "clarify_history", None) or []) if isinstance(item, dict)]
+    history.append({"slots": slots})
+    task.clarify_history = history
+
+
+def _holding_still_open(value: Any) -> bool:
+    """项列表里还有未确认项。普通标量不是这种列表。"""
+
+    if not isinstance(value, list) or not value:
+        return False
+    if not all(isinstance(item, dict) for item in value):
+        return False
+    if not any("status" in item or "code" in item for item in value):
+        return False
+    return any(str(item.get("status") or "") != "confirmed" for item in value)
 
 
 def _submission_changes(
@@ -676,6 +661,7 @@ class QteasyAssistant:
         explanation_depth: str = "standard",
         session_id: str | None = None,
         agent_auto: Optional[bool] = None,
+        debug: bool = False,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 预览别名：dry-run ToolPlan，不执行 skill。
 
@@ -691,6 +677,7 @@ class QteasyAssistant:
             explanation_depth=explanation_depth,
             session_id=session_id,
             agent_auto=agent_auto,
+            debug=debug,
         )
 
     def plan(
@@ -707,6 +694,7 @@ class QteasyAssistant:
         answers: Optional[List[Any]] = None,
         skip: bool = False,
         allow_composer_slot_fill: bool = True,
+        debug: bool = False,
     ) -> Dict[str, Any] | AssistantOutput:
         """Plan 模式：生成 dry_run 计划。
 
@@ -777,6 +765,7 @@ class QteasyAssistant:
                 patches=None,
                 allow_composer_slot_fill=False,
                 replace_query=text,
+                debug=debug,
             )
             asked = text
         elif action == "abandon":
@@ -810,6 +799,7 @@ class QteasyAssistant:
                 patches=None,
                 allow_composer_slot_fill=allow_composer_slot_fill,
                 forced_job="open",
+                debug=debug,
             )
             asked = ""
         elif action:
@@ -820,6 +810,7 @@ class QteasyAssistant:
                 patches=None,
                 allow_composer_slot_fill=False,
                 replace_query=action,
+                debug=debug,
             )
             asked = action
         else:
@@ -860,6 +851,7 @@ class QteasyAssistant:
                 patches=structured or None,
                 allow_composer_slot_fill=allow_composer_slot_fill,
                 clarify_answers=clarify_answers,
+                debug=debug,
             )
         failed = self._clarification_failed_result(
             plan,
@@ -1835,6 +1827,7 @@ class QteasyAssistant:
         forced_job: str = "",
         replace_query: str = "",
         clarify_answers: Optional[List[Any]] = None,
+        debug: bool = False,
     ) -> Tuple[Any, Optional[ConversationState]]:
         """Composer 先记 user_text，再按 Task 转移表路由。"""
 
@@ -1847,6 +1840,7 @@ class QteasyAssistant:
                 mode="plan",
                 profile=profile,
                 forced_job=forced_job,
+                debug=debug,
             ), None
 
         state = self.session_store.load(sid)
@@ -1999,6 +1993,8 @@ class QteasyAssistant:
                     state.start_task(query=asked)
                 merge_facts(state, new_task_patches(asked), source="extracted", confirmed=True)
 
+        if inbound == "control" and state.task is not None:
+            _append_clarify_history(state.task, pending, card_text, card_items)
         plan = self.planner.build_plan(
             asked or query,
             mode="plan",
@@ -2011,21 +2007,24 @@ class QteasyAssistant:
             revision_query=revision_query,
             kept_steps=kept_steps,
             clause_split=clause_split,
+            debug=debug,
         )
-        accepted_dates = _accepted_card_slots(plan, card_text, card_items)
-        if accepted_dates:
-            merge_facts(state, accepted_dates, source="user", confirmed=True)
-            assumptions = dict(plan.assumptions or {})
-            assumptions["session_missing"] = [
-                name
-                for name in (assumptions.get("session_missing") or [])
-                if name not in accepted_dates
-            ]
-            plan.assumptions = assumptions
-        if not card_text and not card_items:
-            accepted_inputs = (getattr(plan, "assumptions", None) or {}).get("accepted_inputs")
-            if isinstance(accepted_inputs, dict) and accepted_inputs:
-                merge_facts(state, accepted_inputs, source="user", confirmed=True)
+        record_slots = ((getattr(plan, "assumptions", None) or {}).get("fill_record") or {}).get("slots")
+        if isinstance(record_slots, list):
+            for item in record_slots:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "")
+                if not name:
+                    continue
+                value = item.get("value")
+                source = str(item.get("source") or "")
+                if source == "default":
+                    state.set_slot(name, value, source="default", confirmed=False)
+                elif source == "user" and _holding_still_open(value):
+                    state.set_slot(name, value, source="user", confirmed=False)
+                elif source == "user":
+                    merge_facts(state, {name: value}, source="user", confirmed=True)
         if keep_plan_id and (inbound == "control" or revising):
             plan.plan_id = keep_plan_id
         if topic_skipped:
@@ -2314,6 +2313,9 @@ class QteasyAssistant:
             state.task.set_missing([])
             state.task.set_pending(None)
         state.task.plan_id = str(getattr(plan, "plan_id", "") or "")
+        record = (plan.assumptions or {}).get("fill_record")
+        if isinstance(record, dict):
+            state.task.fill_record = dict(record)
 
     @staticmethod
     def _apply_clarify_answer_streak(
@@ -2322,22 +2324,16 @@ class QteasyAssistant:
         *,
         user_answered: bool,
     ) -> None:
-        """用户提交后仍缺才升 clarify_round；3=last chance；4=失败标记。"""
+        """用户提交后仍缺才升 clarify_round；3=last chance；到 4 就停，卡片留下。"""
 
         if not user_answered or state.task is None:
             return
         if not state.task.missing:
             return
+        if int(state.task.clarify_round or 0) >= 4:
+            return
         state.task.clarify_round = int(state.task.clarify_round or 0) + 1
         assumptions = dict(getattr(plan, "assumptions", None) or {})
-        if state.task.clarify_round >= 4:
-            assumptions["clarification_failed"] = True
-            assumptions.pop("clarification", None)
-            assumptions["session_missing"] = []
-            plan.assumptions = assumptions
-            state.task.set_pending(None)
-            state.task.set_missing([])
-            return
         if state.task.clarify_round == 3:
             clar = assumptions.get("clarification")
             if isinstance(clar, dict):

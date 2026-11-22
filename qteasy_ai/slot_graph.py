@@ -1158,6 +1158,414 @@ def _portfolio_needs_weight(slot: Dict[str, Any], steps: Sequence[Any]) -> bool:
     return saw_portfolio
 
 
+_NOT_GIVEN = "用户未明确给出"
+
+
+def _user_source_text(sentence: str, history: Sequence[Dict[str, Any]]) -> str:
+    """质检对照用的用户原文：办事原文加上历次回答，不从里面再抽候选。"""
+
+    parts = [str(sentence or "")]
+    for turn in history or []:
+        if not isinstance(turn, dict):
+            continue
+        for row in turn.get("slots") or []:
+            if not isinstance(row, dict):
+                continue
+            answer = row.get("answer")
+            if isinstance(answer, str) and answer.strip():
+                parts.append(answer)
+            elif isinstance(answer, list):
+                parts.append(_kept_element_source(answer))
+    return "\n".join(part for part in parts if part)
+
+
+def _judge_slots(
+    projected: Sequence[Dict[str, Any]],
+    steps: Sequence[Any],
+    candidates: Dict[str, Any],
+    mentioned: Set[str],
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+    held_back: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """同一次判断。收下的是 value 和 source，拒绝的是理由字符串。
+
+    空着的必填用现有拒因。点到了但没有值才写「用户未明确给出」。
+    没点到又有缺省声明的格子在这一次收下，来源是 default。
+    """
+
+    accepted: Dict[str, Dict[str, Any]] = {}
+    rejected: Dict[str, str] = {}
+    held = held_back or {}
+    user_text = _user_source_text(sentence, history)
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if not name:
+            continue
+        if name in held and name not in mentioned:
+            rejected[name] = _reject_reason(slot, held[name])
+            continue
+        if name in mentioned:
+            raw = candidates.get(name)
+            if raw in (None, "", []):
+                rejected[name] = _NOT_GIVEN
+                continue
+            source = user_text
+            if slot.get("element"):
+                value = accept_slot_value(slot, raw, source)
+            else:
+                value = accept_slot_value(slot, raw, source)
+            if value in (None, "", []):
+                rejected[name] = _reject_reason(slot, raw)
+                continue
+            accepted[name] = {"value": value, "source": "user"}
+            continue
+        current = _read_input(steps, name)
+        if current not in (None, "", []):
+            if isinstance(current, (list, dict)):
+                source = _kept_element_source(current)
+            else:
+                source = str(current)
+            checked = accept_slot_value(slot, current, source)
+            if checked in (None, "", []):
+                rejected[name] = _reject_reason(slot, current)
+            continue
+        mode_ready = str((candidates or {}).get("mode") or "") in {"equal", "weighted"}
+        if _portfolio_needs_weight(slot, steps) and not mode_ready:
+            rejected[name] = _reject_reason(slot, "")
+            continue
+        metric_open = (
+            name == "metric"
+            and (
+                _must_ask(slot, steps)
+                or (candidates or {}).get("threshold") not in (None, "", [])
+            )
+        )
+        if metric_open or slot.get("required"):
+            rejected[name] = _reject_reason(slot, "")
+            continue
+        if not _has_declared_default(slot):
+            continue
+        value = _slot_default_value(slot)
+        if value in (None, "", []):
+            rejected[name] = _reject_reason(slot, "" if value in (None, "") else value)
+            continue
+        checked = accept_slot_value(
+            slot,
+            value,
+            "" if isinstance(value, (list, dict)) else str(value),
+        )
+        if checked in (None, "", []):
+            rejected[name] = _reject_reason(slot, value)
+            continue
+        accepted[name] = {"value": checked, "source": "default"}
+    return {"accepted": accepted, "rejected": rejected}
+
+
+def _apply_judged(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    report: Dict[str, Any],
+    candidates: Dict[str, Any],
+) -> None:
+    """把收下的 value 写回步骤。被拒的格子清掉。mode 只在权重没被拒时写入。"""
+
+    accepted = report.get("accepted") if isinstance(report.get("accepted"), dict) else {}
+    rejected = report.get("rejected") if isinstance(report.get("rejected"), dict) else {}
+    by_name = {str(slot.get("name") or ""): slot for slot in projected}
+    for name, item in accepted.items():
+        if not isinstance(item, dict):
+            continue
+        value = item.get("value")
+        slot = by_name.get(str(name))
+        if slot is None:
+            continue
+        if str(slot.get("resolve") or "") == "weights" and isinstance(value, dict):
+            if str(value.get("mode") or "") == "equal":
+                _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+                _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", "equal")
+            slot["filled"] = True
+            slot["value"] = value
+            continue
+        _write_element(planner, steps, str(name), value)
+        slot["value"] = value
+        slot["filled"] = _element_complete(slot, value) if slot.get("element") else True
+    for name in rejected:
+        _clear_slot(planner, steps, str(name))
+        slot = by_name.get(str(name))
+        if slot is not None:
+            slot["filled"] = False
+            slot["value"] = None
+    if "weights" in rejected:
+        return
+    mode = str((candidates or {}).get("mode") or "")
+    if mode in {"equal", "weighted"}:
+        if mode == "equal":
+            _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
+        _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", mode)
+        planner._fill_mode = mode
+
+
+def _model_fill_candidates(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+    revision_query: str,
+) -> Tuple[Dict[str, Any], str]:
+    """有模型时只调用一次填槽协议。回答在提示词里，不按槽名交成候选。"""
+
+    slots = [slot for slot in projected if str(slot.get("name") or "")]
+    raw = planner.provider.chat(
+        _fill_prompt(
+            planner,
+            slots,
+            sentence,
+            history,
+            revision_query=revision_query,
+            accepted=_shown_accepted(steps, projected),
+        )
+    )
+    parsed = _parse_model_slots(raw, [str(slot.get("name") or "") for slot in slots]) or {}
+    return parsed, str(raw or "")
+
+
+def _static_fill_candidates(
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], str, str]:
+    """没有模型。还没有澄清时查金句表；已有澄清时只取最后一条回答。"""
+
+    if history:
+        last = history[-1] if isinstance(history[-1], dict) else {}
+        found: Dict[str, Any] = {}
+        for row in last.get("slots") or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "")
+            if name:
+                found[name] = row.get("answer")
+        return found, "card", ""
+    found = _exact_sentence_candidates(sentence)
+    return found, "template", sentence if found else ""
+
+
+def _fill_cycle(
+    planner: Any,
+    steps: Sequence[Any],
+    projected: Sequence[Dict[str, Any]],
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+    revision_query: str = "",
+    model_revision: bool = False,
+    held_back: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """一圈只出一次候选，再质检一次。不按任务名分叉，也不写计划记录。"""
+
+    provider = getattr(planner, "provider", None)
+    if provider is not None and model_revision:
+        candidates, protocol = _read_model_revision(
+            planner, steps, projected, sentence, revision_query
+        )
+        source = "model"
+    elif provider is not None:
+        candidates, protocol = _model_fill_candidates(
+            planner, steps, projected, sentence, history, revision_query
+        )
+        source = "model"
+    else:
+        candidates, source, protocol = _static_fill_candidates(sentence, history)
+    mentioned = {str(key) for key in candidates if str(key) != "mode"}
+    report = _judge_slots(
+        projected,
+        steps,
+        candidates,
+        mentioned,
+        sentence,
+        history,
+        held_back,
+    )
+    debug = {
+        "fill_source": sentence,
+        "history": [dict(item) for item in history if isinstance(item, dict)],
+        "candidate_source": source,
+        "protocol": protocol,
+        "candidates": dict(candidates),
+        "reasons": dict(report.get("rejected") or {}),
+    }
+    planner._fill_debug_entry = debug
+    return {"report": report, "candidates": candidates, "debug": debug}
+
+
+def _open_label(text: str) -> Dict[str, str]:
+    """澄清卡上的开放输入。"""
+
+    return {"label": "其它" if _CJK.search(str(text or "")) else "Other"}
+
+
+def _dumb_rows(
+    projected: Sequence[Dict[str, Any]],
+    rejected: Mapping[str, str],
+    sentence: str,
+) -> List[Dict[str, Any]]:
+    """弱智卡。说明和拒因都是拒绝理由。没有合同缺省就不编缺省项。"""
+
+    by_name = {str(slot.get("name") or ""): slot for slot in projected}
+    rows: List[Dict[str, Any]] = []
+    for name, reason in rejected.items():
+        slot = by_name.get(str(name)) or {"name": str(name)}
+        lead = reason == _NOT_GIVEN and _has_declared_default(slot)
+        row = _pending_row(slot, reason, sentence, lead_default=lead)
+        row["prompt"] = reason
+        row["error"] = reason
+        if "open" not in row:
+            row["open"] = _open_label(sentence)
+        rows.append(row)
+    return rows
+
+
+def _card_prompt(
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+    accepted: Mapping[str, Any],
+    rejected: Mapping[str, str],
+    projected: Sequence[Dict[str, Any]],
+) -> str:
+    """出卡提示词。合同选项 id 写在 contract 里，供对协议。"""
+
+    by_name = {str(slot.get("name") or ""): slot for slot in projected}
+    lines = [
+        "Clarification protocol.",
+        "Task sentence:",
+        str(sentence or ""),
+        "Clarification history:",
+    ]
+    lines.extend(_history_lines(history))
+    lines.append("Accepted:")
+    shown = {}
+    for name, item in accepted.items():
+        if isinstance(item, dict):
+            shown[name] = item.get("value")
+    lines.extend(_accepted_lines(shown))
+    lines.append("Rejected:")
+    for name, reason in rejected.items():
+        slot = by_name.get(str(name)) or {"name": str(name)}
+        ids = [str(item.get("id")) for item in _options_for(str(name), slot)]
+        lines.append(f"name={name}")
+        lines.append(f"reason={reason}")
+        lines.append("contract=" + ",".join(ids))
+    lines.append(
+        'Reply with JSON {"questions":[{"name":"","explanation":"",'
+        '"options":[{"id":"","label":""}],"open":{"label":"Other"}}]}'
+    )
+    return "\n".join(lines)
+
+
+def _parse_card_questions(
+    raw: str,
+    rejected: Mapping[str, str],
+    projected: Sequence[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """出卡协议对不上时返回 None，调用方整张改弱智卡。"""
+
+    if not raw or "[fake-llm]" in raw:
+        return None
+    payload = _parse_json(raw)
+    questions = payload.get("questions") if isinstance(payload, dict) else None
+    if not isinstance(questions, list):
+        return None
+    by_q: Dict[str, Dict[str, Any]] = {}
+    for item in questions:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if name in rejected and name not in by_q:
+            by_q[name] = item
+    if set(by_q) != {str(name) for name in rejected}:
+        return None
+    by_slot = {str(slot.get("name") or ""): slot for slot in projected}
+    rows: List[Dict[str, Any]] = []
+    for name, reason in rejected.items():
+        item = by_q[str(name)]
+        explanation = str(item.get("explanation") or "").strip()
+        choices = item.get("options") if isinstance(item.get("options"), list) else []
+        opened = item.get("open") if isinstance(item.get("open"), dict) else None
+        usable = [opt for opt in choices if isinstance(opt, dict)]
+        if not explanation or len(usable) < 2 or not opened:
+            return None
+        slot = by_slot.get(str(name)) or {"name": str(name)}
+        needed = {str(opt.get("id")) for opt in _options_for(str(name), slot)}
+        got = {str(opt.get("id")) for opt in usable if opt.get("id") is not None}
+        if not needed <= got:
+            return None
+        if reason == _NOT_GIVEN and _has_declared_default(slot):
+            first = usable[0]
+            if str(first.get("id") or "") != "default":
+                return None
+        row = _pending_row(slot, reason, explanation, lead_default=False)
+        row["prompt"] = explanation
+        row["error"] = reason
+        row["options"] = [dict(opt) for opt in usable]
+        row["open"] = dict(opened)
+        rows.append(row)
+    return rows
+
+
+def _author_clarification(
+    planner: Any,
+    projected: Sequence[Dict[str, Any]],
+    sentence: str,
+    history: Sequence[Dict[str, Any]],
+    accepted: Mapping[str, Any],
+    rejected: Mapping[str, str],
+) -> List[Dict[str, Any]]:
+    """有拒绝才出卡。协议对不上就出弱智卡，不再叫第三次模型。不写槽。"""
+
+    debug = getattr(planner, "_fill_debug_entry", None)
+    if not isinstance(debug, dict):
+        debug = {}
+        planner._fill_debug_entry = debug
+    provider = getattr(planner, "provider", None)
+    if provider is None or not rejected:
+        debug["dumb_card"] = True
+        return _dumb_rows(projected, rejected, sentence)
+    raw = provider.chat(_card_prompt(sentence, history, accepted, rejected, projected))
+    parsed = _parse_card_questions(raw, rejected, projected)
+    debug["card_protocol"] = str(raw or "")
+    if parsed is None:
+        debug["dumb_card"] = True
+        return _dumb_rows(projected, rejected, sentence)
+    return parsed
+
+
+def _remember_fill_record(
+    planner: Any,
+    status: str,
+    report: Dict[str, Any],
+    history: Sequence[Dict[str, Any]],
+    questions: Sequence[Dict[str, Any]],
+) -> None:
+    """这一圈的用户可见记录先放在规划器上，由 finalize_plan 写入计划。"""
+
+    slots: List[Dict[str, Any]] = []
+    for name, item in (report.get("accepted") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        slots.append({"name": str(name), "value": item.get("value"), "source": item.get("source")})
+    mode = str(getattr(planner, "_fill_mode", "") or "")
+    if mode in {"equal", "weighted"} and not any(item.get("name") == "mode" for item in slots):
+        slots.append({"name": "mode", "value": mode, "source": "user"})
+    planner._fill_mode = ""
+    planner._fill_record = {
+        "status": status,
+        "slots": slots,
+        "questions": [dict(item) for item in questions if isinstance(item, dict)],
+        "answers": [dict(item) for item in history if isinstance(item, dict)],
+    }
+
+
 def _fill_graph(
     planner: Any,
     steps: List[Any],
@@ -1180,6 +1588,14 @@ def _fill_graph(
         return _unresolved_depends(planner, query)
     if _bind_upstream(planner, steps):
         return _missing_upstream(planner, query)
+    incoming: Dict[str, Any] = {}
+    for step in steps:
+        inputs = getattr(step, "inputs", None)
+        if not isinstance(inputs, dict):
+            continue
+        for key, value in inputs.items():
+            if value not in (None, "", []) and key not in incoming:
+                incoming[key] = value
     rejected = _canonicalize_steps(planner, steps)
     if kept_steps is not None:
         overlay_kept_inputs(steps, kept_steps)
@@ -1194,6 +1610,14 @@ def _fill_graph(
         for step in steps:
             if isinstance(getattr(step, "inputs", None), dict):
                 step.inputs.pop("shares", None)
+    prewritten: Dict[str, Any] = {}
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if not name or name in confirmed:
+            continue
+        current = _read_input(steps, name)
+        if current not in (None, "", []):
+            prewritten[name] = current
     _clear_open_prewrite(steps, projected, confirmed, kept_steps=kept_steps)
     closed_items: Dict[str, Any] = {}
     held_back: Dict[str, Any] = {}
@@ -1224,6 +1648,22 @@ def _fill_graph(
         if any(str(slot.get("name") or "") == name for slot in projected):
             continue
         _write_empty(planner, steps, name, raw)
+    for name, raw in prewritten.items():
+        slot = next((item for item in projected if str(item.get("name") or "") == name), None)
+        if slot is None or name in held_back:
+            continue
+        source = _kept_element_source(raw) if isinstance(raw, (list, dict)) else str(raw)
+        if accept_slot_value(slot, raw, source) in (None, "", []):
+            held_back[name] = raw
+    for name, raw in incoming.items():
+        if name in prewritten or name in held_back:
+            continue
+        slot = next((item for item in projected if str(item.get("name") or "") == name), None)
+        if slot is None:
+            continue
+        source = _kept_element_source(raw) if isinstance(raw, (list, dict)) else str(raw)
+        if accept_slot_value(slot, raw, source) in (None, "", []):
+            held_back[name] = raw
     if kept_steps is not None or carry_steps is not None:
         if carry_steps is not None:
             carry_confirmed_inputs(planner, carry_steps, steps, session)
@@ -1235,224 +1675,164 @@ def _fill_graph(
                         continue
                     step.inputs["htype_names"] = recipe_htype
         _sync_projected(planner, steps, projected)
-    open_slots = [slot for slot in projected if not slot["filled"]]
-    answered = {
-        str(name): str(text)
-        for name, text in (card_text or {}).items()
-        if str(name or "") and text not in (None, "")
-    }
-    item_names = {
-        str(name)
-        for name, value in (card_items or {}).items()
-        if str(name or "") and value not in (None, "", [])
-    }
+    sentence = str(query or "")
+    history: List[Dict[str, Any]] = []
+    task = getattr(session, "task", None) if session is not None else None
+    if task is not None:
+        stored = str(getattr(task, "fill_source", "") or "")
+        if stored:
+            sentence = stored
+        history = [
+            dict(item)
+            for item in (getattr(task, "clarify_history", None) or [])
+            if isinstance(item, dict)
+        ]
+    revision_query = str(getattr(planner, "_revision_query", "") or "")
     model_revision = (
         getattr(planner, "provider", None) is not None
-        and not answered
+        and not history
         and (kept_steps is not None or carry_steps is not None)
     )
-    covered = set(answered) | item_names
-    submitted: Dict[str, Any] = {}
-    ambiguous: List[str] = []
-    # 点到只来自这张卡已经盖住的槽、协议里出现的键，或金句表交出的键。
-    mentioned: Set[str] = set(covered)
-    blocked: Dict[str, str] = {}
-    first_report = _inspect_slots(
-        steps, projected, query, mentioned, answered, kept_steps=kept_steps
-    )
-    _remember_validation_rejects(planner, first_report)
-    gap_names = {str(name) for name in (first_report.get("gaps") or ())}
-    provider = getattr(planner, "provider", None)
-    model_submitted: Dict[str, Any] = {}
-    if model_revision:
-        revision_submitted, revision_touched = _read_model_revision(
-            planner, steps, projected, query
-        )
-        submitted.update(revision_submitted)
-        mentioned |= revision_touched
-        model_submitted = revision_submitted
-        _sync_projected(planner, steps, projected)
-    elif provider is not None and (gap_names or answered):
-        # 有卡片时只读这张卡盖住的槽，已经写上的也进这一次协议。没有卡片时，还开着的槽都进协议。
-        model_slots = [
-            slot
-            for slot in projected
-            if (not answered and not slot["filled"])
-            or str(slot.get("name") or "") in covered
-        ]
-        if model_slots:
-            raw_fill = provider.chat(_fill_prompt(planner, model_slots, query, answered))
-            _remember_fill_output(planner, raw_fill)
-            model_submitted = _parse_model_slots(
-                raw_fill,
-                [slot["name"] for slot in model_slots],
-            ) or {}
-            for slot in model_slots:
-                name = str(slot.get("name") or "")
-                raw_text = str(answered.get(name) or "").strip()
-                if name not in model_submitted:
-                    if name in answered:
-                        mentioned.add(name)
-                    else:
-                        mentioned.discard(name)
-                    continue
-                source = answered[name] if name in answered else query
-                model_value = model_submitted.get(name)
-                option_ids = set(_option_ids(slot)) | {str(item) for item in (slot.get("enum") or [])}
-                if raw_text and raw_text in option_ids and str(model_value).strip() != raw_text:
-                    blocked[name] = (
-                        f"{raw_text!r} was changed to {model_value!r}. The selected option was not kept."
-                    )
-                    mentioned.add(name)
-                    continue
-                if (name in answered or not slot.get("required")) and not _submitted_legal(
-                    slot, model_value, source
-                ):
-                    mentioned.add(name)
-                    continue
-                submitted[name] = model_value
-            if "mode" in model_submitted and "weights" not in covered:
-                submitted["mode"] = model_submitted["mode"]
-    elif provider is None:
-        if not covered:
-            found = _exact_sentence_candidates(query)
-            for name, value in confirmed.items():
-                if value not in (None, "", []):
-                    found.pop(name, None)
-            if found:
-                submitted.update(found)
-                mentioned.update(found)
-        by_name = {str(slot.get("name") or ""): slot for slot in projected}
-        for name, text in answered.items():
-            slot = by_name.get(name)
-            if slot is None:
-                continue
-            if str(slot.get("resolve") or "") == "column":
-                if is_history_column(str(text).strip()):
-                    submitted[name] = str(text).strip()
-                continue
-            if str(slot.get("format") or "") == "YYYYMMDD":
-                example = str(slot.get("example") or "")
-                direct = accept_yyyymmdd(text, example, str(text))
-                if direct:
-                    submitted[name] = direct
-                continue
-            submitted[name] = text
-    for name, items in (card_items or {}).items():
-        key = str(name or "")
-        if not key or items in (None, "", []):
-            continue
-        if provider is not None and key not in model_submitted:
-            continue
-        submitted[key] = items
-    _place_submitted(planner, steps, projected, submitted)
-    force_names = _review_submission(steps, projected, submitted, query, answered)
-    same_column = reject_same_history_column(projected, set(submitted), steps, planner)
-    _seal_elements(planner, steps, projected, closed_items)
-    second_report = _inspect_slots(
+    for name, raw in list(closed_items.items()):
+        _write_element(planner, steps, name, raw)
+    cycle = _fill_cycle(
+        planner,
         steps,
         projected,
-        query,
-        mentioned,
-        answered,
-        fresh=set(submitted),
-        kept_steps=kept_steps,
+        sentence,
+        history,
+        revision_query=revision_query,
+        model_revision=model_revision,
+        held_back=held_back,
     )
-    _remember_validation_rejects(planner, second_report)
-    _apply_inspected(planner, steps, projected, second_report)
-    if not covered or "weights" in covered:
-        for step in steps:
-            if step.skill_name != _PORTFOLIO_SKILL:
-                continue
-            weight_reason = normalize_portfolio_weight(step.inputs if isinstance(step.inputs, dict) else {})
-            if weight_reason:
-                return _blocked_plan(planner, query, weight_reason)
-    blocked_weights = _reject_weight_count(steps)
-    if blocked_weights:
-        force_names |= blocked_weights
-        _sync_projected(planner, steps, projected)
-    materialized = _materialize_declared_defaults(
-        planner, steps, projected, set(second_report.get("gaps") or ())
-    )
-    default_gaps = set(materialized.get("gaps") or ())
-    if materialized.get("defaults"):
-        extras["slot_defaults"] = dict(materialized["defaults"])
+    report = cycle["report"]
+    candidates = cycle["candidates"]
+    confirmed_now = _confirmed_values(session)
+    accepted_now = report.get("accepted")
+    if isinstance(accepted_now, dict):
+        from_template = str((cycle.get("debug") or {}).get("candidate_source") or "") == "template"
+        for name, raw in confirmed_now.items():
+            item = accepted_now.get(name)
+            if from_template and name in candidates and isinstance(item, dict) and item.get("value") != raw:
+                accepted_now.pop(name, None)
+    _apply_judged(planner, steps, projected, report, candidates)
+    _seal_elements(planner, steps, projected, closed_items)
+    for step in steps:
+        if step.skill_name != _PORTFOLIO_SKILL or not isinstance(step.inputs, dict):
+            continue
+        normalize_portfolio_weight(step.inputs)
+    rejected = dict(report.get("rejected") or {})
+    for name in _reject_weight_count(steps):
+        rejected.setdefault(name, "Weight count does not match the holdings.")
+        _clear_slot(planner, steps, name)
+    same_column = reject_same_history_column(projected, set(report.get("accepted") or {}), steps, planner)
+    for name, reason in same_column.items():
+        rejected.setdefault(str(name), str(reason))
+        _clear_slot(planner, steps, str(name))
+    accepted = report.get("accepted")
+    if isinstance(accepted, dict):
+        for name in rejected:
+            accepted.pop(str(name), None)
+    report["rejected"] = rejected
+    defaults = {
+        str(name): "default"
+        for name, item in (report.get("accepted") or {}).items()
+        if isinstance(item, dict) and item.get("source") == "default" and str(name) not in rejected
+    }
+    item_rows: List[Dict[str, Any]] = []
+    for slot in projected:
+        extra_rows = _item_pending_rows(slot)
+        if extra_rows:
+            item_rows.extend(extra_rows)
+    need_card = bool(rejected) or bool(item_rows)
+    if need_card:
+        _remember_diagnosis_defaults(session, projected)
+        pending = _author_clarification(
+            planner,
+            projected,
+            sentence,
+            history,
+            report.get("accepted") or {},
+            rejected,
+        )
+        seen = {str(item.get("name") or "") + ":" + str(item.get("index") or "") for item in pending}
+        for row in item_rows:
+            key = str(row.get("name") or "") + ":" + str(row.get("index") or "")
+            if key not in seen:
+                pending.append(row)
+        _remember_fill_record(planner, "clarify", report, history, pending)
+        if not pending:
+            return steps, extras
+        extras["accepted_steps"] = _accepted_snapshot(steps)
+        names = []
+        for item in pending:
+            slot_name = str(item.get("name") or "")
+            if slot_name and slot_name not in names:
+                names.append(slot_name)
+        lead = pending[0]
+        label = str(lead.get("label") or "")
+        detail = str(lead.get("constraint") or lead.get("hint") or "")
+        pieces = [label] if label else []
+        if detail and detail != label:
+            pieces.append(detail)
+        hint = "\n".join(pieces)
+        replaced = [
+            planner._make_step(
+                step_id="step_1",
+                skill_name="qt.ai.system.fallback",
+                inputs=planner._fallback_step_inputs(
+                    query="",
+                    action="clarify_required",
+                    reason="missing_required_slots",
+                    hint=hint,
+                    missing_info="|".join(names),
+                    next_step="Fill the fields on the card.",
+                    details={
+                        "slot_pending": pending,
+                        "accepted_steps": list(extras["accepted_steps"]),
+                        "fill_authored": True,
+                    },
+                ),
+            )
+        ]
+        extras["clarification"] = {
+            "restatement": f"You asked: {sentence}",
+            "pending": pending,
+            "confirm_prompt": hint,
+            "fill_authored": True,
+        }
+        return replaced, extras
+    mismatch = align_steps(planner, steps)
+    if mismatch:
+        _remember_fill_record(planner, "passed", report, history, [])
+        return _wire_rejected(planner, steps, sentence, job, mismatch)
+    if defaults:
+        extras["slot_defaults"] = defaults
     if job in _DIAGNOSIS_JOBS:
         _bake_describe_view(steps, projected)
         _remember_diagnosis_defaults(session, projected)
     if job == _HOLD_COMPARE_JOB:
         _sync_projected(planner, steps, projected)
-        _finish_portfolio_graph(steps, query)
+        _finish_portfolio_graph(steps, sentence)
         _sync_projected(planner, steps, projected)
-    mismatch = align_steps(planner, steps)
-    if mismatch:
-        return _wire_rejected(planner, steps, query, job, mismatch)
-    errors = _take_slot_errors(session)
-    errors.update(blocked)
-    errors.update(same_column)
-    errors.update(_inspect_errors(first_report, second_report))
-    for name, raw in held_back.items():
-        slot = next((item for item in projected if str(item.get("name") or "") == name), None)
-        if slot is None or slot.get("filled"):
-            continue
-        mentioned.add(name)
-        errors.setdefault(name, _reject_reason(slot, raw))
-    for name, text in answered.items():
-        slot = next((item for item in projected if str(item.get("name") or "") == name), None)
-        if slot is None or slot.get("filled"):
-            continue
-        mentioned.add(name)
-        errors.setdefault(name, _reject_reason(slot, text))
-    force_names |= default_gaps
-    force_names |= _unresolved_optional_defaults(projected, mentioned)
-    open_names = _open_any_of_names(planner, steps, projected)
-    pending = _pending_after_fill(
-        projected, steps, ambiguous, errors, query, open_names, rejected, job, force_names
-    )
     code_missing = any(
         str(slot.get("resolve") or "") == "code" and slot.get("required") and not slot.get("filled")
         for slot in projected
     )
-    # 接线卡上用户已经选定不画图。这一轮不再用原句里的出图词把快照判掉。
     if (
         not getattr(planner, "_wire_resume", False)
         and not code_missing
-        and wants_chart(query)
+        and wants_chart(sentence)
         and not any(step.skill_name == "qt.ai.hp.plot" for step in steps)
     ):
-        return _blocked_plan(planner, query, "A chart was requested but the plan has no plot step.")
-    if not pending:
-        choice = _statistic_options(steps)
-        if choice:
-            extras["statistic_options"] = choice
-        extras["accepted_inputs"] = _accepted_inputs(steps, submitted, pending)
-        return steps, extras
-    extras.pop("slot_defaults", None)
-    extras["accepted_inputs"] = _accepted_inputs(steps, submitted, pending)
-    extras["accepted_steps"] = _accepted_snapshot(steps)
-    names = [str(item["name"]) for item in pending]
-    label = str(pending[0].get("label") or "")
-    hint = str(
-        pending[0].get("constraint") or pending[0].get("hint") or clarification_prompt(pending)
-    )
-    if label and label not in hint:
-        hint = f"{label}. {hint}".strip()
-    replaced = [
-        planner._make_step(
-            step_id="step_1",
-            skill_name="qt.ai.system.fallback",
-            inputs=planner._fallback_step_inputs(
-                query=query,
-                action="clarify_required",
-                reason="missing_required_slots",
-                hint=hint,
-                missing_info="|".join(names),
-                next_step="Fill the fields on the card.",
-                details={"slot_pending": pending, "accepted_steps": _accepted_snapshot(steps)},
-            ),
-        )
-    ]
-    return replaced, extras
+        _remember_fill_record(planner, "clarify", report, history, [])
+        return _blocked_plan(planner, sentence, "A chart was requested but the plan has no plot step.")
+    choice = _statistic_options(steps)
+    if choice:
+        extras["statistic_options"] = choice
+    _remember_fill_record(planner, "passed", report, history, [])
+    return steps, extras
+
 
 
 def _blocked_plan(planner: Any, query: str, reason: str) -> Tuple[List[Any], Dict[str, Any]]:
@@ -1739,65 +2119,6 @@ def _slot_default_value(slot: Dict[str, Any]) -> Any:
     return None
 
 
-def _materialize_declared_defaults(
-    planner: Any,
-    steps: Sequence[Any],
-    projected: Sequence[Dict[str, Any]],
-    gaps: Set[str],
-) -> Dict[str, Any]:
-    """报告没把这一格算进空缺、步骤仍空、且槽上有缺省声明时写入，再质检刚写上的值。
-
-    不读任务名或技能名。写上的名字不进入用户提交。质检拒绝或没有对应函数时回到空缺。
-
-    Parameters
-    ----------
-    planner : planner
-        用来把值写进仍空的输入。
-    steps : sequence
-        当前步骤。
-    projected : sequence of dict
-        投影槽。
-    gaps : set of str
-        这一次报告里的空缺。这些槽不写。
-
-    Returns
-    -------
-    dict
-        ``defaults`` 是留下的槽名到来源 ``default``。``gaps`` 是没写上或被拒的槽名。
-    """
-
-    blocked = {str(name) for name in gaps}
-    written: List[str] = []
-    rejected: Set[str] = set()
-    for slot in projected:
-        name = str(slot.get("name") or "")
-        if not name or name in blocked or not _has_declared_default(slot):
-            continue
-        if _read_input(steps, name) not in (None, "", []):
-            continue
-        value = _slot_default_value(slot)
-        if value in (None, "", []):
-            rejected.add(name)
-            continue
-        if not _write_empty(planner, steps, name, value):
-            rejected.add(name)
-            continue
-        written.append(name)
-    if written:
-        subset = [slot for slot in projected if str(slot.get("name") or "") in set(written)]
-        report = _inspect_slots(steps, subset, "", set(), None, fresh=set())
-        _remember_validation_rejects(planner, report)
-        _apply_inspected(planner, steps, subset, report)
-        report_gaps = {str(name) for name in (report.get("gaps") or ())}
-        report_errors = {str(name) for name in (report.get("errors") or {})}
-        for name in written:
-            if name in report_gaps or name in report_errors or _read_input(steps, name) in (None, "", []):
-                rejected.add(name)
-                continue
-    kept = [name for name in written if name not in rejected]
-    return {"defaults": {name: "default" for name in kept}, "gaps": rejected}
-
-
 def _project(
     planner: Any,
     steps: Sequence[Any],
@@ -1968,7 +2289,12 @@ def peek_channel(tokens: Sequence[str]) -> str:
     return ""
 
 
-def _pending_row(slot: Dict[str, Any], error: str = "", query: str = "") -> Dict[str, Any]:
+def _pending_row(
+    slot: Dict[str, Any],
+    error: str = "",
+    query: str = "",
+    lead_default: Optional[bool] = None,
+) -> Dict[str, Any]:
     """系统出的一格。选项只在被追问时挂上。
 
     Parameters
@@ -2012,7 +2338,12 @@ def _pending_row(slot: Dict[str, Any], error: str = "", query: str = "") -> Dict
     if slot.get("vocabulary"):
         row["vocabulary"] = [str(item) for item in slot.get("vocabulary") or []]
     options = _options_for(name, slot)
-    if not slot.get("required") and _has_declared_default(slot):
+    lead = (
+        (not slot.get("required") and _has_declared_default(slot))
+        if lead_default is None
+        else bool(lead_default) and _has_declared_default(slot)
+    )
+    if lead:
         shown = _default_label(slot)
         row["default_value"] = shown
         options = [{"id": "default", "label": str(shown)}] + [
@@ -2046,17 +2377,61 @@ def _option_ids(spec: Dict[str, Any]) -> List[str]:
     return [str(item.get("id")) for item in (spec.get("options") or []) if isinstance(item, dict) and item.get("id") is not None]
 
 
+def _history_lines(history: Optional[Sequence[Dict[str, Any]]]) -> List[str]:
+    """把历次澄清展开成提示词行。还没有澄清时为空。"""
+
+    lines: List[str] = []
+    for turn in history or []:
+        if not isinstance(turn, dict):
+            continue
+        for row in turn.get("slots") or []:
+            if not isinstance(row, dict):
+                continue
+            lines.append(f"name={row.get('name') or ''}")
+            lines.append(f"prompt={row.get('prompt') or ''}")
+            lines.append(
+                "options=" + json.dumps(row.get("options") or [], ensure_ascii=False, default=str)
+            )
+            lines.append(
+                "answer=" + json.dumps(row.get("answer"), ensure_ascii=False, default=str)
+            )
+    return lines
+
+
+def _accepted_lines(accepted: Optional[Mapping[str, Any]]) -> List[str]:
+    """已经收下的值，一行一个槽。"""
+
+    lines: List[str] = []
+    for name, value in (accepted or {}).items():
+        lines.append(f"{name}={json.dumps(value, ensure_ascii=False, default=str)}")
+    return lines
+
+
+def _shown_accepted(steps: Sequence[Any], projected: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """步骤上已经有的值，供提示词的 Accepted 段。"""
+
+    found: Dict[str, Any] = {}
+    for slot in projected:
+        name = str(slot.get("name") or "")
+        if not name:
+            continue
+        current = _read_input(steps, name)
+        if current not in (None, "", []):
+            found[name] = current
+    return found
+
+
 def _fill_prompt(
     planner: Any,
     slots: Sequence[Dict[str, Any]],
     query: str,
-    card_text: Optional[Dict[str, str]] = None,
-    include_current: bool = False,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    revision_query: str = "",
+    accepted: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """一次协议列出投影槽和 schema 合同。例子不是提交值。
+    """一次协议列出投影槽。槽清单之后是办事原文、历次澄清和已收下的值。
 
-    ``card_text`` 里的槽只放该槽原文，任务原句不同时当作这些槽的提交来源。
-    ``include_current`` 为真时，已经填上的值一并写进协议，供修改句阅读。
+    不再按卡片盖住的槽省略办事原文。修改句另起一行，不写进 ``fill_source``。
     """
 
     lines = [_FILL_PREFIX]
@@ -2076,24 +2451,18 @@ def _fill_prompt(
             bits.append(f"example={slot.get('example')} (not a value)")
         if slot.get("constraint"):
             bits.append(f"constraint={slot.get('constraint')}")
-        if include_current and slot.get("value") not in (None, "", []):
-            bits.append(
-                "current=" + json.dumps(slot.get("value"), ensure_ascii=False, default=str)
-            )
         lines.append(" ".join(bits))
     if any(str(slot.get("resolve") or "") == "weights" for slot in slots):
         lines.append("mode is submitted with weights. It is not a separate slot.")
-    answered = card_text or {}
-    named = [slot for slot in slots if str(slot.get("name") or "") in answered]
-    others = [slot for slot in slots if str(slot.get("name") or "") not in answered]
-    if others or not named:
-        lines.append("User text:")
-        lines.append(str(query or ""))
-    if named:
-        lines.append("Slot text:")
-        for slot in named:
-            name = str(slot.get("name") or "")
-            lines.append(f"{name}: {answered.get(name) or ''}")
+    lines.append("Task sentence:")
+    lines.append(str(query or ""))
+    if str(revision_query or "").strip():
+        lines.append("Revision:")
+        lines.append(str(revision_query))
+    lines.append("Clarification history:")
+    lines.extend(_history_lines(history))
+    lines.append("Accepted:")
+    lines.extend(_accepted_lines(accepted))
     lines.append("Reply with a JSON object. Keys must be the slot names above.")
     return "\n".join(lines)
 
@@ -2119,8 +2488,8 @@ def _parse_model_slots(raw: str, names: Sequence[str]) -> Optional[Dict[str, Any
     for name in wanted:
         if name in source:
             found[name] = source[name]
-    if "weights" in wanted and "mode" in source:
-        found["mode"] = source["mode"]
+    if source.get("mode") not in (None, ""):
+        found["mode"] = source.get("mode")
     if not found:
         return None
     return found
@@ -2131,52 +2500,44 @@ def _read_model_revision(
     steps: Sequence[Any],
     projected: Sequence[Dict[str, Any]],
     query: str,
-) -> Tuple[Dict[str, Any], Set[str]]:
-    """有模型的修改句。启发式不解析。协议给出缺键、null、有值。
+    revision_query: str = "",
+) -> Tuple[Dict[str, Any], str]:
+    """有模型且没有澄清时的修改句。这一次协议就是候选，不再另叫填槽。
 
-    缺键不改已确认的值。null 或校验收不下的值清掉该格并记为点到。
-    收得下的值交给后续写入。已经填上的槽也在协议里。
+    缺键留给质检：已经收下的值不在这里清掉。协议原文交给这一圈的 debug。
 
     Parameters
     ----------
     planner : planner
         带语言模型的规划器。
     steps : sequence
-        当前步骤。只在收不下时清掉对应输入。
+        当前步骤。只用来读已经写下的值。
     projected : sequence of dict
-        当前图上的投影槽，含已经填上的。
+        当前图上的投影槽。
     query : str
-        这一句原文，不拼任务原句。
+        办事原文 ``fill_source``。
+    revision_query : str, optional
+        这一句修改。不写进 ``fill_source``。
 
     Returns
     -------
-    submitted : dict
-        收得下的槽值。
-    touched : set of str
-        点到了但没有合法值的槽名。
+    tuple
+        解析出的槽名到值，以及协议原文。
     """
 
     slots = [slot for slot in projected if str(slot.get("name") or "")]
     raw = planner.provider.chat(
-        _fill_prompt(planner, slots, query, None, include_current=True)
+        _fill_prompt(
+            planner,
+            slots,
+            query,
+            None,
+            revision_query=revision_query,
+            accepted=_shown_accepted(steps, projected),
+        )
     )
-    _remember_fill_output(planner, raw)
     parsed = _parse_model_slots(raw, [str(slot.get("name") or "") for slot in slots]) or {}
-    submitted: Dict[str, Any] = {}
-    touched: Set[str] = set()
-    for slot in slots:
-        name = str(slot.get("name") or "")
-        if name not in parsed:
-            continue
-        value = parsed.get(name)
-        if value is None or not _submitted_legal(slot, value, query):
-            _clear_slot(planner, steps, name)
-            touched.add(name)
-            continue
-        submitted[name] = value
-    if parsed.get("mode") not in (None, ""):
-        submitted["mode"] = parsed.get("mode")
-    return submitted, touched
+    return parsed, str(raw or "")
 
 
 def _parse_json(text: str) -> Optional[Dict[str, Any]]:
@@ -3270,27 +3631,12 @@ def normalize_portfolio_weight(inputs: Dict[str, Any]) -> str:
         inputs["mode"] = "equal"
         return ""
     if isinstance(raw, str):
-        parsed = commit_weight_text(raw)
-        if parsed["status"] != "value":
-            inputs.pop("weights", None)
-            return str(parsed.get("reason") or "weights")
-        if parsed["values"].get("mode") == "equal":
-            inputs.pop("weights", None)
-            inputs["mode"] = "equal"
-            return ""
-        raw = parsed["values"].get("weights")
-        inputs["weights"] = raw
-    weights = _as_weight_list(inputs.get("weights"))
+        return ""
+    weights = _as_weight_list(raw)
     if weights:
         inputs["weights"] = weights
         inputs["mode"] = "weighted"
         return ""
-    if str(inputs.get("mode") or "") == "equal":
-        inputs.pop("weights", None)
-        return ""
-    if raw not in (None, "", []):
-        inputs.pop("weights", None)
-        return "Weight value is not a number list."
     return ""
 
 
@@ -4552,9 +4898,7 @@ def _merge_closed_items(previous: Any, fresh: Any, slot: Dict[str, Any]) -> Any:
     for index in range(max(len(prev_items), len(fresh_items))):
         prev = prev_items[index] if index < len(prev_items) else None
         new = fresh_items[index] if index < len(fresh_items) else None
-        if isinstance(prev, dict) and str(prev.get("status") or "") == "confirmed":
-            merged.append(dict(prev))
-        elif isinstance(new, dict):
+        if isinstance(new, dict):
             merged.append(dict(new))
         elif isinstance(prev, dict):
             merged.append(dict(prev))
@@ -4609,36 +4953,6 @@ def _holding_items(steps: Sequence[Any]) -> List[Dict[str, Any]]:
 
 
 
-def _drop_card_examples(
-    steps: Sequence[Any],
-    query: str,
-    card_text: Optional[Dict[str, str]] = None,
-) -> None:
-    """卡片例子不是提交值，除非对照原文里就有这个数字。
-
-    这张卡上的日期槽用该槽原文做对照，其它日期槽仍用任务原句。
-    """
-
-    answered = card_text or {}
-    for step in steps:
-        inputs = step.inputs if isinstance(getattr(step, "inputs", None), dict) else None
-        if inputs is None:
-            continue
-        for name in ("start", "end"):
-            current = str(inputs.get(name) or "")
-            if not current:
-                continue
-            example = str(date_bound_presentation(name).get("example") or "")
-            source = answered[name] if name in answered else query
-            # 这一句没再提到的日期留着。只丢掉不是日期的值，以及原文里没有的卡片例子。
-            if accept_yyyymmdd(current, "", current) is None:
-                inputs.pop(name, None)
-                continue
-            if example and current == example and example not in str(source or ""):
-                if accept_yyyymmdd(current, example, source) is None:
-                    inputs.pop(name, None)
-
-
 def _held_codes(steps: Sequence[Any]) -> List[str]:
     """已确认的持有代码。基准不计入只数。"""
 
@@ -4685,130 +4999,6 @@ def _clear_weight_mode(steps: Sequence[Any]) -> None:
             continue
         step.inputs.pop("weights", None)
         step.inputs.pop("mode", None)
-
-
-def _remember_fill_output(planner: Any, raw: Any) -> None:
-    """把这一次填槽 chat 的原文留在 planner 上。"""
-
-    bucket = getattr(planner, "_fill_outputs", None)
-    if isinstance(bucket, list):
-        bucket.append(str(raw or ""))
-
-
-def _remember_validation_rejects(planner: Any, report: Dict[str, Any]) -> None:
-    """把这次质检已经返回的拒因原文留下。不重新计算。"""
-
-    bucket = getattr(planner, "_validation_rejects", None)
-    if not isinstance(bucket, list) or not isinstance(report, dict):
-        return
-    errors = report.get("errors")
-    if not isinstance(errors, dict):
-        return
-    for value in errors.values():
-        text = str(value or "").strip()
-        if text:
-            bucket.append(text)
-
-
-def _inspect_slots(
-    steps: Sequence[Any],
-    projected: Sequence[Dict[str, Any]],
-    query: str,
-    mentioned: Set[str],
-    card_text: Optional[Dict[str, str]] = None,
-    fresh: Optional[Set[str]] = None,
-    kept_steps: Optional[Sequence[Any]] = None,
-) -> Dict[str, Any]:
-    """只读质检。每一格只调用 ``accept_slot_value``，拒因只用 ``_reject_reason``。
-
-    不读任务名，也不改步骤。空着且这一轮没提到的选填槽不写拒因，也不算空缺。
-    ``confirmed`` 只作为收下后的结果，不能用来跳过。已有值只对照这份值复查形式。
-    这一轮新交的候选仍对照卡片原文或问句。
-
-    Parameters
-    ----------
-    steps : sequence
-        当前步骤。只读现值。
-    projected : sequence of dict
-        投影槽。
-    query : str
-        这一轮用户原文。卡片上的新候选改用卡片原文。
-    mentioned : set of str
-        这一轮点到的槽。
-    card_text : dict, optional
-        卡片槽名到原文。
-    fresh : set of str, optional
-        这一轮新交的槽名。不在这里的现值只复查形式。
-
-    Returns
-    -------
-    dict
-        ``accepted`` 是收下的值，``errors`` 是拒因，``gaps`` 是空缺槽名。
-    """
-
-    accepted: Dict[str, Any] = {}
-    errors: Dict[str, str] = {}
-    gaps: Set[str] = set()
-    answered = card_text or {}
-    fresh_names = set(fresh or ())
-    kept_values = _kept_input_values(kept_steps)
-    for slot in projected:
-        name = str(slot.get("name") or "")
-        if not name:
-            continue
-        current = _read_input(steps, name)
-        if current in (None, "", []):
-            if slot.get("required") or name in mentioned:
-                gaps.add(name)
-            continue
-        if name in fresh_names:
-            source = answered.get(name, query) if name in answered else query
-            # 修改句把已确认项和新增项一起交回时，已确认代码仍算原文里有过。
-            if slot.get("element") and name not in answered and kept_steps is not None:
-                kept_text = " ".join(
-                    _kept_element_source(item)
-                    for item in (kept_values.get(name) or [])
-                    if _kept_element_source(item)
-                )
-                if kept_text:
-                    source = f"{source} {kept_text}".strip()
-        elif slot.get("element") and not answered:
-            # 没有卡片时，已确认不能跳过「原文里有没有这只代码」。
-            # 上一份计划里的同值用它自己的代码当原文，跟进句没再提到也不清。
-            saved = kept_values.get(name) or []
-            if _same_as_kept(current, saved):
-                source = _kept_element_source(current)
-            else:
-                source = query
-        else:
-            source = str(current)
-        value = accept_slot_value(slot, current, source)
-        if value in (None, "", []):
-            errors[name] = _reject_reason(slot, current)
-            gaps.add(name)
-            continue
-        accepted[name] = value
-        if slot.get("element") and not _element_complete(slot, value):
-            if slot.get("required") or name in mentioned:
-                gaps.add(name)
-    return {"accepted": accepted, "errors": errors, "gaps": gaps}
-
-
-def _inspect_errors(first: Dict[str, Any], second: Dict[str, Any]) -> Dict[str, str]:
-    """第二次收下的格清掉第一次因空着写下的拒因。"""
-
-    accepted = set((second.get("accepted") or {}))
-    gaps = set(second.get("gaps") or ())
-    found = {str(key): str(value) for key, value in (second.get("errors") or {}).items() if value}
-    for name, reason in (first.get("errors") or {}).items():
-        key = str(name)
-        if key in accepted and key not in gaps:
-            continue
-        found.setdefault(key, str(reason))
-    for name in list(found):
-        if name in accepted and name not in gaps:
-            found.pop(name, None)
-    return found
 
 
 def _place_submitted(
@@ -4876,57 +5066,6 @@ def _apply_inspected(
             _clear_slot(planner, steps, name)
             slot["filled"] = False
             slot["value"] = None
-
-
-def _review_submission(
-    steps: Sequence[Any],
-    projected: Sequence[Dict[str, Any]],
-    submitted: Dict[str, Any],
-    query: str,
-    card_text: Optional[Dict[str, str]] = None,
-) -> Set[str]:
-    """整理 mode，并丢掉卡片上的非法日期例子。槽值只由质检收下。
-
-    Parameters
-    ----------
-    steps : sequence
-        当前步骤。
-    projected : sequence of dict
-        投影槽。
-    submitted : dict
-        这一轮候选。只读其中的 mode。
-    query : str
-        任务原句。只交给卡片例子校验。
-    card_text : dict, optional
-        卡片槽名到原文。
-
-    Returns
-    -------
-    set of str
-        仍要追问的槽名。
-    """
-
-    force: Set[str] = set()
-    mode = str(submitted.get("mode") or "")
-    if mode in {"equal", "weighted"}:
-        if mode == "equal":
-            _clear_on_skill(steps, _PORTFOLIO_SKILL, "weights")
-        _set_on_skill(steps, _PORTFOLIO_SKILL, "mode", mode)
-    _drop_card_examples(steps, query, card_text)
-    for slot in projected:
-        name = str(slot.get("name") or "")
-        if name not in {"start", "end"}:
-            continue
-        current = None
-        for step in steps:
-            value = (step.inputs or {}).get(name)
-            if value not in (None, "", []):
-                current = value
-                break
-        if current in (None, "", []):
-            slot["filled"] = False
-            slot["value"] = None
-    return force
 
 
 def _holding_confirm_prompt(mention: str, code: str) -> str:

@@ -468,6 +468,10 @@ class Task:
     missing: List[str] = field(default_factory=list)
     pending_clarification: Optional[Dict[str, Any]] = None
     clarify_round: int = 0
+    fill_source: str = ""
+    clarify_history: List[Dict[str, Any]] = field(default_factory=list)
+    fill_record: Dict[str, Any] = field(default_factory=dict)
+    fill_debug: List[Dict[str, Any]] = field(default_factory=list)
     plan_id: str = ""
     revision: int = 0
     run_id: str = ""
@@ -540,6 +544,10 @@ class Task:
             if isinstance(self.pending_clarification, dict)
             else None,
             "clarify_round": int(self.clarify_round or 0),
+            "fill_source": str(self.fill_source or ""),
+            "clarify_history": [dict(item) for item in (self.clarify_history or []) if isinstance(item, dict)],
+            "fill_record": dict(self.fill_record or {}),
+            "fill_debug": [dict(item) for item in (self.fill_debug or []) if isinstance(item, dict)],
             "plan_id": str(self.plan_id or ""),
             "revision": int(self.revision or 0),
             "run_id": str(self.run_id or ""),
@@ -571,6 +579,12 @@ class Task:
             missing=[str(item) for item in (raw.get("missing") or [])],
             pending_clarification=pending,
             clarify_round=int(raw.get("clarify_round") or 0),
+            fill_source=str(raw.get("fill_source") or ""),
+            clarify_history=[
+                dict(item) for item in (raw.get("clarify_history") or []) if isinstance(item, dict)
+            ],
+            fill_record=dict(raw.get("fill_record") or {}) if isinstance(raw.get("fill_record"), dict) else {},
+            fill_debug=[dict(item) for item in (raw.get("fill_debug") or []) if isinstance(item, dict)],
             plan_id=str(raw.get("plan_id") or ""),
             revision=int(raw.get("revision") or 0),
             run_id=str(raw.get("run_id") or ""),

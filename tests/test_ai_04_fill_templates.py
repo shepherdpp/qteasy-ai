@@ -18,10 +18,11 @@ from qteasy_ai.app import build_default_registry
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.slot_graph import (
+    _author_clarification,
     _fill_graph,
     _finish_portfolio_graph,
-    _pending_after_fill,
-    _review_submission,
+    _model_fill_candidates,
+    _static_fill_candidates,
     kernel_window,
 )
 
@@ -410,12 +411,19 @@ class TestAi04FillTemplates(unittest.TestCase):
         print("\n[TestAi04FillTemplates] 四函数源码守卫")
         functions = (
             _fill_graph,
+            _model_fill_candidates,
+            _static_fill_candidates,
             _finish_portfolio_graph,
-            _review_submission,
-            _pending_after_fill,
+            _author_clarification,
         )
         for func in functions:
             source = inspect.getsource(func)
             hits = [name for name in _BANNED_CALLS if name in source]
             print(" ", func.__name__, "hits:", hits)
             self.assertEqual(hits, [])
+        model_source = inspect.getsource(_model_fill_candidates)
+        static_source = inspect.getsource(_static_fill_candidates)
+        print(" model scans gold:", "_exact_sentence_candidates" in model_source)
+        print(" static chats:", "provider.chat" in static_source)
+        self.assertNotIn("_exact_sentence_candidates", model_source)
+        self.assertNotIn("provider.chat", static_source)

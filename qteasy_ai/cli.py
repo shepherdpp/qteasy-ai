@@ -317,6 +317,7 @@ def main() -> int:
             response_style=response_style,
             explanation_depth=depth,
             session_id=session_id,
+            debug=bool(getattr(args, "debug", False)),
         )
         _print_result(
             payload,

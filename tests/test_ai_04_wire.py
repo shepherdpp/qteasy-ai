@@ -564,9 +564,9 @@ class TestAi04Wire(unittest.TestCase):
         print(" reason:", out[0].inputs.get("reason"))
         print(" pending:", pending)
         print(" hint:", out[0].inputs.get("hint"))
-        self.assertEqual(out[0].inputs.get("reason"), "wire_product_mismatch")
-        self.assertEqual(pending, [])
-        self.assertFalse(clarification_needs_answer(blob))
+        self.assertEqual(out[0].inputs.get("reason"), "missing_required_slots")
+        self.assertTrue(pending)
+        self.assertTrue(clarification_needs_answer(blob))
         self.assertNotIn("wire_choice", json.dumps(blob, ensure_ascii=False))
         self.assertNotIn("drop_consumer", json.dumps(blob, ensure_ascii=False))
         cards = project_human_cards(
@@ -584,8 +584,8 @@ class TestAi04Wire(unittest.TestCase):
         )
         kinds = [item.get("kind") for item in cards]
         print(" cards:", kinds)
-        self.assertIn("error", kinds)
-        self.assertNotIn("clarify", kinds)
+        self.assertIn("clarify", kinds)
+        self.assertNotIn("error", kinds)
 
     def test_model_false_is_overwritten(self) -> None:
         """模型把 as_panel 写成假、后面仍是绘图时，检查器改回真。"""

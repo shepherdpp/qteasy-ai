@@ -133,6 +133,33 @@ class RuleValidator:
         return corrected, trace
 
 
+def _seed_clarify_history(task: Any, card_text: Any, card_items: Any) -> None:
+    """历史还是空的、这次又带了卡片回答时，补一条与应用相同形状的历史。
+
+    规划器没有上一张卡的题干，``prompt`` 和 ``options`` 留空。
+    历史里已经有条目时不补。解释者只读这份历史。
+    """
+
+    if task is None:
+        return
+    existing = [item for item in (getattr(task, "clarify_history", None) or []) if isinstance(item, dict)]
+    if existing:
+        return
+    answers: Dict[str, Any] = {}
+    if isinstance(card_text, dict):
+        answers.update(card_text)
+    if isinstance(card_items, dict):
+        answers.update(card_items)
+    slots: List[Dict[str, Any]] = []
+    for name, answer in answers.items():
+        key = str(name or "")
+        if not key or answer in (None, "", []):
+            continue
+        slots.append({"name": key, "prompt": "", "options": [], "answer": answer})
+    if slots:
+        task.clarify_history = [{"slots": slots}]
+
+
 class Planner:
     """规则 + env_facts 门禁的计划生成器（B0）。
 
@@ -182,6 +209,7 @@ class Planner:
         revision_query: str = "",
         kept_steps: Optional[List[Dict[str, Any]]] = None,
         clause_split: Optional[ClauseSplit] = None,
+        debug: bool = False,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -225,6 +253,7 @@ class Planner:
             revision_query=revision_query,
             kept_steps=kept_steps,
             clause_split=clause_split,
+            debug=debug,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -244,6 +273,7 @@ class Planner:
         revision_query: str = "",
         kept_steps: Optional[List[Dict[str, Any]]] = None,
         clause_split: Optional[ClauseSplit] = None,
+        debug: bool = False,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -262,8 +292,11 @@ class Planner:
         """
 
         self._classify_protocol = ""
-        self._fill_outputs = []
-        self._validation_rejects = []
+        self._fill_debug = False
+        self._fill_task = None
+        self._fill_record = None
+        self._fill_debug_entry = None
+        self._revision_query = ""
         if mode == "ask":
             steps = []
             assumptions: Dict[str, Any] = {"mode": "ask", "no_skill_execution": True}
@@ -283,6 +316,10 @@ class Planner:
         self._diagnosis_statistic = ""
         self.intent_engine.provider = self.provider
         task = getattr(session, "task", None) if session is not None else None
+        self._fill_debug = bool(debug)
+        self._fill_task = task
+        self._fill_record = {"status": "passed", "slots": [], "questions": [], "answers": []}
+        self._revision_query = str(revision_query or "").strip()
         origin_text = str(getattr(task, "user_query", "") or "") if task is not None else ""
         if not origin_text:
             origin_text = query
@@ -335,6 +372,9 @@ class Planner:
             and origin_text == split_source
         ):
             origin_text = clause.task
+        if task is not None and not str(getattr(task, "fill_source", "") or ""):
+            task.fill_source = str(origin_text or "")
+        _seed_clarify_history(task, card_text, card_items)
 
         if revision and task is not None and str(getattr(task, "job", "") or ""):
             current_job = str(task.job or "")
@@ -493,9 +533,11 @@ class Planner:
         if hold_kept:
             gate_extras: Dict[str, Any] = {}
         else:
+            fill_source = str(getattr(task, "fill_source", "") or "") if task is not None else ""
             steps, gate_extras = self._apply_post_candidate_gates(
                 steps,
                 query=query,
+                fill_source=fill_source,
                 candidate_source=candidate_source,
                 job=decision.job,
                 session=session,
@@ -552,7 +594,12 @@ class Planner:
                 input_sources["invest_end"] = "kernel"
         if input_sources:
             assumptions["input_sources"] = input_sources
-        missing = self._required_missing(decision.job, steps, session)
+        missing = self._required_missing(
+            decision.job,
+            steps,
+            session,
+            accepted_steps=assumptions.get("accepted_steps") or [],
+        )
         if missing:
             shown = user_query
             if clause is not None and clause.status == "marked" and clause.task:
@@ -567,10 +614,15 @@ class Planner:
         elif isinstance(assumptions.get("clarification"), dict):
             assumptions["clarification"] = finalize_clarification_for_emit(assumptions["clarification"])
         self._attach_open_resume(assumptions)
-        if self.provider is not None and isinstance(assumptions.get("clarification"), dict):
+        clar = assumptions.get("clarification")
+        if (
+            self.provider is not None
+            and isinstance(clar, dict)
+            and not clar.get("fill_authored")
+        ):
             assumptions["clarification"] = polish_clarification(
                 self.provider,
-                assumptions["clarification"],
+                clar,
                 origin_text,
             )
         intent_flags = dict(decision.flags or {})
@@ -615,11 +667,28 @@ class Planner:
             "source": candidate_plan.assumptions.get("intent_source", "rule"),
             "rationale": candidate_plan.assumptions.get("intent_rationale", ""),
             "classify_protocol": str(self._classify_protocol or ""),
-            "fill_output": [str(item) for item in self._fill_outputs],
-            "validation_rejects": [str(item) for item in self._validation_rejects],
         }
-        self._fill_outputs.clear()
-        self._validation_rejects.clear()
+        record = getattr(self, "_fill_record", None)
+        if isinstance(record, dict):
+            assumptions = dict(final_plan.assumptions or {})
+            assumptions["fill_record"] = record
+            final_plan.assumptions = assumptions
+        if getattr(self, "_fill_debug", False):
+            entry = getattr(self, "_fill_debug_entry", None)
+            task = getattr(self, "_fill_task", None)
+            existing = [
+                dict(item)
+                for item in (getattr(task, "fill_debug", None) or [])
+                if isinstance(item, dict)
+            ] if task is not None else []
+            if isinstance(entry, dict):
+                saved = dict(entry)
+                saved["index"] = len(existing)
+                existing.append(saved)
+                if task is not None:
+                    task.fill_debug = existing
+            final_plan.planner_trace["fill_debug"] = existing
+        self._fill_debug_entry = None
         self._classify_protocol = ""
         return final_plan
 
@@ -770,8 +839,14 @@ class Planner:
             return False
         return str((step.inputs or {}).get("fallback_action") or "") == "clarify_required"
 
-    def _required_missing(self, job: str, steps: List[ToolStep], session: Any) -> List[str]:
-        """当前 Job 仍缺的必填槽。"""
+    def _required_missing(
+        self,
+        job: str,
+        steps: List[ToolStep],
+        session: Any,
+        accepted_steps: Optional[List[Any]] = None,
+    ) -> List[str]:
+        """当前 Job 仍缺的必填槽。澄清卡挡住可见步骤时，也看已经收下的步骤。"""
 
         required = {
             "data.refill": ("start", "end"),
@@ -786,8 +861,11 @@ class Planner:
             if slot is not None and getattr(slot, "value", None) not in (None, ""):
                 continue
             found = False
-            for step in steps:
-                inputs = step.inputs or {}
+            looked: List[Any] = list(steps)
+            looked.extend(row for row in (accepted_steps or []) if isinstance(row, dict))
+            for step in looked:
+                inputs = step.get("inputs") if isinstance(step, dict) else (step.inputs or {})
+                inputs = inputs or {}
                 if key == "start" and (inputs.get("start") or inputs.get("invest_start")):
                     found = True
                 elif key == "end" and (inputs.get("end") or inputs.get("invest_end")):
@@ -864,6 +942,8 @@ class Planner:
         hint = str((steps[0].inputs or {}).get("hint") or "").strip()
         if hint:
             blob["confirm_prompt"] = hint
+        if isinstance(details, dict) and details.get("fill_authored"):
+            blob["fill_authored"] = True
         return blob
 
     _DATA_INTENT_SKILLS = {
@@ -1010,13 +1090,15 @@ class Planner:
         card_items: Optional[Dict[str, Any]] = None,
         kept_steps: Optional[List[Dict[str, Any]]] = None,
         carry_steps: Optional[List[Dict[str, Any]]] = None,
+        fill_source: str = "",
     ) -> Tuple[List[ToolStep], Dict[str, Any]]:
         """投影填槽之后，再走日期/freq、必填槽与 env_facts 门禁。"""
 
+        slot_query = str(fill_source or "").strip() or query
         gated, extras = apply_slot_layer(
             self,
             steps,
-            query,
+            slot_query,
             job,
             session,
             card_text,

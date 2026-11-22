@@ -222,7 +222,8 @@ class TestAi04CommitElements(unittest.TestCase):
         shares = str(_snap(third, "qt.ai.data.kline").get("shares") or "")
         print(" third holdings:", done.get("holdings"))
         print(" shares:", shares, "mode:", done.get("mode"), "benchmark:", done.get("benchmark"))
-        self.assertTrue(all(item.get("status") == "pending" for item in (done.get("holdings") or [])))
+        # 这一圈没有新候选。已经写下的项只复查形式，不因原文没再写代码而改回未完成。
+        self.assertTrue(all(item.get("status") == "confirmed" for item in (done.get("holdings") or [])))
         self.assertNotIn("600519.SH", shares)
         self.assertNotEqual(done.get("mode"), "equal")
         self.assertIsInstance(done.get("benchmark"), dict)

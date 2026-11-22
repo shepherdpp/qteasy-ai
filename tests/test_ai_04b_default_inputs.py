@@ -21,7 +21,8 @@ from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session_gate import new_task_patches
 from qteasy_ai.slot_graph import (
-    _materialize_declared_defaults,
+    _apply_judged,
+    _judge_slots,
     _slot_default_value,
     kernel_window,
 )
@@ -209,11 +210,12 @@ class TestAi04bDefaultInputs(unittest.TestCase):
             "example": "20250101",
             "default": "20250101",
         }
-        result = _materialize_declared_defaults(planner, [step], [slot], set())
-        print(" kept:", step.inputs.get("start"), "gaps:", result.get("gaps"), "defaults:", result.get("defaults"))
+        result = _judge_slots([slot], [step], {}, set(), "", [])
+        _apply_judged(planner, [step], [slot], result, {})
+        print(" kept:", step.inputs.get("start"), "accepted:", result.get("accepted"), "rejected:", result.get("rejected"))
         self.assertEqual(step.inputs.get("start"), "20250101")
-        self.assertNotIn("start", result.get("gaps") or set())
-        self.assertEqual((result.get("defaults") or {}).get("start"), "default")
+        self.assertNotIn("start", result.get("rejected") or {})
+        self.assertEqual((result.get("accepted") or {}).get("start", {}).get("source"), "default")
 
     def test_illegal_default_returns_to_gaps(self) -> None:
         """非法缺省再质检后清掉。未知 default_kind 不写值，同样回到空缺。"""
@@ -229,10 +231,11 @@ class TestAi04bDefaultInputs(unittest.TestCase):
             "example": "20250101",
             "default": "20251340",
         }
-        rejected = _materialize_declared_defaults(planner, [illegal_step], [illegal], set())
-        print(" illegal:", illegal_step.inputs.get("start"), "gaps:", rejected.get("gaps"))
+        rejected = _judge_slots([illegal], [illegal_step], {}, set(), "", [])
+        _apply_judged(planner, [illegal_step], [illegal], rejected, {})
+        print(" illegal:", illegal_step.inputs.get("start"), "rejected:", rejected.get("rejected"))
         self.assertIn(illegal_step.inputs.get("start"), (None, ""))
-        self.assertIn("start", rejected.get("gaps") or set())
+        self.assertIn("start", rejected.get("rejected") or {})
 
         unknown_step = planner._make_step(step_id="step_1", skill_name="qt.ai.data.kline", inputs={})
         unknown = {
@@ -243,10 +246,11 @@ class TestAi04bDefaultInputs(unittest.TestCase):
             "example": "20250101",
             "default_kind": "missing_kind",
         }
-        missed = _materialize_declared_defaults(planner, [unknown_step], [unknown], set())
-        print(" unknown:", unknown_step.inputs.get("start"), "gaps:", missed.get("gaps"))
+        missed = _judge_slots([unknown], [unknown_step], {}, set(), "", [])
+        _apply_judged(planner, [unknown_step], [unknown], missed, {})
+        print(" unknown:", unknown_step.inputs.get("start"), "rejected:", missed.get("rejected"))
         self.assertIn(unknown_step.inputs.get("start"), (None, ""))
-        self.assertIn("start", missed.get("gaps") or set())
+        self.assertIn("start", missed.get("rejected") or {})
         self.assertIsNone(_slot_default_value(unknown))
 
     def test_lookback_uses_declared_default_not_skill_name(self) -> None:
@@ -279,7 +283,7 @@ class TestAi04bDefaultInputs(unittest.TestCase):
         self.assertNotIn("lookback_days", _names(asked))
         self.assertEqual(predicate.get("lookback_days"), 126)
 
-        materialize_source = inspect.getsource(_materialize_declared_defaults)
+        materialize_source = inspect.getsource(_judge_slots)
         dispatch_source = inspect.getsource(_slot_default_value)
         fill_source = inspect.getsource(
             __import__("qteasy_ai.slot_graph", fromlist=["_fill_graph"])._fill_graph

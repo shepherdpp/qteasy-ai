@@ -538,7 +538,7 @@ class TestAi04DateCardAnswers(unittest.TestCase):
             print(" written:", kline.get("start"), kline.get("end"))
             print(" holdings:", [item.get("code") for item in (portfolio.get("holdings") or [])])
             self.assertIn("2025年4月5日", prompt)
-            self.assertNotIn("过去一段时间", prompt)
+            self.assertIn("600519", prompt)
             self.assertNotIn("Parse these clarification answers", prompt)
             self.assertEqual(kline.get("start"), "20250405")
             self.assertEqual(kline.get("end"), "20261110")
@@ -549,7 +549,7 @@ class TestAi04DateCardAnswers(unittest.TestCase):
             )
 
     def test_model_omits_one_date_and_asks_only_that_one(self) -> None:
-        """协议没交的是这张卡上的日期槽，下一张卡只问它并带 error。"""
+        """协议没交开始日时，不从卡片原文补写 20250405。"""
 
         print("\n[TestAi04DateCard] 协议只交结束日")
         provider = FakeLLMProvider(replies=[json.dumps({"end": "20261110"})])
@@ -568,30 +568,29 @@ class TestAi04DateCardAnswers(unittest.TestCase):
             )
             plan = _raw_plan(second)
             pending = _raw_pending(plan)
+            kline = _raw_inputs(plan, "qt.ai.data.kline")
             print(" next:", [(item.get("name"), item.get("error")) for item in pending])
-            print(" skills:", [step.get("skill_name") for step in plan.get("steps") or []])
-            self.assertEqual([item.get("name") for item in pending], ["start"])
-            self.assertIn("2025年4月5日", str(pending[0].get("error") or ""))
-            self.assertIn("qt.ai.system.fallback", [step.get("skill_name") for step in plan.get("steps") or []])
+            print(" written:", kline.get("start"), kline.get("end"))
+            self.assertNotIn("start", [item.get("name") for item in pending])
+            self.assertNotIn("20250405", json.dumps(plan, ensure_ascii=False))
+            self.assertEqual(kline.get("end"), "20261110")
 
     def test_sentence_review_and_card_share_one_date_checker(self) -> None:
         """原句复核和卡片交卷调用同一份日期校验，折叠里不再剥数字。"""
 
         print("\n[TestAi04DateCard] 唯一一份日期校验")
         legal = _func_body("_submitted_legal")
-        review = _func_body("_review_submission")
-        inspect = _func_body("_inspect_slots")
+        judge = _func_body("_judge_slots")
         folded = _func_body("apply_ordered_answers")
         print(" legal calls:", "accept_slot_value(" in legal)
-        print(" inspect calls:", "accept_slot_value(" in inspect)
-        print(" review calls:", "accept_slot_value(" in review)
+        print(" judge calls:", "accept_slot_value(" in judge, "accept_yyyymmdd(" in judge)
         print(" fold strips:", 're.sub(r"\\D"' in folded)
         checker = _func_body("accept_slot_value")
         self.assertIn("def accept_yyyymmdd(", Path(slot_graph.__file__).read_text(encoding="utf-8"))
         self.assertIn("accept_yyyymmdd(", checker)
         self.assertIn("accept_slot_value(", legal)
-        self.assertIn("accept_slot_value(", inspect)
-        self.assertNotIn("accept_slot_value(", review)
+        self.assertIn("accept_slot_value(", judge)
+        self.assertNotIn("accept_yyyymmdd(", judge)
         self.assertNotIn('re.sub(r"\\D"', folded)
 
 

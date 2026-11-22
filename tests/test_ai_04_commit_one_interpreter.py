@@ -202,7 +202,7 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
             self.assertNotIn("holdings", confirmed)
 
     def test_copy_uses_confirmed_values_and_composition_renames(self) -> None:
-        """已确认的值按槽名抄。补数步在组图时把 shares 写成 symbols。未确认的日期不抄。"""
+        """已确认的值按槽名抄。补数步把 shares 写成 symbols，代码保持已确认。未确认的日期不抄。"""
 
         print("\n[TestAi04OneInterpreter] 抄回与组图改键")
         planner = Planner(build_default_registry(), env_facts={})
@@ -212,17 +212,19 @@ class TestAi04CommitOneInterpreter(unittest.TestCase):
         ready.set_slot("end", "20240331", source="user", confirmed=True)
         ready.set_slot("shares", "000001.SZ,000002.SZ", source="user", confirmed=True)
         plan = planner.build_plan("下载数据", mode="plan", session=ready, skip_classify=True)
-        accepted = (plan.assumptions or {}).get("accepted_steps") or []
-        refill = next(step for step in accepted if step.get("skill_name") == "qt.ai.data.refill_basic_equity_and_index")
-        symbols = refill.get("inputs", {}).get("symbols")
-        print(" confirmed inputs:", refill.get("inputs"))
+        refill = next(
+            step for step in plan.steps
+            if step.skill_name == "qt.ai.data.refill_basic_equity_and_index"
+        )
+        symbols = refill.inputs.get("symbols")
+        print(" confirmed inputs:", dict(refill.inputs))
         print(" symbols:", symbols)
         print(" pending:", [item.get("name") for item in (((plan.assumptions or {}).get("clarification") or {}).get("pending") or [])])
-        self.assertEqual(refill.get("inputs", {}).get("start"), "20240101")
-        self.assertEqual(refill.get("inputs", {}).get("end"), "20240331")
+        self.assertEqual(refill.inputs.get("start"), "20240101")
+        self.assertEqual(refill.inputs.get("end"), "20240331")
         self.assertEqual(
             [(item.get("code"), item.get("status")) for item in symbols],
-            [("000001.SZ", "pending"), ("000002.SZ", "pending")],
+            [("000001.SZ", "confirmed"), ("000002.SZ", "confirmed")],
         )
 
         held = ConversationState.empty("one-unconfirmed")

@@ -122,21 +122,23 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(r3["plan"]["steps"][0]["inputs"].get("fallback_action"), "clarify_required")
 
             r4 = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240401"})
-            err = r4.get("error") or {}
-            print(" after wrong#4 error:", err)
             print(" after wrong#4 session:", r4.get("session"))
-            self.assertEqual(err.get("code"), "CLARIFICATION_FAILED")
-            self.assertIn("too many invalid answers", str(err.get("message") or ""))
-            self.assertNotIn("Clarification skipped", str(err.get("message") or ""))
-            self.assertNotIn("plan", r4)
+            print(" after wrong#4 skill:", (r4.get("plan") or {}).get("steps", [{}])[0].get("skill_name"))
+            self.assertIn("plan", r4)
+            self.assertNotEqual((r4.get("error") or {}).get("code"), "CLARIFICATION_FAILED")
+            self.assertEqual(r4["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
+            self.assertEqual(r4["plan"]["steps"][0]["inputs"].get("fallback_action"), "clarify_required")
             store = SessionStore(assistant.memory_store)
             done = store.load(sid)
             print(" task status:", done.task.status if done.task else None)
             print(" task round:", done.task.clarify_round if done.task else None)
-            self.assertEqual(done.task.status, "done")
+            self.assertNotEqual(done.task.status, "done")
             self.assertEqual(done.task.clarify_round, 4)
-            self.assertFalse(done.task.missing)
-            self.assertIsNone(done.task.pending_clarification)
+            self.assertIsNotNone(done.task.pending_clarification)
+            again = assistant.plan("", response_style="raw", session_id=sid, patches={"start": "20240501"})
+            print(" again round:", (again.get("session") or {}).get("clarify_round"))
+            self.assertEqual((again.get("session") or {}).get("clarify_round"), 4)
+            self.assertEqual(again["plan"]["steps"][0]["skill_name"], "qt.ai.system.fallback")
 
     def test_clarify_multi_patches_streak_plus_one(self) -> None:
         """一次多槽 patches 仍缺时只 +1（按提交轮次，非每槽）。"""

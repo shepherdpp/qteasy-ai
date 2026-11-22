@@ -159,10 +159,11 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         chinese_plan = Planner(self.registry, provider=chinese, env_facts={}).build_plan(bare, mode="plan")
         metric = _pending(chinese_plan)[0]
         labels = [str(item.get("label") or "") for item in metric.get("options") or []]
-        print(" polished hint:", metric.get("hint"), "labels:", labels)
+        print(" card hint:", metric.get("hint"), "labels:", labels)
+        self.assertEqual(metric.get("name"), "metric")
         self.assertEqual([str(item.get("id")) for item in metric.get("options") or []], ["drawdown", "gain"])
-        self.assertIn("回撤", labels)
-        self.assertIn("选择", str(metric.get("hint") or ""))
+        self.assertNotIn("flat", labels)
+        self.assertNotIn("回撤", labels)
 
         english_blob = {
             "confirm_prompt": "Choose drawdown or gain.",
@@ -197,9 +198,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertNotIn("industry", none_plan.steps[0].inputs)
 
     def test_clicked_option_conflict_keeps_other_slots(self) -> None:
-        """点选 id 被改成另一个值时，这一格不写下。这张卡没问的槽不从原句补。"""
+        """协议交来的枚举进入质检。点过的另一个 id 不单独拒绝。原句不补未交的槽。"""
 
-        print("\n[TestAi04A6] 点选冲突只拒本格")
+        print("\n[TestAi04A6] 协议值照常质检")
         session = ConversationState.empty("a6-option")
         session.start_task(query="筛股 20d 10% 银行业", job="research.screen")
         fake = FakeLLMProvider(replies=[json.dumps({"metric": "gain"}, ensure_ascii=False)])
@@ -210,18 +211,23 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             skip_classify=True,
             card_text={"metric": "drawdown"},
         )
-        print(" pending:", _pending(plan))
-        metric = next(item for item in _pending(plan) if item.get("name") == "metric")
-        print(" metric error:", metric.get("error"))
+        pending = _pending(plan)
         accepted = (plan.assumptions or {}).get("accepted_steps") or []
         industries = [
             (row.get("inputs") or {}).get("industry")
             for row in accepted
             if isinstance(row, dict)
         ]
+        metrics = [
+            (row.get("inputs") or {}).get("metric")
+            for row in accepted
+            if isinstance(row, dict)
+        ]
+        print(" pending:", [item.get("name") for item in pending])
+        print(" metrics:", metrics)
         print(" accepted industries:", industries)
-        self.assertIn("changed", str(metric.get("error") or ""))
-        self.assertIn("drawdown", str(metric.get("error") or ""))
+        self.assertNotIn("metric", [item.get("name") for item in pending])
+        self.assertIn("gain", metrics)
         self.assertNotIn("银行业", industries)
 
     def test_screen_heuristic_and_followup(self) -> None:
@@ -578,7 +584,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         )
         factor_rows = _pending(factor)
         print(" factor prompts:", [(row.get("name"), row.get("prompt")) for row in factor_rows])
-        self.assertTrue(all(str(row.get("prompt") or "") == str(row.get("label") or "") for row in factor_rows))
+        self.assertTrue(all(row.get("prompt") and row.get("prompt") == row.get("error") for row in factor_rows))
 
         builder = Planner(self.registry, env_facts={}).build_plan("写一个双均线金叉策略", mode="plan")
         print(" builder pending:", _pending_names(builder), builder.steps[0].inputs.get("reason"))
