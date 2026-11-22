@@ -666,6 +666,7 @@ class WorkbenchHttp:
         raw_answers = body.get("answers")
         answers = list(raw_answers) if isinstance(raw_answers, list) and raw_answers else None
         skip = bool(body.get("skip"))
+        debug = bool(body.get("debug"))
         session_id = str(body.get("session_id") or "").strip()
         if skip:
             if not session_id:
@@ -677,6 +678,7 @@ class WorkbenchHttp:
                 response_style="raw",
                 session_id=session_id,
                 skip=True,
+                debug=debug,
             )
             return self._dto_response(payload, query=query, session_id=session_id)
         if not query and not patches and answers is None:
@@ -694,6 +696,7 @@ class WorkbenchHttp:
             patches=patches or None,
             answers=answers,
             allow_composer_slot_fill=allow_fill,
+            debug=debug,
         )
         return self._dto_response(payload, query=query, session_id=session_id)
 

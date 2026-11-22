@@ -754,6 +754,7 @@ class QteasyAssistant:
                 session_id,
                 agent_auto=agent_auto,
                 choice=wire_choice,
+                debug=debug,
             )
             asked = ""
         elif wire_choice:
@@ -1770,6 +1771,7 @@ class QteasyAssistant:
         *,
         agent_auto: Optional[bool],
         choice: str,
+        debug: bool = False,
     ) -> Tuple[Any, Optional[ConversationState]]:
         """按选择卡上已经验证过的步骤快照恢复，不再组图。"""
 
@@ -1778,7 +1780,7 @@ class QteasyAssistant:
         sid = str(session_id or "").strip()
         state = self.session_store.load(sid) if sid else None
         if state is None or state.task is None:
-            return self.planner.build_plan("", mode="plan", profile=profile), state
+            return self.planner.build_plan("", mode="plan", profile=profile, debug=debug), state
         if agent_auto is not None:
             state.agent_auto = bool(agent_auto)
         pending = state.task.pending_clarification if isinstance(state.task.pending_clarification, dict) else {}
@@ -1798,6 +1800,7 @@ class QteasyAssistant:
                 session=state,
                 profile=profile,
                 resume_steps=snapshot or None,
+                debug=debug,
             )
         finally:
             self.planner.provider = held
@@ -1852,6 +1855,7 @@ class QteasyAssistant:
                 profile=profile,
                 forced_job=forced_job,
                 replace_query=replace_query,
+                debug=debug,
             )
         structured = _normalize_patches(patches)
         inbound = "control" if structured or clarify_answers is not None else "composer"
@@ -2055,6 +2059,7 @@ class QteasyAssistant:
         profile: Dict[str, Any],
         forced_job: str,
         replace_query: str,
+        debug: bool = False,
     ) -> Tuple[Any, ConversationState]:
         """恢复卡的两个规划动作：强制 open，或用新句子重新分类。"""
 
@@ -2078,6 +2083,7 @@ class QteasyAssistant:
                 skip_classify=False,
                 profile=profile,
                 forced_job="open",
+                debug=debug,
             )
             self._sync_session_from_plan(state, plan, query=asked, skip_classify=False)
             clar = (plan.assumptions or {}).get("clarification")
@@ -2102,7 +2108,7 @@ class QteasyAssistant:
             state.cancel_task()
         state.start_task(query=text)
         merge_facts(state, new_task_patches(text), source="extracted", confirmed=True)
-        plan = self.planner.build_plan(text, mode="plan", session=state, profile=profile)
+        plan = self.planner.build_plan(text, mode="plan", session=state, profile=profile, debug=debug)
         if cancelled:
             plan.assumptions = dict(plan.assumptions or {})
             plan.assumptions["topic_skipped"] = True

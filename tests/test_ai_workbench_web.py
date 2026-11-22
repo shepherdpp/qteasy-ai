@@ -1511,10 +1511,30 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             appearance_head = 'renderTimeGroupHead("settings:appearance", "APPEARANCE"'
             providers_head = 'renderTimeGroupHead("settings:providers", "PROVIDERS"'
             about_head = 'renderTimeGroupHead("settings:about", "ABOUT"'
-            self.assertLess(settings_fn.find(system_head), settings_fn.find(appearance_head))
             self.assertLess(settings_fn.find(appearance_head), settings_fn.find(providers_head))
-            self.assertLess(settings_fn.find(providers_head), settings_fn.find(about_head))
+            self.assertLess(settings_fn.find(providers_head), settings_fn.find(system_head))
+            self.assertLess(settings_fn.find(system_head), settings_fn.find(about_head))
+            self.assertLess(settings_fn.find(">Debug Mode<"), settings_fn.find(">DataSource<"))
             self.assertIn(">DataSource<", settings_fn)
+            self.assertIn("debug-switch", settings_fn)
+            self.assertIn(
+                "debug mode is on, more process information will be recorded in session json file for debugging",
+                src,
+            )
+            self.assertIn(
+                "debug mode is off, process information is not recorded in the session json file",
+                src,
+            )
+            ds_fn = _extract_js_function(src, "dataSourceLine")
+            print(" datasource line:", "Connected to" in ds_fn, "not connected" in ds_fn)
+            self.assertIn("Datasource Connected to ", ds_fn)
+            self.assertIn("Datasource not connected", ds_fn)
+            self.assertIn("datasource-dot", ds_fn)
+            debug_fn = _extract_js_function(src, "renderRunDebug")
+            print(" run debug reads fill_debug:", "fill_debug" in debug_fn, "fill_output" in debug_fn)
+            self.assertIn("fill_debug", debug_fn)
+            self.assertNotIn("fill_output", debug_fn)
+            self.assertNotIn("validation_rejects", debug_fn)
             self.assertIn('settingsStack("SYSTEM (QTEASY)"', settings_fn)
             self.assertIn('settingsStack("Agent (QTEASY-AI)"', settings_fn)
             self.assertIn('settingsStack("Author"', settings_fn)

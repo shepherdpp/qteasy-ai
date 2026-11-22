@@ -14,6 +14,7 @@ import unittest
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
+from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.workbench.http_app import create_app
 
 
@@ -1798,6 +1799,73 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             self.assertEqual(body.get("qteasy_ai_released"), "Nov 19, 2026")
             self.assertEqual((body.get("datasource") or {}).get("status"), "connected")
             self.assertEqual(source, qteasy.QT_DATA_SOURCE.connection_type)
+
+    def test_plan_debug_flag_writes_fill_debug(self) -> None:
+        """POST /v1/plan 带 debug 才写入 fill_debug，并投影到澄清卡。"""
+
+        print("\n[TestAiWorkbenchHttp] plan debug 开关")
+        sentence = "算因子 IC"
+        bad = json.dumps({"shares": "平安银行"}, ensure_ascii=False)
+        card = json.dumps({
+            "questions": [{
+                "name": "shares",
+                "explanation": "'平安银行' is not an exchange code.",
+                "options": [
+                    {"id": "000001.SZ", "label": "000001.SZ"},
+                    {"id": "000002.SZ", "label": "000002.SZ"},
+                ],
+                "open": {"label": "Other"},
+            }]
+        }, ensure_ascii=False)
+        replies = [
+            json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
+            json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+            json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+            bad,
+            card,
+        ]
+
+        def post(debug: bool):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                store = MemoryStore(base_dir=temp_dir)
+                assistant = QteasyAssistant(memory_store=store, registry=build_default_registry())
+                app = create_app(assistant=assistant)
+                assistant.apply_provider(FakeLLMProvider(replies=list(replies)))
+                from starlette.testclient import TestClient
+
+                client = TestClient(app)
+                body = {"query": sentence, "session_id": "s-http-debug"}
+                if debug:
+                    body["debug"] = True
+                res = client.post("/v1/plan", json=body)
+                payload = res.json()
+                task = assistant.session_store.load("s-http-debug").task
+                print(" debug:", debug, "status:", res.status_code)
+                print(" task fill_debug:", len(task.fill_debug or []) if task is not None else None)
+                return res.status_code, payload, task
+
+        quiet_code, quiet, quiet_task = post(False)
+        print(" quiet messages:", [row.get("kind") for row in (quiet.get("messages") or [])])
+        self.assertEqual(quiet_code, 200)
+        self.assertTrue(quiet_task is None or not quiet_task.fill_debug)
+        quiet_cards = [
+            row for row in (quiet.get("messages") or [])
+            if row.get("kind") == "clarify"
+        ]
+        self.assertTrue(quiet_cards)
+        self.assertNotIn("fill_debug", quiet_cards[0].get("payload") or {})
+
+        on_code, shown, shown_task = post(True)
+        print(" on fill_debug:", (shown_task.fill_debug or [None])[0] if shown_task is not None else None)
+        self.assertEqual(on_code, 200)
+        self.assertIsNotNone(shown_task)
+        self.assertTrue(shown_task.fill_debug)
+        self.assertIn(sentence, json.dumps(shown_task.fill_debug[0], ensure_ascii=False))
+        cards = [row for row in (shown.get("messages") or []) if row.get("kind") == "clarify"]
+        print(" clarify payload keys:", sorted((cards[0].get("payload") or {})) if cards else [])
+        self.assertTrue(cards)
+        copied = (cards[0].get("payload") or {}).get("fill_debug") or []
+        self.assertEqual(copied, shown_task.fill_debug)
 
 
 if __name__ == "__main__":

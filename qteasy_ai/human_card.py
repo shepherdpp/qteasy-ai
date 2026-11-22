@@ -237,6 +237,16 @@ def revision_notice_text(
     return "\n".join([f"Plan revised (revision {int(revision)})."] + lines)
 
 
+def _fill_debug_rows(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """计划 trace 里已经写下的填槽调试圈。没有则空列表。"""
+
+    trace = plan.get("planner_trace") if isinstance(plan.get("planner_trace"), dict) else {}
+    rows = trace.get("fill_debug") if isinstance(trace, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [dict(item) for item in rows if isinstance(item, dict)]
+
+
 def project_human_cards(
     payload: Dict[str, Any],
     *,
@@ -382,6 +392,9 @@ def project_human_cards(
         plan_id = str(plan.get("plan_id") or raw.get("plan_id") or "")
         if plan_id:
             blob["plan_id"] = plan_id
+        saved_debug = _fill_debug_rows(plan)
+        if saved_debug:
+            blob["fill_debug"] = saved_debug
         cards.append(make_card("clarify", text, blob))
         _append_match_notice(cards, plan)
         return cards
@@ -455,6 +468,9 @@ def project_human_cards(
         choice = assumptions.get("statistic_options") if isinstance(assumptions, dict) else None
         if isinstance(choice, dict) and choice.get("options"):
             ready_payload["statistic_options"] = choice
+        saved_debug = _fill_debug_rows(plan)
+        if saved_debug:
+            ready_payload["fill_debug"] = saved_debug
         cards.append(make_card("plan_ready", text, ready_payload))
         _append_match_notice(cards, plan)
 

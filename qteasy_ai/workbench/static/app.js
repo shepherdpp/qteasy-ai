@@ -5,6 +5,9 @@ const STORAGE_TRANSCRIPTS = "qteasy-ai.transcripts";
 const STORAGE_COL_SESSION = "qteasy-ai.col-session";
 const STORAGE_COL_ARTIFACT = "qteasy-ai.col-artifact";
 const STORAGE_THEME = "qteasy-ai.theme";
+const STORAGE_DEBUG = "qteasy-ai.debug";
+const DEBUG_ON_TEXT = "debug mode is on, more process information will be recorded in session json file for debugging";
+const DEBUG_OFF_TEXT = "debug mode is off, process information is not recorded in the session json file";
 const MIN_SESSION_COL = 260;
 const MIN_ARTIFACT_COL = 280;
 
@@ -1611,7 +1614,9 @@ async function sendQueryBody(text, options) {
   if (requestMode === "agent" && !backgrounded) executeSseOpen = true;
   const signal = backgrounded ? undefined : (runAbort ? runAbort.signal : undefined);
   try {
-    const body = JSON.stringify({ query: text, session_id: owner });
+    const fields = { query: text, session_id: owner };
+    if (requestMode === "plan" && debugModeOn()) fields.debug = true;
+    const body = JSON.stringify(fields);
     const path = requestMode === "ask" ? "/v1/ask" : requestMode === "agent" ? "/v1/run?stream=1" : "/v1/plan";
     const headers = { "Content-Type": "application/json" };
     if (requestMode === "agent") headers.Accept = "text/event-stream";
@@ -1656,7 +1661,7 @@ async function sendControlPatches(patches) {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: owner, patches }),
+      body: planJson({ session_id: owner, patches }),
       owner,
     });
     stopBusyTranscriptPoll();
@@ -1680,7 +1685,7 @@ async function sendControlAnswers(answers) {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: owner, answers }),
+      body: planJson({ session_id: owner, answers }),
       owner,
     });
     stopBusyTranscriptPoll();
@@ -1704,7 +1709,7 @@ async function sendControlSkip() {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: owner, skip: true }),
+      body: planJson({ session_id: owner, skip: true }),
       owner,
     });
     stopBusyTranscriptPoll();
@@ -1842,7 +1847,7 @@ function onChatClick(ev) {
   if (!(t instanceof Element)) return;
   const debugBtn = t.closest("button.run-debug-toggle");
   if (debugBtn) {
-    const key = Number(debugBtn.getAttribute("data-run-debug"));
+    const key = String(debugBtn.getAttribute("data-run-debug") || "");
     if (openRunDebug.has(key)) openRunDebug.delete(key);
     else openRunDebug.add(key);
     renderChat();
@@ -2135,7 +2140,7 @@ async function submitParamEdits() {
     const dto = await api("/v1/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: owner, patches }),
+      body: planJson({ session_id: owner, patches }),
       owner,
     });
     if (!adoptServerResult(dto, owner)) {
@@ -2294,6 +2299,11 @@ function onArtifactClick(ev) {
   const themeChoice = t.closest("#btn-theme-dark, #btn-theme-light");
   if (themeChoice) {
     applyTheme(themeChoice.id === "btn-theme-light" ? "light" : "dark");
+    renderArtifacts();
+    return;
+  }
+  if (t.closest("#btn-debug-mode")) {
+    localStorage.setItem(STORAGE_DEBUG, debugModeOn() ? "0" : "1");
     renderArtifacts();
     return;
   }
@@ -3407,12 +3417,12 @@ function renderProcessGroup(html, foldable, turnKey) {
   return `<div class="process-fold" data-testid="process-fold"><button type="button" class="ghost process-toggle" data-process-turn="${turnKey}" aria-expanded="${open ? "true" : "false"}">${arrow} ${label}</button>${body}</div>`;
 }
 
-function clarifyReceiptHtml(msg) {
+function clarifyReceiptHtml(msg, extra) {
   const line = clarifyReceiptLine(msg);
   const answered = line
     ? line.split("\n").filter(Boolean).map((row) => `<div class="answered">${escapeHtml(row)}</div>`).join("")
     : "";
-  return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}</div></div>`;
+  return `<div class="msg" data-testid="clarify-history"><div class="msg-role">Clarify</div><div class="bubble">${escapeHtml(msg.text || "")}${answered}${extra || ""}</div></div>`;
 }
 
 function trailingStageNotice() {
@@ -3428,9 +3438,10 @@ function trailingStageNotice() {
   return null;
 }
 
-function renderProcessMessage(msg, stepsHtml) {
+function renderProcessMessage(msg, stepsHtml, index) {
   if (msg.kind === "clarification" || msg.kind === "clarify") {
-    return clarifyReceiptHtml(msg);
+    const debug = fillDebugDisclosure((msg.payload && msg.payload.fill_debug) || [], `msg-${index}`);
+    return clarifyReceiptHtml(msg, debug);
   }
   if (msg.kind === "mode_notice") {
     const stage = trailingStageNotice();
@@ -3447,7 +3458,8 @@ function renderProcessMessage(msg, stepsHtml) {
     const openBtn = rid
       ? `<div class="actions"><button type="button" class="ghost" data-open-plan="${escapeHtml(rid)}">View Plan</button></div>`
       : "";
-    return `<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}</div></div>`;
+    const debug = fillDebugDisclosure((msg.payload && msg.payload.fill_debug) || [], `msg-${index}`);
+    return `<div class="msg"><div class="msg-role">Plan</div><div class="bubble">${escapeHtml(msg.text || "")}${openBtn}${debug}</div></div>`;
   }
   return "";
 }
@@ -3483,16 +3495,53 @@ function renderRunSteps(msg) {
   return `<ol class="step-list" data-testid="run-steps">${rows}</ol>`;
 }
 
+function debugModeOn() {
+  return localStorage.getItem(STORAGE_DEBUG) === "1";
+}
+
+function planJson(fields) {
+  const body = Object.assign({}, fields);
+  if (debugModeOn()) body.debug = true;
+  return JSON.stringify(body);
+}
+
+function fillDebugBlocks(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "";
+  return list.map((item, i) => {
+    const row = item && typeof item === "object" ? item : {};
+    const index = row.index == null ? i : row.index;
+    const candidates = row.candidates == null ? "" : JSON.stringify(row.candidates, null, 2);
+    const reasons = row.reasons == null ? "" : JSON.stringify(row.reasons, null, 2);
+    const protocol = String(row.card_protocol || "").trim()
+      ? `<div>Card protocol:</div><pre>${escapeHtml(String(row.card_protocol))}</pre>`
+      : "";
+    const dumb = row.dumb_card ? `<div>Dumb card</div>` : "";
+    return `<div class="fill-debug-cycle"><div>Cycle ${escapeHtml(String(index))}</div><div>Fill source:</div><pre>${escapeHtml(String(row.fill_source || ""))}</pre><div>Fill protocol:</div><pre>${escapeHtml(String(row.protocol || ""))}</pre><div>Candidates:</div><pre>${escapeHtml(candidates)}</pre><div>Reject reasons:</div><pre>${escapeHtml(reasons)}</pre>${protocol}${dumb}</div>`;
+  }).join("");
+}
+
+function fillDebugDisclosure(rows, key) {
+  const blocks = fillDebugBlocks(rows);
+  if (!blocks) return "";
+  const id = String(key);
+  const open = openRunDebug.has(id);
+  const label = open ? "Hide debug" : "Debug";
+  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${escapeHtml(id)}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
+  const body = open ? `<div class="process-body" data-testid="run-debug">${blocks}</div>` : "";
+  return `<div class="actions">${button}</div>${body}`;
+}
+
 function renderRunDebug(msg, index) {
   const view = msg.payload && msg.payload.run_view;
   if (!view) return "";
-  const open = openRunDebug.has(index);
+  const key = String(index);
+  const open = openRunDebug.has(key);
   const label = open ? "Hide debug" : "Debug";
-  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${index}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
+  const button = `<button type="button" class="ghost run-debug-toggle" data-run-debug="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}">${label}</button>`;
   if (!open) return `<div class="actions">${button}</div>`;
-  const fills = (view.fill_output || []).map((item) => `<pre>${escapeHtml(item)}</pre>`).join("");
-  const rejects = (view.validation_rejects || []).map((item) => `<div>${escapeHtml(item)}</div>`).join("");
-  return `<div class="actions">${button}</div><div class="process-body" data-testid="run-debug"><div>Classify protocol:</div><pre>${escapeHtml(view.classify_protocol || "")}</pre><div>Fill output:</div>${fills}<div>Validation rejects:</div>${rejects}</div>`;
+  const cycles = fillDebugBlocks(view.fill_debug);
+  return `<div class="actions">${button}</div><div class="process-body" data-testid="run-debug"><div>Classify protocol:</div><pre>${escapeHtml(view.classify_protocol || "")}</pre>${cycles}</div>`;
 }
 
 function renderVisibleMessage(msg, index) {
@@ -3561,7 +3610,7 @@ function renderTurn(range, isLatest) {
       continue;
     }
     if (PROCESS_KINDS.has(msg.kind)) {
-      pending.push(renderProcessMessage(msg, i === execAt ? stepsHtml : ""));
+      pending.push(renderProcessMessage(msg, i === execAt ? stepsHtml : "", i));
       continue;
     }
     if (stepsHtml && !stepsPlaced && (msg.kind === "result" || msg.kind === "error" || msg.kind === "ask" || msg.kind === "ask_text")) {
@@ -3750,9 +3799,10 @@ function renderClarification() {
       <button type="button" class="ix-text-btn" id="btn-clarify-end" title="End this request" ${lock}>End</button>
     </div>`;
     }
+    const debug = fillDebugDisclosure((clar.payload && clar.payload.fill_debug) || [], "clarify-live");
     return `<div class="ix-card" data-testid="clarification-form">
     <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3></div>
-    <div class="ix-card-body">${prompt}</div>
+    <div class="ix-card-body">${prompt}${debug}</div>
     ${foot}
   </div>`;
   }
@@ -3805,9 +3855,10 @@ function renderClarification() {
     : clar
       ? ""
       : "<p>Fill the missing fields, then submit. End this request closes the request.</p>";
+  const debug = fillDebugDisclosure((clar.payload && clar.payload.fill_debug) || [], "clarify-live");
   return `<div class="ix-card" data-testid="clarification-form">
     <div class="ix-card-head"><h3 class="ix-card-title">Clarification</h3>${pager}</div>
-    <div class="ix-card-body">${prompt}${constraintHtml}${questionHtml}${hintHtml}${formatHtml}${exampleHtml}${errorHtml}${optionRows}</div>
+    <div class="ix-card-body">${prompt}${constraintHtml}${questionHtml}${hintHtml}${formatHtml}${exampleHtml}${errorHtml}${optionRows}${debug}</div>
     ${foot}
   </div>`;
 }
@@ -3842,9 +3893,11 @@ function renderPlanCard() {
     const viewBtn = rid
       ? `<button type="button" class="ix-text-btn" data-open-plan="${escapeHtml(rid)}" title="View Plan">View</button>`
       : "";
+    const ready = latestMessage("plan_ready");
+    const debug = fillDebugDisclosure((ready && ready.payload && ready.payload.fill_debug) || [], "plan-live");
     body = `${jobLine}
     <p class="warn">Plan ${escapeHtml(card.plan_id)}</p>
-    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>`;
+    <p class="hint">Full steps are in the plan Artifact. Confirm is optional.</p>${debug}`;
     foot = `<div class="ix-card-foot">
       ${viewBtn}
       <button type="button" class="ix-text-btn" id="btn-edit" title="Change params" ${lock}>Change</button>
@@ -4216,9 +4269,10 @@ function settingsStack(title, contentHtml) {
 
 function dataSourceLine() {
   const ds = (systemInfo && systemInfo.datasource) || {};
-  const status = ds.status ? String(ds.status) : "not connected";
-  const source = ds.source == null || String(ds.source).trim() === "" ? "—" : String(ds.source);
-  return escapeHtml(`status: ${status}, source: ${source}`);
+  const source = ds.source == null ? "" : String(ds.source).trim();
+  const connected = String(ds.status || "") === "connected" && source;
+  if (!connected) return `<span class="settings-quit-hint">Datasource not connected</span>`;
+  return `<span class="datasource-dot" aria-hidden="true"></span><span class="settings-quit-hint">Datasource Connected to ${escapeHtml(source)}</span>`;
 }
 
 function renderSettingsBody() {
@@ -4227,6 +4281,7 @@ function renderSettingsBody() {
   const appearanceOpen = !treeCollapsed.has("settings:appearance");
   const providersOpen = !treeCollapsed.has("settings:providers");
   const aboutOpen = !treeCollapsed.has("settings:about");
+  const debugOn = debugModeOn();
   const systemBody = systemOpen
     ? `<div class="settings-group-body">
       <p class="settings-item-title">Workbench</p>
@@ -4234,8 +4289,13 @@ function renderSettingsBody() {
         <button type="button" class="danger" id="btn-quit-server" title="Stops this workbench process and frees its port.">Quit</button>
         <span class="settings-quit-hint">Stops this workbench process and frees its port.</span>
       </div>
+      <p class="settings-item-title">Debug Mode</p>
+      <div class="settings-quit-row">
+        <button type="button" class="debug-switch${debugOn ? " is-on" : ""}" id="btn-debug-mode" role="switch" aria-checked="${debugOn ? "true" : "false"}" aria-label="Debug Mode"></button>
+        <span class="settings-quit-hint">${escapeHtml(debugOn ? DEBUG_ON_TEXT : DEBUG_OFF_TEXT)}</span>
+      </div>
       <p class="settings-item-title">DataSource</p>
-      <div class="settings-quit-row"><span class="settings-quit-hint">${dataSourceLine()}</span></div>
+      <div class="settings-quit-row">${dataSourceLine()}</div>
     </div>`
     : "";
   const appearanceBody = appearanceOpen
@@ -4265,9 +4325,9 @@ function renderSettingsBody() {
     : "";
   return `<div class="settings-panel">
     <h3>Settings</h3>
-    <div class="time-group">${renderTimeGroupHead("settings:system", "SYSTEM", systemOpen)}${systemBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:appearance", "APPEARANCE", appearanceOpen)}${appearanceBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:providers", "PROVIDERS", providersOpen)}${providersBody}</div>
+    <div class="time-group">${renderTimeGroupHead("settings:system", "SYSTEM", systemOpen)}${systemBody}</div>
     <div class="time-group">${renderTimeGroupHead("settings:about", "ABOUT", aboutOpen)}${aboutBody}</div>
   </div>`;
 }
