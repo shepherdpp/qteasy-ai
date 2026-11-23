@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.intent_engine import IntentEngine
 from qteasy_ai.memory_store import MemoryStore
-from qteasy_ai.parse_turn import present_intent_card, parse_utterance
+from qteasy_ai.parse_turn import FIXED_GUIDE, present_intent_card, parse_utterance
 from qteasy_ai.provider import FakeLLMProvider
 
 _TASK = "600519 和 000858 做一条等权组合"
@@ -87,6 +87,20 @@ def _inputs_blob(plan: Dict[str, Any]) -> str:
         if isinstance(step, dict):
             chunks.append(json.dumps(step.get("inputs") or {}, ensure_ascii=False))
     return "\n".join(chunks)
+
+
+def _prompt_examples(system: str) -> List[Dict[str, Any]]:
+    """系统提示里每份示例的用户句和 JSON。"""
+
+    rows: List[Dict[str, Any]] = []
+    marker = "User sentence: "
+    for part in system.split("Example, ")[1:]:
+        start = part.find(marker)
+        rest = part[start + len(marker):]
+        sentence, _, after = rest.partition("\n")
+        payload = json.loads(after.strip().splitlines()[0])
+        rows.append({"sentence": sentence, "payload": payload})
+    return rows
 
 
 def _seed(assistant: QteasyAssistant, sid: str, *, plan_id: str, status: str) -> None:
@@ -521,3 +535,99 @@ class TestAi04ParseOnce(unittest.TestCase):
         self.assertNotIn("gold_cases", model)
         self.assertNotIn(".chat(", gold)
         self.assertIn("_trigger_hits", constitution)
+
+    def test_parse_prompt_states_goal_and_catalog(self) -> None:
+        """系统提示写明目标和字段，清单带官方 Job 摘要。"""
+
+        print("\n[TestAi04ParseOnce] 解析提示写出目标和清单")
+        outline = "OUTLINE-ROUND-ONE"
+        fake = FakeLLMProvider(replies=[_protocol()])
+        engine = IntentEngine(provider=fake)
+        parse_utterance(engine, "随便一句", outline=outline)
+        system = fake.system_prompts[0]
+        user = fake.prompts[0]
+        jobs_block = user.split("Outline:")[0]
+        examples = _prompt_examples(system)
+        print(" system:", system)
+        print(" official jobs:", jobs_block)
+        print(" examples:", [(row["sentence"], row["payload"].get("task"), row["payload"].get("questions"), row["payload"].get("job")) for row in examples])
+        self.assertIn("fill job only when the sentence clearly matches one official Job", system)
+        self.assertIn("never true, false, or null", system)
+        self.assertIn("the question shown to the user", system)
+        self.assertIn("in the same language as the user sentence", system)
+        self.assertIn("exact contiguous slice", system)
+        self.assertIn("must not overlap", system)
+        self.assertIn("Do not translate", system)
+        self.assertIn("Each id comes from the Official jobs list", system)
+        self.assertIn("Do not fetch it", system)
+        self.assertIn("new: this sentence starts a new plan.", system)
+        self.assertIn(
+            "revise: the outline already has a plan that has not run, and this sentence changes it.",
+            system,
+        )
+        self.assertIn(
+            "run: the outline already has a plan that has not run, and this sentence asks to run it.",
+            system,
+        )
+        self.assertIn(
+            'abandon: this sentence abandons the current plan that has not run. Then job is "", candidates is [], and open_intent is "".',
+            system,
+        )
+        self.assertIn(
+            '"": the sentence and the outline do not show which of the above it is.',
+            system,
+        )
+        self.assertEqual(len(examples), 2)
+        for row in examples:
+            sentence = str(row["sentence"])
+            payload = row["payload"]
+            task = str(payload.get("task") or "")
+            questions = [str(item) for item in (payload.get("questions") or [])]
+            print(" slice:", task, questions, "in", sentence)
+            if task:
+                self.assertIn(task, sentence)
+            for question in questions:
+                self.assertIn(question, sentence)
+                self.assertNotIn(question, task)
+        self.assertEqual(examples[1]["payload"].get("job"), "data.summary")
+        self.assertNotEqual(examples[1]["payload"].get("job"), "research.hold_compare")
+        self.assertIn(
+            "- research.hold_compare: Hold named symbols as one portfolio, optionally beside a benchmark or as excess.",
+            jobs_block,
+        )
+        self.assertIn("Outline:\n" + outline, user)
+        self.assertNotIn("- open:", user)
+        self.assertNotIn("Fetched:", user)
+
+    def test_boolean_open_intent_still_voids_the_package(self) -> None:
+        """open_intent 写成布尔值时，整包作废，中文题干不留下。"""
+
+        print("\n[TestAi04ParseOnce] 布尔 open_intent 仍整包作废")
+        utterance = "什么是最大回撤？"
+        reply = json.dumps(
+            {
+                "job": "",
+                "intent_text": "用户在问定义",
+                "clarification_text": "中文题干应被丢掉",
+                "open_intent": True,
+                "task": "",
+                "questions": [utterance],
+                "candidates": [],
+                "relation": "",
+                "plan_id": "",
+                "fetch": "",
+            },
+            ensure_ascii=False,
+        )
+        fake = FakeLLMProvider(replies=[reply])
+        package = parse_utterance(IntentEngine(provider=fake), utterance)
+        print(" guide:", package.get("clarification_text"))
+        print(" open:", package.get("open_intent"), "invalid:", package.get("invalid"))
+        print(" questions:", package.get("questions"), "candidates:", package.get("candidates"), "job:", package.get("job"))
+        self.assertEqual(package.get("clarification_text"), FIXED_GUIDE)
+        self.assertNotIn("中文题干应被丢掉", str(package.get("clarification_text") or ""))
+        self.assertEqual(package.get("questions"), [])
+        self.assertEqual(package.get("candidates"), [])
+        self.assertEqual(package.get("job"), "")
+        self.assertTrue(package.get("invalid"))
+        self.assertEqual(package.get("open_intent"), utterance)

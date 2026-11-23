@@ -48,21 +48,46 @@ _PROTOCOL_KEYS = (
     "fetch",
 )
 
-_PARSE_SYSTEM = (
-    "You parse one qteasy-ai user sentence into a single JSON object. "
-    "Keys: job, intent_text, clarification_text, open_intent, task, questions, "
-    "candidates, relation, plan_id, fetch. "
-    "job is an official Job id, or an empty string. "
-    "task and each question must be exact contiguous slices of the user sentence. "
-    "They must not overlap. intent_text is not a slice. "
-    "When job is an official id, candidates, clarification_text, and open_intent are empty. "
-    "candidates is a list of {id, label, detail}. Each id is an official Job id. "
-    "Do not put open or abandon in candidates. "
-    "Do not fill job and candidates at the same time. "
-    "relation is new, revise, run, abandon, or an empty string. "
-    "fetch is an empty string, turn:<n>, or plan:<id>. "
-    "Do not include slot values, steps, or flags. Reply with JSON only."
-)
+_PARSE_SYSTEM = """\
+You parse one qteasy-ai user sentence into one JSON object. Reply with JSON only.
+
+Goal: fill job only when the sentence clearly matches one official Job. Then candidates is [], clarification_text is "", and open_intent is "". Otherwise job is "". Write the question shown to the user, one open-plan sentence the user can confirm, and the few closest official Jobs. Closeness is your judgment. Do not emit a score.
+
+Fields:
+- job: an official Job id from the Official jobs list, or "".
+- intent_text: one sentence of your understanding, in the same language as the user sentence. Not a slice of the user sentence. Not the card question.
+- clarification_text: the question shown to the user, in the same language as the user sentence. "" when job is an official id.
+- open_intent: one open-plan sentence the user can confirm, in the same language as the user sentence, or "". It is a string, never true, false, or null. Do not copy the user sentence unless that sentence itself is the plan to run. "" when job is an official id. The user confirms this sentence, not the original sentence and not intent_text.
+- task: an exact contiguous slice of the user sentence for the work, or "". Do not translate it and do not drop characters. If no such slice exists, use "".
+- questions: an array of exact contiguous slices that are questions. Do not translate them and do not drop characters. They must not overlap task or each other. Do not put "" in the array. When the sentence contains both work and a question, put the work in task and the question in questions. Leave out any question that is not verbatim in the user sentence.
+- candidates: an array of {id, label, detail}. Each id comes from the Official jobs list. label and detail use the same language as the user sentence. Do not include open or abandon. Do not make job and candidates both non-empty. [] when job is an official id. When job is "", include the few closest official Jobs.
+- relation is one of:
+  - new: this sentence starts a new plan.
+  - revise: the outline already has a plan that has not run, and this sentence changes it.
+  - run: the outline already has a plan that has not run, and this sentence asks to run it.
+  - abandon: this sentence abandons the current plan that has not run. Then job is "", candidates is [], and open_intent is "".
+  - "": the sentence and the outline do not show which of the above it is.
+- plan_id: "" or a plan id already present in the materials.
+- fetch: "" unless one earlier turn or one plan in the outline is not complete enough. Only then use turn:<n> or plan:<id>. The current sentence is already in User sentence. Do not fetch it.
+
+Do not include slot values, steps, or flags.
+
+The user message has up to four parts:
+- Official jobs: the only legal source for job and candidate ids. Each line is an id and what that job does.
+- Outline: earlier turns. It is not the current sentence.
+- Fetched: material named by a previous parse of this same sentence. Use it only to complete this parse.
+- User sentence: the sentence to parse.
+
+Slices in an example belong only to that example's user sentence. Do not copy words that are not in the current user sentence.
+
+Example, unclear job.
+User sentence: 把 000300.SH 的走势画出来，波动大不大？
+{"job":"","intent_text":"用户想看指数走势，并问波动大不大","clarification_text":"你是要导出走势图，还是看波动和交易日的摘要？也可以确认下面这句开放图意图。","open_intent":"画出 000300.SH 的走势并标出波动","task":"把 000300.SH 的走势画出来","questions":["波动大不大？"],"candidates":[{"id":"data.export","label":"导出走势图","detail":"把走势画出来"},{"id":"data.summary","label":"行情摘要","detail":"看波动和交易日"}],"relation":"new","plan_id":"","fetch":""}
+
+Example, clear official job.
+User sentence: 看一下 000300.SH 的波动和交易日
+{"job":"data.summary","intent_text":"查看指数的波动和交易日","clarification_text":"","open_intent":"","task":"看一下 000300.SH 的波动和交易日","questions":[],"candidates":[],"relation":"new","plan_id":"","fetch":""}
+"""
 
 
 def parse_utterance(
@@ -116,10 +141,14 @@ def _parse_with_model(
     """有模型的一次协议。不查金句。"""
 
     official = set(engine.catalog.official_ids)
-    catalog_lines = "\n".join(f"- {item}" for item in engine.catalog.official_ids)
+    catalog_lines = "\n".join(
+        line
+        for line in engine.catalog.job_summaries()
+        if line.startswith("- ") and line[2:].split(":", 1)[0].strip() in official
+    )
     prompt_parts = [f"Official jobs:\n{catalog_lines}"]
     if str(outline or "").strip():
-        prompt_parts.append(str(outline).strip())
+        prompt_parts.append("Outline:\n" + str(outline).strip())
     if str(fetched or "").strip():
         prompt_parts.append("Fetched:\n" + str(fetched).strip())
     prompt_parts.append("User sentence:\n" + str(utterance or ""))
