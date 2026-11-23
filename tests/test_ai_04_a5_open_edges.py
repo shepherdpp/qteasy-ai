@@ -102,7 +102,17 @@ def _open_plan(registry, steps, query: str = _QUERY, fill: str = ""):
     if fill:
         replies.append(fill)
     fake = FakeLLMProvider(replies=replies)
-    plan = Planner(registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+    planner = Planner(registry, provider=fake, env_facts={})
+    card = planner.build_plan(query, mode="plan")
+    package = {}
+    pending = ((card.assumptions or {}).get("clarification") or {}).get("pending") or []
+    if pending and isinstance(pending[0], dict):
+        package = dict(pending[0].get("parse_package") or {})
+    package["job"] = "open"
+    package["open_intent"] = str(package.get("open_intent") or query)
+    package["confirmed"] = "open_intent"
+    package["relation"] = "new"
+    plan = planner.build_plan(query, mode="plan", parsed=package)
     return plan, fake
 
 
@@ -217,7 +227,8 @@ class TestAi04A5OpenEdges(unittest.TestCase):
         print(" skills:", names)
         print(" reason:", reason)
         print(" execution_mode:", plan.execution_mode)
-        self.assertEqual(plan.planner_trace.get("intent_job"), "clarify")
+        self.assertEqual(plan.planner_trace.get("intent_job"), "")
+        self.assertTrue(((plan.assumptions or {}).get("clarification") or {}).get("recover_authored"))
         self.assertEqual(names, ["qt.ai.system.fallback"])
         self.assertEqual(reason, "open_too_many_steps")
         for name in four:
@@ -239,7 +250,8 @@ class TestAi04A5OpenEdges(unittest.TestCase):
             print(" skills:", names)
             print(" reason:", reason)
             print(" execution_mode:", plan.execution_mode)
-            self.assertEqual(plan.planner_trace.get("intent_job"), "clarify")
+            self.assertEqual(plan.planner_trace.get("intent_job"), "")
+            self.assertTrue(((plan.assumptions or {}).get("clarification") or {}).get("recover_authored"))
             self.assertEqual(names, ["qt.ai.system.fallback"])
             self.assertEqual(reason, "open_forbidden_skill")
             self.assertNotIn(name, names)
@@ -260,7 +272,8 @@ class TestAi04A5OpenEdges(unittest.TestCase):
             print(" skills:", names)
             print(" reason:", reason)
             print(" execution_mode:", plan.execution_mode)
-            self.assertEqual(plan.planner_trace.get("intent_job"), "clarify")
+            self.assertEqual(plan.planner_trace.get("intent_job"), "")
+            self.assertTrue(((plan.assumptions or {}).get("clarification") or {}).get("recover_authored"))
             self.assertEqual(names, ["qt.ai.system.fallback"])
             self.assertEqual(reason, "open_skill_not_on_legal_edge")
             self.assertNotIn(name, names)

@@ -36,6 +36,61 @@ from typing import Any, Dict, List, Optional
 from .config import DEFAULT_PROVIDER_TIMEOUT, ConfigCenter
 
 
+def _json_object(text: str) -> Optional[Dict[str, Any]]:
+    """回复能解析成对象才返回，否则 None。"""
+
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _fold_legacy_parse_queue(replies: List[str]) -> List[str]:
+    """把旧的拆句加分类队列折成一次解析协议。
+
+    旧测试先排 ``{"task","question"}``，再排一到两条只含 ``job`` 的分类回复。
+    现在第一次模型调用就要交出整份协议，填槽回复仍留在后面。
+    """
+
+    folded: List[str] = []
+    index = 0
+    while index < len(replies):
+        data = _json_object(replies[index])
+        if data is None or not set(data).issubset({"task", "question"}):
+            folded.append(replies[index])
+            index += 1
+            continue
+        task = str(data.get("task") or "")
+        question = str(data.get("question") or "")
+        job = ""
+        consumed = 1
+        # 纯提问或两段重叠时不吞掉后面的分类回复，整份不能拿去定 Job。
+        take_job = bool(task) and not (question and question in task)
+        while take_job and index + consumed < len(replies):
+            nxt = _json_object(replies[index + consumed])
+            if nxt is None or "job" not in nxt or "task" in nxt or "questions" in nxt:
+                break
+            job = str(nxt.get("job") or "")
+            consumed += 1
+        questions = [question] if question and question not in task else []
+        protocol = {
+            "job": job,
+            "intent_text": task or question,
+            "clarification_text": "",
+            "open_intent": "",
+            "task": task,
+            "questions": questions,
+            "candidates": [],
+            "relation": "revise" if job else "",
+            "plan_id": "",
+            "fetch": "",
+        }
+        folded.append(json.dumps(protocol, ensure_ascii=False))
+        index += consumed
+    return folded
+
+
 class BaseLLMProvider(ABC):
     """LLM Provider 抽象基类。
 
@@ -73,7 +128,7 @@ class FakeLLMProvider(BaseLLMProvider):
     """
 
     def __init__(self, replies: Optional[List[str]] = None) -> None:
-        self.replies: List[str] = list(replies or [])
+        self.replies: List[str] = _fold_legacy_parse_queue(list(replies or []))
         self.prompts: List[str] = []
         self.system_prompts: List[str] = []
 

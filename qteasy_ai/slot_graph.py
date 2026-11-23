@@ -797,6 +797,8 @@ def clarification_skips_polish(blob: Dict[str, Any]) -> bool:
 
     if not isinstance(blob, dict):
         return False
+    if blob.get("intent_authored") or blob.get("recover_authored") or blob.get("fill_authored"):
+        return True
     pending = blob.get("pending")
     if not isinstance(pending, list):
         return False

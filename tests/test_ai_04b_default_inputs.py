@@ -132,7 +132,15 @@ class TestAi04bDefaultInputs(unittest.TestCase):
                 ),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            first = _raw_plan(assistant.plan(_OPEN, response_style="raw", session_id="open-kernel"))
+            assistant.plan(_OPEN, response_style="raw", session_id="open-kernel")
+            first = _raw_plan(
+                assistant.plan(
+                    "",
+                    response_style="raw",
+                    session_id="open-kernel",
+                    patches={"intent": "confirm_open_intent"},
+                )
+            )
             rows = ((first.get("assumptions") or {}).get("clarification") or {}).get("pending") or []
             print(" entry pending:", [item.get("name") for item in rows])
             self.assertEqual([item.get("name") for item in rows], ["shares"])

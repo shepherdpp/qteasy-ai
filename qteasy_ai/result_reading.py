@@ -223,10 +223,11 @@ def _plan_steps(plan: Mapping[str, Any]) -> List[Any]:
 
 
 def _questions(plan: Mapping[str, Any]) -> List[str]:
-    """``assumptions['questions']`` 里的非空原文。"""
+    """``parse_record.questions`` 里的非空原文。"""
 
     assumptions = plan.get("assumptions") if isinstance(plan, Mapping) else None
-    raw = assumptions.get("questions") if isinstance(assumptions, dict) else None
+    record = assumptions.get("parse_record") if isinstance(assumptions, dict) else None
+    raw = record.get("questions") if isinstance(record, dict) else None
     if not isinstance(raw, list):
         return []
     found: List[str] = []

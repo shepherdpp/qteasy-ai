@@ -104,8 +104,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" slot lines:", slot_lines)
         print(" skills:", [step.skill_name for step in plan.steps])
         catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
-        self.assertEqual(fake.prompts[0], screen)
-        self.assertEqual(len(catalogs), 1)
+        self.assertIn("User sentence:", fake.prompts[0])
+        self.assertIn(screen, fake.prompts[0])
+        self.assertEqual(len(catalogs), 0)
         self.assertEqual(len(fill_prompts), 1)
         self.assertIn("industry", slot_lines)
         self.assertIn("threshold", slot_lines)

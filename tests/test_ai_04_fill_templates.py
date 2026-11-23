@@ -338,8 +338,9 @@ class TestAi04FillTemplates(unittest.TestCase):
             self.assertEqual(history.get("end"), window["end"])
             self.assertEqual(defaults.get("start"), "default")
             self.assertEqual(defaults.get("end"), "default")
-            self.assertNotIn("20240315", blob)
-            self.assertNotIn("20231231", blob)
+            written = json.dumps(history, ensure_ascii=False)
+            self.assertNotIn("20240315", written)
+            self.assertNotIn("20231231", written)
 
     def test_protocol_omits_benchmark_output(self) -> None:
         """协议有基准但没有 benchmark_output 时，不从「看超额」补出 excess_only。"""

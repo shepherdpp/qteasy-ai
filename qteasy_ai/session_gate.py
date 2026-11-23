@@ -78,24 +78,11 @@ class SessionGate:
             kind / patches。
         """
 
-        text = (query or "").strip()
-        hatch = _hatch_decision(session, text)
-        if hatch is not None:
-            return hatch
+        del query
         status = session.task_status()
         high = bool(session.task is not None and getattr(session.task, "high_side_effect", False))
-        if status == "running" and high:
-            if is_live_backgrounded(session.session_id):
-                return GateDecision(kind="new_intent", rationale="background_run")
+        if status == "running" and high and not is_live_backgrounded(session.session_id):
             return GateDecision(kind="block_running", rationale="high_side_effect_running")
-        if session.task is None or status in {"done", "cancelled", ""}:
-            return GateDecision(kind="new_intent", rationale="composer_new_task")
-        if status == "running":
-            return GateDecision(kind="new_intent", rationale="composer_new_task")
-        if status in {"clarifying", "ready"} and is_abandon_plan(text):
-            return GateDecision(kind="abandon_plan", rationale="abandon_plan")
-        if status in {"clarifying", "ready"}:
-            return GateDecision(kind="revise_plan", rationale="revise_plan")
         return GateDecision(kind="new_intent", rationale="composer_new_task")
 
 

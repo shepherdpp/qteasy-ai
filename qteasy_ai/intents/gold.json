@@ -183,6 +183,284 @@
       "source": "rule",
       "flags": {},
       "lock": true
+    },
+    {
+      "id": "HC3",
+      "query": "600519 和 000858 做一条等权组合",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HC4",
+      "query": "000001.SZ 和 000002.SZ 做一条等权组合，相对沪深300，看超额",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HC5",
+      "query": "000001.SZ 和 000002.SZ 做一条等权组合，相对沪深300，看超额和累计收益",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "REFILL-DAY",
+      "query": "帮我下载日线",
+      "job": "data.refill",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "FIC1",
+      "query": "factor IC of close vs volume for 000001.SZ,000002.SZ from 20240101 to 20240331",
+      "job": "research.factor_ic",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "AB1",
+      "query": "放弃当前计划",
+      "job": "",
+      "relation": "abandon",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "AB2",
+      "query": "放弃这份计划",
+      "job": "",
+      "relation": "abandon",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "AB3",
+      "query": "放弃并重开",
+      "job": "",
+      "relation": "abandon",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "AB4",
+      "query": "放弃当前计划并重开",
+      "job": "",
+      "relation": "abandon",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "AB5",
+      "query": "abandon this plan",
+      "job": "",
+      "relation": "abandon",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "AB6",
+      "query": "abandon the plan",
+      "job": "",
+      "relation": "abandon",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "READ-QUIET",
+      "query": "get_history_data close for 000300.SH",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "READ-WINDOW",
+      "query": "get_history_data close for 000300.SH，过去三年",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "READ-DAY",
+      "query": "读取历史 close 000300.SH 20240315",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "READ-YEAR",
+      "query": "读取历史 close 000300.SH 到 2023 年",
+      "job": "data.read",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "SCREEN-QUIET",
+      "query": "筛股 银行业 跌幅超过 10%",
+      "job": "research.screen",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "SCREEN-BAD",
+      "query": "筛股 回看 abc 跌 10% 银行业",
+      "job": "research.screen",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "VOL-NAMES",
+      "query": "茅台和五粮液的波动率",
+      "job": "data.summary",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "VOL-LOOK",
+      "query": "看一下波动率",
+      "job": "data.summary",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "VOL-SHORT",
+      "query": "波动率",
+      "job": "data.summary",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "EXPORT-SHORT",
+      "query": "导出",
+      "job": "data.export",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "FIC-ONE",
+      "query": "factor IC of close vs volume for 000001.SZ from 20240101 to 20240331",
+      "job": "research.factor_ic",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "FIC-BARE",
+      "query": "factor ic",
+      "job": "research.factor_ic",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-MOUTAI",
+      "query": "贵州茅台和格力电器做一条等权组合，相对沪深300",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-EXCESS",
+      "query": "000001.SZ 和 000002.SZ 按权重 6:4 做一条组合，看超额",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-BARE",
+      "query": "000001.SZ 和 000002.SZ 做一条等权组合",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-CUM",
+      "query": "000001.SZ 和 000002.SZ 按权重 6:4 做一条组合，看累计收益",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-MIX",
+      "query": "000001.SZ 和 000300.SH 做一条等权组合",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-WEEKLY",
+      "query": "000001 与 000300，并说明 000300 是指数，取数周线，做一条等权组合",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-CUM-MT",
+      "query": "600519 和 000858 做一条等权组合，看累计收益",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "HOLD-SPAN",
+      "query": "600519 和 000858 做一条等权组合，看过去一段时间的持仓收益率，并跟沪深300做一个对比",
+      "job": "research.hold_compare",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "REFILL-EN",
+      "query": "download A-share daily data to local datasource",
+      "job": "data.refill",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "META-ZH",
+      "query": "列出策略参数",
+      "job": "strategy.meta",
+      "source": "rule",
+      "flags": {},
+      "lock": true
+    },
+    {
+      "id": "BUILDER-MA",
+      "query": "写一个双均线金叉策略",
+      "job": "strategy.builder",
+      "source": "rule",
+      "flags": {},
+      "lock": true
     }
   ]
 }

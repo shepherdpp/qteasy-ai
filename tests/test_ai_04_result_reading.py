@@ -27,7 +27,7 @@ def _plan(user_query: str, questions: list = None) -> dict:
 
     assumptions = {}
     if questions:
-        assumptions["questions"] = list(questions)
+        assumptions["parse_record"] = {"questions": list(questions)}
     return {
         "plan_id": "plan_read",
         "user_query": user_query,

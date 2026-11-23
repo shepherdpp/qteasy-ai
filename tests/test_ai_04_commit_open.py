@@ -385,7 +385,15 @@ class TestAi04CommitOpen(unittest.TestCase):
                 ),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            first = _raw_plan(assistant.plan(query, response_style="raw", session_id=sid))
+            assistant.plan(query, response_style="raw", session_id=sid)
+            first = _raw_plan(
+                assistant.plan(
+                    "",
+                    response_style="raw",
+                    session_id=sid,
+                    patches={"intent": "confirm_open_intent"},
+                )
+            )
             rows = _pending(first)
             print(" entry:", sid, "pending:", [(item.get("name"), item.get("prompt")) for item in rows])
             self.assertEqual([item.get("name") for item in rows], ["shares"])

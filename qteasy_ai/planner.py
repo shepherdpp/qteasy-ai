@@ -30,6 +30,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from .contracts import SkillSideEffects, ToolPlan, ToolStep, new_plan_id
 from .identity import prefix_system_prompt
 from .intent_engine import IntentEngine, IntentDecision
+from .parse_turn import (
+    constitution_package,
+    decide,
+    load_material,
+    parse_utterance,
+    present_intent_card,
+    present_recover_card,
+    public_record,
+)
 from .intents.recipes import _compose_screen, _diagnosis_steps, compose_recipe, env_ready_steps
 from .provider import BaseLLMProvider
 from .registry import SkillRegistry
@@ -52,6 +61,14 @@ from .slot_graph import (
     strategy_id_options,
 )
 from .wire import align_steps, choice_card
+
+def _open_failed(steps: Optional[List[Any]], reason: str) -> bool:
+    """开放图没有步骤、带了原因，或退成了说明步。"""
+
+    if not steps or str(reason or "").strip():
+        return True
+    return any(getattr(step, "skill_name", "") == "qt.ai.system.fallback" for step in steps)
+
 
 _FETCH_CHANNEL = {
     "qt.ai.data.history": "history",
@@ -210,6 +227,7 @@ class Planner:
         kept_steps: Optional[List[Dict[str, Any]]] = None,
         clause_split: Optional[ClauseSplit] = None,
         debug: bool = False,
+        parsed: Optional[Dict[str, Any]] = None,
     ) -> ToolPlan:
         """Hybrid 三段式入口，生成最终可执行计划。
 
@@ -254,6 +272,7 @@ class Planner:
             kept_steps=kept_steps,
             clause_split=clause_split,
             debug=debug,
+            parsed=parsed,
         )
         validated, trace = self.validate_plan(candidate)
         return self.finalize_plan(candidate, validated, trace)
@@ -274,6 +293,7 @@ class Planner:
         kept_steps: Optional[List[Dict[str, Any]]] = None,
         clause_split: Optional[ClauseSplit] = None,
         debug: bool = False,
+        parsed: Optional[Dict[str, Any]] = None,
     ) -> ToolPlan:
         """生成候选计划。
 
@@ -324,11 +344,26 @@ class Planner:
         if not origin_text:
             origin_text = query
         skip = bool(skip_classify and task is not None and str(getattr(task, "job", "") or ""))
-        self._diagnosis_statistic = self._statistic_followup(session, user_query, skip)
         forced = str(forced_job or "").strip()
         resumed = [row for row in (resume_steps or []) if isinstance(row, dict) and row.get("skill_name")]
         revision = str(revision_query or "").strip()
         kept_rows = [row for row in (kept_steps or []) if isinstance(row, dict)]
+        if parsed is not None or (
+            not skip
+            and not revision
+            and forced != "open"
+            and not resumed
+            and not card_text
+        ):
+            if parsed is None:
+                parsed = self._parse_unrouted(query, session, debug=debug)
+            return self._plan_from_parsed(
+                user_query,
+                parsed,
+                session=session,
+                kept_steps=kept_rows,
+                debug=debug,
+            )
         self._revision_skip_shares = False
         revision_open = False
         replaced_rows: Optional[List[Dict[str, Any]]] = None
@@ -617,12 +652,15 @@ class Planner:
             assumptions["session_missing"] = missing
         elif isinstance(assumptions.get("clarification"), dict):
             assumptions["clarification"] = finalize_clarification_for_emit(assumptions["clarification"])
+        assumptions["intent_job"] = decision.job
         self._attach_open_resume(assumptions)
         clar = assumptions.get("clarification")
         if (
             self.provider is not None
             and isinstance(clar, dict)
             and not clar.get("fill_authored")
+            and not clar.get("intent_authored")
+            and not clar.get("recover_authored")
         ):
             assumptions["clarification"] = polish_clarification(
                 self.provider,
@@ -652,6 +690,366 @@ class Planner:
             mode="plan",
         )
 
+    def outline_from(self, messages: Any) -> Tuple[str, List[Any]]:
+        """当前这句之前的提纲，和取材料用的同一份索引。"""
+
+        from . import ask_engine
+        from .knowledge_base import KnowledgeBase
+
+        cards = ask_engine.build_ask_history_index(list(messages or []), KnowledgeBase())
+        outline = ask_engine.render_session_outline(cards, fidelity="context")
+        return outline, cards
+
+    def parse_fetched(
+        self,
+        utterance: str,
+        outline: str,
+        cards: List[Any],
+        session: Any,
+        *,
+        debug: bool,
+    ) -> Dict[str, Any]:
+        """一次协议。模型写了 fetch 时再解析一次，第二次的 fetch 丢掉。"""
+
+        engine = self.intent_engine
+        engine.provider = self.provider
+        identity = getattr(self, "identity_dir", None)
+        current = parse_utterance(
+            engine,
+            utterance,
+            outline=outline,
+            fetched="",
+            identity_dir=identity,
+        )
+        entries: List[Dict[str, Any]] = []
+        if debug and isinstance(current.get("debug_entry"), dict):
+            entries.append(dict(current["debug_entry"]))
+        fetch = str(current.get("fetch") or "")
+        if engine.provider is not None and fetch:
+            material = load_material(fetch, cards, session, getattr(self, "memory_store", None))
+            current = parse_utterance(
+                engine,
+                utterance,
+                outline=outline,
+                fetched=material,
+                identity_dir=identity,
+            )
+            if debug and isinstance(current.get("debug_entry"), dict):
+                entries.append(dict(current["debug_entry"]))
+            current["fetch"] = ""
+        current.pop("debug_entry", None)
+        if debug and entries:
+            current["debug_entries"] = entries
+        return current
+
+    def _parse_unrouted(self, query: str, session: Any, *, debug: bool) -> Dict[str, Any]:
+        """没有装配层代传整包时，先宪法，再提纲，再解析。"""
+
+        engine = self.intent_engine
+        engine.provider = self.provider
+        raw = str(query or "").strip()
+        blocked = engine._constitution(raw, raw.lower())
+        if blocked is not None:
+            package = constitution_package(raw, blocked)
+            if not debug:
+                package.pop("debug_entries", None)
+            return package
+        messages: List[Any] = []
+        if session is not None:
+            messages = [dict(item) for item in (getattr(session, "messages", None) or []) if isinstance(item, dict)]
+            if messages and str(messages[-1].get("text") or "") == raw and messages[-1].get("kind") == "user_text":
+                messages = messages[:-1]
+        outline, cards = self.outline_from(messages)
+        return self.parse_fetched(raw, outline, cards, session, debug=debug)
+
+    def _plan_from_parsed(
+        self,
+        user_query: str,
+        package: Dict[str, Any],
+        *,
+        session: Any,
+        kept_steps: Optional[List[Dict[str, Any]]],
+        debug: bool,
+    ) -> ToolPlan:
+        """确认后的整包才改图、填槽。未确认、放弃和宪法都不进填槽。"""
+
+        package = dict(package or {})
+        task = getattr(session, "task", None) if session is not None else None
+        old_job = str(getattr(task, "job", "") or "") if task is not None else ""
+        existing_id = str(getattr(task, "plan_id", "") or "") if task is not None else ""
+        action = decide(package, session)
+        if action == "fresh" and session is not None:
+            if task is not None and str(getattr(task, "status", "") or "") in {"clarifying", "ready"}:
+                session.cancel_task()
+            session.start_task(query=str(package.get("task") or user_query))
+            task = session.task
+            plan_id = new_plan_id()
+        elif action == "keep":
+            plan_id = existing_id or new_plan_id()
+        else:
+            if action == "intent" and session is not None and session.task is None:
+                session.start_task(query=user_query)
+            if action == "abandon" and session is not None and task is not None and str(getattr(task, "status", "") or "") in {"clarifying", "ready"}:
+                session.cancel_task()
+            task = getattr(session, "task", None) if session is not None else None
+            plan_id = existing_id or new_plan_id()
+        self._fill_task = task
+        self._parse_debug_entries = list(package.get("debug_entries") or []) if debug else None
+        if not self._parse_debug_entries:
+            self._parse_debug_entries = None
+        if action == "constitution":
+            decision = IntentDecision(
+                job=str(package.get("job") or "clarify"),
+                flags=dict(package.get("flags") or {}),
+                source="rule",
+                rationale=str(package.get("constitution") or ""),
+            )
+            steps = compose_recipe(self, decision, user_query)
+            hint = str((steps[0].inputs or {}).get("hint") or "") if steps else ""
+            package["constitution_hint"] = hint
+            self._fill_record = None
+            return self._emit_parsed(
+                user_query,
+                package,
+                steps=steps,
+                decision=decision,
+                plan_id=plan_id,
+                assumptions={},
+            )
+        if action == "abandon":
+            self._fill_record = None
+            return self._emit_parsed(
+                user_query,
+                package,
+                steps=[],
+                decision=IntentDecision(job="clarify", source="rule", rationale="abandon_plan"),
+                plan_id=plan_id,
+                assumptions={"abandoned": True},
+            )
+        if action == "intent":
+            package["card"] = "intent"
+            card = present_intent_card(package)
+            self._fill_record = None
+            return self._emit_parsed(
+                user_query,
+                package,
+                steps=[
+                    self._make_step(
+                        step_id="step_1",
+                        skill_name="qt.ai.system.fallback",
+                        inputs=self._fallback_step_inputs(
+                            query=user_query,
+                            action="clarify_required",
+                            reason="intent_unconfirmed",
+                            hint=str(card.get("confirm_prompt") or ""),
+                            missing_info="intent",
+                            next_step="Choose a job, confirm the open sentence, or rephrase.",
+                        ),
+                    )
+                ],
+                decision=IntentDecision(job="", source=str(package.get("source") or "rule"), rationale="intent_unconfirmed"),
+                plan_id=plan_id,
+                assumptions={"clarification": card},
+            )
+        job = str(package.get("job") or "")
+        fill_text = str(package.get("task") or "").strip() or str(package.get("open_intent") or "").strip() or user_query
+        if task is not None:
+            task.fill_source = fill_text
+        if action == "keep":
+            origin = str(getattr(task, "user_query", "") or "").strip() or fill_text
+            revision = str(user_query or "").strip()
+            self._revision_query = revision if revision and revision != origin else ""
+            fill_text = origin
+            if task is not None:
+                task.fill_source = origin
+        kept = [row for row in (kept_steps or []) if isinstance(row, dict)]
+        if not kept and task is not None:
+            pending = task.pending_clarification if isinstance(task.pending_clarification, dict) else {}
+            snapshot = pending.get("accepted_steps")
+            if isinstance(snapshot, list):
+                kept = [row for row in snapshot if isinstance(row, dict)]
+        if job == "open" or str(package.get("confirmed") or "") == "open_intent":
+            open_text = str(package.get("open_intent") or "").strip() or fill_text
+            if self.provider is None:
+                return self._recover_from_open(user_query, package, plan_id, "open_requires_provider")
+            open_steps, open_reason = self._compose_open_dag(open_text)
+            if _open_failed(open_steps, open_reason):
+                reason = str(open_reason or "").strip() or "open_unparsed"
+                return self._recover_from_open(user_query, package, plan_id, reason)
+            package["open_note"] = "Open plan composed."
+            decision = IntentDecision(
+                job="open",
+                flags=dict(package.get("flags") or {}),
+                source=str(package.get("source") or "llm"),
+                rationale="open_intent",
+            )
+            steps = open_steps or []
+            replaced = None
+            fill_kept = None
+            carry = None
+            compose_query = open_text
+        else:
+            decision = IntentDecision(
+                job=job or "clarify",
+                flags=dict(package.get("flags") or {}),
+                source=str(package.get("source") or "rule"),
+                rationale="parse_utterance",
+            )
+            compose_query = fill_text
+            steps = compose_recipe(self, decision, compose_query)
+            replaced = None
+            fill_kept = None
+            carry = None
+            if action == "keep" and job and job == old_job:
+                overlay_kept_inputs(steps, kept)
+                fill_kept = kept
+            elif action == "keep" and job and old_job and job != old_job:
+                replaced = [dict(row) for row in kept]
+                carry = kept
+        package["executable"] = True
+        steps, gate_extras = self._apply_post_candidate_gates(
+            steps,
+            query=compose_query,
+            fill_source=fill_text,
+            candidate_source=decision.source,
+            job=decision.job,
+            session=session,
+            kept_steps=fill_kept,
+            carry_steps=carry,
+        )
+        assumptions: Dict[str, Any] = dict(gate_extras or {})
+        if replaced is not None:
+            assumptions["replaced_steps"] = replaced
+        missing = self._required_missing(
+            decision.job,
+            steps,
+            session,
+            accepted_steps=assumptions.get("accepted_steps") or [],
+        )
+        if missing:
+            existing = assumptions.get("clarification")
+            if isinstance(existing, dict) and existing.get("fill_authored"):
+                assumptions["clarification"] = finalize_clarification_for_emit(existing)
+            else:
+                assumptions["clarification"] = finalize_clarification_for_emit(
+                    self._factor_ic_clarification(
+                        self._session_clarification(fill_text, missing),
+                        steps,
+                    )
+                )
+            assumptions["session_missing"] = missing
+        elif isinstance(assumptions.get("clarification"), dict):
+            assumptions["clarification"] = finalize_clarification_for_emit(assumptions["clarification"])
+        assumptions["intent_job"] = decision.job
+        self._attach_open_resume(assumptions)
+        clar = assumptions.get("clarification")
+        if (
+            self.provider is not None
+            and isinstance(clar, dict)
+            and not clar.get("fill_authored")
+            and not clar.get("intent_authored")
+            and not clar.get("recover_authored")
+        ):
+            assumptions["clarification"] = polish_clarification(self.provider, clar, fill_text)
+        clar = assumptions.get("clarification")
+        if isinstance(clar, dict) and assumptions.get("accepted_steps"):
+            clar["accepted_steps"] = list(assumptions.get("accepted_steps") or [])
+        return self._emit_parsed(
+            user_query,
+            package,
+            steps=steps,
+            decision=decision,
+            plan_id=plan_id,
+            assumptions=assumptions,
+        )
+
+    def _recover_from_open(
+        self,
+        user_query: str,
+        package: Dict[str, Any],
+        plan_id: str,
+        reason: str,
+    ) -> ToolPlan:
+        """组图失败。询问留下，不把同一句开放计划再确认一次。"""
+
+        package["card"] = "recover"
+        package["executable"] = False
+        card = present_recover_card(
+            package,
+            reason=reason,
+            official_ids=self.intent_engine.catalog.official_ids,
+        )
+        self._fill_record = None
+        return self._emit_parsed(
+            user_query,
+            package,
+            steps=[
+                self._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self._fallback_step_inputs(
+                        query=user_query,
+                        action="clarify_required",
+                        reason=reason,
+                        hint=str(card.get("confirm_prompt") or ""),
+                        missing_info="open_plan",
+                        next_step="Pick a suggested job or rephrase the request.",
+                    ),
+                )
+            ],
+            decision=IntentDecision(job="", source="rule", rationale=reason),
+            plan_id=plan_id,
+            assumptions={"clarification": card},
+        )
+
+    def _emit_parsed(
+        self,
+        user_query: str,
+        package: Dict[str, Any],
+        *,
+        steps: List[ToolStep],
+        decision: IntentDecision,
+        plan_id: str,
+        assumptions: Dict[str, Any],
+    ) -> ToolPlan:
+        """把解析记录放进候选计划。不另写一份 questions。"""
+
+        merged = {
+            "planner": "hybrid_intent_h_prime",
+            "provider_enabled": self.provider is not None,
+            "env_facts_used": bool(self.env_facts),
+            "candidate_source": decision.source,
+            "downgrade_reason": "",
+            "intent_job": decision.job,
+            "intent_source": decision.source,
+            "intent_rationale": decision.rationale,
+        }
+        merged.update(assumptions)
+        merged.pop("questions", None)
+        flags = dict(package.get("flags") or {})
+        for step in steps:
+            mapped = _FETCH_CHANNEL.get(step.skill_name)
+            if mapped:
+                flags["channel"] = mapped
+            elif step.skill_name == "qt.ai.data.read":
+                channel = str((step.inputs or {}).get("channel") or "").strip()
+                if channel:
+                    flags["channel"] = channel
+        if flags:
+            merged["intent_flags"] = flags
+        merged["parse_record"] = public_record(package, plan_id=plan_id)
+        merged["hold_execution"] = bool(package.get("hold_execution"))
+        self._market_overrides = None
+        self._diagnosis_statistic = ""
+        return ToolPlan(
+            plan_id=plan_id,
+            user_query=user_query,
+            steps=steps,
+            assumptions=merged,
+            execution_mode="dry_run",
+            mode="plan",
+        )
+
     def validate_plan(self, candidate_plan: ToolPlan) -> Tuple[ToolPlan, Dict[str, Any]]:
         """校验候选计划并返回修订结果。"""
 
@@ -670,8 +1068,17 @@ class Planner:
             "intent_job": candidate_plan.assumptions.get("intent_job", ""),
             "source": candidate_plan.assumptions.get("intent_source", "rule"),
             "rationale": candidate_plan.assumptions.get("intent_rationale", ""),
-            "classify_protocol": str(self._classify_protocol or ""),
         }
+        assumptions = dict(final_plan.assumptions or {})
+        incoming = (candidate_plan.assumptions or {}).get("parse_record")
+        if isinstance(incoming, dict):
+            assumptions["parse_record"] = dict(incoming)
+            assumptions.pop("questions", None)
+            final_plan.assumptions = assumptions
+        entries = getattr(self, "_parse_debug_entries", None)
+        if isinstance(entries, list) and entries:
+            final_plan.planner_trace["parse_debug"] = [dict(item) for item in entries if isinstance(item, dict)]
+        self._parse_debug_entries = None
         record = getattr(self, "_fill_record", None)
         if isinstance(record, dict):
             assumptions = dict(final_plan.assumptions or {})
@@ -724,36 +1131,6 @@ class Planner:
             if value not in (None, ""):
                 values[str(name)] = value
         return values
-
-    def _statistic_followup(self, session: Any, user_query: str, skip: bool) -> str:
-        """跟进时把「收益 / 波动」收成统计步技能名。整句重问仍按问句里的词。"""
-
-        if not skip or session is None:
-            return ""
-        task = getattr(session, "task", None)
-        job = str(getattr(task, "job", "") or "") if task is not None else ""
-        if task is None or job not in {"data.summary", "data.export"}:
-            return ""
-        mapping = {
-            "收益": "qt.ai.hp.returns",
-            "returns": "qt.ai.hp.returns",
-            "return": "qt.ai.hp.returns",
-            "qt.ai.hp.returns": "qt.ai.hp.returns",
-            "波动": "qt.ai.hp.volatility",
-            "波动率": "qt.ai.hp.volatility",
-            "volatility": "qt.ai.hp.volatility",
-            "qt.ai.hp.volatility": "qt.ai.hp.volatility",
-        }
-        chosen = mapping.get(str(user_query or "").strip().lower(), "")
-        flags = dict(getattr(task, "flags", None) or {})
-        if chosen:
-            flags["statistic_skill"] = chosen
-            task.flags = flags
-            return chosen
-        saved = str(flags.get("statistic_skill") or "")
-        if saved in {"qt.ai.hp.returns", "qt.ai.hp.volatility"}:
-            return saved
-        return ""
 
     def _market_inputs(self, query: str) -> Dict[str, Any]:
         """抽标的与日期；已确认槽盖过问句中先出现的旧代码。"""

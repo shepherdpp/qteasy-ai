@@ -77,13 +77,9 @@ from .session import (
     set_deferred_run,
     task_was_cancelled,
 )
+from .parse_turn import BLOCK_HINT, constitution_package
 from .session_gate import (
-    GateDecision,
     SessionGate,
-    extract_plan_id,
-    is_discuss_only,
-    is_execute_plan_utterance,
-    is_skip_clarify,
     merge_facts,
     new_task_patches,
 )
@@ -166,15 +162,9 @@ _CLARIFICATION_FAILED_MESSAGE = (
 
 
 def _provider_for_narrative(provider: Any, assumptions: Any, query: str) -> Any:
-    """整句都是附带提问时，不再请模型改写计划说明。"""
+    """计划说明使用当前模型。询问不再单独关掉它。"""
 
-    questions = assumptions.get("questions") if isinstance(assumptions, dict) else None
-    if (
-        isinstance(questions, list)
-        and len(questions) == 1
-        and str(questions[0] or "").strip() == str(query or "").strip()
-    ):
-        return None
+    del assumptions, query
     return provider
 
 
@@ -274,6 +264,28 @@ def _append_clarify_history(
     history = [dict(item) for item in (getattr(task, "clarify_history", None) or []) if isinstance(item, dict)]
     history.append({"slots": slots})
     task.clarify_history = history
+
+
+def _merge_fill_slots(state: Any, plan: Any) -> None:
+    """这一圈收下的槽写进当前任务。缺省不确认，没收完的列表也不确认。"""
+
+    record_slots = ((getattr(plan, "assumptions", None) or {}).get("fill_record") or {}).get("slots")
+    if not isinstance(record_slots, list):
+        return
+    for item in record_slots:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if not name:
+            continue
+        value = item.get("value")
+        source = str(item.get("source") or "")
+        if source == "default":
+            state.set_slot(name, value, source="default", confirmed=False)
+        elif source == "user" and _holding_still_open(value):
+            state.set_slot(name, value, source="user", confirmed=False)
+        elif source == "user":
+            merge_facts(state, {name: value}, source="user", confirmed=True)
 
 
 def _holding_still_open(value: Any) -> bool:
@@ -512,6 +524,7 @@ class QteasyAssistant:
             provider=provider,
             env_facts=self.memory_store.load_env_facts(),
         )
+        self.planner.memory_store = self.memory_store
         # Executor：负责按计划执行。
         self.executor = PlanExecutor(self.registry, self.memory_store)
         self.renderer = OutputRenderer()
@@ -864,16 +877,6 @@ class QteasyAssistant:
         )
         if failed is not None:
             return failed
-        if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
-            return self.ask(
-                asked,
-                response_style=response_style,
-                persist=persist,
-                keep=keep,
-                explanation_depth=explanation_depth,
-                session_id=session_id,
-                requested_mode="plan",
-            )
         return self._execute_and_format(
             plan=plan,
             confirm=False,
@@ -944,18 +947,10 @@ class QteasyAssistant:
         )
         if failed is not None:
             return failed
-        if str((plan.planner_trace or {}).get("intent_job") or "") == "route_to_ask":
-            return self.ask(
-                query,
-                response_style=response_style,
-                persist=persist,
-                keep=keep,
-                explanation_depth=explanation_depth,
-                session_id=session_id,
-                requested_mode="run",
-            )
-        confirm = True
-        plan.execution_mode = "execute"
+        hold = bool((getattr(plan, "assumptions", None) or {}).get("hold_execution"))
+        confirm = not hold
+        if not hold:
+            plan.execution_mode = "execute"
         if session is not None and session.agent_auto:
             plan, confirm = self._apply_agent_auto_gate(plan)
         return self._execute_and_format(
@@ -1445,79 +1440,11 @@ class QteasyAssistant:
         on_step_start: Any = None,
         on_progress: Any = None,
     ) -> Optional[Dict[str, Any] | AssistantOutput]:
-        """两条模式缺口与 skip 澄清：不走 Hybrid。"""
+        """讨论、口头执行和整句跳过都不再从这里截走。"""
 
-        del agent_auto
-        if is_discuss_only(query):
-            return self.ask(
-                query,
-                response_style=response_style,
-                persist=persist,
-                keep=keep,
-                explanation_depth=explanation_depth,
-                session_id=session_id,
-                requested_mode=requested_mode,
-            )
-        sid = str(session_id or "").strip()
-        session = self.session_store.load(sid) if sid else None
-        if is_skip_clarify(query) and session is not None and session.task is not None and (
-            session.task.pending_clarification or session.task.missing
-        ):
-            session.append_user_text(query)
-            self.session_store.save(session)
-            return self._skip_clarification_result(
-                session,
-                query=query,
-                requested_mode=requested_mode,
-                response_style=response_style,
-                include_user_text=False,
-            )
-        run_hatch = is_execute_plan_utterance(query) or (
-            requested_mode == "run" and bool(extract_plan_id(query))
-        )
-        if not run_hatch:
-            return None
-        if session is not None:
-            session.append_user_text(query)
-            self.session_store.save(session)
-        plan_id = extract_plan_id(query) or (
-            str(session.task.plan_id or "") if session is not None and session.task is not None else ""
-        )
-        if not plan_id:
-            return self._closed_error_result(
-                query=query,
-                requested_mode=requested_mode,
-                response_style=response_style,
-                session=session,
-                code="PLAN_ID_MISSING",
-                message="No current plan to run. Create a plan first, or name plan_id in the sentence.",
-                next_action="Run plan() first, or include plan_xxxxxxxx in the sentence.",
-            )
-        hatch = "plan_mode_execute" if requested_mode == "plan" else "run_plan_id"
-        try:
-            return self.run_plan(
-                plan_id,
-                response_style=response_style,
-                persist=persist,
-                keep=keep,
-                explanation_depth=explanation_depth,
-                session_id=sid or None,
-                on_step=on_step,
-                on_step_start=on_step_start,
-                on_progress=on_progress,
-                requested_mode=requested_mode,
-                hatch=hatch,
-            )
-        except ValueError as exc:
-            return self._closed_error_result(
-                query=query,
-                requested_mode=requested_mode,
-                response_style=response_style,
-                session=session,
-                code="PLAN_ID_NOT_FOUND",
-                message=str(exc),
-                next_action="Create or select a plan in this session, then Confirm.",
-            )
+        del query, session_id, requested_mode, response_style, persist, keep
+        del explanation_depth, agent_auto, on_step, on_step_start, on_progress
+        return None
 
     def _skip_clarification_result(
         self,
@@ -1820,6 +1747,133 @@ class QteasyAssistant:
 
         return self._card_submitted_value(session_id, "unresolved_intent", patches, answers)
 
+    def _composer_parse(
+        self,
+        state: ConversationState,
+        asked: str,
+        prior_messages: List[Dict[str, Any]],
+        profile: Dict[str, Any],
+        debug: bool,
+    ) -> Tuple[Any, ConversationState]:
+        """宪法一次，然后提纲和解析。点名只再解析一次。"""
+
+        engine = self.planner.intent_engine
+        engine.provider = self.planner.provider
+        blocked = engine._constitution(asked, asked.lower())
+        if blocked is not None:
+            package = constitution_package(asked, blocked)
+            if not debug:
+                package.pop("debug_entries", None)
+        else:
+            outline, cards = self.planner.outline_from(prior_messages)
+            package = self.planner.parse_fetched(asked, outline, cards, state, debug=debug)
+        return self._build_parsed(state, package, asked, profile, debug)
+
+    def _answer_parse_card(
+        self,
+        state: ConversationState,
+        pending: Dict[str, Any],
+        structured: Dict[str, Any],
+        asked: str,
+        profile: Dict[str, Any],
+        debug: bool,
+    ) -> Tuple[Any, ConversationState]:
+        """意图卡沿用当时的 relation。恢复卡先改成 new。其它文本整句重来。"""
+
+        rows = [item for item in (pending.get("pending") or []) if isinstance(item, dict)]
+        row = rows[0] if rows else {}
+        name = str(row.get("name") or "")
+        answer = str(structured.get(name) or asked or "").strip()
+        package = dict(pending.get("parse_package") or {})
+        matched = ""
+        for item in row.get("options") or []:
+            if not isinstance(item, dict):
+                continue
+            ident = str(item.get("id") or "")
+            if answer and answer in {ident, str(item.get("label") or "")}:
+                matched = ident
+                break
+        recover = bool(pending.get("recover_authored"))
+        open_confirm = row.get("open_confirm") if isinstance(row.get("open_confirm"), dict) else {}
+        if recover and matched:
+            package["relation"] = "new"
+            package["original_relation"] = "new"
+            package["job"] = matched
+            package["confirmed"] = "recovery"
+            package["choice"] = matched
+            package["card"] = "recover"
+            package["open_intent"] = ""
+            return self._build_parsed(state, package, str(package.get("utterance") or asked), profile, debug)
+        if not recover and matched:
+            package["job"] = matched
+            package["confirmed"] = "candidate"
+            package["choice"] = matched
+            package["card"] = "intent"
+            package["open_intent"] = ""
+            return self._build_parsed(state, package, str(package.get("utterance") or asked), profile, debug)
+        if not recover and open_confirm and answer == str(open_confirm.get("id") or ""):
+            package["job"] = "open"
+            package["confirmed"] = "open_intent"
+            package["choice"] = str(open_confirm.get("id") or "")
+            package["card"] = "intent"
+            return self._build_parsed(state, package, str(package.get("utterance") or asked), profile, debug)
+        prior = [dict(item) for item in (state.messages or []) if isinstance(item, dict)]
+        if answer:
+            state.append_user_text(answer)
+            self.session_store.save(state)
+        return self._composer_parse(state, answer, prior, profile, debug)
+
+    def _build_parsed(
+        self,
+        state: ConversationState,
+        package: Dict[str, Any],
+        query: str,
+        profile: Dict[str, Any],
+        debug: bool,
+    ) -> Tuple[Any, ConversationState]:
+        """用已经解析的整包出计划。点选不再解析。"""
+
+        kept = self._kept_plan_steps(state)
+        plan = self.planner.build_plan(
+            query,
+            mode="plan",
+            session=state,
+            profile=profile,
+            kept_steps=kept,
+            parsed=package,
+            debug=debug,
+        )
+        _merge_fill_slots(state, plan)
+        self._sync_session_from_plan(state, plan, query=query, skip_classify=False)
+        self._remember_intent(state, plan)
+        self.session_store.save(state)
+        return plan, state
+
+    @staticmethod
+    def _remember_intent(state: ConversationState, plan: Any) -> None:
+        """卡片和选择记在意图历史上，不并进填槽历史。"""
+
+        task = state.task
+        if task is None:
+            return
+        record = (getattr(plan, "assumptions", None) or {}).get("parse_record")
+        if not isinstance(record, dict):
+            return
+        card = str(record.get("card") or "")
+        choice = str(record.get("choice") or "")
+        if not card and not choice:
+            return
+        history = [dict(item) for item in (task.intent_history or []) if isinstance(item, dict)]
+        history.append(
+            {
+                "card": card,
+                "choice": choice,
+                "relation": str(record.get("relation") or ""),
+                "job": str(record.get("job") or ""),
+            }
+        )
+        task.intent_history = history
+
     def _assemble_plan(
         self,
         query: str,
@@ -1875,6 +1929,7 @@ class QteasyAssistant:
         clause_split = None
         revising = False
 
+        prior_messages = [dict(item) for item in (state.messages or []) if isinstance(item, dict)]
         if inbound == "composer" and asked:
             state.append_user_text(asked)
             self.session_store.save(state)
@@ -1885,6 +1940,15 @@ class QteasyAssistant:
                 if state.task is not None and isinstance(state.task.pending_clarification, dict)
                 else {}
             )
+            if pending.get("intent_authored") or pending.get("recover_authored"):
+                return self._answer_parse_card(
+                    state,
+                    pending,
+                    structured,
+                    asked,
+                    profile,
+                    debug,
+                )
             card_text, card_items = _take_card_payload(pending, structured)
             slot_revision = dict(card_text)
             kept_steps = self._kept_plan_steps(state)
@@ -1914,89 +1978,16 @@ class QteasyAssistant:
                 state.task.revision = int(state.task.revision or 0) + 1
                 if state.task.status in {"done", "cancelled", ""}:
                     state.task.mark_ready()
-        else:
-            web_typed_skip = (
-                not allow_composer_slot_fill
-                and state.task_status() == "clarifying"
-                and bool(asked)
-                and is_skip_clarify(asked)
-            )
-            if web_typed_skip:
-                gate = GateDecision(kind="new_intent", rationale="web_clarify_composer_new_task")
-            else:
-                gate = self.session_gate.classify(state, asked)
+        elif asked:
+            gate = self.session_gate.classify(state, asked)
             if gate.kind == "block_running":
+                plan = self._block_running_plan(asked, debug=debug)
+                if state.task is not None and state.task.plan_id:
+                    plan.plan_id = str(state.task.plan_id)
+                self._sync_session_from_plan(state, plan, query=asked, skip_classify=False)
                 self.session_store.save(state)
-                return self._block_running_plan(asked), state
-            if gate.kind == "abandon_plan":
-                if state.task is not None:
-                    state.cancel_task()
-                self.session_store.save(state)
-                dummy = ToolPlan(
-                    plan_id=str(state.task.plan_id or "") if state.task is not None else "",
-                    user_query=asked,
-                    steps=[],
-                    assumptions={"abandoned": True, "intent_job": "clarify"},
-                    execution_mode="dry_run",
-                    mode="plan",
-                    planner_trace={
-                        "intent_job": "clarify",
-                        "source": "session",
-                        "rationale": "abandon_plan",
-                    },
-                )
-                return dummy, state
-            elif gate.kind == "revise_plan":
-                revising = True
-                keep_plan_id = str(state.task.plan_id or "") if state.task is not None else ""
-                revision_query = asked
-                kept_steps = self._kept_plan_steps(state)
-                skip_classify = True
-            elif gate.kind == "new_intent":
-                from .slot_graph import split_task_and_question
-
-                clause_split = split_task_and_question(
-                    asked,
-                    self.planner.provider,
-                    identity_dir=getattr(self.planner, "identity_dir", None),
-                )
-                if clause_split.status == "marked" and clause_split.task:
-                    peek = self.planner.intent_engine.classify(clause_split.task)
-                else:
-                    peek = None
-                if peek is not None and str(getattr(peek, "job", "") or "") == "route_to_ask":
-                    dummy = ToolPlan(
-                        plan_id="",
-                        user_query=asked,
-                        steps=[],
-                        assumptions={"intent_job": "route_to_ask"},
-                        execution_mode="dry_run",
-                        mode="plan",
-                        planner_trace={"intent_job": "route_to_ask", "source": "session", "rationale": "ask_not_task"},
-                    )
-                    self.session_store.save(state)
-                    return dummy, state
-                backgrounded = is_live_backgrounded(state.session_id)
-                topic_skipped = bool(
-                    state.task and state.task.status in {"clarifying", "ready", "running"}
-                ) and not backgrounded
-                if topic_skipped and state.task is not None:
-                    state.prior_inputs = {
-                        str(name): slot.value
-                        for name, slot in (state.task.slots or {}).items()
-                        if getattr(slot, "confirmed", False) and slot.value not in (None, "")
-                    }
-                else:
-                    state.prior_inputs = {}
-                if topic_skipped:
-                    state.cancel_task()
-                state.start_task(query=asked)
-                merge_facts(state, new_task_patches(asked), source="extracted", confirmed=True)
-                skip_classify = False
-            else:
-                if state.task is None:
-                    state.start_task(query=asked)
-                merge_facts(state, new_task_patches(asked), source="extracted", confirmed=True)
+                return plan, state
+            return self._composer_parse(state, asked, prior_messages, profile, debug)
 
         if inbound == "control" and state.task is not None:
             _append_clarify_history(state.task, pending, card_text, card_items)
@@ -2014,22 +2005,7 @@ class QteasyAssistant:
             clause_split=clause_split,
             debug=debug,
         )
-        record_slots = ((getattr(plan, "assumptions", None) or {}).get("fill_record") or {}).get("slots")
-        if isinstance(record_slots, list):
-            for item in record_slots:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "")
-                if not name:
-                    continue
-                value = item.get("value")
-                source = str(item.get("source") or "")
-                if source == "default":
-                    state.set_slot(name, value, source="default", confirmed=False)
-                elif source == "user" and _holding_still_open(value):
-                    state.set_slot(name, value, source="user", confirmed=False)
-                elif source == "user":
-                    merge_facts(state, {name: value}, source="user", confirmed=True)
+        _merge_fill_slots(state, plan)
         if keep_plan_id and (inbound == "control" or revising):
             plan.plan_id = keep_plan_id
         if topic_skipped:
@@ -2117,20 +2093,69 @@ class QteasyAssistant:
         self.session_store.save(state)
         return plan, state
 
-    def _block_running_plan(self, query: str) -> Any:
-        """高副作用 running 时拒绝换题。"""
+    def _block_running_plan(self, query: str, *, debug: bool = False) -> Any:
+        """高副作用 running 时拒绝换题。请用户等待，或放弃当前计划。"""
 
+        record = {
+            "utterance": str(query or ""),
+            "intent_text": "",
+            "clarification_text": "",
+            "open_intent": "",
+            "job": "",
+            "task": "",
+            "questions": [],
+            "relation": "",
+            "plan_id": "",
+            "candidates": [],
+            "confirmed_by": "",
+            "card": "",
+            "choice": "",
+            "constitution_hint": "",
+            "block_hint": BLOCK_HINT,
+            "open_note": "",
+            "executable": False,
+        }
+        trace: Dict[str, Any] = {
+            "intent_job": "clarify",
+            "source": "session",
+            "rationale": "block_running",
+        }
+        if debug:
+            trace["parse_debug"] = [
+                {
+                    "outline": "",
+                    "fetched": "",
+                    "protocol": "",
+                    "gold_id": "",
+                    "rationale": "block_running",
+                }
+            ]
         return ToolPlan(
             plan_id=new_plan_id(),
             user_query=query,
-            steps=[],
+            steps=[
+                self.planner._make_step(
+                    step_id="step_1",
+                    skill_name="qt.ai.system.fallback",
+                    inputs=self.planner._fallback_step_inputs(
+                        query=query,
+                        action="clarify_required",
+                        reason="block_running",
+                        hint=BLOCK_HINT,
+                        missing_info="none",
+                        next_step="Wait for the running plan to finish, or abandon it.",
+                    ),
+                )
+            ],
             assumptions={
                 "intent_job": "clarify",
                 "block_running": True,
+                "parse_record": record,
+                "hold_execution": True,
             },
             execution_mode="dry_run",
             mode="plan",
-            planner_trace={"intent_job": "clarify", "source": "session", "rationale": "block_running"},
+            planner_trace=trace,
         )
 
     def confirm_kb_write(
@@ -2303,7 +2328,10 @@ class QteasyAssistant:
         missing = list((plan.assumptions or {}).get("session_missing") or [])
         clarification = (plan.assumptions or {}).get("clarification")
         if state.task is None:
-            return
+            parsed_now = (plan.assumptions or {}).get("parse_record")
+            if not isinstance(parsed_now, dict):
+                return
+            state.start_task(query=query)
         answerable = isinstance(clarification, dict) and clarification_needs_answer(clarification)
         closed_note = isinstance(clarification, dict) and bool(clarification) and not answerable
         if closed_note:
@@ -2323,6 +2351,12 @@ class QteasyAssistant:
         record = (plan.assumptions or {}).get("fill_record")
         if isinstance(record, dict):
             state.task.fill_record = dict(record)
+        parsed = (plan.assumptions or {}).get("parse_record")
+        if isinstance(parsed, dict):
+            state.task.parse_record = dict(parsed)
+        debug_rows = (plan.planner_trace or {}).get("parse_debug")
+        if isinstance(debug_rows, list) and debug_rows:
+            state.task.parse_debug = [dict(item) for item in debug_rows if isinstance(item, dict)]
 
     @staticmethod
     def _apply_clarify_answer_streak(

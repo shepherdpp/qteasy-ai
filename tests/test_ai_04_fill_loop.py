@@ -68,6 +68,26 @@ def _pending(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [item for item in (card.get("pending") or []) if isinstance(item, dict)]
 
 
+def _parse(sentence: str, job: str) -> str:
+    """一次合并协议。办事原文就是这句，没有附带询问。"""
+
+    return json.dumps(
+        {
+            "job": job,
+            "intent_text": sentence,
+            "clarification_text": "",
+            "open_intent": "",
+            "task": sentence,
+            "questions": [],
+            "candidates": [],
+            "relation": "new",
+            "plan_id": "",
+            "fetch": "",
+        },
+        ensure_ascii=False,
+    )
+
+
 def _skills(plan: Dict[str, Any]) -> List[str]:
     """可见步骤的技能名。"""
 
@@ -120,9 +140,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
-                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    _parse(sentence, "research.hold_compare"),
                     fill,
                     card,
                 ],
@@ -190,9 +208,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+                    _parse(sentence, "research.factor_ic"),
                     bad,
                     good_card,
                 ],
@@ -422,9 +438,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+                    _parse(sentence, "research.factor_ic"),
                     bad,
                     card,
                 ],
@@ -444,9 +458,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+                    _parse(sentence, "research.factor_ic"),
                     bad,
                     card,
                     bad,
@@ -498,9 +510,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
-                    json.dumps({"job": "research.factor_ic"}, ensure_ascii=False),
+                    _parse(sentence, "research.factor_ic"),
                     bad,
                     card,
                 ],
@@ -538,9 +548,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "backtest.builtin"}, ensure_ascii=False),
-                    json.dumps({"job": "backtest.builtin"}, ensure_ascii=False),
+                    _parse(sentence, "backtest.builtin"),
                     json.dumps({}),
                     "not-json",
                 ],
@@ -607,9 +615,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
-                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    _parse(sentence, "research.hold_compare"),
                     fill,
                     card,
                 ],
@@ -673,9 +679,7 @@ class TestAi04FillLoop(unittest.TestCase):
             assistant = _assistant(
                 temp_dir,
                 [
-                    json.dumps({"task": sentence, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
-                    json.dumps({"job": "research.hold_compare"}, ensure_ascii=False),
+                    _parse(sentence, "research.hold_compare"),
                     fill,
                     card,
                 ],

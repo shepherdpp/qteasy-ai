@@ -57,6 +57,11 @@ def project_run_view(run: Mapping[str, Any]) -> Dict[str, Any]:
     view: Dict[str, Any] = {
         "steps": steps,
         "classify_protocol": str(trace.get("classify_protocol") or ""),
+        "parse_debug": [
+            dict(item)
+            for item in (trace.get("parse_debug") or [])
+            if isinstance(item, Mapping)
+        ],
     }
     fills = trace.get("fill_debug")
     if isinstance(fills, list):
@@ -95,7 +100,7 @@ def render_run_view(view: Mapping[str, Any], *, debug: bool = False) -> str:
     body = "\n".join(lines)
     if not debug:
         return body
-    extra = ["Classify protocol:", str(view.get("classify_protocol") or "")]
+    extra = ["Parse debug:", json.dumps(view.get("parse_debug") or [], ensure_ascii=False)]
     fills = view.get("fill_debug") if isinstance(view.get("fill_debug"), list) else []
     if fills:
         extra.append("Fill debug:")
