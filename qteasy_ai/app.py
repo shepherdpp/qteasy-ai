@@ -234,7 +234,7 @@ def _append_clarify_history(
     card_text: Dict[str, str],
     card_items: Dict[str, Any],
 ) -> None:
-    """把这一次已经回答的格子追加进历次澄清。新出的卡先不写进去。"""
+    """把这一次已经回答的格子追加进历次澄清。新回答的 error 先留空。"""
 
     rows = pending.get("pending") if isinstance(pending, dict) else None
     by_name: Dict[str, Dict[str, Any]] = {}
@@ -256,7 +256,7 @@ def _append_clarify_history(
                 "prompt": str(row.get("prompt") or ""),
                 "options": [dict(item) for item in (row.get("options") or []) if isinstance(item, dict)],
                 "answer": answer,
-                "error": str(row.get("error") or ""),
+                "error": "",
             }
         )
     if not slots:

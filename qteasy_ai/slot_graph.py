@@ -1334,6 +1334,30 @@ def _model_fill_candidates(
     return parsed, str(raw or "")
 
 
+def _open_slot_answers(history: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """每个槽的最后一条。有回答且 error 为空时，这条还没被质检拒绝。"""
+
+    last: Dict[str, Dict[str, Any]] = {}
+    for turn in history or []:
+        if not isinstance(turn, dict):
+            continue
+        for row in turn.get("slots") or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "")
+            if name:
+                last[name] = row
+    found: Dict[str, Dict[str, Any]] = {}
+    for name, row in last.items():
+        answer = row.get("answer")
+        if answer in (None, "", []):
+            continue
+        if str(row.get("error") or "").strip():
+            continue
+        found[name] = row
+    return found
+
+
 def _static_fill_candidates(
     sentence: str,
     history: Sequence[Dict[str, Any]],
@@ -1379,6 +1403,9 @@ def _fill_cycle(
         source = "model"
     else:
         candidates, source, protocol = _static_fill_candidates(sentence, history)
+    open_rows = _open_slot_answers(history)
+    for name, row in open_rows.items():
+        candidates[name] = row.get("answer")
     mentioned = {str(key) for key in candidates if str(key) != "mode"}
     report = _judge_slots(
         projected,
@@ -1389,6 +1416,12 @@ def _fill_cycle(
         history,
         held_back,
     )
+    rejected = report.get("rejected") if isinstance(report.get("rejected"), dict) else {}
+    for name, row in open_rows.items():
+        reason = str(rejected.get(name) or "")
+        if not reason or reason == _NOT_GIVEN:
+            continue
+        row["error"] = reason
     debug = {
         "fill_source": sentence,
         "history": [dict(item) for item in history if isinstance(item, dict)],

@@ -120,9 +120,9 @@ class TestAi04FillLoop(unittest.TestCase):
         self.assertNotEqual((steps[0].inputs or {}).get("start"), "20251340")
 
     def test_model_answer_stays_in_the_prompt(self) -> None:
-        """有模型时澄清回答只进提示词。协议没交的日期不补写。"""
+        """未拒绝的点选就是这一格的值。模型没交这格也不丢掉。"""
 
-        print("\n[TestAi04FillLoop] 回答只进提示词")
+        print("\n[TestAi04FillLoop] 未拒绝的点选进入质检")
         sentence = f"{_MARK} 600519 和 000858 做一条等权组合"
         fill = json.dumps({"start": "20251340"})
         card = json.dumps({
@@ -161,16 +161,22 @@ class TestAi04FillLoop(unittest.TestCase):
             )
             plan = _plan(second)
             prompt = provider.prompts[0] if provider.prompts else ""
-            blob = json.dumps(plan.get("steps") or [], ensure_ascii=False)
-            debug = ((plan.get("planner_trace") or {}).get("fill_debug") or [])
+            names = [item.get("name") for item in _pending(plan)]
+            task = assistant.session_store.load("s-prompt").task
+            history = task.clarify_history or []
+            slot = (history[0].get("slots") or [{}])[0] if history else {}
+            kept = ((plan.get("assumptions") or {}).get("fill_record") or {}).get("slots") or []
+            start_kept = next((item for item in kept if item.get("name") == "start"), {})
             print(" prompt has marker:", _MARK in prompt)
             print(" prompt has answer:", "20250405" in prompt)
-            print(" written blob has 20250405:", "20250405" in blob)
-            print(" debug source:", [item.get("candidate_source") for item in debug])
+            print(" history error:", slot.get("error"))
+            print(" pending:", names)
+            print(" kept start:", start_kept.get("value"))
             self.assertIn(_MARK, prompt)
             self.assertIn("20250405", prompt)
-            self.assertNotIn("20250405", blob)
-            self.assertNotIn(_MARK, blob)
+            self.assertEqual(slot.get("error"), "")
+            self.assertNotIn("start", names)
+            self.assertEqual(start_kept.get("value"), "20250405")
 
     def test_card_protocol_asks_only_rejected(self) -> None:
         """出卡协议要有说明、选项和开放输入，并且只问 rejected。"""
@@ -658,17 +664,16 @@ class TestAi04FillLoop(unittest.TestCase):
             self.assertIn("clarify", kinds)
 
     def test_history_carries_the_reject_reason(self) -> None:
-        """交卷后历次澄清带上拒因，下一圈填槽提示词看得到。"""
+        """点选质检不收时，拒因写回这一条。模型交 null 不写成用户未明确给出。"""
 
-        print("\n[TestAi04FillLoop] 历次澄清带拒因")
+        print("\n[TestAi04FillLoop] 质检拒因写回这一条回答")
         sentence = f"{_MARK} 600519 和 000858 做一条等权组合"
-        reason = "20251340 is not a date."
-        fill = json.dumps({"start": "20251340"})
+        fill = json.dumps({"start": None, "weights": None, "holdings": None})
         card = json.dumps({
             "questions": [
                 {
                     "name": name,
-                    "explanation": reason if name == "start" else f"Need {name}.",
+                    "explanation": "Need a start date." if name == "start" else f"Need {name}.",
                     "options": [{"id": "a", "label": "a"}, {"id": "b", "label": "b"}],
                     "open": {"label": "其它"},
                 }
@@ -688,8 +693,38 @@ class TestAi04FillLoop(unittest.TestCase):
             shown = next(item for item in _pending(_plan(first)) if item.get("name") == "start")
             print(" first error:", shown.get("error"))
             self.assertTrue(shown.get("error"))
-            assistant.apply_provider(FakeLLMProvider(replies=[json.dumps({"mode": "equal"})]))
-            assistant.plan(
+            assistant.apply_provider(FakeLLMProvider(replies=[
+                json.dumps({"start": None, "weights": None, "holdings": None}),
+                card,
+            ]))
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-hist",
+                patches={"start": "20251340"},
+                debug=True,
+            )
+            task = assistant.session_store.load("s-hist").task
+            history = task.clarify_history or []
+            slot = (history[0].get("slots") or [{}])[0] if history else {}
+            card_prompts = [
+                text for text in assistant.planner.provider.prompts
+                if text.startswith("Clarification protocol.")
+            ]
+            names = [item.get("name") for item in _pending(_plan(second))]
+            print(" history error:", slot.get("error"))
+            print(" card prompt has history error:", f"error={slot.get('error')}" in (card_prompts[-1] if card_prompts else ""))
+            print(" pending:", names)
+            self.assertIn("20251340", str(slot.get("error") or ""))
+            self.assertNotEqual(slot.get("error"), shown.get("error"))
+            self.assertNotEqual(slot.get("error"), _NOT_GIVEN)
+            self.assertIn("start", names)
+            self.assertIn(f"error={slot.get('error')}", card_prompts[-1])
+            assistant.apply_provider(FakeLLMProvider(replies=[
+                json.dumps({"start": None, "weights": None, "holdings": None}),
+                card,
+            ]))
+            third = assistant.plan(
                 "",
                 response_style="raw",
                 session_id="s-hist",
@@ -698,12 +733,23 @@ class TestAi04FillLoop(unittest.TestCase):
             )
             task = assistant.session_store.load("s-hist").task
             history = task.clarify_history or []
-            slot = (history[0].get("slots") or [{}])[0] if history else {}
-            prompt = assistant.planner.provider.prompts[0] if assistant.planner.provider.prompts else ""
-            print(" history error:", slot.get("error"))
-            print(" prompt has error:", slot.get("error") in prompt)
-            self.assertEqual(slot.get("error"), shown.get("error"))
-            self.assertIn(f"error={shown.get('error')}", prompt)
+            fresh = (history[-1].get("slots") or [{}])[0] if history else {}
+            fill_prompts = [
+                text for text in assistant.planner.provider.prompts
+                if text.startswith("Slot protocol.")
+            ]
+            kept = ((_plan(third).get("assumptions") or {}).get("fill_record") or {}).get("slots") or []
+            start_kept = next((item for item in kept if item.get("name") == "start"), {})
+            third_names = [item.get("name") for item in _pending(_plan(third))]
+            print(" fresh error:", fresh.get("error"))
+            print(" next fill sees prior error:", slot.get("error") in (fill_prompts[0] if fill_prompts else ""))
+            print(" kept start:", start_kept.get("value"))
+            print(" third pending:", third_names)
+            self.assertEqual(fresh.get("answer"), "20250405")
+            self.assertEqual(fresh.get("error"), "")
+            self.assertIn(str(slot.get("error")), fill_prompts[0])
+            self.assertEqual(start_kept.get("value"), "20250405")
+            self.assertNotIn("start", third_names)
 
     def test_null_freq_is_not_written(self) -> None:
         """用户没给出的频率交 null，步骤上不写 d。"""
