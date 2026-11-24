@@ -78,7 +78,7 @@ class TestAiNotebookMagic(unittest.TestCase):
             )
             plan_cache = {}
 
-            run_command = parse_magic_command("--mode run --raw 列出所有内置策略")
+            run_command = parse_magic_command("--mode run --raw list built-in strategies")
             run_outcome = execute_magic_command(run_command, assistant=assistant, plan_cache=plan_cache)
             run_payload = run_outcome["result"]
             plan_id = run_outcome["plan_id"]
@@ -162,10 +162,10 @@ class TestAiNotebookMagic(unittest.TestCase):
             accepted = (payload["plan"].get("assumptions") or {}).get("accepted_steps") or []
             print(" accepted:", accepted)
             self.assertEqual(names, ["qt.ai.system.fallback"])
-            self.assertEqual(inputs.get("reason"), "missing_required_slots")
+            self.assertEqual(inputs.get("missing_info"), "intent")
             self.assertNotIn("20240101", json.dumps(accepted, ensure_ascii=False))
             self.assertNotIn("20241231", json.dumps(accepted, ensure_ascii=False))
-            self.assertEqual(payload["plan"]["planner_trace"].get("intent_job"), "data.refill")
+            self.assertEqual(payload["plan"]["planner_trace"].get("intent_job"), "")
 
     def test_notebook_ask_session_zero_skill(self) -> None:
         """Ask 带 session-id 仍无 execution。"""

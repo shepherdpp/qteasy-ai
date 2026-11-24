@@ -16,7 +16,9 @@ from typing import Any, Dict, List, Optional
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
+from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.slot_graph import kernel_window, revision_target
+from tests.parse_protocol import protocol_reply
 
 _FIRST = "我想找两只股票创建一个组合，进行对比。"
 _SHORT = "600519 和 000858 做一条等权组合"
@@ -31,6 +33,36 @@ _READY = "600519 和 000858 做一条等权组合，看过去一段时间的持�
 _FREQ_READY = "600519 和 000858 做一条等权组合，周线"
 _END_ONLY = "600519 和 000858 做一条等权组合，到 2023 年"
 _DATE = re.compile(r"(?<!\d)20\d{6}(?!\d)")
+
+
+def _arm(assistant: QteasyAssistant, query: str, job: str, relation: str = "") -> None:
+    """下一句用一份合并协议，不再靠触发词换图。"""
+
+    asked = json.dumps(
+        {
+            "questions": [
+                {
+                    "name": name,
+                    "explanation": "Please provide " + name + ".",
+                    "open": {"label": "Type a value"},
+                }
+                for name in (
+                    "holdings",
+                    "benchmark",
+                    "start",
+                    "end",
+                    "freq",
+                    "shares",
+                    "strategy_id",
+                    "weights",
+                )
+            ]
+        },
+        ensure_ascii=False,
+    )
+    assistant.planner.provider = FakeLLMProvider(
+        replies=[protocol_reply(query, job, relation), "{}", asked]
+    )
 
 
 def _assistant(temp_dir: str) -> QteasyAssistant:
@@ -125,6 +157,7 @@ class TestAi04RevisePlan(unittest.TestCase):
         print("\n[TestAi04RevisePlan] 三句升级")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
+            _arm(assistant, _FIRST, "research.hold_compare")
             first = assistant.plan(_FIRST, response_style="raw", session_id="s-three")
             state = assistant.session_store.load("s-three")
             plan = _show("first", first, state)
@@ -139,6 +172,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertTrue(plan_id)
             self.assertEqual(state.task.user_query, _FIRST)
 
+            _arm(assistant, _BENCH, "research.hold_compare", "revise")
             second = assistant.plan(_BENCH, response_style="raw", session_id="s-three")
             state = assistant.session_store.load("s-three")
             plan = _show("bench", second, state)
@@ -152,6 +186,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertIn("holdings", [item.get("name") for item in _pending(plan)])
             self.assertEqual(state.task.user_query, _FIRST)
 
+            _arm(assistant, _WINDOW, "research.hold_compare", "revise")
             third = assistant.plan(_WINDOW, response_style="raw", session_id="s-three")
             state = assistant.session_store.load("s-three")
             plan = _show("window", third, state)
@@ -182,7 +217,9 @@ class TestAi04RevisePlan(unittest.TestCase):
         print("\n[TestAi04RevisePlan] 周线不换图")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
+            _arm(assistant, _FIRST, "research.hold_compare")
             assistant.plan(_FIRST, response_style="raw", session_id="s-week")
+            _arm(assistant, _WEEK, "research.hold_compare", "revise")
             result = assistant.plan(_WEEK, response_style="raw", session_id="s-week")
             state = assistant.session_store.load("s-week")
             plan = _show("week", result, state)
@@ -217,6 +254,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertIn("## What will run", markdown)
             self.assertIn("600519.SH", markdown)
 
+            _arm(assistant, _DAILY, "data.read", "revise")
             third = assistant.plan(_DAILY, response_style="raw", session_id="s-daily")
             state = assistant.session_store.load("s-daily")
             plan = _show("switched", third, state)
@@ -246,6 +284,7 @@ class TestAi04RevisePlan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
             assistant.plan(_SHORT, response_style="raw", session_id="s-stay")
+            _arm(assistant, _DAILY_BENCH, "research.hold_compare", "revise")
             result = assistant.plan(_DAILY_BENCH, response_style="raw", session_id="s-stay")
             state = assistant.session_store.load("s-stay")
             plan = _show("stay", result, state)
@@ -288,6 +327,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             state = assistant.session_store.load("s-one-bench")
             ready = _show("short", opened, state)
             self.assertTrue(_confirmable(ready))
+            _arm(assistant, _BENCH, "research.hold_compare", "revise")
             result = assistant.plan(_BENCH, response_style="raw", session_id="s-one-bench")
             state = assistant.session_store.load("s-one-bench")
             plan = _show("one-bench", result, state)
@@ -297,7 +337,9 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertEqual(_codes(portfolio.get("holdings")), ["600519.SH", "000858.SZ"])
             self.assertNotEqual(str((portfolio.get("benchmark") or {}).get("code") or ""), "000300.SH")
 
+            assistant.planner.provider = None
             assistant.plan(_SHORT, response_style="raw", session_id="s-one-week")
+            _arm(assistant, _WEEK, "research.hold_compare", "revise")
             week = assistant.plan(_WEEK, response_style="raw", session_id="s-one-week")
             state = assistant.session_store.load("s-one-week")
             plan = _show("one-week", week, state)
@@ -330,8 +372,10 @@ class TestAi04RevisePlan(unittest.TestCase):
         print("\n[TestAi04RevisePlan] 优化参数换图")
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = _assistant(temp_dir)
+            backtest_query = "macd 回测 000001.SZ 从 20200101 到 20201231"
+            _arm(assistant, backtest_query, "backtest.builtin")
             first = assistant.plan(
-                "macd 回测 000001.SZ 从 20200101 到 20201231",
+                backtest_query,
                 response_style="raw",
                 session_id="s-opt",
             )
@@ -339,7 +383,9 @@ class TestAi04RevisePlan(unittest.TestCase):
             opened = _show("backtest", first, state)
             plan_id = str(opened.get("plan_id") or "")
             self.assertEqual(_job(opened), "backtest.builtin")
-            second = assistant.plan("再帮我优化参数", response_style="raw", session_id="s-opt")
+            follow = "再帮我优化参数"
+            _arm(assistant, follow, "optimize.builtin", "revise")
+            second = assistant.plan(follow, response_style="raw", session_id="s-opt")
             state = assistant.session_store.load("s-opt")
             plan = _show("optimize", second, state)
             replaced = (plan.get("assumptions") or {}).get("replaced_steps") or []
@@ -374,6 +420,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             assistant.cancel_unexecuted_plan("s-cancel")
             cancelled = assistant.session_store.load("s-cancel")
             self.assertEqual(cancelled.task.status, "cancelled")
+            _arm(assistant, _BENCH, "research.hold_compare", "new")
             nxt = assistant.plan(_BENCH, response_style="raw", session_id="s-cancel")
             after = assistant.session_store.load("s-cancel")
             plan = _show("after-cancel", nxt, after)
@@ -383,6 +430,7 @@ class TestAi04RevisePlan(unittest.TestCase):
             self.assertNotEqual(plan.get("plan_id"), old_id)
             self.assertEqual(again_steps, saved_steps)
 
+            assistant.planner.provider = None
             ready = assistant.plan(_SHORT, response_style="raw", session_id="s-confirm")
             state = assistant.session_store.load("s-confirm")
             confirmed = _show("confirm-ready", ready, state)
@@ -396,6 +444,7 @@ class TestAi04RevisePlan(unittest.TestCase):
                 print(" run_plan error:", type(exc).__name__, exc)
             running = assistant.session_store.load("s-confirm")
             print(" after confirm status:", None if running.task is None else running.task.status)
+            _arm(assistant, _BENCH, "research.hold_compare", "new")
             later = assistant.plan(_BENCH, response_style="raw", session_id="s-confirm")
             state = assistant.session_store.load("s-confirm")
             plan = _show("after-confirm", later, state)

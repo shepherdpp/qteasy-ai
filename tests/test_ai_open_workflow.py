@@ -8,6 +8,7 @@
 # Unittest for G.7 Catalog workflow fork (open design loop)
 # ======================================
 
+import json
 import unittest
 from typing import Optional
 
@@ -16,6 +17,7 @@ from qteasy_ai.intents import load_default_catalog
 from qteasy_ai.planner import Planner, ToolPlan
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
+from tests.parse_protocol import protocol_reply
 
 
 class TestAiOpenWorkflow(unittest.TestCase):
@@ -88,11 +90,34 @@ class TestAiOpenWorkflow(unittest.TestCase):
         """pct_chg 不是 history 列时澄清，不出 IC 步。"""
 
         print("\n[TestAiOpenWorkflow] unknown pct_chg clarifies")
-        query = (
-            "factor IC of close vs pct_chg for 000001.SZ,000002.SZ "
-            "from 20240101 to 20240331"
+        query = "factor IC summary for selection pool"
+        asked = json.dumps(
+            {
+                "questions": [
+                    {
+                        "name": name,
+                        "explanation": "Please provide " + name + ".",
+                        "open": {"label": "Type a value"},
+                    }
+                    for name in (
+                        "factor_htype",
+                        "return_htype",
+                        "shares",
+                        "start",
+                        "end",
+                    )
+                ]
+            },
+            ensure_ascii=False,
         )
-        plan = Planner(self.registry, env_facts={}).build_plan(query, mode="plan")
+        fake = FakeLLMProvider(
+            replies=[
+                protocol_reply(query, "research.factor_ic"),
+                json.dumps({"return_htype": "pct_chg"}, ensure_ascii=False),
+                asked,
+            ]
+        )
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [step.skill_name for step in plan.steps]
         inputs = plan.steps[0].inputs if plan.steps else {}
         print(" skills:", names)
@@ -416,11 +441,11 @@ class TestAiOpenWorkflow(unittest.TestCase):
         print("\n[TestAiOpenWorkflow] system open job")
         import json
 
+        from tests.parse_protocol import open_parsed
+
         query = "xyzzy unmatched formula 12345"
         fake = FakeLLMProvider(
             replies=[
-                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
-                json.dumps({"job": "open"}),
                 json.dumps(
                     {
                         "steps": [
@@ -430,7 +455,11 @@ class TestAiOpenWorkflow(unittest.TestCase):
                 ),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            query,
+            mode="plan",
+            parsed=open_parsed(query),
+        )
         names = [step.skill_name for step in plan.steps]
         print(" intent:", plan.planner_trace.get("intent_job"), "skills:", names)
         print(" design_loop:", (plan.assumptions or {}).get("design_loop"))
@@ -515,7 +544,7 @@ class TestAiClarifyEmitS1(unittest.TestCase):
         from qteasy_ai.app import build_default_registry
 
         plan = Planner(build_default_registry(), env_facts={}).build_plan(
-            "请帮我列出内置交易策略的参数",
+            "列出策略参数",
             mode="plan",
         )
         clar = (plan.assumptions or {}).get("clarification") or {}

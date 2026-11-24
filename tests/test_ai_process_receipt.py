@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
-from qteasy_ai.human_card import clarify_receipt_line, drop_closed_clarification
+from qteasy_ai.human_card import drop_closed_clarification
 from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.provider import FakeLLMProvider
@@ -32,18 +32,6 @@ _STEPS = [
 _TOO_MANY = _STEPS + [
     {"skill_name": "qt.ai.hp.volatility", "inputs": {}, "depends_on": ["step_2"]},
 ]
-
-
-def _job(payload: dict) -> str:
-    """分类罐头。"""
-
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _clause(text: str) -> str:
-    """整句是办事，没有附带提问。"""
-
-    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
 
 
 class _ProbeProvider(FakeLLMProvider):
@@ -76,10 +64,9 @@ class TestAiProcessReceipt(unittest.TestCase):
             store = MemoryStore(base_dir=temp_dir)
             fake = _ProbeProvider(
                 replies=[
-                    _clause(_ZH),
-                    _job({"job": "clarify"}),
-                    _job({"job": "clarify"}),
+                    "not-a-protocol",
                     json.dumps({"steps": _STEPS}),
+                    json.dumps({"shares": "000300.SH"}),
                 ],
                 store=store,
                 session_id="s-receipt",
@@ -87,37 +74,29 @@ class TestAiProcessReceipt(unittest.TestCase):
             asst = QteasyAssistant(provider=fake, registry=self.registry, memory_store=store)
             asst.plan(_ZH, response_style="raw", session_id="s-receipt")
             asst.on_stage = lambda stage_id, text: calls.append((stage_id, text))
-            asst.plan(
+            second = asst.plan(
                 "",
                 response_style="raw",
                 session_id="s-receipt",
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": "confirm_open_intent"},
             )
             seen = fake.seen
             texts = [str(row.get("text") or "") for row in (seen.messages if seen else [])]
-            clarify = next(row for row in seen.messages if row.get("kind") == "clarify")
-            payload = clarify.get("payload") or {}
+            pending = None if seen is None or seen.task is None else seen.task.pending_clarification
+            plan = second.get("plan") or {}
+            skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
             print(" texts:", texts)
-            print(" answer:", payload.get("answer"), payload.get("answer_label"), payload.get("status"))
             print(" calls:", calls)
-            print(" pending:", None if seen.task is None else seen.task.pending_clarification)
+            print(" pending during compose:", pending)
+            print(" skills:", skills)
             self.assertIsNotNone(seen)
-            self.assertEqual(payload.get("status"), "answered")
-            self.assertEqual(payload.get("answer"), "compose_open")
-            self.assertEqual(payload.get("answer_label"), "给出开放计划")
-            receipt = clarify_receipt_line(str(clarify.get("text") or ""), payload)
-            print(" receipt:", receipt)
-            self.assertEqual(receipt, "用户已选 给出开放计划")
-            self.assertIn("正在创建开放计划", texts)
-            self.assertEqual(calls, [("compose_open", "正在创建开放计划")])
-            self.assertIsNone(seen.task.pending_clarification)
-            notice = next(row for row in seen.messages if row.get("text") == "正在创建开放计划")
-            print(" stage:", notice.get("payload"))
-            self.assertEqual((notice.get("payload") or {}).get("stage_id"), "compose_open")
-            self.assertNotIn("planner_trace", notice.get("text") or "")
-            self.assertNotIn("qt.ai", notice.get("text") or "")
-            self.assertNotIn("llm_uncertain", notice.get("text") or "")
-            self.assertEqual(texts.count("正在创建开放计划"), 1)
+            self.assertEqual(calls, [])
+            self.assertTrue((pending or {}).get("intent_authored"))
+            self.assertEqual(
+                skills,
+                ["qt.ai.data.kline", "qt.ai.hp.returns", "qt.ai.hp.plot"],
+            )
+            self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "open")
 
     def test_unmatched_notice_then_too_many_keeps_the_placeholder(self) -> None:
         """未匹配先写一句；超步数后占位还在，且不回到三选卡。"""
@@ -126,9 +105,7 @@ class TestAiProcessReceipt(unittest.TestCase):
         calls = []
         fake = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _TOO_MANY}),
             ]
         )
@@ -143,17 +120,15 @@ class TestAiProcessReceipt(unittest.TestCase):
             first_payload = asst.plan(_ZH, response_style="raw", session_id=sid)
             first = asst.session_store.load(sid)
             first_texts = [str(row.get("text") or "") for row in first.messages]
-            first_trace = (first_payload.get("plan") or {}).get("planner_trace") or {}
-            match = next(row for row in first.messages if (row.get("payload") or {}).get("stage_id") == "match")
-            match_text = str(match.get("text") or "")
+            first_names = [
+                item.get("name")
+                for item in (((first_payload.get("plan") or {}).get("assumptions") or {}).get("clarification") or {}).get("pending") or []
+                if isinstance(item, dict)
+            ]
             print(" first:", first_texts)
-            print(" first trace:", first_trace)
-            print(" first match:", match_text)
+            print(" first pending:", first_names)
             print(" first calls:", calls)
-            self.assertNotIn("未匹配到现成操作模版", first_texts)
-            self.assertEqual(match_text, render_match_notice(first_trace, chinese=True))
-            if "llm_uncertain" in match_text:
-                self.assertIn("llm_uncertain", str(first_trace.get("rationale") or ""))
+            self.assertEqual(first_names, ["intent"])
             self.assertEqual(calls, [])
 
             calls.clear()
@@ -161,7 +136,7 @@ class TestAiProcessReceipt(unittest.TestCase):
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": "confirm_open_intent"},
             )
             after = asst.session_store.load(sid)
             texts = [str(row.get("text") or "") for row in after.messages]
@@ -171,46 +146,17 @@ class TestAiProcessReceipt(unittest.TestCase):
             reason = ((plan.get("steps") or [{}])[0].get("inputs") or {}).get("reason")
             print(" reason:", reason)
             self.assertEqual(reason, "open_too_many_steps")
-            self.assertIn("正在创建开放计划", texts)
-            self.assertLess(
-                texts.index("正在创建开放计划"),
-                max(index for index, text in enumerate(texts) if text),
-            )
-            unanswered = [
-                row
-                for row in after.messages
-                if row.get("kind") == "clarify"
-                and str((row.get("payload") or {}).get("status") or "") not in {"answered", "skipped"}
+            self.assertNotIn("正在创建开放计划", texts)
+            pending_names = [
+                item.get("name")
+                for item in ((after.task.pending_clarification or {}).get("pending") or [])
+                if isinstance(item, dict)
             ]
-            errors = [row for row in after.messages if row.get("kind") == "error"]
-            print(" unanswered:", len(unanswered), "errors:", [row.get("text") for row in errors])
-            print(" status:", after.task.status if after.task else None)
-            self.assertEqual(unanswered, [])
-            self.assertTrue(errors)
-            self.assertIn("open_too_many_steps", str(errors[-1].get("text") or ""))
-            self.assertIsNone(after.task.pending_clarification)
-            self.assertEqual(after.task.status, "done")
-            self.assertEqual(calls, [("compose_open", "正在创建开放计划")])
-            stage_rows = [
-                row
-                for row in after.messages
-                if (row.get("payload") or {}).get("stage_id")
-            ]
-            stage_text = "\n".join(str(row.get("text") or "") for row in stage_rows)
-            second_trace = (second.get("plan") or {}).get("planner_trace") or {}
-            second_match = next(
-                row for row in stage_rows if (row.get("payload") or {}).get("stage_id") == "match" and row.get("text") != match_text
-            )
-            print(" stage texts:", stage_text)
-            print(" second trace:", second_trace)
-            print(" second match:", second_match.get("text"))
-            self.assertEqual(second_match.get("text"), render_match_notice(second_trace, chinese=True))
-            self.assertNotIn("任务 open", str(second_match.get("text") or ""))
-            self.assertNotIn("planner_trace", stage_text)
-            self.assertNotIn("qt.ai", stage_text)
-            if "llm_uncertain" in stage_text:
-                self.assertIn("llm_uncertain", str(first_trace.get("rationale") or ""))
-                self.assertIn("llm_uncertain", str(second_trace.get("rationale") or ""))
+            print(" pending:", pending_names, "status:", after.task.status if after.task else None)
+            print(" calls:", calls)
+            self.assertEqual(pending_names, ["recover"])
+            self.assertEqual(after.task.status, "clarifying")
+            self.assertEqual(calls, [])
 
     def test_closed_run_clarification_is_not_projected_again(self) -> None:
         """已答之后，旧 run 的澄清块不再变成一张未答卡。"""
@@ -218,9 +164,7 @@ class TestAiProcessReceipt(unittest.TestCase):
         print("\n[TestAiProcessReceipt] 已关闭澄清不再投影")
         fake = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _STEPS}),
                 json.dumps({"shares": "000300.SH"}),
             ]
@@ -237,7 +181,7 @@ class TestAiProcessReceipt(unittest.TestCase):
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": "confirm_open_intent"},
             )
             session = asst.session_store.load(sid)
             stale = {
@@ -263,13 +207,9 @@ class TestAiProcessReceipt(unittest.TestCase):
             print(" transcript tail:", [row.get("kind") for row in session.messages[-4:]])
             self.assertNotIn("clarify", kinds)
             self.assertEqual(state.sidebar.missing, [])
-            answered = [
-                row
-                for row in session.messages
-                if row.get("kind") == "clarify" and (row.get("payload") or {}).get("answer_label") == "给出开放计划"
-            ]
-            print(" answered labels:", [(row.get("payload") or {}).get("answer_label") for row in answered])
-            self.assertTrue(answered)
+            guides = [row for row in session.messages if "Choose a listed job" in str(row.get("text") or "")]
+            print(" intent guides:", len(guides))
+            self.assertTrue(guides)
             cleaned = drop_closed_clarification(stale)
             print(" cleaned keys:", sorted(cleaned))
             self.assertNotIn("clarification", cleaned)

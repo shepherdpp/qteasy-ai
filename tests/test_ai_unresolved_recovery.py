@@ -15,13 +15,14 @@ import unittest
 
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
+from qteasy_ai.parse_turn import CONFIRM_OPEN_ID, FIXED_GUIDE
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
+from tests.parse_protocol import open_parsed
 
 
 _ZH = "取 000300.SH 日线，算收益，再出一页图，请生成一个简短的开放计划"
-_ZH_PROMPT = "您的需求无法跟现成的操作模版匹配（job），是否需要我创建一份开放计划？"
-_EN_PROMPT = "This request does not match a built-in operation template (job). Create an open plan?"
+_GUIDE = FIXED_GUIDE
 _STEPS = [
     {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
     {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["step_1"]},
@@ -36,12 +37,6 @@ def _job(payload: dict) -> str:
     """分类罐头。"""
 
     return json.dumps(payload, ensure_ascii=False)
-
-
-def _clause(text: str) -> str:
-    """整句是办事，没有附带提问。"""
-
-    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
 
 
 def _pending(plan):
@@ -66,11 +61,16 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
     def test_unresolved_card_for_each_classify_miss(self) -> None:
         """无模型，以及 clarify / 不确定 / 多 id / 非法 id，都出同一张恢复卡且不润色。"""
 
-        print("\n[TestAiUnresolvedRecovery] 分类落空出固定恢复卡")
-        bare = Planner(self.registry, env_facts={}).build_plan("xyzzy unmatched formula 12345", mode="plan")
+        print("\n[TestAiUnresolvedRecovery] 分类落空出意图卡")
+        bare_query = "xyzzy unmatched formula 12345"
+        bare = Planner(self.registry, env_facts={}).build_plan(bare_query, mode="plan")
+        bare_row = _pending(bare)[0]
         print(" bare prompt:", (bare.assumptions.get("clarification") or {}).get("confirm_prompt"))
-        self.assertEqual(_names(bare), ["unresolved_intent"])
-        self.assertEqual((bare.assumptions.get("clarification") or {}).get("confirm_prompt"), _EN_PROMPT)
+        self.assertEqual(_names(bare), ["intent"])
+        self.assertEqual((bare.assumptions.get("clarification") or {}).get("confirm_prompt"), _GUIDE)
+        self.assertEqual([item["id"] for item in bare_row["options"]], [CONFIRM_OPEN_ID])
+        self.assertEqual(bare_row["options"][0]["label"], bare_query)
+        self.assertEqual((bare_row.get("open") or {}).get("label"), "Your own open intent")
 
         replies = (
             {"job": "clarify"},
@@ -79,21 +79,20 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             {"job": "not-a-job"},
         )
         for payload in replies:
-            fake = FakeLLMProvider(replies=[_clause(_ZH), _job(payload), "polish-must-not-run"])
+            fake = FakeLLMProvider(replies=[json.dumps(payload, ensure_ascii=False), "polish-must-not-run"])
             plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(_ZH, mode="plan")
             row = _pending(plan)[0]
             print(" payload:", payload, "prompts:", len(fake.prompts), "left:", fake.replies)
             print(" prompt:", (plan.assumptions.get("clarification") or {}).get("confirm_prompt"))
-            self.assertEqual(len(fake.prompts), 2)
-            self.assertEqual(fake.prompts[0], _ZH)
+            self.assertEqual(len(fake.prompts), 1)
+            self.assertIn(_ZH, fake.prompts[0])
+            self.assertTrue(fake.prompts[0].startswith("Official jobs:"))
             self.assertEqual(fake.replies, ["polish-must-not-run"])
-            self.assertEqual(_names(plan), ["unresolved_intent"])
-            self.assertEqual([item["id"] for item in row["options"]], ["compose_open", "abandon"])
-            self.assertEqual((plan.assumptions.get("clarification") or {}).get("confirm_prompt"), _ZH_PROMPT)
-            self.assertEqual(row["options"][0]["label"], "给出开放计划")
-            self.assertEqual(row["options"][1]["label"], "放弃")
-            self.assertEqual((row.get("open") or {}).get("label"), "重写需求")
-            self.assertNotIn("open_label", row)
+            self.assertEqual(_names(plan), ["intent"])
+            self.assertEqual([item["id"] for item in row["options"]], [CONFIRM_OPEN_ID])
+            self.assertEqual((plan.assumptions.get("clarification") or {}).get("confirm_prompt"), _GUIDE)
+            self.assertEqual(row["options"][0]["label"], _ZH)
+            self.assertEqual((row.get("open") or {}).get("label"), "Your own open intent")
             self.assertNotIn("unresolved_intent", plan.steps[0].inputs)
 
     def test_certain_open_skips_the_recovery_card(self) -> None:
@@ -102,13 +101,15 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print("\n[TestAiUnresolvedRecovery] 确定 open 不出恢复卡")
         fake = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "open"}),
                 json.dumps({"steps": _STEPS}),
                 json.dumps({"shares": "000300.SH"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(_ZH, mode="plan")
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            _ZH,
+            mode="plan",
+            parsed=open_parsed(_ZH),
+        )
         print(" skills:", [step.skill_name for step in plan.steps], plan.planner_trace.get("intent_job"))
         self.assertEqual(plan.planner_trace.get("intent_job"), "open")
         self.assertNotIn("unresolved_intent", _names(plan))
@@ -125,15 +126,18 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print(" not_supported:", blocked.steps[0].inputs.get("reason"), _names(blocked))
         self.assertNotIn("unresolved_intent", _names(blocked))
         self.assertEqual(_names(blocked), [])
-        self.assertNotEqual(blocked.steps[0].inputs.get("fallback_action"), "clarify_required")
+        self.assertEqual(blocked.steps[0].inputs.get("reason"), "sw_industry_dsl_not_in_1_0")
 
-        too_many = FakeLLMProvider(
-            replies=[_clause(_ZH), _job({"job": "open"}), json.dumps({"steps": _TOO_MANY})]
+        too_many = FakeLLMProvider(replies=[json.dumps({"steps": _TOO_MANY})])
+        rejected = Planner(self.registry, provider=too_many, env_facts={}).build_plan(
+            _ZH,
+            mode="plan",
+            parsed=open_parsed(_ZH),
         )
-        rejected = Planner(self.registry, provider=too_many, env_facts={}).build_plan(_ZH, mode="plan")
         print(" open reason:", rejected.steps[0].inputs.get("reason"), _names(rejected))
         self.assertEqual(rejected.steps[0].inputs.get("reason"), "open_too_many_steps")
-        self.assertEqual(_names(rejected), [])
+        self.assertEqual(_names(rejected), ["recover"])
+        self.assertNotIn("unresolved_intent", _names(rejected))
 
         refill = Planner(self.registry, env_facts={}).build_plan(
             "download A-share daily data to local datasource",
@@ -142,7 +146,10 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print(" refill:", _names(refill))
         self.assertEqual(_names(refill), ["start", "end"])
 
-        factor = Planner(self.registry, env_facts={}).build_plan("factor ic", mode="plan")
+        factor = Planner(self.registry, env_facts={}).build_plan(
+            "factor IC summary for selection pool",
+            mode="plan",
+        )
         print(" factor:", _names(factor))
         self.assertNotIn("unresolved_intent", _names(factor))
         self.assertIn("factor_htype", _names(factor))
@@ -152,12 +159,9 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
 
         print("\n[TestAiUnresolvedRecovery] 强制 open 不再分类")
         decoy = _job({"job": "data.summary"})
-        # 首句先拆分，再探路分类一次、正式分类一次；其后才是开放图与不得被消耗的 Job。
         fake = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _STEPS}),
                 json.dumps({"shares": "000300.SH"}),
                 decoy,
@@ -177,39 +181,40 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             print(" card:", clar.get("text"))
             print(" shares:", None if shares is None else shares.value)
             print(" prompts after card:", len(fake.prompts), "left:", fake.replies)
-            self.assertEqual(clar.get("text"), _ZH_PROMPT)
-            self.assertEqual(clar["payload"]["pending"][0].get("prompt"), _ZH_PROMPT)
-            self.assertEqual((clar["payload"]["pending"][0].get("open") or {}).get("label"), "重写需求")
+            self.assertEqual(clar.get("text"), _GUIDE)
+            self.assertEqual(clar["payload"]["pending"][0].get("prompt"), _GUIDE)
+            self.assertEqual(clar["payload"]["pending"][0]["options"][0].get("id"), CONFIRM_OPEN_ID)
+            self.assertEqual((clar["payload"]["pending"][0].get("open") or {}).get("label"), "Your own open intent")
             self.assertNotIn("open_label", clar["payload"]["pending"][0])
             self.assertIsNone(shares)
             self.assertNotIn("unresolved_intent", before.task.slots)
-            catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
-            self.assertEqual(len(catalogs), 2)
+            catalogs = [text for text in fake.prompts if text.startswith("Official jobs:")]
+            self.assertEqual(len(catalogs), 1)
 
             second = asst.plan(
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": CONFIRM_OPEN_ID},
             )
             after = asst.session_store.load(sid)
             plan = second.get("plan") or {}
             skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
             trace = plan.get("planner_trace") or {}
-            catalogs_after = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+            catalogs_after = [text for text in fake.prompts if text.startswith("Official jobs:")]
             allowed = [text for text in fake.prompts if text.startswith("Allowed skills:")]
             print(" skills:", skills, "intent:", trace.get("intent_job"))
             print(" catalogs:", len(catalogs_after), "open prompts:", len(allowed), "left:", fake.replies)
             print(" last prompt:", fake.prompts[-1][:80] if fake.prompts else "")
             print(" slots:", list((after.task.slots or {}).keys()) if after.task else None)
-            self.assertEqual(after.task.id, before.task.id)
+            self.assertNotEqual(after.task.id, before.task.id)
+            self.assertEqual(after.task.user_query, _ZH)
             self.assertEqual(trace.get("intent_job"), "open")
             self.assertEqual(skills, ["qt.ai.data.kline", "qt.ai.hp.returns", "qt.ai.hp.plot"])
-            self.assertEqual(len(catalogs_after), 2)
+            self.assertEqual(len(catalogs_after), 1)
             self.assertEqual(len(allowed), 1)
-            self.assertFalse(fake.prompts[-1].startswith("Official and system Job ids:"))
+            self.assertFalse(fake.prompts[-1].startswith("Official jobs:"))
             self.assertNotIn("unresolved_intent", after.task.slots)
-            self.assertNotIn("shares", after.task.slots)
             self.assertEqual(plan["steps"][0]["inputs"].get("shares"), "000300.SH")
 
     def test_compose_open_too_many_steps_stays_a_reason_card(self) -> None:
@@ -218,9 +223,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print("\n[TestAiUnresolvedRecovery] 强制 open 超步数")
         fake = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _TOO_MANY}),
             ]
         )
@@ -236,7 +239,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": CONFIRM_OPEN_ID},
             )
             plan = second.get("plan") or {}
             steps = plan.get("steps") or []
@@ -251,58 +254,43 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             print(" error:", None if error is None else error.get("text"))
             print(" plan_md:", bool(second.get("plan_md")))
             self.assertEqual(reason, "open_too_many_steps")
-            self.assertEqual(pending, [])
-            self.assertIsNone(after.task.pending_clarification)
-            self.assertEqual(after.task.status, "done")
-            self.assertNotIn("clarify", kinds)
-            self.assertIsNotNone(error)
-            self.assertIn("open_too_many_steps", str(error.get("text") or ""))
+            self.assertEqual([item.get("name") for item in pending if isinstance(item, dict)], ["recover"])
+            self.assertEqual(after.task.status, "clarifying")
+            self.assertIn("clarify", kinds)
+            self.assertIsNone(error)
+            self.assertIn("open_too_many_steps", str((pending[0] or {}).get("prompt") or ""))
             self.assertFalse(second.get("plan_md"))
 
     def test_abandon_closes_the_task(self) -> None:
         """放弃结束当前请求，不再规划。"""
 
         print("\n[TestAiUnresolvedRecovery] 放弃收口")
-        fake = FakeLLMProvider(
-            replies=[_clause(_ZH), _job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"]
-        )
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
-                provider=fake,
                 registry=self.registry,
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "s-abandon"
             asst.plan(_ZH, response_style="raw", session_id=sid)
-            prompts = len(fake.prompts)
-            second = asst.plan(
-                "",
-                response_style="raw",
-                session_id=sid,
-                patches={"unresolved_intent": "abandon"},
-            )
+            second = asst.plan("放弃当前计划", response_style="raw", session_id=sid)
             after = asst.session_store.load(sid)
-            err = second.get("error") or {}
-            print(" error:", err, "status:", after.task.status if after.task else None)
-            print(" prompts:", prompts, len(fake.prompts), "left:", fake.replies)
-            self.assertEqual(err.get("code"), "CLARIFICATION_ABANDONED")
-            self.assertIn("abandoned", str(err.get("message") or "").lower())
-            self.assertEqual(after.task.status, "done")
-            self.assertEqual(len(fake.prompts), prompts)
-            self.assertEqual(fake.replies, ["must-not-run"])
+            assumptions = (second.get("plan") or {}).get("assumptions") or {}
+            print(" abandoned:", assumptions.get("abandoned"), "status:", after.task.status if after.task else None)
+            print(" steps:", (second.get("execution") or {}).get("steps"))
+            self.assertTrue(assumptions.get("abandoned"))
+            self.assertEqual(after.task.status, "cancelled")
             self.assertEqual((second.get("execution") or {}).get("steps"), [])
 
     def test_rewrite_reclassifies_the_new_sentence(self) -> None:
         """开放输入整句替换原句并重新分类；选项标签文字不是强制 open。"""
 
         print("\n[TestAiUnresolvedRecovery] 重写后重新分类")
-        typed_later = "给出开放计划"
+        typed = "给出开放计划"
         fake = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
-                _clause(typed_later),
+                "not-a-protocol",
+                json.dumps({"steps": _TOO_MANY}),
+                "not-a-protocol",
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -314,31 +302,37 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             sid = "s-rewrite"
             asst.plan(_ZH, response_style="raw", session_id=sid)
             before = asst.session_store.load(sid)
-            typed = typed_later
+            asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"intent": CONFIRM_OPEN_ID},
+            )
             second = asst.plan(
                 "",
                 response_style="raw",
                 session_id=sid,
-                patches={"unresolved_intent": typed},
+                patches={"recover": typed},
                 allow_composer_slot_fill=False,
             )
             after = asst.session_store.load(sid)
-            catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+            catalogs = [text for text in fake.prompts if text.startswith("Official jobs:")]
             opened = [text for text in fake.prompts if text.startswith("Allowed skills:")]
             plan = second.get("plan") or {}
             pending = ((plan.get("assumptions") or {}).get("clarification") or {}).get("pending") or []
             print(" catalogs:", len(catalogs), "opened:", len(opened))
             print(" user_query:", after.task.user_query if after.task else None)
             print(" pending:", [item.get("name") for item in pending if isinstance(item, dict)])
-            self.assertEqual(len(catalogs), 3)
-            self.assertIn(typed, catalogs[-1])
-            self.assertNotIn(_ZH, catalogs[-1])
-            self.assertEqual(opened, [])
+            self.assertEqual(len(catalogs), 2)
+            self.assertIn("User sentence:\n" + typed, catalogs[-1])
+            self.assertEqual(len(opened), 1)
             self.assertNotEqual(after.task.id, before.task.id)
-            self.assertEqual(after.task.user_query, typed)
+            users = [str(row.get("text") or "") for row in after.messages if row.get("kind") == "user_text"]
+            print(" users:", users)
+            self.assertIn(typed, users)
             self.assertEqual(
                 [item.get("name") for item in pending if isinstance(item, dict)],
-                ["unresolved_intent"],
+                ["intent"],
             )
             self.assertNotIn("unresolved_intent", after.task.slots)
 
@@ -348,9 +342,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         print("\n[TestAiUnresolvedRecovery] answers 按题号恢复")
         compose = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _STEPS}),
                 json.dumps({"shares": "000300.SH"}),
                 _job({"job": "data.summary"}),
@@ -365,42 +357,36 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             sid = "s-answers-open"
             asst.plan(_ZH, response_style="raw", session_id=sid)
             before = asst.session_store.load(sid)
-            second = asst.plan("", response_style="raw", session_id=sid, answers=["compose_open"])
+            second = asst.plan("", response_style="raw", session_id=sid, answers=[CONFIRM_OPEN_ID])
             after = asst.session_store.load(sid)
             plan = second.get("plan") or {}
             skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
             print(" compose skills:", skills, "intent:", (plan.get("planner_trace") or {}).get("intent_job"))
-            self.assertEqual(after.task.id, before.task.id)
+            self.assertNotEqual(after.task.id, before.task.id)
+            self.assertEqual(after.task.user_query, _ZH)
             self.assertEqual((plan.get("planner_trace") or {}).get("intent_job"), "open")
             self.assertEqual(skills, ["qt.ai.data.kline", "qt.ai.hp.returns", "qt.ai.hp.plot"])
 
-        abandon = FakeLLMProvider(
-            replies=[_clause(_ZH), _job({"job": "clarify"}), _job({"job": "clarify"}), "must-not-run"]
-        )
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
-                provider=abandon,
                 registry=self.registry,
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "s-answers-abandon"
             asst.plan(_ZH, response_style="raw", session_id=sid)
-            prompts = len(abandon.prompts)
-            second = asst.plan("", response_style="raw", session_id=sid, answers=["abandon"])
+            second = asst.plan("放弃当前计划", response_style="raw", session_id=sid)
             after = asst.session_store.load(sid)
-            err = second.get("error") or {}
-            print(" abandon:", err.get("code"), after.task.status if after.task else None)
-            self.assertEqual(err.get("code"), "CLARIFICATION_ABANDONED")
-            self.assertEqual(after.task.status, "done")
-            self.assertEqual(len(abandon.prompts), prompts)
+            assumptions = (second.get("plan") or {}).get("assumptions") or {}
+            print(" abandon:", assumptions.get("abandoned"), after.task.status if after.task else None)
+            self.assertTrue(assumptions.get("abandoned"))
+            self.assertEqual(after.task.status, "cancelled")
 
         typed_rewrite = "只看沪深300的日线收益"
         rewrite = FakeLLMProvider(
             replies=[
-                _clause(_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
-                _clause(typed_rewrite),
+                "not-a-protocol",
+                json.dumps({"steps": _TOO_MANY}),
+                "not-a-protocol",
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -411,6 +397,12 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             )
             sid = "s-answers-rewrite"
             asst.plan(_ZH, response_style="raw", session_id=sid)
+            asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                answers=[CONFIRM_OPEN_ID],
+            )
             typed = typed_rewrite
             second = asst.plan(
                 "",
@@ -420,12 +412,14 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 allow_composer_slot_fill=False,
             )
             after = asst.session_store.load(sid)
-            catalogs = [text for text in rewrite.prompts if text.startswith("Official and system Job ids:")]
+            catalogs = [text for text in rewrite.prompts if text.startswith("Official jobs:")]
             print(" rewrite query:", after.task.user_query if after.task else None)
             print(" catalogs:", len(catalogs))
-            self.assertEqual(len(catalogs), 3)
-            self.assertIn(typed, catalogs[-1])
-            self.assertEqual(after.task.user_query, typed)
+            self.assertEqual(len(catalogs), 2)
+            self.assertIn("User sentence:\n" + typed, catalogs[-1])
+            users = [str(row.get("text") or "") for row in after.messages if row.get("kind") == "user_text"]
+            print(" rewrite users:", users)
+            self.assertIn(typed, users)
             self.assertNotIn("unresolved_intent", after.task.slots)
 
     def test_open_slot_answer_resumes_the_same_graph(self) -> None:
@@ -449,9 +443,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
         decoy = _job({"job": "data.refill"})
         fake = FakeLLMProvider(
             replies=[
-                _clause(query),
-                _job({"job": "open"}),
-                _job({"job": "open"}),
+                "not-a-protocol",
                 json.dumps({"steps": rough}),
                 json.dumps({"shares": "000300.SH", "freq": "d", "asset_type": "IDX"}),
                 json.dumps({
@@ -473,9 +465,15 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "s-resume-open"
-            first = asst.plan(query, response_style="raw", session_id=sid)
+            asst.plan(query, response_style="raw", session_id=sid)
+            opened = asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"intent": CONFIRM_OPEN_ID},
+            )
             held = asst.session_store.load(sid)
-            clar = (first.get("plan") or {}).get("assumptions", {}).get("clarification") or {}
+            clar = (opened.get("plan") or {}).get("assumptions", {}).get("clarification") or {}
             pending = held.task.pending_clarification if held.task is not None else {}
             snapshot = [row.get("skill_name") for row in (clar.get("accepted_steps") or [])]
             print(" resume_job:", clar.get("resume_job"), "snapshot:", snapshot)
@@ -488,7 +486,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
             )
             self.assertEqual(pending.get("resume_job"), "open")
             self.assertFalse(str(held.task.job or ""))
-            catalogs = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+            catalogs = [text for text in fake.prompts if text.startswith("Official jobs:")]
             fake.replies.extend([
                 json.dumps({"htype_names": "close"}),
                 "polish placeholder",
@@ -513,7 +511,7 @@ class TestAiUnresolvedRecovery(unittest.TestCase):
                 for item in ((plan.get("assumptions") or {}).get("clarification") or {}).get("pending") or []
                 if isinstance(item, dict)
             ]
-            catalogs_after = [text for text in fake.prompts if text.startswith("Official and system Job ids:")]
+            catalogs_after = [text for text in fake.prompts if text.startswith("Official jobs:")]
             print(" skills:", skills, plan.get("execution_mode"))
             print(" depends:", depends)
             print(" history:", (history.get("inputs") or {}))

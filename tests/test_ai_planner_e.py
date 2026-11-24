@@ -16,6 +16,7 @@ from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
+from tests.parse_protocol import open_parsed, plan_job, protocol_reply
 from qteasy_ai.session import SessionStore
 
 
@@ -45,8 +46,6 @@ class TestAiPlannerE(unittest.TestCase):
         query = "xyzzy unmatched formula 12345 000300.SH"
         fake = FakeLLMProvider(
             replies=[
-                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
-                json.dumps({"job": "open"}),
                 json.dumps(
                     {
                         "steps": [
@@ -58,13 +57,17 @@ class TestAiPlannerE(unittest.TestCase):
                 json.dumps({"shares": "000300.SH"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            query,
+            mode="plan",
+            parsed=open_parsed(query),
+        )
         names = [s.skill_name for s in plan.steps]
         print(" skills:", names, "intent:", plan.planner_trace.get("intent_job"))
         print(" prompts:", len(fake.prompts))
         self.assertEqual(plan.planner_trace.get("intent_job"), "open")
         self.assertEqual(names, ["qt.ai.strategy_meta.list", "qt.ai.data.kline"])
-        self.assertGreaterEqual(len(fake.prompts), 2)
+        self.assertGreaterEqual(len(fake.prompts), 1)
 
     def test_open_drops_unknown_input_keys(self) -> None:
         """schema：丢掉未知键。"""
@@ -73,8 +76,6 @@ class TestAiPlannerE(unittest.TestCase):
         query = "xyzzy unmatched formula 12345"
         fake = FakeLLMProvider(
             replies=[
-                json.dumps({"task": query, "question": ""}, ensure_ascii=False),
-                json.dumps({"job": "open"}),
                 json.dumps(
                     {
                         "steps": [
@@ -88,7 +89,11 @@ class TestAiPlannerE(unittest.TestCase):
                 json.dumps({"strategy_id": "macd"}),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            query,
+            mode="plan",
+            parsed=open_parsed(query),
+        )
         print(" inputs:", plan.steps[0].inputs)
         print(" corrections:", plan.planner_trace.get("validator_trace", {}).get("corrections"))
         self.assertEqual(plan.steps[0].inputs.get("strategy_id"), "macd")
@@ -118,9 +123,8 @@ class TestAiPlannerE(unittest.TestCase):
         """倒置日期区间 → clarify，不得落到 summary 执行失败。"""
 
         print("\n[TestAiPlannerE] inverted dates")
-        plan = Planner(self.registry, env_facts={}).build_plan(
-            "summary 000300.SH from 20241231 to 20240101", mode="plan"
-        )
+        asked = "summary 000300.SH from 20241231 to 20240101"
+        plan = plan_job(self.registry, asked, "data.summary")
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         accepted = (plan.assumptions or {}).get("accepted_steps") or []
         print(" accepted:", accepted)
@@ -136,9 +140,8 @@ class TestAiPlannerE(unittest.TestCase):
         """非法 freq → clarify。"""
 
         print("\n[TestAiPlannerE] invalid freq")
-        plan = Planner(self.registry, env_facts={}).build_plan(
-            "summary freq=not_a_freq 000300.SH", mode="plan"
-        )
+        asked = "summary freq=not_a_freq 000300.SH"
+        plan = plan_job(self.registry, asked, "data.summary")
         print(" skill:", plan.steps[0].skill_name, plan.steps[0].inputs)
         accepted = (plan.assumptions or {}).get("accepted_steps") or []
         print(" accepted:", accepted)
@@ -184,19 +187,14 @@ class TestAiPlannerE(unittest.TestCase):
             ),
         )
         for query, channel, names, skill_name, name_key in cases:
-            fake = FakeLLMProvider(
-                replies=[
-                    json.dumps({"task": query, "question": ""}, ensure_ascii=False),
-                    json.dumps({"job": "data.read", "uncertain": False}),
-                ]
-            )
+            fake = FakeLLMProvider(replies=[protocol_reply(query, "data.read")])
             plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
             inputs = plan.steps[0].inputs
             print(" query:", query)
             print(" inputs:", inputs)
             self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
             self.assertEqual(plan.planner_trace.get("intent_job"), "data.read")
-            self.assertEqual((plan.assumptions or {}).get("intent_flags", {}).get("channel"), "history")
+            self.assertEqual((plan.assumptions or {}).get("intent_flags", {}).get("channel"), channel)
             self.assertIn(name_key, str(plan.steps[0].inputs.get("missing_info") or ""))
             self.assertNotIn("get_reference_data", query)
             self.assertNotIn("get_static_data", query)
@@ -205,14 +203,7 @@ class TestAiPlannerE(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(base_dir=temp_dir)
             asked = "please fetch cn_gdp from 20240101 to 20240131"
-            reply = json.dumps({"job": "data.read", "uncertain": False})
-            fake = FakeLLMProvider(
-                replies=[
-                    json.dumps({"task": asked, "question": ""}, ensure_ascii=False),
-                    reply,
-                    reply,
-                ]
-            )
+            fake = FakeLLMProvider(replies=[protocol_reply(asked, "data.read"), protocol_reply(asked, "data.read")])
             assistant = QteasyAssistant(
                 memory_store=store,
                 registry=self.registry,
@@ -226,7 +217,7 @@ class TestAiPlannerE(unittest.TestCase):
             print(" task flags:", state.task.flags if state.task else None)
             self.assertTrue(read)
             self.assertEqual(read[0]["inputs"].get("missing_info"), "names")
-            self.assertEqual(state.task.flags.get("channel"), "history")
+            self.assertEqual(state.task.flags.get("channel"), "reference")
 
             second = assistant.plan(
                 "",

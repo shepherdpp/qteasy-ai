@@ -338,12 +338,14 @@ class TestAi04ParseOnce(unittest.TestCase):
             option_ids = [item.get("id") for item in row.get("options") or []]
             chats_after_card = len(assistant.planner.provider.prompts)
             print(" prompt:", row.get("prompt"), "options:", option_ids)
-            print(" open:", (row.get("open_confirm") or {}).get("text"), "chats:", chats_after_card)
+            print(" open label:", (row.get("open") or {}).get("label"), "chats:", chats_after_card)
             self.assertTrue(card.get("intent_authored"))
             self.assertFalse(card.get("recover_authored"))
             self.assertEqual(row.get("prompt"), "请选一个官方 Job，或确认开放句。")
-            self.assertEqual(option_ids, ["data.summary", "data.export"])
-            self.assertEqual((row.get("open_confirm") or {}).get("text"), "OPEN-SENTENCE")
+            self.assertEqual(option_ids, ["data.summary", "data.export", "confirm_open_intent"])
+            self.assertEqual((row.get("options") or [])[-1].get("label"), "OPEN-SENTENCE")
+            self.assertNotIn("open_confirm", row)
+            self.assertEqual((row.get("open") or {}).get("label"), "Your own open intent")
             self.assertNotIn("selected", row)
             self.assertNotIn("default", row)
             self.assertEqual(chats_after_card, 1)
@@ -438,11 +440,13 @@ class TestAi04ParseOnce(unittest.TestCase):
             )
             quiet_plan = _plan(quiet)
             quiet_row = (_card(quiet_plan).get("pending") or [{}])[0]
-            print(" no-model recover options:", quiet_row.get("options"), "open:", quiet_row.get("open_confirm"))
+            print(" no-model recover options:", quiet_row.get("options"), "open:", (quiet_row.get("open") or {}).get("label"))
             self.assertTrue(_card(lone).get("intent_authored"))
             self.assertTrue(_card(quiet_plan).get("recover_authored"))
             self.assertEqual(quiet_row.get("options") or [], [])
             self.assertNotIn("open_confirm", quiet_row)
+            self.assertNotIn("confirm_open_intent", [item.get("id") for item in quiet_row.get("options") or []])
+            self.assertEqual((quiet_row.get("open") or {}).get("label"), "Rewrite the request")
             self.assertFalse(_record(quiet_plan).get("executable"))
 
             assistant.apply_provider(FakeLLMProvider(replies=["{}"]))
@@ -598,6 +602,13 @@ class TestAi04ParseOnce(unittest.TestCase):
         self.assertIn("Outline:\n" + outline, user)
         self.assertNotIn("- open:", user)
         self.assertNotIn("Fetched:", user)
+        self.assertIn("Card replies:", system)
+        self.assertIn("not a new user sentence", system)
+        self.assertIn(
+            "Use the replies only to reconsider job, open_intent, candidates, clarification_text, and relation.",
+            system,
+        )
+        self.assertNotIn("Card replies:", user)
 
     def test_boolean_open_intent_still_voids_the_package(self) -> None:
         """open_intent 写成布尔值时，整包作废，中文题干不留下。"""
@@ -631,3 +642,220 @@ class TestAi04ParseOnce(unittest.TestCase):
         self.assertEqual(package.get("job"), "")
         self.assertTrue(package.get("invalid"))
         self.assertEqual(package.get("open_intent"), utterance)
+
+    def test_typed_open_sentence_is_a_reply(self) -> None:
+        """空白框打出与推荐开放句相同的文字时，按回复再解析。"""
+
+        print("\n[TestAi04ParseOnce] 打出开放句原文仍是回复")
+        utterance = "开放这句 OPEN-SENTENCE"
+        issued = _protocol(
+            clarification_text="请选一个官方 Job，或确认开放句。",
+            open_intent="OPEN-SENTENCE",
+            task="开放这句",
+            questions=["OPEN-SENTENCE"],
+            candidates=[{"id": "data.summary", "label": "摘要", "detail": "先看摘要"}],
+            relation="new",
+        )
+        follow = _protocol(
+            job="data.summary",
+            intent_text="改为摘要",
+            task=utterance,
+            relation="new",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(temp_dir, [issued, follow, "{}"])
+            shown = assistant.plan(utterance, response_style="raw", session_id="s-same", debug=True)
+            self.assertTrue(_card(_plan(shown)).get("intent_authored"))
+            typed = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-same",
+                patches={"intent": "OPEN-SENTENCE"},
+                debug=True,
+            )
+            typed_plan = _plan(typed)
+            prompts = [item for item in assistant.planner.provider.prompts if "User sentence:" in item]
+            print(" confirmed:", _record(typed_plan).get("confirmed_by"), "job:", _record(typed_plan).get("job"))
+            print(" prompts:", len(prompts), "last has reply:", "Reply: OPEN-SENTENCE" in prompts[-1])
+            self.assertEqual(_record(typed_plan).get("job"), "data.summary")
+            self.assertNotEqual(_record(typed_plan).get("confirmed_by"), "open_intent")
+            self.assertEqual(_record(typed_plan).get("confirmed_by"), "direct")
+            self.assertIn("User sentence:\n" + utterance, prompts[-1])
+            self.assertIn("Card replies:", prompts[-1])
+            self.assertIn("Reply: OPEN-SENTENCE", prompts[-1])
+
+    def test_blank_reply_reparses_the_original_sentence(self) -> None:
+        """空白框回到原句。连续回复留在 Card replies。Composer 另发一句不带上。"""
+
+        print("\n[TestAi04ParseOnce] 空白框回到原句")
+        utterance = "开放这句 OPEN-SENTENCE"
+        issued = _protocol(
+            clarification_text="请选一个官方 Job，或确认开放句。",
+            open_intent="OPEN-SENTENCE",
+            task="开放这句",
+            questions=["OPEN-SENTENCE"],
+            candidates=[{"id": "data.summary", "label": "摘要", "detail": "先看摘要"}],
+            relation="new",
+        )
+        again = _protocol(
+            clarification_text="还要再选一次。",
+            open_intent="OPEN-SENTENCE",
+            task="开放这句",
+            questions=["OPEN-SENTENCE"],
+            candidates=[{"id": "data.export", "label": "导出", "detail": "再导出"}],
+            relation="new",
+        )
+        third = _protocol(
+            clarification_text="第三次仍未确认。",
+            open_intent="OPEN-SENTENCE",
+            task="开放这句",
+            questions=["OPEN-SENTENCE"],
+            candidates=[{"id": "data.summary", "label": "摘要", "detail": "先看摘要"}],
+            relation="new",
+        )
+        fresh = _protocol(
+            job="data.summary",
+            intent_text="新的一句",
+            task="全新的一句",
+            relation="new",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(temp_dir, [issued, again, third, fresh, "{}"])
+            state = assistant.session_store.load("s-reply")
+            state.append_user_text("EARLIER-TURN")
+            state.append_messages([{"kind": "plan_ready", "text": "旧计划", "payload": {}}])
+            assistant.session_store.save(state)
+            shown = assistant.plan(utterance, response_style="raw", session_id="s-reply", debug=True)
+            self.assertTrue(_card(_plan(shown)).get("intent_authored"))
+            first = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-reply",
+                patches={"intent": "做一张开放步骤图"},
+                debug=True,
+            )
+            state = assistant.session_store.load("s-reply")
+            user_texts = [item.get("text") for item in state.messages if item.get("kind") == "user_text"]
+            prompts = [item for item in assistant.planner.provider.prompts if "User sentence:" in item]
+            outline = prompts[-1].split("Outline:\n", 1)[1].split("\n\nUser sentence:", 1)[0]
+            print(" user texts:", user_texts)
+            print(" outline has earlier:", "EARLIER-TURN" in outline, "has utterance:", utterance in outline)
+            print(" query:", state.task.user_query if state.task else "")
+            self.assertEqual(user_texts, ["EARLIER-TURN", utterance])
+            self.assertIn("User sentence:\n" + utterance, prompts[-1])
+            self.assertIn("Card replies:", prompts[-1])
+            self.assertIn("Reply: 做一张开放步骤图", prompts[-1])
+            self.assertIn("EARLIER-TURN", outline)
+            self.assertNotIn(utterance, outline)
+            self.assertNotIn("做一张开放步骤图", outline)
+            self.assertEqual(state.task.user_query, utterance)
+            self.assertTrue(_card(_plan(first)).get("intent_authored"))
+
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-reply",
+                patches={"intent": "再写一句开放意图"},
+                debug=True,
+            )
+            prompts = [item for item in assistant.planner.provider.prompts if "User sentence:" in item]
+            print(" rounds:", prompts[-1].count("Reply:"))
+            self.assertIn("Reply: 做一张开放步骤图", prompts[-1])
+            self.assertIn("Reply: 再写一句开放意图", prompts[-1])
+            self.assertGreaterEqual(prompts[-1].count("Round "), 2)
+            self.assertTrue(_card(_plan(second)).get("intent_authored"))
+            state = assistant.session_store.load("s-reply")
+            user_texts = [item.get("text") for item in state.messages if item.get("kind") == "user_text"]
+            self.assertEqual(user_texts, ["EARLIER-TURN", utterance])
+
+            composer = assistant.plan("全新的一句", response_style="raw", session_id="s-reply", debug=True)
+            prompts = [item for item in assistant.planner.provider.prompts if "User sentence:" in item]
+            print(" composer sentence:", "User sentence:\n全新的一句" in prompts[-1], "card replies:", "Card replies:" in prompts[-1])
+            print(" composer job:", _record(_plan(composer)).get("job"))
+            self.assertIn("User sentence:\n全新的一句", prompts[-1])
+            self.assertNotIn("Card replies:", prompts[-1])
+
+    def test_blocked_reply_keeps_the_same_card(self) -> None:
+        """空白框过不了宪法时留下说明，原卡继续可答。"""
+
+        print("\n[TestAi04ParseOnce] 空白框被宪法拦住仍留原卡")
+        utterance = "开放这句 OPEN-SENTENCE"
+        issued = _protocol(
+            clarification_text="请选一个官方 Job，或确认开放句。",
+            open_intent="OPEN-SENTENCE",
+            task="开放这句",
+            questions=["OPEN-SENTENCE"],
+            candidates=[{"id": "data.summary", "label": "摘要", "detail": "先看摘要"}],
+            relation="new",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(temp_dir, [issued])
+            shown = assistant.plan(utterance, response_style="raw", session_id="s-block", debug=True)
+            before = _card(_plan(shown))
+            before_row = (before.get("pending") or [{}])[0]
+            chats = len(assistant.planner.provider.prompts)
+            blocked = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-block",
+                patches={"intent": _UNSAFE},
+                debug=True,
+            )
+            state = assistant.session_store.load("s-block")
+            notices = [
+                str(item.get("text") or "")
+                for item in state.messages
+                if item.get("kind") == "mode_notice"
+            ]
+            pending = state.task.pending_clarification if state.task is not None else {}
+            pending_row = ((pending or {}).get("pending") or [{}])[0]
+            message_blob = "\n".join(str(item.get("text") or "") for item in state.messages)
+            print(" notices:", notices)
+            print(" chats:", len(assistant.planner.provider.prompts), "status:", state.task.status if state.task else "")
+            print(" pending prompt:", pending_row.get("prompt"), "replies:", list(getattr(state.task, "intent_card_replies", None) or []))
+            self.assertEqual(len(assistant.planner.provider.prompts), chats)
+            self.assertTrue(any("Shell command" in item for item in notices))
+            self.assertEqual(list(getattr(state.task, "intent_card_replies", None) or []), [])
+            self.assertEqual(pending_row.get("prompt"), before_row.get("prompt"))
+            self.assertEqual(
+                [item.get("id") for item in pending_row.get("options") or []],
+                [item.get("id") for item in before_row.get("options") or []],
+            )
+            self.assertNotEqual(state.task.status, "done")
+            self.assertNotIn(_UNSAFE, message_blob)
+            self.assertTrue(_card(_plan(blocked)).get("intent_authored"))
+
+            assistant.apply_provider(None)
+            quiet = assistant.plan("没有候选项的开放句", response_style="raw", session_id="s-quiet")
+            self.assertEqual(_record(_plan(quiet)).get("open_intent"), "没有候选项的开放句")
+            kept = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-quiet",
+                patches={"intent": "自己的开放句"},
+            )
+            quiet_state = assistant.session_store.load("s-quiet")
+            print(" no-model open:", _record(_plan(kept)).get("open_intent"), "provider:", assistant.planner.provider)
+            self.assertIsNone(assistant.planner.provider)
+            self.assertEqual(_record(_plan(kept)).get("open_intent"), "没有候选项的开放句")
+            self.assertTrue(_card(_plan(kept)).get("intent_authored"))
+
+            unsafe = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-quiet",
+                patches={"intent": _UNSAFE},
+            )
+            unsafe_state = assistant.session_store.load("s-quiet")
+            unsafe_row = ((unsafe_state.task.pending_clarification or {}).get("pending") or [{}])[0]
+            unsafe_notices = [
+                str(item.get("text") or "")
+                for item in unsafe_state.messages
+                if item.get("kind") == "mode_notice"
+            ]
+            print(" no-model notices:", unsafe_notices, "status:", unsafe_state.task.status)
+            self.assertTrue(any("Shell command" in item for item in unsafe_notices))
+            self.assertEqual(unsafe_row.get("prompt"), (_card(_plan(kept)).get("pending") or [{}])[0].get("prompt"))
+            self.assertNotEqual(unsafe_state.task.status, "done")
+            self.assertNotIn(_UNSAFE, "\n".join(str(item.get("text") or "") for item in unsafe_state.messages))
+            self.assertTrue(_card(_plan(unsafe)).get("intent_authored"))

@@ -15,6 +15,7 @@ import unittest
 from qteasy_ai.app import build_default_registry
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
+from tests.parse_protocol import protocol_reply
 
 
 def _llm_job(job: str) -> str:
@@ -40,7 +41,7 @@ class TestAiPlannerHybrid(unittest.TestCase):
 
         print("\n[TestAiPlannerHybrid] llm summary job")
         query = "xyzzy unmatched formula 000300.SH"
-        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("data.summary")])
+        fake = FakeLLMProvider(replies=[protocol_reply(query, "data.summary")])
         planner = Planner(self.registry, provider=fake, env_facts={})
         plan = planner.build_plan(query, mode="plan")
         step = plan.steps[0]
@@ -51,7 +52,7 @@ class TestAiPlannerHybrid(unittest.TestCase):
         self.assertEqual(plan.planner_trace.get("source"), "llm")
         self.assertEqual(step.skill_name, "qt.ai.system.fallback")
         self.assertEqual(step.inputs.get("missing_info"), "shares")
-        catalog = next(text for text in fake.prompts if text.startswith("Official and system Job ids:"))
+        catalog = next(text for text in fake.prompts if text.startswith("Official jobs:"))
         self.assertTrue(any(text.startswith("Slot protocol") for text in fake.prompts))
         self.assertIn("data.summary:", catalog)
         self.assertNotIn("qt.ai.backtest.run_builtin:", catalog)
@@ -75,7 +76,7 @@ class TestAiPlannerHybrid(unittest.TestCase):
 
         print("\n[TestAiPlannerHybrid] refill missing dates")
         query = "download A-share daily data to local datasource"
-        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("data.refill")])
+        fake = FakeLLMProvider(replies=[protocol_reply(query, "data.refill")])
         planner = Planner(self.registry, provider=fake, env_facts={})
         plan = planner.build_plan(query, mode="plan")
         step = plan.steps[0]
@@ -122,7 +123,7 @@ class TestAiPlannerHybrid(unittest.TestCase):
 
         print("\n[TestAiPlannerHybrid] screen Mode-D llm job")
         query = "请搜索过去半年内所有跌幅>20%，且行业属于公共交通的股票。"
-        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("research.screen")])
+        fake = FakeLLMProvider(replies=[protocol_reply(query, "research.screen")])
         hybrid = Planner(self.registry, provider=fake, env_facts={}).build_plan(query, mode="plan")
         names = [s.skill_name for s in hybrid.steps]
         print(" skills:", names)
@@ -151,10 +152,10 @@ class TestAiPlannerHybrid(unittest.TestCase):
 
         print("\n[TestAiPlannerHybrid] job catalog prompt")
         query = "xyzzy unmatched formula 12345"
-        fake = FakeLLMProvider(replies=[_clause(query), _llm_job("data.summary")])
+        fake = FakeLLMProvider(replies=[protocol_reply(query, "data.summary")])
         planner = Planner(self.registry, provider=fake, env_facts={})
         plan = planner.build_plan(query, mode="plan")
-        prompt = next(text for text in fake.prompts if text.startswith("Official and system Job ids:"))
+        prompt = next(text for text in fake.prompts if text.startswith("Official jobs:"))
         print(" prompt excerpt:", prompt[:400])
         print(" plan skill:", plan.steps[0].skill_name)
         self.assertIn("- data.summary:", prompt)

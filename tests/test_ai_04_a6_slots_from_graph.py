@@ -20,6 +20,7 @@ from qteasy_ai.plan_markdown import tool_plan_to_markdown
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
+from tests.parse_protocol import open_parsed, protocol_reply
 from qteasy_ai.slot_graph import (
     accept_slot_value,
     apply_polish_text,
@@ -27,18 +28,6 @@ from qteasy_ai.slot_graph import (
     strategy_id_options,
     table_option_ids,
 )
-
-
-def _job(job: str) -> str:
-    """分类罐头。"""
-
-    return json.dumps({"job": job}, ensure_ascii=False)
-
-
-def _clause(text: str) -> str:
-    """整句是办事，没有附带提问。"""
-
-    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
 
 
 def _pending(plan):
@@ -77,8 +66,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         }
         fake = FakeLLMProvider(
             replies=[
-                _clause(screen),
-                _job("research.screen"),
+                protocol_reply(screen, "research.screen"),
                 json.dumps(
                     {
                         "industry": "银行业",
@@ -137,8 +125,7 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         }
         chinese = FakeLLMProvider(
             replies=[
-                _clause(bare),
-                _job("research.screen"),
+                protocol_reply(bare, "research.screen"),
                 json.dumps({"industry": "银行业", "lookback_days": 20, "threshold": 0.1}, ensure_ascii=False),
                 json.dumps({
                     "questions": [{
@@ -303,10 +290,10 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" clarification:", blob)
         self.assertNotEqual(plan.steps[0].inputs.get("names"), "industry")
 
+        fetch = "please fetch industry and name for 000001.SZ"
         fake = FakeLLMProvider(
             replies=[
-                _clause("please fetch industry and name for 000001.SZ"),
-                _job("data.read"),
+                protocol_reply(fetch, "data.read"),
                 json.dumps({"names": "industry,stock_name"}, ensure_ascii=False),
             ]
         )
@@ -340,27 +327,12 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
             self.assertNotEqual(plan.steps[0].inputs.get("missing_info"), "supported_skill")
             self.assertNotIn("supported_skill", _pending_names(plan))
-            self.assertEqual(_pending_names(plan), ["unresolved_intent"])
-            self.assertEqual(option_ids, ["compose_open", "abandon"])
+            self.assertEqual(_pending_names(plan), ["intent"])
+            self.assertEqual(plan.steps[0].inputs.get("missing_info"), "intent")
+            self.assertIn("confirm_open_intent", option_ids)
+            self.assertEqual((row.get("open") or {}).get("label"), "Your own open intent")
             self.assertNotIn("supported_skill", prompt)
-            if query == zh:
-                self.assertEqual(
-                    prompt,
-                    "您的需求无法跟现成的操作模版匹配（job），是否需要我创建一份开放计划？",
-                )
-                self.assertEqual(row["options"][0]["label"], "给出开放计划")
-                self.assertEqual(row["options"][1]["label"], "放弃")
-                self.assertEqual((row.get("open") or {}).get("label"), "重写需求")
-                self.assertNotIn("open_label", row)
-            else:
-                self.assertEqual(
-                    prompt,
-                    "This request does not match a built-in operation template (job). Create an open plan?",
-                )
-                self.assertEqual(row["options"][0]["label"], "Create an open plan")
-                self.assertEqual(row["options"][1]["label"], "Abandon")
-                self.assertEqual((row.get("open") or {}).get("label"), "Rewrite the request")
-                self.assertNotIn("open_label", row)
+            self.assertNotIn("compose_open", option_ids)
 
         too_many = [
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
@@ -368,22 +340,18 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.volatility", "inputs": {}},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}},
         ]
-        fake = FakeLLMProvider(
-            replies=[
-                _clause("取日线、算收益、出一页图"),
-                _job("open"),
-                json.dumps({"steps": too_many}),
-            ]
-        )
+        rejected_query = "取日线、算收益、出一页图"
+        fake = FakeLLMProvider(replies=[json.dumps({"steps": too_many})])
         rejected = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "取日线、算收益、出一页图",
+            rejected_query,
             mode="plan",
+            parsed=open_parsed(rejected_query),
         )
         print(" open reason:", rejected.steps[0].inputs.get("reason"))
         print(" open pending:", _pending_names(rejected))
         self.assertEqual(rejected.steps[0].inputs.get("reason"), "open_too_many_steps")
-        self.assertEqual(_pending_names(rejected), [])
-        self.assertFalse(clarification_needs_answer(rejected.assumptions.get("clarification")))
+        self.assertEqual(_pending_names(rejected), ["recover"])
+        self.assertTrue(clarification_needs_answer(rejected.assumptions.get("clarification")))
         self.assertNotEqual(rejected.steps[0].inputs.get("missing_info"), "supported_skill")
         self.assertIn("open_too_many_steps", str((rejected.assumptions.get("clarification") or {}).get("confirm_prompt")))
         rejected_cards = project_human_cards(
@@ -401,25 +369,25 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         )
         rejected_kinds = [item.get("kind") for item in rejected_cards]
         print(" open cards:", rejected_kinds)
-        self.assertIn("error", rejected_kinds)
-        self.assertNotIn("clarify", rejected_kinds)
+        self.assertIn("clarify", rejected_kinds)
+        self.assertNotIn("error", rejected_kinds)
 
         steps = [
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
             {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["step_1"]},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_2"]},
         ]
+        opened_query = "取 000300.SH 日线、算收益、出一页图"
         opened = FakeLLMProvider(
             replies=[
-                _clause("取 000300.SH 日线、算收益、出一页图"),
-                _job("open"),
                 json.dumps({"steps": steps}),
                 json.dumps({"shares": "000300.SH"}),
             ]
         )
         dry = Planner(self.registry, provider=opened, env_facts={}).build_plan(
-            "取 000300.SH 日线、算收益、出一页图",
+            opened_query,
             mode="plan",
+            parsed=open_parsed(opened_query),
         )
         print(" open skills:", [step.skill_name for step in dry.steps], dry.execution_mode)
         print(" kline pending:", _pending_names(dry))
@@ -452,8 +420,6 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         asked = "取 000300.SH 日线，算收益，再出一页图"
         fake = FakeLLMProvider(
             replies=[
-                _clause(asked),
-                _job("open"),
                 json.dumps({"steps": rough}, ensure_ascii=False),
                 json.dumps({"shares": "000300.SH", "freq": "d"}),
                 json.dumps({
@@ -466,7 +432,11 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
                 }, ensure_ascii=False),
             ]
         )
-        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(asked, mode="plan")
+        plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
+            asked,
+            mode="plan",
+            parsed=open_parsed(asked),
+        )
         protocol = next(text for text in fake.prompts if str(text).startswith("Slot protocol"))
         protocol_slots = [
             line.split()[1] for line in protocol.splitlines() if line.startswith("slot:")
@@ -514,10 +484,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.returns", "inputs": {"method": "pct_change"}},
             {"skill_name": "qt.ai.hp.plot", "inputs": {"shares": "000300.SH"}},
         ]
+        ready_query = "取 000300.SH 从 20240101 起的日线，算收益，再出一页图"
         opened = FakeLLMProvider(
             replies=[
-                _clause("取 000300.SH 从 20240101 起的日线，算收益，再出一页图"),
-                _job("open"),
                 json.dumps({"steps": ready}, ensure_ascii=False),
                 json.dumps(
                     {
@@ -530,8 +499,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             ]
         )
         dry = Planner(self.registry, provider=opened, env_facts={}).build_plan(
-            "取 000300.SH 从 20240101 起的日线，算收益，再出一页图",
+            ready_query,
             mode="plan",
+            parsed=open_parsed(ready_query),
         )
         print(" dry skills:", [step.skill_name for step in dry.steps], dry.execution_mode)
         print(" dry inputs:", dry.steps[0].inputs)
@@ -636,17 +606,17 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
             {"skill_name": "qt.ai.hp.returns", "inputs": {}, "depends_on": ["qt.ai.data.kline"]},
         ]
+        linked_query = "取 000300.SH 日线再算收益"
         fake = FakeLLMProvider(
             replies=[
-                _clause("取 000300.SH 日线再算收益"),
-                _job("open"),
                 json.dumps({"steps": linked}),
                 json.dumps({"shares": "000300.SH"}),
             ]
         )
         plan = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "取 000300.SH 日线再算收益",
+            linked_query,
             mode="plan",
+            parsed=open_parsed(linked_query),
         )
         print(" skills:", [step.skill_name for step in plan.steps])
         print(" depends:", [list(step.depends_on) for step in plan.steps])
@@ -685,16 +655,12 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.hp.returns", "inputs": {}},
         ]
         for label, steps in (("ambiguous", ambiguous), ("unknown", unknown), ("forward", forward)):
-            opened = FakeLLMProvider(
-                replies=[
-                    _clause("取 000300.SH 日线再算收益"),
-                    _job("open"),
-                    json.dumps({"steps": steps}),
-                ]
-            )
+            depend_query = "取 000300.SH 日线再算收益"
+            opened = FakeLLMProvider(replies=[json.dumps({"steps": steps})])
             rejected = Planner(self.registry, provider=opened, env_facts={}).build_plan(
-                "取 000300.SH 日线再算收益",
+                depend_query,
                 mode="plan",
+                parsed=open_parsed(depend_query),
             )
             reason = rejected.steps[0].inputs.get("reason")
             print(" ", label, rejected.steps[0].skill_name, reason, _pending_names(rejected))
@@ -724,17 +690,17 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             {"skill_name": "qt.ai.data.kline", "inputs": {"shares": "000300.SH"}},
             {"skill_name": "qt.ai.hp.returns", "inputs": {}},
         ]
+        bound_query = "取 000300.SH 日线再算收益"
         bound = FakeLLMProvider(
             replies=[
-                _clause("取 000300.SH 日线再算收益"),
-                _job("open"),
                 json.dumps({"steps": empty}),
                 json.dumps({"shares": "000300.SH"}),
             ]
         )
         dry = Planner(self.registry, provider=bound, env_facts={}).build_plan(
-            "取 000300.SH 日线再算收益",
+            bound_query,
             mode="plan",
+            parsed=open_parsed(bound_query),
         )
         print(" empty depends:", [list(step.depends_on) for step in dry.steps], _pending_names(dry))
         self.assertEqual(dry.execution_mode, "dry_run")
@@ -758,16 +724,12 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
             },
             {"skill_name": "qt.ai.hp.returns", "inputs": {}},
         ]
-        fake = FakeLLMProvider(
-            replies=[
-                _clause("取 000300.SH 的 close，算收益"),
-                _job("open"),
-                json.dumps({"steps": rough}),
-            ]
-        )
+        history_query = "取 000300.SH 的 close，算收益"
+        fake = FakeLLMProvider(replies=[json.dumps({"steps": rough})])
         asked = Planner(self.registry, provider=fake, env_facts={}).build_plan(
-            "取 000300.SH 的 close，算收益",
+            history_query,
             mode="plan",
+            parsed=open_parsed(history_query),
         )
         rows = {str(item.get("name") or ""): item for item in _pending(asked)}
         print(" history pending:", list(rows))

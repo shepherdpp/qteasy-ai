@@ -475,6 +475,8 @@ class Task:
     parse_record: Dict[str, Any] = field(default_factory=dict)
     parse_debug: List[Dict[str, Any]] = field(default_factory=list)
     intent_history: List[Dict[str, Any]] = field(default_factory=list)
+    intent_card_replies: List[Dict[str, Any]] = field(default_factory=list)
+    intent_fetched: str = ""
     plan_id: str = ""
     revision: int = 0
     run_id: str = ""
@@ -554,6 +556,10 @@ class Task:
             "parse_record": dict(self.parse_record or {}),
             "parse_debug": [dict(item) for item in (self.parse_debug or []) if isinstance(item, dict)],
             "intent_history": [dict(item) for item in (self.intent_history or []) if isinstance(item, dict)],
+            "intent_card_replies": [
+                dict(item) for item in (self.intent_card_replies or []) if isinstance(item, dict)
+            ],
+            "intent_fetched": str(self.intent_fetched or ""),
             "plan_id": str(self.plan_id or ""),
             "revision": int(self.revision or 0),
             "run_id": str(self.run_id or ""),
@@ -594,6 +600,10 @@ class Task:
             parse_record=dict(raw.get("parse_record") or {}) if isinstance(raw.get("parse_record"), dict) else {},
             parse_debug=[dict(item) for item in (raw.get("parse_debug") or []) if isinstance(item, dict)],
             intent_history=[dict(item) for item in (raw.get("intent_history") or []) if isinstance(item, dict)],
+            intent_card_replies=[
+                dict(item) for item in (raw.get("intent_card_replies") or []) if isinstance(item, dict)
+            ],
+            intent_fetched=str(raw.get("intent_fetched") or ""),
             plan_id=str(raw.get("plan_id") or ""),
             revision=int(raw.get("revision") or 0),
             run_id=str(raw.get("run_id") or ""),

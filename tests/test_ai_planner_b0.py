@@ -100,7 +100,7 @@ class TestAiPlannerB0(unittest.TestCase):
 
         print("\n[TestAiPlannerB0] empty env_facts summary chain")
         planner = Planner(self.registry, env_facts={})
-        plan = planner.build_plan("show summary of 000300.SH from 20240101 to 20241231", mode="plan")
+        plan = planner.build_plan("kline summary of 000300.SH", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
         print(" skills:", skill_names)
         accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)
@@ -122,7 +122,7 @@ class TestAiPlannerB0(unittest.TestCase):
             }
         }
         planner = Planner(self.registry, env_facts=env_facts)
-        plan = planner.build_plan("show summary of 000300.SH", mode="plan")
+        plan = planner.build_plan("kline summary of 000300.SH", mode="plan")
         skill_names = [step.skill_name for step in plan.steps]
         print(" skills:", skill_names)
         accepted = json.dumps(plan.assumptions.get("accepted_steps") or [], ensure_ascii=False)

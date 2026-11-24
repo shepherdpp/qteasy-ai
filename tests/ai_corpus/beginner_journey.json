@@ -226,11 +226,11 @@
       "stage": "1",
       "mode": "plan",
       "query": "explain PT and PS",
-      "expected_job": "route_to_ask",
+      "expected_job": "",
       "expected_skills": ["qt.ai.system.fallback"],
       "tutorial": "docs/source/tutorials/3-start-first-strategy.md",
-      "run_policy": "ask",
-      "notes": "route_to_ask → Ask；KB 已有 pt_ps_vs"
+      "run_policy": "plan_only",
+      "notes": "纯询问停在意图卡，本步不转 Ask"
     }
   ]
 }

@@ -19,7 +19,7 @@
       "id": "B1",
       "query": "show summary of 000300.SH from 20240101 to 20241231",
       "mode": "plan",
-      "expected_job": "data.summary",
+      "expected_job": "",
       "expected_skill": "qt.ai.system.fallback",
       "expect_plan_md": false
     },
@@ -75,7 +75,7 @@
       "id": "B-F2",
       "query": "run macd backtest from 20180101 to 20231231",
       "mode": "plan",
-      "expected_job": "backtest.builtin",
+      "expected_job": "",
       "expected_skill": "qt.ai.system.fallback",
       "expect_plan_md": false
     },

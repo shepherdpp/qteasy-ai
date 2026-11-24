@@ -24,6 +24,7 @@ from qteasy_ai.contracts import ToolPlan, ToolStep
 from qteasy_ai.executor import PlanExecutor
 from qteasy_ai.memory_store import MemoryStore, _json_safe
 from qteasy_ai.planner import Planner
+from tests.parse_protocol import plan_job
 from qteasy_ai.registry import SkillRegistry
 from qteasy_ai.skills.data_kline import build_data_kline_skill
 from qteasy_ai.skills.hp_describe import build_hp_describe_skill
@@ -139,7 +140,7 @@ class TestAi04A0Recipes(unittest.TestCase):
         candle = "export kline of 000300.SH to png"
         curve = "export close curve of 000300.SH"
         candle_plan = self.planner.build_plan(candle, mode="plan")
-        curve_plan = self.planner.build_plan(curve, mode="plan")
+        curve_plan = plan_job(build_default_registry(), curve, "data.export")
         legacy = self.planner._infer_steps(query="导出 000300.SH 折线", q_lower="导出 000300.SH 折线")
         print(" candle:", _names(candle_plan.steps), candle_plan.steps[0].inputs)
         print(" curve job:", curve_plan.planner_trace.get("intent_job"), _names(curve_plan.steps))
@@ -167,7 +168,7 @@ class TestAi04A0Recipes(unittest.TestCase):
         plan = self.planner.build_plan(query, mode="plan")
         legacy = self.planner._infer_steps(query=query, q_lower=query.lower())
         bare = "请搜索过去半年行业属于银行的股票"
-        bare_plan = self.planner.build_plan(bare, mode="plan")
+        bare_plan = plan_job(build_default_registry(), bare, "research.screen")
         bare_legacy = self.planner._infer_steps(query=bare, q_lower=bare.lower())
         print(" skills:", _names(plan.steps))
         print(" legacy:", _names(legacy))

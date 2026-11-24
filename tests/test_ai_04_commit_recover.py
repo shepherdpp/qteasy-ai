@@ -16,6 +16,7 @@ from qteasy_ai.app import build_default_registry
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.session import ConversationState
+from tests.parse_protocol import protocol_reply
 
 
 def _pending_names(plan) -> list:
@@ -43,9 +44,7 @@ class TestAi04CommitRecover(unittest.TestCase):
 
         print("\n[TestAi04CommitRecover] 不确定仍留在持有对比")
         ask = "平安、招行、茅台，轻重不同，放一起成一条线"
-        unsure = json.dumps({"job": "research.hold_compare", "uncertain": True}, ensure_ascii=False)
-        split_ask = json.dumps({"task": ask, "question": ""}, ensure_ascii=False)
-        plan, fake = self._plan(ask, [split_ask, unsure])
+        plan, fake = self._plan(ask, [protocol_reply(ask, "research.hold_compare")])
         print(" job:", plan.planner_trace.get("intent_job"), plan.planner_trace.get("intent_rationale"))
         print(" skills:", [step.skill_name for step in plan.steps])
         print(" pending:", _pending_names(plan))
@@ -64,18 +63,13 @@ class TestAi04CommitRecover(unittest.TestCase):
         self.assertNotIn("600519", dumped)
 
         trailed = ask + "，跟上次是一回事吗"
-        split_trailed = json.dumps(
-            {"task": ask, "question": "跟上次是一回事吗"},
-            ensure_ascii=False,
-        )
-        again, seen = self._plan(trailed, [split_trailed, unsure])
-        classify = [item for item in seen.prompts if "Official and system Job ids:" in item]
+        again, seen = self._plan(trailed, [protocol_reply(trailed, "research.hold_compare")])
+        classify = [item for item in seen.prompts if item.startswith("Official jobs:")]
         print(" trailed job:", again.planner_trace.get("intent_job"))
-        print(" trailed classify:", classify)
+        print(" trailed classify:", len(classify))
         self.assertEqual(again.planner_trace.get("intent_job"), "research.hold_compare")
-        self.assertTrue(classify)
-        self.assertNotIn("是一回事吗", classify[0])
-        self.assertNotIn("跟上次", classify[0])
+        self.assertEqual(len(classify), 1)
+        self.assertIn(ask, classify[0])
 
     def test_unrelated_uncertain_stays_unmatched(self) -> None:
         """对不上闭合菜谱的短句仍是开放计划恢复，不新造 Job。"""
@@ -87,7 +81,7 @@ class TestAi04CommitRecover(unittest.TestCase):
         print(" job:", plan.planner_trace.get("intent_job"))
         print(" pending:", _pending_names(plan))
         self.assertNotEqual(plan.planner_trace.get("intent_job"), "research.hold_compare")
-        self.assertIn("unresolved_intent", _pending_names(plan))
+        self.assertIn("intent", _pending_names(plan))
 
     def test_prior_question_uses_previous_commit(self) -> None:
         """有模型的纯反问不进分类。没有模型时也不升成持有对比。"""

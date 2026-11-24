@@ -19,25 +19,13 @@ from qteasy.history import HistoryPanel
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.human_card import clarification_needs_answer, project_human_cards
 from qteasy_ai.memory_store import MemoryStore
+from qteasy_ai.parse_turn import CONFIRM_OPEN_ID
 from qteasy_ai.planner import Planner
 from qteasy_ai.provider import FakeLLMProvider
 from qteasy_ai.skills.hp_volatility import build_hp_volatility_skill
 from qteasy_ai.slot_graph import apply_slot_layer
 from qteasy_ai.wire import align_steps
-
-
-def _job(payload) -> str:
-    """分类罐头。"""
-
-    if isinstance(payload, str):
-        payload = {"job": payload}
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _clause(text: str) -> str:
-    """整句是办事，没有附带提问。"""
-
-    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
+from tests.parse_protocol import plan_job, protocol_reply
 
 
 def _pending(plan):
@@ -178,8 +166,7 @@ class TestAi04Wire(unittest.TestCase):
         """体检不改波动率默认；导出和筛股不被拒绝；阿尔法没基准时要上游表。"""
 
         print("\n[TestAi04Wire] 体检、导出、筛股和阿尔法")
-        planner = Planner(self.registry, env_facts={})
-        summary = planner.build_plan("000300.SH volatility", mode="plan")
+        summary = plan_job(self.registry, "000300.SH volatility", "data.summary")
         accepted = _accepted(summary)
         print(" summary skills:", [row["skill_name"] for row in accepted])
         print(" summary reason:", summary.steps[0].inputs.get("reason"))
@@ -192,13 +179,14 @@ class TestAi04Wire(unittest.TestCase):
         self.assertEqual(volatility["depends_on"], ["step_1"])
         self.assertFalse(any(row["skill_name"] == "qt.ai.hp.describe" for row in accepted))
 
-        exported = planner.build_plan("export png 000300.SH", mode="plan")
+        exported = plan_job(self.registry, "export png 000300.SH", "data.export")
         export_names = [row["skill_name"] for row in _accepted(exported)]
         print(" export skills:", export_names, exported.steps[0].inputs.get("reason"))
         self.assertEqual(export_names, ["qt.ai.data.kline", "qt.ai.hp.plot"])
         self.assertNotEqual(exported.steps[0].inputs.get("reason"), "wire_product_mismatch")
 
-        screened = planner.build_plan("筛股 20d 跌 10%", mode="plan")
+        planner = Planner(self.registry, env_facts={})
+        screened = plan_job(self.registry, "筛股 20d 跌 10%", "research.screen")
         screen_names = [row["skill_name"] for row in _accepted(screened)]
         print(" screen skills:", screen_names, screened.steps[0].inputs.get("reason"))
         self.assertIn("qt.ai.research.universe_filter", screen_names)
@@ -288,9 +276,7 @@ class TestAi04Wire(unittest.TestCase):
         query = "取 000300.SH 日线，做汇总，再出一页图"
         fake = FakeLLMProvider(
             replies=[
-                _clause(query),
-                _job("open"),
-                _job("open"),
+                "not-a-protocol",
                 json.dumps({"steps": steps}, ensure_ascii=False),
             ]
         )
@@ -301,7 +287,13 @@ class TestAi04Wire(unittest.TestCase):
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
             sid = "wire-agg"
-            first = asst.plan(query, response_style="raw", session_id=sid)
+            asst.plan(query, response_style="raw", session_id=sid)
+            first = asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"intent": CONFIRM_OPEN_ID},
+            )
             plan = first.get("plan") or {}
             blob = (plan.get("assumptions") or {}).get("clarification") or {}
             row = (blob.get("pending") or [{}])[0]
@@ -341,9 +333,7 @@ class TestAi04Wire(unittest.TestCase):
 
         fake_plot = FakeLLMProvider(
             replies=[
-                _clause(query),
-                _job("open"),
-                _job("open"),
+                "not-a-protocol",
                 json.dumps({"steps": steps}, ensure_ascii=False),
             ]
         )
@@ -355,6 +345,12 @@ class TestAi04Wire(unittest.TestCase):
             )
             sid = "wire-plot"
             asst.plan(query, response_style="raw", session_id=sid)
+            asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"intent": CONFIRM_OPEN_ID},
+            )
             plotted = asst.plan("", response_style="raw", session_id=sid, patches={"wire_choice": "use_panel"})
             plotted_plan = plotted.get("plan") or {}
             rows = _raw_rows(plotted_plan)
@@ -396,15 +392,12 @@ class TestAi04Wire(unittest.TestCase):
             {"skill_name": "qt.ai.hp.plot", "inputs": {"page": 1}, "depends_on": ["step_1"]},
         ]
         sentence = "汇总之后出一页图"
-        rewrite = "列出内置策略"
+        rewrite = "list built-in strategies"
         fake = FakeLLMProvider(
             replies=[
-                _clause(sentence),
-                _job("open"),
-                _job("open"),
+                "not-a-protocol",
                 json.dumps({"steps": steps}),
-                _clause(rewrite),
-                _job("strategy.meta"),
+                protocol_reply(rewrite, "strategy.meta"),
             ]
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -415,6 +408,12 @@ class TestAi04Wire(unittest.TestCase):
             )
             sid = "wire-rewrite"
             asst.plan(sentence, response_style="raw", session_id=sid)
+            asst.plan(
+                "",
+                response_style="raw",
+                session_id=sid,
+                patches={"intent": CONFIRM_OPEN_ID},
+            )
             before = len(fake.prompts)
             second = asst.plan(
                 "",
@@ -424,7 +423,7 @@ class TestAi04Wire(unittest.TestCase):
             )
             plan = second.get("plan") or {}
             skills = [step.get("skill_name") for step in (plan.get("steps") or [])]
-            catalogs = [text for text in fake.prompts[before:] if "列出内置策略" in text]
+            catalogs = [text for text in fake.prompts[before:] if rewrite in text]
             print(" skills:", skills)
             print(" new prompts mention rewrite:", len(catalogs), "intent:", (plan.get("planner_trace") or {}).get("intent_job"))
             self.assertTrue(catalogs)
@@ -445,12 +444,9 @@ class TestAi04Wire(unittest.TestCase):
         def _open():
             return FakeLLMProvider(
                 replies=[
-                    _clause(query),
-                    _job("open"),
-                    _job("open"),
+                    "not-a-protocol",
                     json.dumps({"steps": steps}, ensure_ascii=False),
-                    _clause("列出内置策略"),
-                    _job("strategy.meta"),
+                    protocol_reply("list built-in strategies", "strategy.meta"),
                 ]
             )
 
@@ -463,6 +459,7 @@ class TestAi04Wire(unittest.TestCase):
             )
             sid = "wire-answers-drop"
             asst.plan(query, response_style="raw", session_id=sid)
+            asst.plan("", response_style="raw", session_id=sid, answers=[CONFIRM_OPEN_ID])
             dropped = asst.plan("", response_style="raw", session_id=sid, answers=["drop_consumer"])
             dropped_plan = dropped.get("plan") or {}
             dropped_rows = (dropped_plan.get("assumptions") or {}).get("accepted_steps") or []
@@ -486,6 +483,7 @@ class TestAi04Wire(unittest.TestCase):
             )
             sid = "wire-answers-plot"
             asst.plan(query, response_style="raw", session_id=sid)
+            asst.plan("", response_style="raw", session_id=sid, answers=[CONFIRM_OPEN_ID])
             plotted = asst.plan("", response_style="raw", session_id=sid, answers=["use_panel"])
             rows = _raw_rows(plotted.get("plan") or {})
             print(" panel answers:", rows)
@@ -502,8 +500,9 @@ class TestAi04Wire(unittest.TestCase):
             )
             sid = "wire-answers-rewrite"
             asst.plan(query, response_style="raw", session_id=sid)
+            asst.plan("", response_style="raw", session_id=sid, answers=[CONFIRM_OPEN_ID])
             before = len(rewrite_fake.prompts)
-            typed = "列出内置策略"
+            typed = "list built-in strategies"
             second = asst.plan("", response_style="raw", session_id=sid, answers=[typed])
             plan = second.get("plan") or {}
             skills = [step.get("skill_name") for step in (plan.get("steps") or [])]

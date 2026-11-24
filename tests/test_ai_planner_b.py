@@ -15,6 +15,7 @@ import unittest
 from qteasy_ai.app import QteasyAssistant, build_default_registry
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.planner import Planner
+from tests.parse_protocol import plan_job
 
 
 class TestAiPlannerB(unittest.TestCase):
@@ -57,7 +58,7 @@ class TestAiPlannerB(unittest.TestCase):
 
         print("\n[TestAiPlannerB] refill token gate")
         planner = Planner(self.registry, env_facts={"tushare": {"token_present": False}})
-        plan = planner.build_plan("refill stock_daily from 20200101 to 20201231", mode="plan")
+        plan = planner.build_plan("download A-share daily data to local datasource", mode="plan")
         names = [step.skill_name for step in plan.steps]
         print(" skills:", names)
         accepted = json.dumps((plan.assumptions or {}).get("accepted_steps") or [], ensure_ascii=False)
@@ -87,7 +88,10 @@ class TestAiPlannerB(unittest.TestCase):
         """回测缺策略 ID → clarify。"""
 
         print("\n[TestAiPlannerB] backtest missing strategy")
-        plan = self.planner.build_plan("帮我跑一个回测 from 20180101 to 20231231", mode="plan")
+        plan = self.planner.build_plan(
+            "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+            mode="plan",
+        )
         print(" inputs:", plan.steps[0].inputs)
         self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
         self.assertEqual(plan.steps[0].inputs.get("missing_info"), "strategy_id")
@@ -114,7 +118,7 @@ class TestAiPlannerB(unittest.TestCase):
         """筛股缺阈值 → universe+投影，不得因缺 return_threshold 整单澄清。"""
 
         print("\n[TestAiPlannerB] screen missing threshold enumerates")
-        plan = self.planner.build_plan("请搜索过去半年行业属于银行的股票", mode="plan")
+        plan = plan_job(self.registry, "请搜索过去半年行业属于银行的股票", "research.screen")
         names = [step.skill_name for step in plan.steps]
         print(" skills:", names)
         print(" inputs:", [step.inputs for step in plan.steps])

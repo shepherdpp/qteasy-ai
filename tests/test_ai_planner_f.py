@@ -61,9 +61,10 @@ class TestAiPlannerF(unittest.TestCase):
             self.assertEqual(first["session"]["clarify_round"], 0)
 
             second = assistant.plan(
-                "20240101 到 20241231",
+                "",
                 response_style="raw",
                 session_id="s-refill",
+                patches={"start": "20240101", "end": "20241231"},
             )
             names = [s["skill_name"] for s in second["plan"]["steps"]]
             print(" second skills:", names)
@@ -72,25 +73,19 @@ class TestAiPlannerF(unittest.TestCase):
             accepted = (second["plan"].get("assumptions") or {}).get("accepted_steps") or []
             print(" second accepted:", accepted)
             self.assertEqual(second["plan"]["planner_trace"].get("intent_job"), "data.refill")
-            self.assertEqual(names, ["qt.ai.system.fallback"])
-            self.assertEqual(second["plan"]["steps"][0]["inputs"].get("reason"), "missing_required_slots")
-            self.assertNotIn("20240101", json.dumps(accepted, ensure_ascii=False))
-            self.assertNotIn("20241231", json.dumps(accepted, ensure_ascii=False))
+            self.assertIn("qt.ai.data.refill_basic_equity_and_index", names)
+            blob = json.dumps(second["plan"], ensure_ascii=False)
+            self.assertIn("20240101", blob)
+            self.assertIn("20241231", blob)
 
             store = SessionStore(assistant.memory_store)
             filled = store.load("s-refill")
             print(" filled slots:", {k: v.to_dict() for k, v in filled.task.slots.items()})
             print(" filled status:", filled.task.status, "job:", filled.task.job)
             self.assertEqual(filled.task.job, "data.refill")
-            self.assertNotEqual(filled.task.status, "ready")
-
-            confirm = assistant.plan("对，理解正确", response_style="raw", session_id="s-refill")
-            cnames = [s["skill_name"] for s in confirm["plan"]["steps"]]
-            print(" confirm skills:", cnames)
-            print(" confirm trace:", confirm["plan"].get("planner_trace"))
-            print(" confirm source:", confirm["plan"]["planner_trace"].get("source"))
-            self.assertEqual(confirm["plan"]["planner_trace"].get("source"), "session")
-            self.assertEqual(confirm["plan"]["planner_trace"].get("intent_job"), "data.refill")
+            self.assertEqual(str(filled.task.slots["start"].value), "20240101")
+            self.assertEqual(str(filled.task.slots["end"].value), "20241231")
+            self.assertEqual(second["plan"].get("plan_id"), plan.get("plan_id"))
 
     def test_clarify_submit_round_streak_warn_and_fail(self) -> None:
         """提交轮次 streak：首卡 0；第 3 次 last chance；第 4 次失败收口。"""
@@ -178,7 +173,12 @@ class TestAiPlannerF(unittest.TestCase):
             print(" first skills:", [s["skill_name"] for s in first["plan"]["steps"]])
             print(" first plan_id:", first_id)
             self.assertEqual(first["plan"]["planner_trace"].get("intent_job"), "strategy.builder")
-            second = assistant.plan("把慢线改成 60", response_style="raw", session_id="s-d")
+            second = assistant.plan(
+                "",
+                response_style="raw",
+                session_id="s-d",
+                patches={"slow": 60},
+            )
             second_id = str((second.get("plan") or {}).get("plan_id") or "")
             print(" second job:", second["plan"]["planner_trace"].get("intent_job"))
             print(" second source:", second["plan"]["planner_trace"].get("source"))
@@ -216,7 +216,7 @@ class TestAiPlannerF(unittest.TestCase):
                 defaults={"shares": "000300.SH"},
             )
             pretty = assistant.plan(
-                "用 macd 做回测，2018 到 2023",
+                "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
                 response_style="user_friendly",
                 session_id="s-def",
             )
@@ -240,7 +240,7 @@ class TestAiPlannerF(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             assistant = self._assistant(temp_dir)
             payload = assistant.plan(
-                "用 macd 做回测，2018 到 2023",
+                "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
                 response_style="raw",
                 session_id="s-none",
             )

@@ -21,7 +21,7 @@ from qteasy_ai.match_notice import render_match_notice
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.provider import FakeLLMProvider
 
-_HOLD = "帮我做一个组合对比"
+_HOLD = "600519 和 000858 做一条等权组合"
 _WEATHER = "请帮我看看天气"
 _OPEN_ZH = "取 000300.SH 日线，算收益，再出一页图，请生成一个简短的开放计划"
 _STEPS = [
@@ -32,18 +32,6 @@ _STEPS = [
 _TOO_MANY = _STEPS + [
     {"skill_name": "qt.ai.hp.volatility", "inputs": {}, "depends_on": ["step_2"]},
 ]
-
-
-def _job(payload: Dict[str, Any]) -> str:
-    """分类罐头。"""
-
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _clause(text: str) -> str:
-    """整句是办事，没有附带提问。"""
-
-    return json.dumps({"task": text, "question": ""}, ensure_ascii=False)
 
 
 def _plan_payload(
@@ -348,11 +336,9 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
             print(" trace:", trace)
             print(" pending:", names)
             print(" notice:", [item.get("text") for item in notices])
-            self.assertEqual(trace.get("intent_job"), "clarify")
-            self.assertIn("unresolved_intent", names)
-            self.assertEqual(len(notices), 1)
-            self.assertEqual(notices[0].get("text"), render_match_notice(trace, chinese=True))
-            self.assertNotIn("research.hold_compare", str(notices[0].get("text") or ""))
+            self.assertEqual(trace.get("intent_job"), "")
+            self.assertIn("intent", names)
+            self.assertEqual(notices, [])
 
     def test_confirmed_open_notice_stays_chinese(self) -> None:
         """确认开放图后，空 query 仍按原句用中文说明。"""
@@ -361,9 +347,7 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
         calls: List[Any] = []
         fake = FakeLLMProvider(
             replies=[
-                _clause(_OPEN_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _STEPS}),
             ]
         )
@@ -379,7 +363,7 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
                 "",
                 response_style="raw",
                 session_id="s-open",
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": "confirm_open_intent"},
             )
             trace = (second.get("plan") or {}).get("planner_trace") or {}
             user_query = str((second.get("plan") or {}).get("user_query") or "")
@@ -391,17 +375,16 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
             print(" notice:", [item.get("text") for item in notices])
             print(" calls:", calls)
             self.assertEqual(trace.get("intent_job"), "open")
-            self.assertEqual(trace.get("source"), "user")
-            self.assertEqual(trace.get("rationale"), "unresolved_compose_open")
+            self.assertEqual(trace.get("source"), "llm")
+            self.assertEqual(trace.get("rationale"), "open_intent")
             self.assertEqual(len(notices), 1)
             self.assertEqual(
                 notices[0].get("text"),
                 render_match_notice(trace, chinese=True),
             )
             self.assertTrue(str(notices[0].get("text") or "").startswith("任务 "))
-            self.assertIn("正在创建开放计划", texts)
-            self.assertNotIn("open", "正在创建开放计划")
-            self.assertEqual(calls, [("compose_open", "正在创建开放计划")])
+            self.assertNotIn("正在创建开放计划", texts)
+            self.assertEqual(calls, [])
 
     def test_too_many_steps_notice_follows_clarify(self) -> None:
         """超步数的说明贴在错误卡旁，任务种类是 clarify。"""
@@ -409,9 +392,7 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
         print("\n[TestAi04MatchNotice] 接线超步数")
         fake = FakeLLMProvider(
             replies=[
-                _clause(_OPEN_ZH),
-                _job({"job": "clarify"}),
-                _job({"job": "clarify"}),
+                "not-a-protocol",
                 json.dumps({"steps": _TOO_MANY}),
             ]
         )
@@ -426,7 +407,7 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
                 "",
                 response_style="raw",
                 session_id="s-many",
-                patches={"unresolved_intent": "compose_open"},
+                patches={"intent": "confirm_open_intent"},
             )
             trace = (second.get("plan") or {}).get("planner_trace") or {}
             cards = second.get("human_cards") or []
@@ -435,14 +416,12 @@ class TestAi04MatchNoticeWiring(unittest.TestCase):
             print(" trace:", trace)
             print(" kinds:", kinds)
             print(" notice:", [item.get("text") for item in notices])
-            self.assertEqual(trace.get("intent_job"), "clarify")
+            self.assertEqual(trace.get("intent_job"), "")
             self.assertEqual(trace.get("rationale"), "open_too_many_steps")
-            self.assertIn("error", kinds)
-            self.assertNotIn("clarify", kinds)
-            self.assertEqual(len(notices), 1)
-            self.assertEqual(notices[0].get("text"), render_match_notice(trace, chinese=True))
-            self.assertIn("open_too_many_steps", str(notices[0].get("text") or ""))
-            self.assertNotIn("任务 open", str(notices[0].get("text") or ""))
+            self.assertIn("clarify", kinds)
+            self.assertNotIn("error", kinds)
+            self.assertEqual(notices, [])
+            self.assertIn("open_too_many_steps", str(cards))
 
     def test_workbench_draws_match_outside_the_process_fold(self) -> None:
         """匹配说明画在过程折叠外面；活澄清不因后面的匹配说明消失。"""

@@ -72,11 +72,12 @@ Fields:
 
 Do not include slot values, steps, or flags.
 
-The user message has up to four parts:
+The user message has up to five parts:
 - Official jobs: the only legal source for job and candidate ids. Each line is an id and what that job does.
 - Outline: earlier turns. It is not the current sentence.
 - Fetched: material named by a previous parse of this same sentence. Use it only to complete this parse.
-- User sentence: the sentence to parse.
+- User sentence: the sentence to parse. Do not replace it with a card reply.
+- Card replies: answers typed into the blank box of the intent card for this same user sentence. They are not a new user sentence. Do not replace User sentence with them. task and questions must still be exact contiguous slices of User sentence. Use the replies only to reconsider job, open_intent, candidates, clarification_text, and relation.
 
 Slices in an example belong only to that example's user sentence. Do not copy words that are not in the current user sentence.
 
@@ -97,6 +98,7 @@ def parse_utterance(
     outline: str = "",
     fetched: str = "",
     identity_dir: Optional[str] = None,
+    card_replies: str = "",
 ) -> Dict[str, Any]:
     """解析一句。有模型走协议，没有模型只认整句金句。
 
@@ -112,6 +114,8 @@ def parse_utterance(
         已经取回的材料。无模型时忽略，也不再查一次金句。
     identity_dir : str, optional
         用户身份目录，只加在协议的系统提示前。
+    card_replies : str, optional
+        同一句意图卡上的空白框回复。无模型时忽略。
 
     Returns
     -------
@@ -126,6 +130,7 @@ def parse_utterance(
             outline=outline,
             fetched=fetched,
             identity_dir=identity_dir,
+            card_replies=card_replies,
         )
     return _parse_without_model(engine, utterance, outline=outline)
 
@@ -137,6 +142,7 @@ def _parse_with_model(
     outline: str,
     fetched: str,
     identity_dir: Optional[str],
+    card_replies: str = "",
 ) -> Dict[str, Any]:
     """有模型的一次协议。不查金句。"""
 
@@ -152,6 +158,8 @@ def _parse_with_model(
     if str(fetched or "").strip():
         prompt_parts.append("Fetched:\n" + str(fetched).strip())
     prompt_parts.append("User sentence:\n" + str(utterance or ""))
+    if str(card_replies or "").strip():
+        prompt_parts.append("Card replies:\n" + str(card_replies).strip())
     prompt = "\n\n".join(prompt_parts)
     try:
         raw = engine.provider.chat(
@@ -244,15 +252,15 @@ def present_intent_card(package: Dict[str, Any]) -> Dict[str, Any]:
         for item in (package.get("candidates") or [])
         if isinstance(item, dict) and str(item.get("id") or "")
     ]
+    open_intent = str(package.get("open_intent") or "").strip()
+    if open_intent:
+        options.append({"id": CONFIRM_OPEN_ID, "label": open_intent, "detail": ""})
     row: Dict[str, Any] = {
         "name": "intent",
         "prompt": guide,
         "options": options,
-        "open": {"label": "Rephrase"},
+        "open": {"label": "Your own open intent"},
     }
-    open_intent = str(package.get("open_intent") or "").strip()
-    if open_intent:
-        row["open_confirm"] = {"id": CONFIRM_OPEN_ID, "text": open_intent}
     return {
         "intent_authored": True,
         "parse_package": slim_package(package),
@@ -310,11 +318,48 @@ def present_recover_card(
                 "name": "recover",
                 "prompt": prompt,
                 "options": options,
-                "open": {"label": "Rephrase"},
+                "open": {"label": "Rewrite the request"},
             }
         ],
         "confirm_prompt": prompt,
     }
+
+
+def format_card_replies(rows: Sequence[Dict[str, Any]]) -> str:
+    """把同一句意图卡上的空白框回复写成 ``Card replies``。
+
+    Parameters
+    ----------
+    rows : sequence of dict
+        每一轮的题干、官方选项、推荐开放句和回复。
+
+    Returns
+    -------
+    str
+        多轮正文。没有回复时为空串。
+    """
+
+    blocks: List[str] = []
+    for index, row in enumerate(rows or [], 1):
+        if not isinstance(row, dict):
+            continue
+        options = [
+            f"{str(item.get('id') or '')} {str(item.get('label') or '')}".strip()
+            for item in (row.get("options") or [])
+            if isinstance(item, dict) and str(item.get("id") or "")
+        ]
+        blocks.append(
+            "\n".join(
+                [
+                    f"Round {index}",
+                    "Question: " + str(row.get("prompt") or ""),
+                    "Official options: " + "; ".join(options),
+                    "Recommended open intent: " + str(row.get("open_intent") or ""),
+                    "Reply: " + str(row.get("reply") or ""),
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
 
 
 def decide(package: Dict[str, Any], session: Any) -> str:

@@ -372,7 +372,7 @@ class TestAiSession(unittest.TestCase):
             self.assertEqual(again.task_status(), "ready")
             decision = SessionGate(provider=None).classify(again, "请列出所有内置交易策略")
             print(" gate after heal:", decision.kind)
-            self.assertEqual(decision.kind, "revise_plan")
+            self.assertEqual(decision.kind, "new_intent")
 
     def test_load_keeps_live_running(self) -> None:
         """进程内活执行时 load 不得把 running 降为 ready。"""

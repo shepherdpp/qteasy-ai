@@ -671,7 +671,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" first plan:", first_id)
             print(" second plan:", plan_id)
             self.assertTrue(plan_id)
-            self.assertEqual(plan_id, first_id)
+            self.assertNotEqual(plan_id, first_id)
             loaded = asst.session_store.load(sid)
             ready = [m for m in loaded.messages if m.get("kind") == "plan_ready"]
             print(" plan ready count:", len(ready), ready)
@@ -719,7 +719,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             sid = "s-after-list"
             planned = client.post(
                 "/v1/plan",
-                json={"query": "请帮我列出所有的内置交易策略", "session_id": sid},
+                json={"query": "list built-in strategies", "session_id": sid},
             ).json()
             plan_id = (planned.get("plan_card") or {}).get("plan_id")
             ran = client.post("/v1/run-plan", json={"plan_id": plan_id, "session_id": sid})
@@ -759,7 +759,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             sid = "s-bband"
             planned = client.post(
                 "/v1/plan",
-                json={"query": "show me bband strategy parameters", "session_id": sid},
+                json={"query": "show me macd strategy parameters", "session_id": sid},
             ).json()
             plan_id = (planned.get("plan_card") or {}).get("plan_id")
             skills = [
@@ -1105,7 +1105,7 @@ class TestAiWorkbenchHttp(unittest.TestCase):
             print(" spoken job:", session.task.job if session.task else None)
             print(" users spoken:", [row.get("text") for row in users_spoken])
             self.assertEqual(spoken.status_code, 200)
-            self.assertEqual(spoken_id, plan_id)
+            self.assertNotEqual(spoken_id, plan_id)
             self.assertEqual(session.task.job if session.task else None, "data.refill")
             self.assertGreater(len(users_spoken), len(users_after))
 

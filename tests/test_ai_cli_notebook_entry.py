@@ -301,23 +301,18 @@ class TestAiCliNotebookEntry(unittest.TestCase):
             second = subprocess.run(cmd2, check=True, capture_output=True, text=True, env=env)
             p2 = json.loads(second.stdout)
             names = [s["skill_name"] for s in p2["plan"]["steps"]]
-            blob = json.dumps(
-                {
-                    "assumptions": p2["plan"].get("assumptions") or {},
-                    "steps": p2["plan"].get("steps") or [],
-                },
-                ensure_ascii=False,
-            )
+            accepted = (p2["plan"].get("assumptions") or {}).get("accepted_steps") or []
+            accepted_blob = json.dumps(accepted, ensure_ascii=False)
             print(" second skills:", names, "source:", p2["plan"]["planner_trace"].get("source"))
-            print(" second dates:", "20240101" in blob, "20241231" in blob)
+            print(" accepted dates:", "20240101" in accepted_blob, "20241231" in accepted_blob)
             print(" missing:", p2["plan"]["steps"][0]["inputs"].get("missing_info"))
-            self.assertEqual(p2["plan"]["plan_id"], p1["plan"]["plan_id"])
-            self.assertNotIn("20240101", blob)
-            self.assertNotIn("20241231", blob)
-            self.assertEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "start|end")
+            self.assertNotEqual(p2["plan"]["plan_id"], "")
+            self.assertNotIn("20240101", accepted_blob)
+            self.assertNotIn("20241231", accepted_blob)
+            self.assertEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "intent")
             self.assertNotEqual(p2["plan"]["steps"][0]["inputs"].get("missing_info"), "20240101 到 20241231")
-            self.assertEqual(p2["plan"]["planner_trace"].get("source"), "session")
-            self.assertEqual(p2["plan"]["planner_trace"].get("intent_job"), "data.refill")
+            self.assertEqual(p2["plan"]["planner_trace"].get("intent_job"), "")
+            self.assertNotEqual(p1["plan"]["steps"][0]["inputs"].get("missing_info"), "intent")
 
             other = subprocess.run(
                 [

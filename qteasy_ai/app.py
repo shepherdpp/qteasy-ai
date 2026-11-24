@@ -77,7 +77,7 @@ from .session import (
     set_deferred_run,
     task_was_cancelled,
 )
-from .parse_turn import BLOCK_HINT, constitution_package
+from .parse_turn import BLOCK_HINT, CONFIRM_OPEN_ID, constitution_package, format_card_replies
 from .session_gate import (
     SessionGate,
     merge_facts,
@@ -1778,7 +1778,7 @@ class QteasyAssistant:
         profile: Dict[str, Any],
         debug: bool,
     ) -> Tuple[Any, ConversationState]:
-        """意图卡沿用当时的 relation。恢复卡先改成 new。其它文本整句重来。"""
+        """意图卡沿用当时的 relation。恢复卡先改成 new。空白框回到同一次解析。"""
 
         rows = [item for item in (pending.get("pending") or []) if isinstance(item, dict)]
         row = rows[0] if rows else {}
@@ -1790,11 +1790,13 @@ class QteasyAssistant:
             if not isinstance(item, dict):
                 continue
             ident = str(item.get("id") or "")
+            if ident == CONFIRM_OPEN_ID:
+                continue
             if answer and answer in {ident, str(item.get("label") or "")}:
                 matched = ident
                 break
         recover = bool(pending.get("recover_authored"))
-        open_confirm = row.get("open_confirm") if isinstance(row.get("open_confirm"), dict) else {}
+        utterance = str(package.get("utterance") or asked)
         if recover and matched:
             package["relation"] = "new"
             package["original_relation"] = "new"
@@ -1803,25 +1805,160 @@ class QteasyAssistant:
             package["choice"] = matched
             package["card"] = "recover"
             package["open_intent"] = ""
-            return self._build_parsed(state, package, str(package.get("utterance") or asked), profile, debug)
+            return self._build_parsed(state, package, utterance, profile, debug)
+        if not recover and answer == CONFIRM_OPEN_ID:
+            package["job"] = "open"
+            package["confirmed"] = "open_intent"
+            package["choice"] = CONFIRM_OPEN_ID
+            package["card"] = "intent"
+            return self._build_parsed(state, package, utterance, profile, debug)
         if not recover and matched:
             package["job"] = matched
             package["confirmed"] = "candidate"
             package["choice"] = matched
             package["card"] = "intent"
             package["open_intent"] = ""
-            return self._build_parsed(state, package, str(package.get("utterance") or asked), profile, debug)
-        if not recover and open_confirm and answer == str(open_confirm.get("id") or ""):
-            package["job"] = "open"
-            package["confirmed"] = "open_intent"
-            package["choice"] = str(open_confirm.get("id") or "")
-            package["card"] = "intent"
-            return self._build_parsed(state, package, str(package.get("utterance") or asked), profile, debug)
-        prior = [dict(item) for item in (state.messages or []) if isinstance(item, dict)]
-        if answer:
-            state.append_user_text(answer)
-            self.session_store.save(state)
-        return self._composer_parse(state, answer, prior, profile, debug)
+            return self._build_parsed(state, package, utterance, profile, debug)
+        if recover:
+            if state.task is not None:
+                state.task.intent_card_replies = []
+                state.task.intent_fetched = ""
+            prior = [dict(item) for item in (state.messages or []) if isinstance(item, dict)]
+            if answer:
+                state.append_user_text(answer)
+                self.session_store.save(state)
+            return self._composer_parse(state, answer, prior, profile, debug)
+        return self._reparse_card_reply(state, pending, row, package, answer, profile, debug)
+
+    def _reparse_card_reply(
+        self,
+        state: ConversationState,
+        pending: Dict[str, Any],
+        row: Dict[str, Any],
+        package: Dict[str, Any],
+        answer: str,
+        profile: Dict[str, Any],
+        debug: bool,
+    ) -> Tuple[Any, ConversationState]:
+        """空白框是这张卡的回复。拦住则留在原卡，通过则用原句再解析。
+
+        Parameters
+        ----------
+        state : ConversationState
+            当前会话。
+        pending : dict
+            提交前的意图卡。
+        row : dict
+            卡上的那一题。
+        package : dict
+            发出这张卡时的解析整包。
+        answer : str
+            空白框里的回复。
+        profile : dict
+            用户配置。
+        debug : bool
+            是否写入解析调试记录。
+
+        Returns
+        -------
+        tuple
+            计划与会话。
+        """
+
+        utterance = str(package.get("utterance") or "")
+        if not answer:
+            return self._same_intent_plan(state, pending, utterance), state
+        engine = self.planner.intent_engine
+        engine.provider = self.planner.provider
+        blocked = engine._constitution(answer, answer.lower())
+        if blocked is not None:
+            hint = self.planner.hint_for_constitution(answer, blocked)
+            if hint:
+                state.append_messages(
+                    [
+                        {
+                            "kind": "mode_notice",
+                            "text": hint,
+                            "payload": {"reason": "constitution_reply"},
+                        }
+                    ]
+                )
+                self.session_store.save(state)
+            return self._same_intent_plan(state, pending, utterance), state
+        official = []
+        for item in row.get("options") or []:
+            if not isinstance(item, dict):
+                continue
+            ident = str(item.get("id") or "")
+            if not ident or ident == CONFIRM_OPEN_ID:
+                continue
+            official.append({"id": ident, "label": str(item.get("label") or ident)})
+        reply_row = {
+            "prompt": str(row.get("prompt") or ""),
+            "options": official,
+            "open_intent": str(package.get("open_intent") or ""),
+            "reply": answer,
+        }
+        task = state.task
+        history = [dict(item) for item in (getattr(task, "intent_card_replies", None) or []) if isinstance(item, dict)]
+        history.append(reply_row)
+        if task is not None:
+            task.intent_card_replies = history
+        prior: List[Dict[str, Any]] = []
+        for item in state.messages or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind") == "user_text" and str(item.get("text") or "") == utterance:
+                break
+            prior.append(dict(item))
+        outline, cards = self.planner.outline_from(prior)
+        fetched = str(getattr(task, "intent_fetched", "") or "") if task is not None else ""
+        parsed = self.planner.parse_fetched(
+            utterance,
+            outline,
+            cards,
+            state,
+            debug=debug,
+            prior_fetched=fetched,
+            card_replies=format_card_replies(history),
+        )
+        return self._build_parsed(state, parsed, utterance, profile, debug)
+
+    def _same_intent_plan(
+        self,
+        state: ConversationState,
+        pending: Dict[str, Any],
+        utterance: str,
+    ) -> ToolPlan:
+        """原意图卡继续可答。不重新投影一条相同的澄清。
+
+        Parameters
+        ----------
+        state : ConversationState
+            当前会话。
+        pending : dict
+            提交前的意图卡。
+        utterance : str
+            发出这张卡的原句。
+
+        Returns
+        -------
+        ToolPlan
+            仍带这张澄清卡的计划。
+        """
+
+        task = state.task
+        plan_id = str(getattr(task, "plan_id", "") or "") or new_plan_id()
+        record = getattr(task, "parse_record", None) if task is not None else None
+        return ToolPlan(
+            plan_id=plan_id,
+            user_query=utterance or str(getattr(task, "user_query", "") or ""),
+            steps=[],
+            assumptions={
+                "clarification": dict(pending) if isinstance(pending, dict) else {},
+                "parse_record": dict(record) if isinstance(record, dict) else {},
+            },
+        )
 
     def _build_parsed(
         self,
@@ -1931,6 +2068,9 @@ class QteasyAssistant:
 
         prior_messages = [dict(item) for item in (state.messages or []) if isinstance(item, dict)]
         if inbound == "composer" and asked:
+            if state.task is not None:
+                state.task.intent_card_replies = []
+                state.task.intent_fetched = ""
             state.append_user_text(asked)
             self.session_store.save(state)
 

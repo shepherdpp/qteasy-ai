@@ -134,6 +134,7 @@ class TestAiA0Refactor(unittest.TestCase):
             "qt.ai.data.kline",
             "qt.ai.hp.volatility",
             "qt.ai.hp.describe",
+            "qt.ai.system.fallback",
         ):
             metadata = SkillMetadata(
                 name=name,
@@ -151,6 +152,7 @@ class TestAiA0Refactor(unittest.TestCase):
         self.assertIn("candidate_plan_id", plan.planner_trace)
         self.assertIn("validator_trace", plan.planner_trace)
         self.assertEqual(plan.planner_trace["final_step_count"], len(plan.steps))
+        self.assertEqual(plan.steps[0].skill_name, "qt.ai.system.fallback")
 
     def test_skill_runtime_gate(self) -> None:
         """验证 SkillRuntime precheck 与高副作用门控。"""

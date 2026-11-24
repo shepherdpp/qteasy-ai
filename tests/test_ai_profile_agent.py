@@ -140,7 +140,7 @@ class TestAiProfileAgent(unittest.TestCase):
                 registry=self._registry_with_stubs(called),
             )
             payload = assistant.run(
-                "用 macd 做回测，2018 到 2023",
+                "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
                 response_style="raw",
                 session_id="auto-bt",
                 agent_auto=True,
@@ -165,7 +165,7 @@ class TestAiProfileAgent(unittest.TestCase):
                 registry=self._registry_with_stubs(called),
             )
             payload = assistant.run(
-                "用 macd 做回测，2018 到 2023",
+                "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
                 response_style="raw",
                 session_id="auto-ok",
                 agent_auto=True,
@@ -219,7 +219,10 @@ class TestAiProfileAgent(unittest.TestCase):
                 memory_store=store,
                 registry=self._registry_with_stubs(called),
             )
-            payload = assistant.run("用 macd 做回测，2018 到 2023", response_style="raw")
+            payload = assistant.run(
+                "用 macd 在沪深300上跑 2018-2023 回测，给我看年化与最大回撤",
+                response_style="raw",
+            )
             print(" status:", payload["execution"]["status"], "called:", called)
             self.assertEqual(payload["execution"]["status"], "dry_run")
             self.assertEqual(called.get("backtest", 0), 0)

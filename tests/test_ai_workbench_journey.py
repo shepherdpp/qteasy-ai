@@ -81,9 +81,9 @@ class TestAiWorkbenchJourney(unittest.TestCase):
                     continue
                 body = client.post("/v1/plan", json={"query": query}).json()
                 expected = str(case.get("expected_job") or "")
-                if expected == "route_to_ask":
-                    print(" plan", case_id, "routed mode:", body.get("mode"), "sources:", body.get("sources"))
-                    self.assertEqual(body.get("mode"), "ask", msg=case_id)
+                if case_id == "BJ-ASK-PT":
+                    print(" plan", case_id, "mode:", body.get("mode"))
+                    self.assertEqual(body.get("mode"), "plan", msg=case_id)
                     continue
                 job = ((body.get("sidebar") or {}).get("active_intent") or {}).get("job")
                 status = (body.get("execution") or {}).get("status")

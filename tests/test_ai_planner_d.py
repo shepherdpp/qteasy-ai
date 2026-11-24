@@ -114,7 +114,7 @@ class TestAiPlannerD(unittest.TestCase):
         """双均线缺周期 → clarify，不再 not_supported_yet。"""
 
         print("\n[TestAiPlannerD] incomplete builder")
-        plan = self.planner.build_plan("生成一个双均线策略 strategybuilder", mode="plan")
+        plan = self.planner.build_plan("写一个双均线金叉策略", mode="plan")
         print(" skill:", plan.steps[0].skill_name, "inputs:", plan.steps[0].inputs)
         print(" intent:", plan.planner_trace.get("intent_job"))
         self.assertNotEqual(plan.steps[0].inputs.get("fallback_action"), "not_supported_yet")

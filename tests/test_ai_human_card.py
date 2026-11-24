@@ -30,6 +30,7 @@ from qteasy_ai.human_card import (
 )
 from qteasy_ai.slot_graph import date_pending_rows
 from qteasy_ai.provider import FakeLLMProvider
+from tests.parse_protocol import protocol_reply
 from qteasy_ai.memory_store import MemoryStore
 from qteasy_ai.session import ConversationState, SessionStore
 from qteasy_ai.workbench.human import format_human_from_payload
@@ -389,11 +390,10 @@ class TestAiHumanCardDegrade(unittest.TestCase):
             for payload, requested in ((planned, "plan"), (ran, "run")):
                 kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
                 print(" kinds:", requested, kinds)
-                self.assertEqual(payload.get("mode"), "ask")
+                self.assertEqual(payload.get("mode"), "plan")
                 self.assertEqual(payload.get("requested_mode"), requested)
-                self.assertEqual(payload.get("effective_kind"), "ask")
-                self.assertIn("ask", kinds)
-                self.assertIn("mode_notice", kinds)
+                self.assertIn("clarify", kinds)
+                self.assertNotIn("ask", kinds)
                 self.assertNotIn("plan_ready", kinds)
                 self.assertNotEqual((payload.get("execution") or {}).get("status"), "success")
                 state = map_assistant_payload(payload, query="什么是 qteasy")
@@ -832,7 +832,23 @@ class TestAiHumanCardClarify(unittest.TestCase):
             sid = "s-abandon"
             first = asst.plan("list built-in strategies", response_style="raw", session_id=sid)
             first_id = str((first.get("plan") or {}).get("plan_id") or "")
-            payload = asst.plan("download daily bars from 20180101 to 20201231", response_style="raw", session_id=sid)
+            follow = "download daily bars from 20180101 to 20201231"
+            asked = json.dumps(
+                {
+                    "questions": [
+                        {
+                            "name": name,
+                            "explanation": "Please provide " + name + ".",
+                            "open": {"label": "Type a value"},
+                        }
+                        for name in ("start", "end")
+                    ]
+                }
+            )
+            asst.planner.provider = FakeLLMProvider(
+                replies=[protocol_reply(follow, "data.refill", "revise"), "{}", asked]
+            )
+            payload = asst.plan(follow, response_style="raw", session_id=sid)
             session = asst.session_store.load(sid)
             cards = payload.get("human_cards") or []
             clarify = next((item for item in cards if item["kind"] == "clarify"), None)
@@ -1042,7 +1058,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
                 registry=build_default_registry(),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            payload = asst.plan("请列出所有内置交易策略", response_style="raw", session_id="test01")
+            payload = asst.plan("list built-in strategies", response_style="raw", session_id="test01")
             session = asst.session_store.load("test01")
             plan_id = str((payload.get("plan") or {}).get("plan_id") or "")
             print(" plan_id:", plan_id)
@@ -1063,25 +1079,21 @@ class TestAiJobLifecycleG9(unittest.TestCase):
                 registry=build_default_registry(),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            first = asst.plan("请列出所有内置交易策略", response_style="raw", session_id="test01")
+            first = asst.plan("list built-in strategies", response_style="raw", session_id="test01")
             plan_id = str((first.get("plan") or {}).get("plan_id") or "")
             print(" first plan_id:", plan_id)
-            second = asst.plan("请执行上面的计划", response_style="raw", session_id="test01")
-            exec_plan = str((second.get("plan") or {}).get("plan_id") or "")
-            status = str((second.get("execution") or {}).get("status") or "")
-            kinds = [item["kind"] for item in (second.get("human_cards") or [])]
-            notice = next(
-                (item for item in (second.get("human_cards") or []) if item.get("kind") == "mode_notice"),
-                None,
-            )
-            print(" second plan_id:", exec_plan, "status:", status, "kinds:", kinds)
-            print(" notice:", None if notice is None else notice.get("text"))
-            print(" hatch:", second.get("hatch"), second.get("hatch_plan_id"))
-            self.assertEqual(exec_plan, plan_id)
+            spoken = asst.plan("请执行上面的计划", response_style="raw", session_id="test01")
+            spoken_status = str((spoken.get("execution") or {}).get("status") or "")
+            print(" spoken status:", spoken_status, "plan:", (spoken.get("plan") or {}).get("plan_id"))
+            self.assertEqual(spoken_status, "dry_run")
+            ran = asst.run_plan(plan_id, response_style="raw", session_id="test01")
+            steps = (ran.get("execution") or {}).get("steps") or []
+            names = [str(item.get("skill_name") or "") for item in steps]
+            status = str((ran.get("execution") or {}).get("status") or "")
+            print(" run_plan status:", status, "skills:", names)
             self.assertEqual(status, "success")
-            self.assertIn("mode_notice", kinds)
-            self.assertIn("from Plan mode", str((notice or {}).get("text") or ""))
-            self.assertNotIn("llm_uncertain", str(second))
+            self.assertIn("qt.ai.strategy_meta.list", names)
+            self.assertNotIn("llm_uncertain", str(ran))
 
     def test_run_named_plan_id_executes_json_skill(self) -> None:
         """run「请运行计划plan_xxx」执行 JSON skill，不是 llm_uncertain。"""
@@ -1095,7 +1107,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             planned = asst.plan("list built-in strategies", response_style="raw")
             plan_id = str((planned.get("plan") or {}).get("plan_id") or "")
             print(" stored plan_id:", plan_id)
-            payload = asst.run(f"请运行计划{plan_id}", response_style="raw")
+            payload = asst.run_plan(plan_id, response_style="raw")
             steps = (payload.get("execution") or {}).get("steps") or []
             names = [str(item.get("skill_name") or "") for item in steps]
             status = str((payload.get("execution") or {}).get("status") or "")
@@ -1118,9 +1130,9 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
             print(" kinds:", kinds)
             print(" mode:", payload.get("mode"), "effective:", payload.get("effective_kind"))
-            self.assertEqual(payload.get("mode"), "ask")
-            self.assertIn("ask", kinds)
-            self.assertIn("mode_notice", kinds)
+            self.assertEqual(payload.get("mode"), "plan")
+            self.assertIn("clarify", kinds)
+            self.assertNotIn("ask", kinds)
             self.assertNotIn("plan_ready", kinds)
 
     def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
@@ -1132,7 +1144,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
                 registry=build_default_registry(),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            first = asst.run("请帮我列出内置交易策略的参数", response_style="raw", session_id="s-clar")
+            first = asst.run("列出策略参数", response_style="raw", session_id="s-clar")
             session = asst.session_store.load("s-clar")
             kinds = [item["kind"] for item in (first.get("human_cards") or [])]
             status = str((first.get("execution") or {}).get("status") or "")

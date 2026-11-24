@@ -63,11 +63,17 @@ from .slot_graph import (
 from .wire import align_steps, choice_card
 
 def _open_failed(steps: Optional[List[Any]], reason: str) -> bool:
-    """开放图没有步骤、带了原因，或退成了说明步。"""
+    """开放图没有步骤、带了原因，或退成了说明步。接线选择卡不是失败。"""
 
     if not steps or str(reason or "").strip():
         return True
-    return any(getattr(step, "skill_name", "") == "qt.ai.system.fallback" for step in steps)
+    for step in steps:
+        if getattr(step, "skill_name", "") != "qt.ai.system.fallback":
+            continue
+        if str((getattr(step, "inputs", None) or {}).get("reason") or "") == "wire_choice":
+            return False
+        return True
+    return False
 
 
 _FETCH_CHANNEL = {
@@ -708,20 +714,45 @@ class Planner:
         session: Any,
         *,
         debug: bool,
+        prior_fetched: str = "",
+        card_replies: str = "",
     ) -> Dict[str, Any]:
-        """一次协议。模型写了 fetch 时再解析一次，第二次的 fetch 丢掉。"""
+        """一次协议。模型写了 fetch 时再解析一次，第二次的 fetch 丢掉。
+
+        已经取回过材料时，直接放进 Fetched，并忽略这次结果里新的 fetch。
+        """
 
         engine = self.intent_engine
         engine.provider = self.provider
         identity = getattr(self, "identity_dir", None)
+        replies = str(card_replies or "")
+        held = str(prior_fetched or "").strip()
+        entries: List[Dict[str, Any]] = []
+        if held:
+            current = parse_utterance(
+                engine,
+                utterance,
+                outline=outline,
+                fetched=held,
+                identity_dir=identity,
+                card_replies=replies,
+            )
+            if debug and isinstance(current.get("debug_entry"), dict):
+                entries.append(dict(current["debug_entry"]))
+            current["fetch"] = ""
+            current["fetched_material"] = held
+            current.pop("debug_entry", None)
+            if debug and entries:
+                current["debug_entries"] = entries
+            return current
         current = parse_utterance(
             engine,
             utterance,
             outline=outline,
             fetched="",
             identity_dir=identity,
+            card_replies=replies,
         )
-        entries: List[Dict[str, Any]] = []
         if debug and isinstance(current.get("debug_entry"), dict):
             entries.append(dict(current["debug_entry"]))
         fetch = str(current.get("fetch") or "")
@@ -733,14 +764,37 @@ class Planner:
                 outline=outline,
                 fetched=material,
                 identity_dir=identity,
+                card_replies=replies,
             )
             if debug and isinstance(current.get("debug_entry"), dict):
                 entries.append(dict(current["debug_entry"]))
             current["fetch"] = ""
+            current["fetched_material"] = material
         current.pop("debug_entry", None)
         if debug and entries:
             current["debug_entries"] = entries
         return current
+
+    def hint_for_constitution(self, query: str, decision: Any) -> str:
+        """宪法拦住时用户看见的说明。不改计划，也不结束任务。
+
+        Parameters
+        ----------
+        query : str
+            用来生成说明的文本。空白框回复用这段回复。
+        decision : IntentDecision
+            ``_constitution`` 的结果。
+
+        Returns
+        -------
+        str
+            与宪法停止相同的 hint。没有步骤时为空串。
+        """
+
+        steps = compose_recipe(self, decision, str(query or ""))
+        if not steps:
+            return ""
+        return str((steps[0].inputs or {}).get("hint") or "")
 
     def _parse_unrouted(self, query: str, session: Any, *, debug: bool) -> Dict[str, Any]:
         """没有装配层代传整包时，先宪法，再提纲，再解析。"""
@@ -793,6 +847,9 @@ class Planner:
                 session.cancel_task()
             task = getattr(session, "task", None) if session is not None else None
             plan_id = existing_id or new_plan_id()
+        material = str(package.get("fetched_material") or "").strip()
+        if task is not None and material:
+            task.intent_fetched = material
         self._fill_task = task
         self._parse_debug_entries = list(package.get("debug_entries") or []) if debug else None
         if not self._parse_debug_entries:
@@ -952,7 +1009,11 @@ class Planner:
         ):
             assumptions["clarification"] = polish_clarification(self.provider, clar, fill_text)
         clar = assumptions.get("clarification")
-        if isinstance(clar, dict) and assumptions.get("accepted_steps"):
+        if (
+            isinstance(clar, dict)
+            and str(assumptions.get("intent_job") or "") == "open"
+            and assumptions.get("accepted_steps")
+        ):
             clar["accepted_steps"] = list(assumptions.get("accepted_steps") or [])
         return self._emit_parsed(
             user_query,
@@ -1027,12 +1088,20 @@ class Planner:
         merged.update(assumptions)
         merged.pop("questions", None)
         flags = dict(package.get("flags") or {})
-        for step in steps:
-            mapped = _FETCH_CHANNEL.get(step.skill_name)
+        looked: List[Any] = list(steps)
+        for row in assumptions.get("accepted_steps") or []:
+            if isinstance(row, dict) and row.get("skill_name"):
+                looked.append(row)
+        for step in looked:
+            skill_name = str(getattr(step, "skill_name", "") or (step.get("skill_name") if isinstance(step, dict) else ""))
+            inputs = getattr(step, "inputs", None)
+            if not isinstance(inputs, dict):
+                inputs = step.get("inputs") if isinstance(step, dict) else {}
+            mapped = _FETCH_CHANNEL.get(skill_name)
             if mapped:
                 flags["channel"] = mapped
-            elif step.skill_name == "qt.ai.data.read":
-                channel = str((step.inputs or {}).get("channel") or "").strip()
+            elif skill_name == "qt.ai.data.read":
+                channel = str((inputs or {}).get("channel") or "").strip()
                 if channel:
                     flags["channel"] = channel
         if flags:

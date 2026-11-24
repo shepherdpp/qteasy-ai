@@ -453,7 +453,7 @@ class TestAiWorkbenchHuman(unittest.TestCase):
                 registry=build_default_registry(),
                 memory_store=MemoryStore(base_dir=temp_dir),
             )
-            query = "show me trix strategy parameters"
+            query = "show me macd strategy parameters"
             payload = assistant.run(query, response_style="raw")
             text = format_human_from_payload(payload, query=query, registry=assistant.registry)
             steps = (payload.get("execution") or {}).get("steps") or []
@@ -465,7 +465,7 @@ class TestAiWorkbenchHuman(unittest.TestCase):
             print(" doc head:", doc[:180])
             self.assertIn("[MODE: PLAN]  dry_run", text)
             self.assertIn("Which built-in strategy?", text)
-            self.assertIn("trix", text.lower())
+            self.assertIn("macd", text.lower())
             self.assertNotIn("[MODE: RUN]  executed", text)
             self.assertNotIn("qt.ai.strategy_meta.get", text)
 

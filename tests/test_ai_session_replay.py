@@ -191,7 +191,7 @@ class TestAiSessionReplay(unittest.TestCase):
             cards = write["payload"].get("human_cards") or []
             notices = [item for item in cards if item.get("kind") == "mode_notice"]
             print(" write job:", write["job"], "notices:", [item.get("text") for item in notices])
-            self.assertEqual(write["job"], "strategy.builder")
+            self.assertEqual(write["job"], "")
             self.assertFalse(any("Previous topic skipped" in str(item.get("text") or "") for item in notices))
 
     def test_replay_mub9u1go(self) -> None:
@@ -217,8 +217,8 @@ class TestAiSessionReplay(unittest.TestCase):
             trix = traces[2]
             note = traces[3]
             print(" trix job:", trix["job"], "note job:", note["job"])
-            self.assertEqual(trix["job"], "strategy.meta")
-            self.assertEqual(note["job"], "strategy.meta")
+            self.assertEqual(trix["job"], "")
+            self.assertEqual(note["job"], "")
             self.assertIn("strategy_id trix", trix["users"])
             self.assertIn("note 列出macd的参数", note["users"])
             notices = [

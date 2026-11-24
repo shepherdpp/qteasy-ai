@@ -29,6 +29,7 @@ from qteasy_ai.skills.hp_transform import build_hp_returns_skill
 from qteasy_ai.skills.hp_volatility import build_hp_volatility_skill
 from qteasy_ai.app import build_default_registry
 from qteasy_ai.intents.recipes import _diagnosis_steps
+from tests.parse_protocol import plan_job
 from qteasy_ai.slot_graph import _project
 
 _FULL = [
@@ -150,8 +151,8 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         """波动和收益都进 data.summary，只换统计技能。没写视图时仍是 shape。"""
 
         print("\n[TestAi04B2] 波动与收益换技能")
-        vol = self.planner.build_plan("沪深300今年波动率和交易天数 000300.SH", mode="plan")
-        ret = self.planner.build_plan("沪深300今年收益和交易天数 000300.SH", mode="plan")
+        vol = plan_job(build_default_registry(), "沪深300今年波动率和交易天数 000300.SH", "data.summary")
+        ret = plan_job(build_default_registry(), "沪深300今年收益和交易天数 000300.SH", "data.summary")
         vol_names = _names(vol.steps)
         ret_names = _names(ret.steps)
         print(" vol job:", vol.planner_trace.get("intent_job"), vol_names)
@@ -178,9 +179,9 @@ class TestAi04B2Diagnosis(unittest.TestCase):
 
         print("\n[TestAi04B2] 窗口、对数和 5 日收益")
         closes = [10.0 + (i % 5) * 0.7 + i * 0.15 for i in range(30)]
-        window_plan = self.planner.build_plan("000300.SH 60日波动率", mode="plan")
-        log_plan = self.planner.build_plan("000300.SH 的对数收益", mode="plan")
-        period_plan = self.planner.build_plan("000300.SH 的5日收益", mode="plan")
+        window_plan = plan_job(build_default_registry(), "000300.SH 60日波动率", "data.summary")
+        log_plan = plan_job(build_default_registry(), "000300.SH 的对数收益", "data.summary")
+        period_plan = plan_job(build_default_registry(), "000300.SH 的5日收益", "data.summary")
         print(" window job:", window_plan.planner_trace.get("intent_job"), "window:", _accepted(window_plan, "qt.ai.hp.volatility"))
         print(" log job:", log_plan.planner_trace.get("intent_job"), "method:", _accepted(log_plan, "qt.ai.hp.returns"))
         print(" period job:", period_plan.planner_trace.get("intent_job"), "periods:", _accepted(period_plan, "qt.ai.hp.returns"))
@@ -216,7 +217,7 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         """今年是当年 1 月 1 日到 12 月 31 日。体检收齐两个代码，持有对比金句仍收三个。"""
 
         print("\n[TestAi04B2] 今年与多代码")
-        plan = self.planner.build_plan("000300.SH 今年波动率", mode="plan")
+        plan = plan_job(build_default_registry(), "000300.SH 今年波动率", "data.summary")
         today = date.today()
         start = f"{today.year:04d}0101"
         end = f"{today.year:04d}1231"
@@ -234,7 +235,7 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         self.assertNotEqual(kline.get("start"), start)
         self.assertNotIn("000300.SH", str(kline))
 
-        recent = self.planner.build_plan("000300.SH 近一年波动率", mode="plan")
+        recent = plan_job(build_default_registry(), "000300.SH 近一年波动率", "data.summary")
         recent_kline = _accepted(recent, "qt.ai.data.kline")
         print(" recent skills:", [step.skill_name for step in recent.steps])
         print(" recent:", recent_kline.get("start"), recent_kline.get("end"))
@@ -245,7 +246,7 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         self.assertEqual(recent_kline.get("end"), window["end"])
         self.assertNotIn("000300.SH", str(recent_kline))
 
-        two = self.planner.build_plan("000001.SZ 和 000002.SZ 的波动率", mode="plan")
+        two = plan_job(build_default_registry(), "000001.SZ 和 000002.SZ 的波动率", "data.summary")
         two_kline = _accepted(two, "qt.ai.data.kline")
         print(" diagnosis shares:", two_kline.get("shares"), "job:", two.planner_trace.get("intent_job"))
         self.assertEqual(two.planner_trace.get("intent_job"), "data.summary")
@@ -265,7 +266,7 @@ class TestAi04B2Diagnosis(unittest.TestCase):
 
         print("\n[TestAi04B2] 扇出与投影")
         query = "kline summary of 000300.SH export png"
-        plan = self.planner.build_plan(query, mode="plan")
+        plan = plan_job(build_default_registry(), query, "data.summary")
         names = _names(plan.steps)
         print(" job:", plan.planner_trace.get("intent_job"))
         print(" skills:", names)
@@ -308,7 +309,13 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         print("\n[TestAi04B2] 侧栏默认窗口")
         state = ConversationState.empty("b2-window")
         state.start_task(query="000300.SH 波动率", job="data.summary")
-        plan = self.planner.build_plan("000300.SH 波动率", mode="plan", session=state)
+        plan = plan_job(
+            build_default_registry(),
+            "000300.SH 波动率",
+            "data.summary",
+            relation="revise",
+            session=state,
+        )
         slot = state.task.slots.get("window")
         vol = _accepted(plan, "qt.ai.hp.volatility")
         print(" slot:", None if slot is None else (slot.value, slot.source, slot.confirmed))
@@ -340,9 +347,19 @@ class TestAi04B2Diagnosis(unittest.TestCase):
         asked = "kline summary of 000300.SH"
         state.start_task(query=asked, job="data.summary")
         first = self.planner.build_plan(asked, mode="plan", session=state)
+        follow = "kline summary of 000300.SH 收益"
+        state.task.job = "data.summary"
+        state.task.plan_id = first.plan_id
+        state.task.user_query = follow
         state.set_slot("window", 60, source="user", confirmed=True)
         state.set_slot("price_htype", "close", source="user", confirmed=True)
-        second = self.planner.build_plan("收益", mode="plan", session=state, skip_classify=True)
+        second = plan_job(
+            build_default_registry(),
+            follow,
+            "data.summary",
+            relation="revise",
+            session=state,
+        )
         print(" first:", _names(first.steps), "job:", first.planner_trace.get("intent_job"))
         print(" second:", _names(second.steps), "job:", second.planner_trace.get("intent_job"))
         stat = _accepted(second, "qt.ai.hp.returns")

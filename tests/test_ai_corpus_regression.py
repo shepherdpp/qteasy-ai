@@ -164,7 +164,8 @@ class TestAiCorpusRegression(unittest.TestCase):
             error = _error_from_run(payload)
             print(" error case:", case["id"], "status:", status, "steps:", len(steps))
             print("  error:", error)
-            self.assertTrue(steps or payload.get("clarification") or payload.get("error"))
+            plan_steps = ((payload.get("plan") or {}).get("steps") or [])
+            self.assertTrue(steps or plan_steps or payload.get("clarification") or payload.get("error"))
             self.assertIn(error.get("code", ""), case["expected_error_codes"])
             self.assertIn("message", error)
 
@@ -188,7 +189,7 @@ class TestAiCorpusRegression(unittest.TestCase):
         first_step = payload["plan"]["steps"][0]
         print("\n[TestAiCorpusRegression] strategy parameter step:", first_step)
         self.assertEqual(first_step["skill_name"], "qt.ai.system.fallback")
-        self.assertEqual(first_step["inputs"].get("missing_info"), "strategy_id")
+        self.assertEqual(first_step["inputs"].get("missing_info"), "intent")
 
     def test_parameter_query_without_strategy_id_returns_clear_fallback(self) -> None:
         """验证参数查询缺少策略名时返回可解释 fallback。"""
