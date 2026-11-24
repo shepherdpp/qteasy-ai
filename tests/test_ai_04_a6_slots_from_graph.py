@@ -182,9 +182,9 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         self.assertNotIn("industry", none_plan.steps[0].inputs)
 
     def test_clicked_option_conflict_keeps_other_slots(self) -> None:
-        """协议交来的枚举进入质检。点过的另一个 id 不单独拒绝。原句不补未交的槽。"""
+        """点过且尚未拒绝的枚举就是候选。模型另交的 id 不盖掉它。原句不补未交的槽。"""
 
-        print("\n[TestAi04A6] 协议值照常质检")
+        print("\n[TestAi04A6] 点选枚举不被协议盖掉")
         session = ConversationState.empty("a6-option")
         session.start_task(query="筛股 20d 10% 银行业", job="research.screen")
         fake = FakeLLMProvider(replies=[json.dumps({"metric": "gain"}, ensure_ascii=False)])
@@ -211,7 +211,8 @@ class TestAi04A6SlotsFromGraph(unittest.TestCase):
         print(" metrics:", metrics)
         print(" accepted industries:", industries)
         self.assertNotIn("metric", [item.get("name") for item in pending])
-        self.assertIn("gain", metrics)
+        self.assertIn("drawdown", metrics)
+        self.assertNotIn("gain", metrics)
         self.assertNotIn("银行业", industries)
 
     def test_screen_heuristic_and_followup(self) -> None:

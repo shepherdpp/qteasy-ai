@@ -528,9 +528,9 @@ class TestAi04DateCardAnswers(unittest.TestCase):
             self.assertIn("20251340", str(pending[0].get("error") or ""))
 
     def test_model_reads_the_card_text(self) -> None:
-        """交卷后的第一则填槽协议只含这一题原文。"""
+        """填槽协议能看见卡片原文。已回答的日期用原文质检，不改成协议里的另一个八位。"""
 
-        print("\n[TestAi04DateCard] 有模型读卡片原文")
+        print("\n[TestAi04DateCard] 卡片原文不被协议改写")
         provider = FakeLLMProvider(
             replies=[json.dumps({"start": "20250405", "end": "20261110"})]
         )
@@ -550,17 +550,22 @@ class TestAi04DateCardAnswers(unittest.TestCase):
             plan = _raw_plan(second)
             kline = _raw_inputs(plan, "qt.ai.data.kline")
             portfolio = _raw_inputs(plan, "qt.ai.hp.portfolio")
+            pending = _raw_pending(plan)
+            skills = [step.get("skill_name") for step in plan.get("steps") or []]
             prompt = provider.prompts[0] if provider.prompts else ""
             print(" prompts:", len(provider.prompts))
             print(" prompt:", prompt)
             print(" written:", kline.get("start"), kline.get("end"))
+            print(" pending:", [(item.get("name"), item.get("error")) for item in pending])
+            print(" skills:", skills)
             print(" holdings:", [item.get("code") for item in (portfolio.get("holdings") or [])])
             self.assertIn("2025年4月5日", prompt)
             self.assertIn("600519", prompt)
             self.assertNotIn("Parse these clarification answers", prompt)
-            self.assertEqual(kline.get("start"), "20250405")
+            self.assertIn(kline.get("start"), (None, ""))
             self.assertEqual(kline.get("end"), "20261110")
-            self.assertNotIn("qt.ai.system.fallback", [step.get("skill_name") for step in plan.get("steps") or []])
+            self.assertNotIn("20250405", json.dumps(plan, ensure_ascii=False))
+            self.assertIn("qt.ai.system.fallback", skills)
             self.assertEqual(
                 [item.get("code") for item in (portfolio.get("holdings") or [])],
                 ["600519.SH", "000858.SZ"],

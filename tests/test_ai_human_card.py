@@ -373,7 +373,7 @@ class TestAiHumanCardDegrade(unittest.TestCase):
     """切片 C：run/plan 降级 Ask；CLI 无子命令。"""
 
     def test_plan_and_run_faq_degrade_to_ask(self) -> None:
-        """概念题 plan/run → Ask 卡 + mode_notice，不 execute。"""
+        """概念题不是金句：plan/run 出意图澄清，不执行，也不进 Ask。"""
 
         print("\n[TestAiHumanCardDegrade] FAQ degrade")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -383,19 +383,20 @@ class TestAiHumanCardDegrade(unittest.TestCase):
             )
             planned = asst.plan("什么是 qteasy", response_style="raw")
             ran = asst.run("什么是 qteasy", response_style="raw")
-            print(" plan mode:", planned.get("mode"), planned.get("requested_mode"), planned.get("effective_kind"))
-            print(" run mode:", ran.get("mode"), ran.get("requested_mode"), ran.get("effective_kind"))
+            print(" plan mode:", (planned.get("plan") or {}).get("mode"), planned.get("requested_mode"), planned.get("effective_kind"))
+            print(" run mode:", (ran.get("plan") or {}).get("mode"), ran.get("requested_mode"), ran.get("effective_kind"))
             print(" plan exec:", (planned.get("execution") or {}).get("status"))
             print(" run exec:", (ran.get("execution") or {}).get("status"))
             for payload, requested in ((planned, "plan"), (ran, "run")):
                 kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
                 print(" kinds:", requested, kinds)
-                self.assertEqual(payload.get("mode"), "plan")
+                self.assertEqual((payload.get("plan") or {}).get("mode"), "plan")
                 self.assertEqual(payload.get("requested_mode"), requested)
+                self.assertEqual(payload.get("effective_kind"), "clarify")
                 self.assertIn("clarify", kinds)
                 self.assertNotIn("ask", kinds)
                 self.assertNotIn("plan_ready", kinds)
-                self.assertNotEqual((payload.get("execution") or {}).get("status"), "success")
+                self.assertEqual((payload.get("execution") or {}).get("status"), "dry_run")
                 state = map_assistant_payload(payload, query="什么是 qteasy")
                 self.assertTrue(state.plan_card is None or not state.plan_card.confirmable)
 
@@ -1070,10 +1071,10 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertFalse(session.task_incomplete())
             self.assertEqual(session.task.plan_id, plan_id)
 
-    def test_plan_execute_utterance_runs_same_plan_id(self) -> None:
-        """同 session「请执行上面的计划」走 run_plan 原 id，不新 plan_id。"""
+    def test_execute_phrase_is_not_a_gold_sentence(self) -> None:
+        """「请执行上面的计划」不是金句：不执行原计划，出意图澄清。"""
 
-        print("\n[TestAiJobLifecycleG9] execute above plan")
+        print("\n[TestAiJobLifecycleG9] execute phrase is not gold")
         with tempfile.TemporaryDirectory() as temp_dir:
             asst = QteasyAssistant(
                 registry=build_default_registry(),
@@ -1082,18 +1083,23 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             first = asst.plan("list built-in strategies", response_style="raw", session_id="test01")
             plan_id = str((first.get("plan") or {}).get("plan_id") or "")
             print(" first plan_id:", plan_id)
+            print(" first skills:", [step.get("skill_name") for step in ((first.get("plan") or {}).get("steps") or [])])
             spoken = asst.plan("请执行上面的计划", response_style="raw", session_id="test01")
-            spoken_status = str((spoken.get("execution") or {}).get("status") or "")
-            print(" spoken status:", spoken_status, "plan:", (spoken.get("plan") or {}).get("plan_id"))
-            self.assertEqual(spoken_status, "dry_run")
-            ran = asst.run_plan(plan_id, response_style="raw", session_id="test01")
-            steps = (ran.get("execution") or {}).get("steps") or []
-            names = [str(item.get("skill_name") or "") for item in steps]
-            status = str((ran.get("execution") or {}).get("status") or "")
-            print(" run_plan status:", status, "skills:", names)
-            self.assertEqual(status, "success")
-            self.assertIn("qt.ai.strategy_meta.list", names)
-            self.assertNotIn("llm_uncertain", str(ran))
+            spoken_plan = spoken.get("plan") if isinstance(spoken.get("plan"), dict) else {}
+            spoken_steps = spoken_plan.get("steps") if isinstance(spoken_plan.get("steps"), list) else []
+            names = [str(item.get("skill_name") or "") for item in spoken_steps if isinstance(item, dict)]
+            kinds = [item["kind"] for item in (spoken.get("human_cards") or [])]
+            status = str((spoken.get("execution") or {}).get("status") or "")
+            print(" spoken plan_id:", spoken_plan.get("plan_id"))
+            print(" spoken status:", status, "effective:", spoken.get("effective_kind"))
+            print(" spoken skills:", names)
+            print(" spoken kinds:", kinds)
+            self.assertEqual(spoken_plan.get("plan_id"), plan_id)
+            self.assertEqual(status, "dry_run")
+            self.assertEqual(spoken.get("effective_kind"), "clarify")
+            self.assertEqual(names, ["qt.ai.system.fallback"])
+            self.assertIn("clarify", kinds)
+            self.assertNotIn("qt.ai.strategy_meta.list", names)
 
     def test_run_named_plan_id_executes_json_skill(self) -> None:
         """run「请运行计划plan_xxx」执行 JSON skill，不是 llm_uncertain。"""
@@ -1118,7 +1124,7 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             self.assertNotIn("qt.ai.system.fallback", names)
 
     def test_discuss_only_goes_to_ask(self) -> None:
-        """plan「本次只讨论」→ Ask + mode_notice，无 plan_ready。"""
+        """「本次只讨论」不是金句：出意图澄清，不进 Ask，也没有可执行计划。"""
 
         print("\n[TestAiJobLifecycleG9] discuss only")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1129,14 +1135,17 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             payload = asst.plan("本次只讨论，什么是 qteasy", response_style="raw")
             kinds = [item["kind"] for item in (payload.get("human_cards") or [])]
             print(" kinds:", kinds)
-            print(" mode:", payload.get("mode"), "effective:", payload.get("effective_kind"))
-            self.assertEqual(payload.get("mode"), "plan")
+            print(" plan mode:", (payload.get("plan") or {}).get("mode"), "effective:", payload.get("effective_kind"))
+            print(" exec:", (payload.get("execution") or {}).get("status"))
+            self.assertEqual((payload.get("plan") or {}).get("mode"), "plan")
+            self.assertEqual(payload.get("effective_kind"), "clarify")
+            self.assertEqual((payload.get("execution") or {}).get("status"), "dry_run")
             self.assertIn("clarify", kinds)
             self.assertNotIn("ask", kinds)
             self.assertNotIn("plan_ready", kinds)
 
     def test_strategy_params_clarify_then_fill_or_skip(self) -> None:
-        """CLI：缺 strategy_id 出 clarify；卡片答案 macd 走 get；typed skip 失败收口。"""
+        """CLI：缺 strategy_id 出 clarify；卡片答案 macd 走 get；打字 skip 再出意图澄清。"""
 
         print("\n[TestAiJobLifecycleG9] clarify params")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1200,13 +1209,17 @@ class TestAiJobLifecycleG9(unittest.TestCase):
             skipped = asst2.run("skip", response_style="raw", session_id="s-skip")
             skip_session = asst2.session_store.load("s-skip")
             skip_kinds = [item["kind"] for item in (skipped.get("human_cards") or [])]
+            skip_status = str((skipped.get("execution") or {}).get("status") or "")
             print(" skip kinds:", skip_kinds)
             print(" skip error:", skipped.get("error"))
-            print(" skip complete:", skip_session.task.status if skip_session.task else None)
-            self.assertIn("error", skip_kinds)
-            self.assertIn("Clarification skipped", str((skipped.get("error") or {}).get("message") or ""))
-            self.assertEqual(skip_session.task.status, "done")
-            self.assertFalse(skip_session.task_incomplete())
+            print(" skip exec:", skip_status, "effective:", skipped.get("effective_kind"))
+            print(" skip complete:", skip_session.task.status if skip_session.task else None, "incomplete:", skip_session.task_incomplete())
+            self.assertIn("clarify", skip_kinds)
+            self.assertNotIn("error", skip_kinds)
+            self.assertNotIn("Clarification skipped", str((skipped.get("error") or {}).get("message") or ""))
+            self.assertEqual(skip_status, "dry_run")
+            self.assertEqual(skip_session.task.status, "clarifying")
+            self.assertTrue(skip_session.task_incomplete())
 
     def test_slim_cards_omit_id_dump_and_toolplan(self) -> None:
         """plan_ready / list result 不含 73 个 id 全文、不含 # ToolPlan。"""
