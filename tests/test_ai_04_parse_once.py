@@ -581,7 +581,7 @@ class TestAi04ParseOnce(unittest.TestCase):
             '"": the sentence and the outline do not show which of the above it is.',
             system,
         )
-        self.assertEqual(len(examples), 2)
+        self.assertEqual(len(examples), 4)
         for row in examples:
             sentence = str(row["sentence"])
             payload = row["payload"]
@@ -609,6 +609,61 @@ class TestAi04ParseOnce(unittest.TestCase):
             system,
         )
         self.assertNotIn("Card replies:", user)
+
+    def test_explicit_open_plan_stays_in_the_prompt_and_on_the_card(self) -> None:
+        """明确要开放图时提示留空 job。正例 task 是原句片段。固定协议不改回持有对比。"""
+
+        print("\n[TestAi04ParseOnce] 明确开放图留在提示和意图卡")
+        import qteasy_ai.parse_turn as parse_turn
+
+        fake = FakeLLMProvider(replies=[_protocol()])
+        parse_utterance(IntentEngine(provider=fake), "随便一句")
+        system = fake.system_prompts[0]
+        examples = _prompt_examples(system)
+        positive = [row for row in examples if "开放图" in str(row["sentence"])]
+        negative = [
+            row for row in examples
+            if row["payload"].get("job") == "research.hold_compare"
+        ]
+        print(" positive:", [(row["sentence"], row["payload"].get("task"), row["payload"].get("job")) for row in positive])
+        print(" negative:", [(row["sentence"], row["payload"].get("job")) for row in negative])
+        print(" parse source has 开放图:", "开放图" in inspect.getsource(parse_turn.parse_utterance))
+        self.assertIn("explicitly asks for an open plan or an open graph", system)
+        self.assertEqual(len(positive), 1)
+        sentence = str(positive[0]["sentence"])
+        payload = positive[0]["payload"]
+        task = str(payload.get("task") or "")
+        self.assertIn(task, sentence)
+        self.assertIn("开放图", task)
+        self.assertEqual(payload.get("job"), "")
+        self.assertTrue(str(payload.get("open_intent") or ""))
+        self.assertEqual(len(negative), 1)
+        self.assertNotIn("开放图", str(negative[0]["sentence"]))
+        self.assertNotIn("开放图", inspect.getsource(parse_turn.parse_utterance))
+        utterance = "输入 600519 和 000858 做一条等权组合，帮我做一份开放图。"
+        reply = _protocol(
+            job="",
+            intent_text="用户要一份开放图",
+            clarification_text="请确认这句开放图。",
+            open_intent="用 600519 和 000858 做一条等权组合的开放图",
+            task=utterance,
+            candidates=[{"id": "research.hold_compare", "label": "持有对比", "detail": "等权"}],
+            relation="new",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = _assistant(temp_dir, [reply])
+            result = assistant.plan(utterance, response_style="raw", session_id="s-open-first")
+            plan = _plan(result)
+            skills = [
+                str(step.get("skill_name") or "")
+                for step in (plan.get("steps") or [])
+                if isinstance(step, dict)
+            ]
+            print(" job:", _record(plan).get("job"), "card:", _card(plan).get("intent_authored"), "skills:", skills)
+            self.assertTrue(_card(plan).get("intent_authored"))
+            self.assertNotEqual(_record(plan).get("job"), "research.hold_compare")
+            self.assertNotIn("qt.ai.hp.portfolio", skills)
+            self.assertNotIn("qt.ai.data.kline", skills)
 
     def test_boolean_open_intent_still_voids_the_package(self) -> None:
         """open_intent 写成布尔值时，整包作废，中文题干不留下。"""

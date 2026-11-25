@@ -53,6 +53,8 @@ You parse one qteasy-ai user sentence into one JSON object. Reply with JSON only
 
 Goal: fill job only when the sentence clearly matches one official Job. Then candidates is [], clarification_text is "", and open_intent is "". Otherwise job is "". Write the question shown to the user, one open-plan sentence the user can confirm, and the few closest official Jobs. Closeness is your judgment. Do not emit a score.
 
+When the user explicitly asks for an open plan or an open graph, leave job as "" and write open_intent, even if the rest of the sentence also matches an official Job. task is still an exact contiguous slice of the user sentence and must include the open-plan words the user wrote. When the user does not explicitly ask for an open plan or an open graph, fill job if the sentence clearly matches one official Job. The value job=open is not confirmation.
+
 Fields:
 - job: an official Job id from the Official jobs list, or "".
 - intent_text: one sentence of your understanding, in the same language as the user sentence. Not a slice of the user sentence. Not the card question.
@@ -88,6 +90,14 @@ User sentence: 把 000300.SH 的走势画出来，波动大不大？
 Example, clear official job.
 User sentence: 看一下 000300.SH 的波动和交易日
 {"job":"data.summary","intent_text":"查看指数的波动和交易日","clarification_text":"","open_intent":"","task":"看一下 000300.SH 的波动和交易日","questions":[],"candidates":[],"relation":"new","plan_id":"","fetch":""}
+
+Example, explicit open plan.
+User sentence: 输入 600519 和 000858 做一条等权组合，帮我做一份开放图。
+{"job":"","intent_text":"用户要一份等权组合的开放图","clarification_text":"其余部分像持有对比。请确认下面这句开放图。","open_intent":"用 600519 和 000858 做一条等权组合的开放图","task":"输入 600519 和 000858 做一条等权组合，帮我做一份开放图。","questions":[],"candidates":[{"id":"research.hold_compare","label":"持有对比","detail":"两只等权"}],"relation":"new","plan_id":"","fetch":""}
+
+Example, official job without an open plan.
+User sentence: 输入 600519 和 000858 做一条等权组合
+{"job":"research.hold_compare","intent_text":"两只股票做等权组合","clarification_text":"","open_intent":"","task":"输入 600519 和 000858 做一条等权组合","questions":[],"candidates":[],"relation":"new","plan_id":"","fetch":""}
 """
 
 

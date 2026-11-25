@@ -46,7 +46,10 @@ def build_data_history_skill(
         version="0.1.0",
         summary="Read local history columns into a HistoryPanel via get_history_data.",
         inputs_schema={
-            "htype_names": dtype_spec(required=True),
+            "htype_names": dtype_spec(
+                required=True,
+                examples=("open", "high", "low", "close", "volume"),
+            ),
             "shares": code_spec(required=True),
             "start": {**window_bound_spec("start"), "default_kind": "kernel_window"},
             "end": {**window_bound_spec("end"), "default_kind": "kernel_window"},

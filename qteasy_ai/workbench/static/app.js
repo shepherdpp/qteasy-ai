@@ -3705,7 +3705,7 @@ function renderClarifyStepOptions(row, index, lock) {
   const rows = items
     .map((item, index) => {
       const active = chipSelected && chipSelected === item.id ? " selected" : "";
-      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeHtml(item.id)}" data-clarify-index="${escapeHtml(key)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
+      return `<button type="button" class="clarify-option${active}" data-clarify-option="${escapeAttr(item.id)}" data-clarify-index="${escapeHtml(key)}" ${lock}><span class="clarify-letter">${clarifyLetter(index)}</span><span class="clarify-option-label">${escapeHtml(item.label)}</span></button>`;
     })
     .join("");
   const openSpec = row && row.open && typeof row.open === "object" ? row.open : null;

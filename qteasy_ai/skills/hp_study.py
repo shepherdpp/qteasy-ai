@@ -421,6 +421,52 @@ def _performance_frame(panel: Any, htype: Any, periods_per_year: Any) -> pd.Data
     )
 
 
+def align_portfolio_weights(
+    shares: Sequence[str],
+    benchmark: str,
+    weights: Sequence[float],
+) -> List[float]:
+    """按面板 share 顺序消耗权重，在基准下标补 0。
+
+    不读 holdings，也不按代码重排。已经和面板一样长、基准不在面板里，
+    或长度对不上非基准只数时，原样返回。
+
+    Parameters
+    ----------
+    shares : sequence of str
+        上游面板的 share 顺序。
+    benchmark : str
+        基准代码。
+    weights : sequence of float
+        用户权重。顺序是去掉基准之后 share 出现的顺序。
+
+    Returns
+    -------
+    list of float
+        交给 ``HistoryPanel.portfolio`` 的数组。
+    """
+
+    names = [str(item) for item in shares]
+    values = [float(item) for item in weights]
+    if len(values) == len(names):
+        return values
+    bench = str(benchmark or "").strip()
+    if not bench or bench not in names:
+        return values
+    held = [name for name in names if name != bench]
+    if len(values) != len(held):
+        return values
+    padded: List[float] = []
+    cursor = 0
+    for name in names:
+        if name == bench:
+            padded.append(0.0)
+        else:
+            padded.append(values[cursor])
+            cursor += 1
+    return padded
+
+
 def build_hp_portfolio_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
     """构建 ``qt.ai.hp.portfolio``。默认等权，基准不参与聚合。
 
@@ -490,19 +536,25 @@ def build_hp_portfolio_skill() -> tuple[SkillMetadata, Callable[..., dict]]:
         chosen = _chosen_mask(mask, payloads)
 
         def _run() -> Any:
+            mode_text = mode or "equal"
+            bench_code = join_code_text(benchmark)
             call: Dict[str, Any] = {
                 "htypes": "close" if htypes in (None, "") else htypes,
-                "mode": mode or "equal",
+                "mode": mode_text,
                 "benchmark_output": benchmark_output or "none",
                 "new_share_name": new_share_name or "PORTFOLIO",
                 "normalize_weights": bool(normalize_weights),
                 "allow_ungrouped": allow_ungrouped or "error",
             }
-            if weights is not None:
+            if weights is not None and mode_text == "weighted" and bench_code:
+                call["weights"] = np.asarray(
+                    align_portfolio_weights(list(panel.shares), bench_code, list(weights)),
+                    dtype=float,
+                )
+            elif weights is not None:
                 call["weights"] = np.asarray(weights, dtype=float)
             if groups:
                 call["groups"] = groups
-            bench_code = join_code_text(benchmark)
             if bench_code:
                 call["benchmark"] = bench_code
             if chosen is not None:

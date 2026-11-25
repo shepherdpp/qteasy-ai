@@ -115,7 +115,7 @@ _LABELS = {
     "metric": "Metric",
     "lookback_days": "Lookback days",
     "names": "Data types",
-    "htype_names": "History columns",
+    "htype_names": "Data type ids",
     "shares": "Symbols",
     "start": "Start date",
     "end": "End date",
@@ -149,7 +149,7 @@ _HINTS = {
     "metric": "Choose drawdown or gain.",
     "lookback_days": "Give the lookback as a whole number of days.",
     "names": "Give the data type names.",
-    "htype_names": "Give the history column names.",
+    "htype_names": "Give data type ids such as close. These examples are not the full catalog.",
     "shares": "Which symbols should this step use?",
     "start": _DATE_HINT,
     "end": _DATE_HINT,
@@ -277,21 +277,61 @@ def asset_type_spec() -> Dict[str, Any]:
     }
 
 
-def dtype_spec(*, required: bool) -> Dict[str, Any]:
+_DTYPE_SUBSETS: Dict[str, Tuple[str, ...]] = {
+    "kline": ("open", "high", "low", "close", "volume"),
+    "valuation": ("pe", "pb"),
+}
+
+
+def dtype_subset_ids(name: str) -> Optional[Tuple[str, ...]]:
+    """按名字取一组数据类型 id。没登记这个名字时返回 ``None``。
+
+    Parameters
+    ----------
+    name : str
+        子集名字，例如 ``kline`` 或 ``valuation``。
+
+    Returns
+    -------
+    tuple of str or None
+        目录里的 id。空名字和未登记的名字都是 ``None``。
+    """
+
+    key = str(name or "").strip()
+    if not key:
+        return None
+    return _DTYPE_SUBSETS.get(key)
+
+
+def dtype_spec(*, required: bool, examples: Sequence[str] = ()) -> Dict[str, Any]:
     """数据类型槽。值必须能唯一对上数据类型。
 
     Parameters
     ----------
     required : bool
         是否必填。
+    examples : sequence of str, optional
+        给模型看的短名单。缺省为空，不把例子说成全集。
 
     Returns
     -------
     dict
-        带 ``resolve=dtype`` 的字符串字段。
+        带 ``resolve=dtype`` 的字符串字段。有短名单时带上例子和约束。
     """
 
-    return {"type": "string", "required": required, "resolve": "dtype"}
+    spec: Dict[str, Any] = {"type": "string", "required": required, "resolve": "dtype"}
+    shown = [str(item).strip() for item in examples if str(item).strip()]
+    if shown:
+        spec["dtype_examples"] = shown
+        spec["example"] = "close" if "close" in shown else shown[0]
+        spec["label"] = "Data type ids"
+        spec["hint"] = "Give data type ids such as close. These examples are not the full catalog."
+        spec["constraint"] = (
+            "A data type id. Examples include "
+            + ", ".join(shown)
+            + ". These examples are not the full catalog."
+        )
+    return spec
 
 
 FACTOR_IC_SLOT_DECLS: Dict[str, Dict[str, Any]] = {
@@ -347,7 +387,18 @@ def code_spec(*, required: bool, element: str = "", min_count: int = 0) -> Dict[
         带 ``resolve=code`` 的字段。
     """
 
-    spec: Dict[str, Any] = {"type": "string", "required": required, "resolve": "code"}
+    spec: Dict[str, Any] = {
+        "type": "string",
+        "required": required,
+        "resolve": "code",
+        "example": "600519.SH,000858.SZ",
+        "constraint": (
+            "Exchange codes with a suffix, separated by English commas. "
+            "Do not submit company names. Do not invent a code the user did not write. "
+            "For an item list, still submit these codes. "
+            "Do not submit code=name, and do not submit the internal item structure."
+        ),
+    }
     if element:
         spec["element"] = element
         spec["cardinality"] = "many"
@@ -401,7 +452,19 @@ def weights_spec() -> Dict[str, Any]:
         带 ``resolve=weights`` 的数组字段。
     """
 
-    return {"type": "array", "required": False, "resolve": "weights"}
+    return {
+        "type": "array",
+        "required": False,
+        "resolve": "weights",
+        "example": "[0.5, 0.5]",
+        "constraint": (
+            "A number array in share order after the benchmark is removed. "
+            "Equal weight is mode=equal with no weights array. "
+            "Do not submit code=number. "
+            "Translate half each, 50%, or 60/40 into this array, such as [0.5, 0.5] or [0.6, 0.4]. "
+            "If the user did not name weights, submit null."
+        ),
+    }
 
 
 def date_bound_presentation(name: str) -> Dict[str, str]:
@@ -513,8 +576,6 @@ def window_phrase(query: str) -> bool:
     """
 
     return _WINDOW_PHRASE.search(str(query or "")) is not None
-
-
 
 
 def refill_bound_spec(name: str) -> Dict[str, Any]:
@@ -936,7 +997,13 @@ def accept_slot_value(slot: Dict[str, Any], value: Any, source: str) -> Any:
         return None
     if resolve == "dtype":
         text = _joined_text(value)
-        return _accept_dtypes(text) if text else None
+        if not text:
+            return None
+        subset_name = str(slot.get("dtype_subset") or "").strip()
+        allowed = dtype_subset_ids(subset_name) if subset_name else None
+        if subset_name and allowed is None:
+            return None
+        return _accept_dtypes(text, allowed)
     if kind not in {"string", ""} and not resolve:
         return value
     text = _joined_text(value)
@@ -1018,16 +1085,32 @@ def _joined_text(value: Any) -> str:
     return text
 
 
-def _accept_dtypes(text: str) -> Optional[str]:
-    """每个词都要唯一对上数据类型，否则整段不收。"""
+def _accept_dtypes(text: str, allowed: Optional[Sequence[str]] = None) -> Optional[str]:
+    """每个词都要唯一对上数据类型，否则整段不收。
+
+    Parameters
+    ----------
+    text : str
+        逗号分隔的候选。
+    allowed : sequence of str, optional
+        声明了子集时，只收这组 id。没声明时不限制目录里的唯一 id。
+
+    Returns
+    -------
+    str or None
+        收下来的 id。有一个对不上就不收。
+    """
 
     parts = [part.strip() for part in str(text or "").split(",") if part.strip()]
     if not parts:
         return None
+    allowed_ids = {str(item) for item in allowed} if allowed is not None else None
     found: List[str] = []
     for part in parts:
         resolved, _missing = resolve_dtype_token(part)
         if not resolved:
+            return None
+        if allowed_ids is not None and resolved not in allowed_ids:
             return None
         found.append(resolved)
     return ",".join(found)
@@ -1505,7 +1588,13 @@ def _card_prompt(
     lines.append("Rejected: slots that failed this round. Write one question for each.")
     for name, reason in rejected.items():
         slot = by_name.get(str(name)) or {"name": str(name)}
-        ids = [str(item.get("id")) for item in _options_for(str(name), slot)]
+        examples = [str(item) for item in (slot.get("dtype_examples") or [])]
+        subset_name = str(slot.get("dtype_subset") or "").strip()
+        if examples and not subset_name:
+            ids: List[str] = []
+            lines.append("examples=" + ",".join(examples) + " (not the full catalog)")
+        else:
+            ids = [str(item.get("id")) for item in _options_for(str(name), slot)]
         lines.append(f"name={name}")
         lines.append(f"reason={reason}")
         lines.append("contract=" + ",".join(ids))
@@ -2438,8 +2527,15 @@ def _pending_row(
 
 
 def _options_for(name: str, slot: Dict[str, Any]) -> List[Dict[str, str]]:
-    """这一格的选项。数据类型不给样例。"""
+    """这一格的选项。未声明子集的数据类型例子不是合法全集。"""
 
+    subset_name = str(slot.get("dtype_subset") or "").strip()
+    if subset_name:
+        allowed = list(dtype_subset_ids(subset_name) or [])
+        return [{"id": item, "label": item} for item in allowed]
+    examples = [str(item) for item in (slot.get("dtype_examples") or [])]
+    if examples:
+        return [{"id": item, "label": item} for item in examples]
     if name in {"names", "htype_names"}:
         return []
     if name == "strategy_id":
@@ -2990,7 +3086,19 @@ def _reject_reason(slot: Dict[str, Any], raw: Any) -> str:
         return f"{text!r} is not an exchange code."
     if resolve == "weights":
         parsed = commit_weight_text(str(text or ""))
+        example = str(slot.get("example") or "[0.5, 0.5]")
+        if parsed.get("status") != "value":
+            return f"{text!r} is not a number array such as {example}."
         return str(parsed.get("reason") or f"{text!r} cannot be accepted for this field.")
+    if resolve == "dtype":
+        example = str(slot.get("example") or "close")
+        subset_name = str(slot.get("dtype_subset") or "").strip()
+        if subset_name:
+            return (
+                f"{text!r} is not in the {subset_name} data type subset. "
+                f"An allowed id is {example}."
+            )
+        return f"{text!r} is not a data type id. An example is {example}."
     return f"{text!r} cannot be accepted for this field."
 
 
@@ -3104,6 +3212,10 @@ def _spec_extras(spec: Dict[str, Any]) -> Dict[str, Any]:
         extra["default"] = spec.get("default")
     if spec.get("default_kind"):
         extra["default_kind"] = str(spec.get("default_kind"))
+    if spec.get("dtype_examples"):
+        extra["dtype_examples"] = [str(item) for item in spec.get("dtype_examples") or []]
+    if spec.get("dtype_subset"):
+        extra["dtype_subset"] = str(spec.get("dtype_subset"))
     return extra
 
 
@@ -3604,7 +3716,7 @@ def commit_freq(query: str) -> Dict[str, Any]:
 
 
 def _ratio_values(text: str) -> List[float]:
-    """冒号、比号或百分数列表。没有完整比例则空列表。"""
+    """冒号、比号或百分数列表。有一段不是数字或百分数则整段拒绝。"""
 
     match = re.search(
         r"(\d+(?:\.\d+)?[%％]?(?:\s*[:：比,/，]\s*\d+(?:\.\d+)?[%％]?)+)",
@@ -3612,9 +3724,16 @@ def _ratio_values(text: str) -> List[float]:
     )
     if match is None:
         return []
+    if re.search(r"[=＝A-Za-z]", match.group(1)):
+        return []
     values: List[float] = []
     for part in re.split(r"\s*[:：比,/，]\s*", match.group(1)):
-        number = _as_float(str(part).strip().rstrip("%").rstrip("％"))
+        token = str(part).strip()
+        if re.fullmatch(r"\d{6}", token):
+            return []
+        if not re.fullmatch(r"\d+(?:\.\d+)?[%％]?", token):
+            return []
+        number = _as_float(token.rstrip("%").rstrip("％"))
         if number is None:
             return []
         values.append(float(number))
@@ -3653,7 +3772,7 @@ def commit_weight_text(text: str) -> Dict[str, Any]:
             "values": {},
             "reason": "Equal weight was negated.",
         }
-    if any(phrase in raw or phrase in folded for phrase in _EQUAL_PHRASES):
+    if any(phrase in raw or phrase in folded for phrase in _EQUAL_PHRASES) or re.search(r"\bequal\b", folded):
         return {"status": "value", "values": {"mode": "equal"}, "reason": ""}
     mentioned = (
         "权重" in raw

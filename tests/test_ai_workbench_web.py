@@ -172,6 +172,7 @@ class TestAiWorkbenchWeb(unittest.TestCase):
             print(" js has data-clarify-option:", "data-clarify-option" in js.text)
             print(" js followUp chip:", "followUp(t.dataset.clarifyOption)" in js.text)
             self.assertIn("data-clarify-option", js.text)
+            self.assertIn('data-clarify-option="${escapeAttr(item.id)}"', js.text)
             self.assertIn("data-clarify-index", js.text)
             self.assertNotIn("data-clarify-slot", js.text)
             self.assertIn("sendControlAnswers", js.text)

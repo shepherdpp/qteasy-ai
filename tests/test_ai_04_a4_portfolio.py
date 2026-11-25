@@ -237,6 +237,77 @@ class TestA4Portfolio(unittest.TestCase):
         self.assertFalse(missing["ok"])
         self.assertEqual(missing["error"]["code"], "HP_PANEL_MISSING")
 
+    def test_weighted_benchmark_pads_zero_at_benchmark_index(self) -> None:
+        """两位权重按面板顺序展开，基准下标补 0，不写回用户权重。"""
+
+        print("\n[A4 portfolio] 基准下标补 0")
+        from qteasy_ai.skills.hp_study import align_portfolio_weights
+
+        end = _panel(
+            [[[10.0], [12.0]], [[30.0], [18.0]], [[100.0], [110.0]]],
+            ["600519.SH", "000858.SZ", "000300.SH"],
+            ["2024-01-02", "2024-01-03"],
+            ["close"],
+        )
+        middle = _panel(
+            [[[10.0], [12.0]], [[100.0], [110.0]], [[30.0], [18.0]]],
+            ["600519.SH", "000300.SH", "000858.SZ"],
+            ["2024-01-02", "2024-01-03"],
+            ["close"],
+        )
+        same = _panel(
+            [[[10.0]], [[30.0]], [[100.0]]],
+            ["600519.SH", "000858.SZ", "000300.SH"],
+            ["2024-01-02"],
+            ["close"],
+        )
+        end_weights = align_portfolio_weights(
+            list(end.shares), "000300.SH", [0.5, 0.5]
+        )
+        middle_weights = align_portfolio_weights(
+            list(middle.shares), "000300.SH", [0.5, 0.5]
+        )
+        same_weights = align_portfolio_weights(
+            list(same.shares), "000300.SH", [0.5, 0.5, 0.0]
+        )
+        print(" end weights:", end_weights)
+        print(" middle weights:", middle_weights)
+        print(" same weights:", same_weights)
+        self.assertEqual(end_weights, [0.5, 0.5, 0.0])
+        self.assertEqual(middle_weights, [0.5, 0.0, 0.5])
+        self.assertEqual(same_weights, [0.5, 0.5, 0.0])
+        handler = build_hp_portfolio_skill()[1]
+        done = handler(
+            mode="weighted",
+            weights=[0.5, 0.5],
+            benchmark="000300.SH",
+            benchmark_output="tag_along",
+            upstream_payload={"panel": end},
+        )
+        mid = handler(
+            mode="weighted",
+            weights=[0.5, 0.5],
+            benchmark="000300.SH",
+            benchmark_output="tag_along",
+            upstream_payload={"panel": middle},
+        )
+        end_panel = done["payload"]["panel"]
+        mid_panel = mid["payload"]["panel"]
+        end_row = list(end_panel.shares).index("PORTFOLIO")
+        mid_row = list(mid_panel.shares).index("PORTFOLIO")
+        end_values = [float(end_panel.values[end_row, i, 0]) for i in range(2)]
+        mid_values = [float(mid_panel.values[mid_row, i, 0]) for i in range(2)]
+        print(" end portfolio:", end_values, "echo:", done["inputs_echo"]["weights"])
+        print(" middle portfolio:", mid_values, "echo:", mid["inputs_echo"]["weights"])
+        self.assertTrue(done["ok"])
+        self.assertTrue(mid["ok"])
+        self.assertEqual(done["inputs_echo"]["weights"], [0.5, 0.5])
+        self.assertEqual(mid["inputs_echo"]["weights"], [0.5, 0.5])
+        self.assertTrue(_close(end_values[0], 20.0))
+        self.assertTrue(_close(end_values[1], 15.0))
+        self.assertTrue(_close(mid_values[0], 20.0))
+        self.assertTrue(_close(mid_values[1], 15.0))
+
     def test_alpha_beta_matches_hand_regression(self) -> None:
         """alpha 与 beta 用手写协方差公式，年化乘 252。缺基准是英文失败。"""
 
